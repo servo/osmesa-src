@@ -2,6 +2,10 @@ language: rust
 os:
   - osx
   - linux
+addons:
+  apt:
+    packages:
+    - libva-dev
 rust:
   - nightly
 notifications:

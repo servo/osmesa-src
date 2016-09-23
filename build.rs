@@ -16,7 +16,9 @@ fn main() {
                 .arg("Makefile.am")
                 .arg("Makefile.in")
                 .arg("src/compiler/glsl/glcpp/glcpp-lex.c")
-                .arg("src/mesa/program/lex.yy.c"));
+                .arg("src/mesa/program/lex.yy.c")
+                .arg("src/compiler/glsl/glcpp/glcpp-parse.c")
+                .arg("src/compiler/glsl/glsl_parser.cpp"));
 
     run(Command::new(src.join("mesa-12.0.1/configure"))
                 .current_dir(&dst)

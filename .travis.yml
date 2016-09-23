@@ -8,6 +8,7 @@ addons:
   apt:
     packages:
     - libva-dev
+    - clang-3.5
 rust:
   - nightly
 notifications:

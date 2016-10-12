@@ -34,8 +34,7 @@ fn main() {
                 .arg("--disable-egl")
                 .arg("--disable-driglx-direct")
                 .arg("--enable-gallium-osmesa")
-                .arg("--with-gallium-drivers=swrast")
-                .arg("--disable-llvm-shared-libs"));
+                .arg("--with-gallium-drivers=swrast"));
 
     run(Command::new("make")
                 .arg("-j4")

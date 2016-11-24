@@ -4,13 +4,15 @@ addons:
       - libva-dev
 env:
   - LDFLAGS=-ltinfo
+before_install:
+  - sudo deb http://apt.llvm.org/trusty/ llvm-toolchain-trusty-3.8 main
+  - sudo deb-src http://apt.llvm.org/trusty/ llvm-toolchain-trusty-3.8 main
+  - sudo apt-get install clang-3.8 llvm-3.8-dev
 install:
   - pip install --user mako
 language: rust
 rust:
   - stable
-  - beta
-  - nightly
 cache: cargo
 notifications:
   webhooks: http://build.servo.org:54856/travis

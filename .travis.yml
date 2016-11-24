@@ -2,7 +2,8 @@ addons:
   apt:
     packages:
       - libva-dev
-      - llvm-3.5-dev
+env:
+  - LDFLAGS=-ltinfo
 install:
   - pip install --user mako
 language: rust

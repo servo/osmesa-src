@@ -2,6 +2,8 @@ addons:
   apt:
     packages:
       - libva-dev
+install:
+  - pip install --user mako
 language: rust
 rust:
   - stable

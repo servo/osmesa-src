@@ -2,6 +2,7 @@ addons:
   apt:
     packages:
       - libva-dev
+      - ncurses-dev
 install:
   - pip install --user mako
 language: rust

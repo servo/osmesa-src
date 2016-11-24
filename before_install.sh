@@ -18,6 +18,8 @@ function llvm_download() {
     tar -xf ${LLVM}.tar.xz -C llvm --strip-components=1
 
     export LLVM_CONFIG_PATH=`pwd`/llvm/bin/llvm-config
+    export PATH=`pwd`/llvm/bin
+    export LD_LIBRARY_PATH=`pwd`/llvm/lib
 }
 
 llvm_download linux-gnu-ubuntu-14.04

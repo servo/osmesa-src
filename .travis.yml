@@ -5,6 +5,8 @@ addons:
       - ncurses-dev
 install:
   - pip install --user mako
+env:
+  - LDFLAGS=-lncurses
 language: rust
 rust:
   - stable

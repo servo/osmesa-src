@@ -2,11 +2,9 @@ addons:
   apt:
     packages:
       - libva-dev
-      - ncurses-dev
+      - llvm-3.5-dev
 install:
   - pip install --user mako
-env:
-  - LDFLAGS=-lncurses
 language: rust
 rust:
   - stable

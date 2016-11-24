@@ -26364,8 +26364,7 @@ fi
 
     if test "x$LLVM_CONFIG" != xno; then
         LLVM_VERSION=`$LLVM_CONFIG --version | egrep -o '^[0-9.]+'`
-        LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags`
-	LLVM_LDFLAGS+=-lncurses
+        LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags --system-libs`
         LLVM_BINDIR=`$LLVM_CONFIG --bindir`
         LLVM_CPPFLAGS=`strip_unwanted_llvm_flags "$LLVM_CONFIG --cppflags"`
         LLVM_CFLAGS=$LLVM_CPPFLAGS   # CPPFLAGS seem to be sufficient

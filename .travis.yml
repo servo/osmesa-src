@@ -1,3 +1,7 @@
+addons:
+  apt:
+    packages:
+      - libva-dev
 language: rust
 rust:
   - stable

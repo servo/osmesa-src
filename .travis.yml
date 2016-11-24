@@ -5,6 +5,7 @@ addons:
 env:
   - LLVM_VERSION=3.8
 before_install:
+  - chmod +x ./before_install.sh
   - ./before_install.sh
 install:
   - pip install --user mako

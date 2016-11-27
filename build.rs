@@ -38,7 +38,7 @@ fn main() {
                 .arg("--disable-llvm-shared-libs"));
 
     run(Command::new("make")
-                .arg("-j4")
+                .arg(format!("-j{}", env::var("NUM_JOBS").unwrap()))
                 .current_dir(&dst));
 }
 

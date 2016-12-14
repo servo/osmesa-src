@@ -20,9 +20,10 @@ pushd mesa-tmp
    --disable-gles1               \
    --disable-gles2               \
    --disable-glx                 \
-   --disable-vulkan              \
+   --disable-llvm-shared-libs    \
    --enable-gallium-osmesa       \
    --with-gallium-drivers=swrast
+
 make -j8 dist
 popd
 tar -xvf mesa-tmp/mesa-${VERSION}.tar.gz

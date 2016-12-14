@@ -34,7 +34,7 @@ fn main() {
                 .arg("--disable-gles1")
                 .arg("--disable-gles2")
                 .arg("--disable-glx")
-                .arg("--disable-vulkan")
+                .arg("--disable-llvm-shared-libs")
                 .arg("--enable-gallium-osmesa")
                 .arg("--with-gallium-drivers=swrast"));
 

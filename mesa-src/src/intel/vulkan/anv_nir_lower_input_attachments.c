@@ -57,7 +57,7 @@ try_lower_input_load(nir_function_impl *impl, nir_intrinsic_instr *load)
    nir_builder_init(&b, impl);
    b.cursor = nir_before_instr(&load->instr);
 
-   nir_ssa_def *frag_coord = nir_f2i(&b, load_frag_coord(&b));
+   nir_ssa_def *frag_coord = nir_f2i32(&b, load_frag_coord(&b));
    nir_ssa_def *offset = nir_ssa_for_src(&b, load->src[0], 2);
    nir_ssa_def *pos = nir_iadd(&b, frag_coord, offset);
 
@@ -86,8 +86,7 @@ try_lower_input_load(nir_function_impl *impl, nir_intrinsic_instr *load)
    tex->is_array = true;
    tex->is_shadow = false;
 
-   tex->texture =
-      nir_deref_as_var(nir_copy_deref(tex, &load->variables[0]->deref));
+   tex->texture = nir_deref_var_clone(load->variables[0], tex);
    tex->sampler = NULL;
    tex->texture_index = 0;
    tex->sampler_index = 0;
@@ -101,11 +100,8 @@ try_lower_input_load(nir_function_impl *impl, nir_intrinsic_instr *load)
 
    if (image_dim == GLSL_SAMPLER_DIM_SUBPASS_MS) {
       tex->op = nir_texop_txf_ms;
-
-      nir_ssa_def *sample_id =
-         nir_load_system_value(&b, nir_intrinsic_load_sample_id, 0);
       tex->src[2].src_type = nir_tex_src_ms_index;
-      tex->src[2].src = nir_src_for_ssa(sample_id);
+      tex->src[2].src = load->src[1];
    }
 
    nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32, NULL);

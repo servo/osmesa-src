@@ -345,7 +345,7 @@ nir_block_create(nir_shader *shader)
                                           _mesa_key_pointer_equal);
    block->imm_dom = NULL;
    /* XXX maybe it would be worth it to defer allocation?  This
-    * way it doesn't get allocated for shader ref's that never run
+    * way it doesn't get allocated for shader refs that never run
     * nir_calc_dominance?  For example, state-tracker creates an
     * initial IR, clones that, runs appropriate lowering pass, passes
     * to driver which does common lowering/opt, and then stores ref
@@ -393,7 +393,7 @@ nir_if_create(nir_shader *shader)
 nir_loop *
 nir_loop_create(nir_shader *shader)
 {
-   nir_loop *loop = ralloc(shader, nir_loop);
+   nir_loop *loop = rzalloc(shader, nir_loop);
 
    cf_init(&loop->cf_node, nir_cf_node_loop);
 
@@ -624,18 +624,21 @@ nir_deref_struct_create(void *mem_ctx, unsigned field_index)
    return deref;
 }
 
-static nir_deref_var *
-copy_deref_var(void *mem_ctx, nir_deref_var *deref)
+nir_deref_var *
+nir_deref_var_clone(const nir_deref_var *deref, void *mem_ctx)
 {
+   if (deref == NULL)
+      return NULL;
+
    nir_deref_var *ret = nir_deref_var_create(mem_ctx, deref->var);
    ret->deref.type = deref->deref.type;
    if (deref->deref.child)
-      ret->deref.child = nir_copy_deref(ret, deref->deref.child);
+      ret->deref.child = nir_deref_clone(deref->deref.child, ret);
    return ret;
 }
 
 static nir_deref_array *
-copy_deref_array(void *mem_ctx, nir_deref_array *deref)
+deref_array_clone(const nir_deref_array *deref, void *mem_ctx)
 {
    nir_deref_array *ret = nir_deref_array_create(mem_ctx);
    ret->base_offset = deref->base_offset;
@@ -645,33 +648,33 @@ copy_deref_array(void *mem_ctx, nir_deref_array *deref)
    }
    ret->deref.type = deref->deref.type;
    if (deref->deref.child)
-      ret->deref.child = nir_copy_deref(ret, deref->deref.child);
+      ret->deref.child = nir_deref_clone(deref->deref.child, ret);
    return ret;
 }
 
 static nir_deref_struct *
-copy_deref_struct(void *mem_ctx, nir_deref_struct *deref)
+deref_struct_clone(const nir_deref_struct *deref, void *mem_ctx)
 {
    nir_deref_struct *ret = nir_deref_struct_create(mem_ctx, deref->index);
    ret->deref.type = deref->deref.type;
    if (deref->deref.child)
-      ret->deref.child = nir_copy_deref(ret, deref->deref.child);
+      ret->deref.child = nir_deref_clone(deref->deref.child, ret);
    return ret;
 }
 
 nir_deref *
-nir_copy_deref(void *mem_ctx, nir_deref *deref)
+nir_deref_clone(const nir_deref *deref, void *mem_ctx)
 {
    if (deref == NULL)
       return NULL;
 
    switch (deref->deref_type) {
    case nir_deref_type_var:
-      return &copy_deref_var(mem_ctx, nir_deref_as_var(deref))->deref;
+      return &nir_deref_var_clone(nir_deref_as_var(deref), mem_ctx)->deref;
    case nir_deref_type_array:
-      return &copy_deref_array(mem_ctx, nir_deref_as_array(deref))->deref;
+      return &deref_array_clone(nir_deref_as_array(deref), mem_ctx)->deref;
    case nir_deref_type_struct:
-      return &copy_deref_struct(mem_ctx, nir_deref_as_struct(deref))->deref;
+      return &deref_struct_clone(nir_deref_as_struct(deref), mem_ctx)->deref;
    default:
       unreachable("Invalid dereference type");
    }
@@ -696,7 +699,9 @@ deref_foreach_leaf_build_recur(nir_deref_var *deref, nir_deref *tail,
    assert(tail->child == NULL);
    switch (glsl_get_base_type(tail->type)) {
    case GLSL_TYPE_UINT:
+   case GLSL_TYPE_UINT64:
    case GLSL_TYPE_INT:
+   case GLSL_TYPE_INT64:
    case GLSL_TYPE_FLOAT:
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_BOOL:
@@ -843,6 +848,8 @@ nir_deref_get_const_initializer_load(nir_shader *shader, nir_deref_var *deref)
    case GLSL_TYPE_INT:
    case GLSL_TYPE_UINT:
    case GLSL_TYPE_DOUBLE:
+   case GLSL_TYPE_UINT64:
+   case GLSL_TYPE_INT64:
    case GLSL_TYPE_BOOL:
       load->value = constant->values[matrix_col];
       break;
@@ -1753,7 +1760,7 @@ nir_block *nir_cf_node_cf_tree_last(nir_cf_node *node)
 nir_block *nir_cf_node_cf_tree_next(nir_cf_node *node)
 {
    if (node->type == nir_cf_node_block)
-      return nir_cf_node_cf_tree_first(nir_cf_node_next(node));
+      return nir_block_cf_tree_next(nir_cf_node_as_block(node));
    else if (node->type == nir_cf_node_function)
       return NULL;
    else

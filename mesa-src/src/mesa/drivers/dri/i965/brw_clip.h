@@ -34,7 +34,7 @@
 
 
 #include "brw_context.h"
-#include "brw_eu.h"
+#include "compiler/brw_eu.h"
 
 /* Initial 3 verts, plus at most 6 additional verts from intersections
  * with fixed planes, plus at most 8 additional verts from intersections
@@ -49,7 +49,7 @@ struct brw_clip_prog_key {
    GLbitfield64 attrs;
    bool contains_flat_varying;
    bool contains_noperspective_varying;
-   unsigned char *interp_mode;
+   const unsigned char *interp_mode;
    GLuint primitive:4;
    GLuint nr_userclip:4;
    GLuint pv_first:1;

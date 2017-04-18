@@ -63,12 +63,6 @@ struct ir3 * ir3_create(struct ir3_compiler *compiler,
 
 void ir3_destroy(struct ir3 *shader)
 {
-	/* TODO convert the dynamic array to ralloc too: */
-	free(shader->indirects);
-	free(shader->predicates);
-	free(shader->baryfs);
-	free(shader->keeps);
-	free(shader->astc_srgb);
 	ralloc_free(shader);
 }
 
@@ -112,7 +106,7 @@ static uint32_t reg(struct ir3_register *reg, struct ir3_info *info,
 			info->max_const = MAX2(info->max_const, max);
 		} else if (val.num == 63) {
 			/* ignore writes to dummy register r63.x */
-		} else if ((max != REG_A0) && (max != REG_P0)) {
+		} else if (max < 48) {
 			if (reg->flags & IR3_REG_HALF) {
 				info->max_half_reg = MAX2(info->max_half_reg, max);
 			} else {
@@ -626,7 +620,7 @@ static void insert_instr(struct ir3_block *block,
 	list_addtail(&instr->node, &block->instr_list);
 
 	if (is_input(instr))
-		array_insert(shader->baryfs, instr);
+		array_insert(shader, shader->baryfs, instr);
 }
 
 struct ir3_block * ir3_block_create(struct ir3 *shader)
@@ -729,7 +723,7 @@ ir3_instr_set_address(struct ir3_instruction *instr,
 	if (instr->address != addr) {
 		struct ir3 *ir = instr->block->shader;
 		instr->address = addr;
-		array_insert(ir->indirects, instr);
+		array_insert(ir, ir->indirects, instr);
 	}
 }
 

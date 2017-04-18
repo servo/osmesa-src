@@ -123,7 +123,7 @@ fd5_sampler_state_create(struct pipe_context *pctx,
 		A5XX_TEX_SAMP_0_WRAP_R(tex_clamp(cso->wrap_r, clamp_to_edge, &so->needs_border));
 
 	so->texsamp1 =
-//		COND(miplinear, A5XX_TEX_SAMP_1_MIPFILTER_LINEAR_FAR) |
+		COND(miplinear, A5XX_TEX_SAMP_1_MIPFILTER_LINEAR_FAR) |
 		COND(!cso->seamless_cube_map, A5XX_TEX_SAMP_1_CUBEMAPSEAMLESSFILTOFF) |
 		COND(!cso->normalized_coords, A5XX_TEX_SAMP_1_UNNORM_COORDS);
 
@@ -257,13 +257,13 @@ fd5_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 			A5XX_TEX_CONST_2_PITCH(elements * rsc->cpp);
 		so->offset = cso->u.buf.offset;
 	} else {
-//		unsigned miplevels;
+		unsigned miplevels;
 
 		lvl = fd_sampler_first_level(cso);
-//		miplevels = fd_sampler_last_level(cso) - lvl;
+		miplevels = fd_sampler_last_level(cso) - lvl;
 		layers = cso->u.tex.last_layer - cso->u.tex.first_layer + 1;
 
-//		so->texconst0 |= A5XX_TEX_CONST_0_MIPLVLS(miplevels);
+		so->texconst0 |= A5XX_TEX_CONST_0_MIPLVLS(miplevels);
 		so->texconst1 =
 			A5XX_TEX_CONST_1_WIDTH(u_minify(prsc->width0, lvl)) |
 			A5XX_TEX_CONST_1_HEIGHT(u_minify(prsc->height0, lvl));
@@ -281,7 +281,7 @@ fd5_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 	case PIPE_TEXTURE_1D:
 	case PIPE_TEXTURE_2D:
 		so->texconst3 =
-			A5XX_TEX_CONST_3_ARRAY_PITCH(rsc->slices[lvl].size0);
+			A5XX_TEX_CONST_3_ARRAY_PITCH(rsc->layer_size);
 		so->texconst5 =
 			A5XX_TEX_CONST_5_DEPTH(1);
 		break;

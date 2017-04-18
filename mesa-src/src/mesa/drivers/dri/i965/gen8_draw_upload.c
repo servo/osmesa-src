@@ -39,10 +39,10 @@ static bool
 is_passthru_format(uint32_t format)
 {
    switch (format) {
-   case BRW_SURFACEFORMAT_R64_PASSTHRU:
-   case BRW_SURFACEFORMAT_R64G64_PASSTHRU:
-   case BRW_SURFACEFORMAT_R64G64B64_PASSTHRU:
-   case BRW_SURFACEFORMAT_R64G64B64A64_PASSTHRU:
+   case ISL_FORMAT_R64_PASSTHRU:
+   case ISL_FORMAT_R64G64_PASSTHRU:
+   case ISL_FORMAT_R64G64B64_PASSTHRU:
+   case ISL_FORMAT_R64G64B64A64_PASSTHRU:
       return true;
    default:
       return false;
@@ -110,6 +110,22 @@ gen8_emit_vertices(struct brw_context *brw)
       ADVANCE_BATCH();
    }
 
+   /* Normally we don't need an element for the SGVS attribute because the
+    * 3DSTATE_VF_SGVS instruction lets you store the generated attribute in an
+    * element that is past the list in 3DSTATE_VERTEX_ELEMENTS. However if
+    * we're using draw parameters then we need an element for the those
+    * values.  Additionally if there is an edge flag element then the SGVS
+    * can't be inserted past that so we need a dummy element to ensure that
+    * the edge flag is the last one.
+    */
+   const bool needs_sgvs_element = (vs_prog_data->uses_basevertex ||
+                                    vs_prog_data->uses_baseinstance ||
+                                    ((vs_prog_data->uses_instanceid ||
+                                      vs_prog_data->uses_vertexid) &&
+                                     uses_edge_flag));
+   const unsigned nr_elements =
+      brw->vb.nr_enabled + needs_sgvs_element + vs_prog_data->uses_drawid;
+
    /* If the VS doesn't read any inputs (calculating vertex position from
     * a state variable for some reason, for example), emit a single pad
     * VERTEX_ELEMENT struct and bail.
@@ -117,12 +133,12 @@ gen8_emit_vertices(struct brw_context *brw)
     * The stale VB state stays in place, but they don't do anything unless
     * a VE loads from them.
     */
-   if (brw->vb.nr_enabled == 0) {
+   if (nr_elements == 0) {
       BEGIN_BATCH(3);
       OUT_BATCH((_3DSTATE_VERTEX_ELEMENTS << 16) | (3 - 2));
       OUT_BATCH((0 << GEN6_VE0_INDEX_SHIFT) |
                 GEN6_VE0_VALID |
-                (BRW_SURFACEFORMAT_R32G32B32A32_FLOAT << BRW_VE0_FORMAT_SHIFT) |
+                (ISL_FORMAT_R32G32B32A32_FLOAT << BRW_VE0_FORMAT_SHIFT) |
                 (0 << BRW_VE0_SRC_OFFSET_SHIFT));
       OUT_BATCH((BRW_VE1_COMPONENT_STORE_0 << BRW_VE1_COMPONENT_0_SHIFT) |
                 (BRW_VE1_COMPONENT_STORE_0 << BRW_VE1_COMPONENT_1_SHIFT) |
@@ -171,22 +187,6 @@ gen8_emit_vertices(struct brw_context *brw)
       }
       ADVANCE_BATCH();
    }
-
-   /* Normally we don't need an element for the SGVS attribute because the
-    * 3DSTATE_VF_SGVS instruction lets you store the generated attribute in an
-    * element that is past the list in 3DSTATE_VERTEX_ELEMENTS. However if
-    * we're using draw parameters then we need an element for the those
-    * values.  Additionally if there is an edge flag element then the SGVS
-    * can't be inserted past that so we need a dummy element to ensure that
-    * the edge flag is the last one.
-    */
-   const bool needs_sgvs_element = (vs_prog_data->uses_basevertex ||
-                                    vs_prog_data->uses_baseinstance ||
-                                    ((vs_prog_data->uses_instanceid ||
-                                      vs_prog_data->uses_vertexid) &&
-                                     uses_edge_flag));
-   const unsigned nr_elements =
-      brw->vb.nr_enabled + needs_sgvs_element + vs_prog_data->uses_drawid;
 
    /* The hardware allows one more VERTEX_ELEMENTS than VERTEX_BUFFERS,
     * presumably for VertexID/InstanceID.
@@ -281,7 +281,7 @@ gen8_emit_vertices(struct brw_context *brw)
           vs_prog_data->uses_baseinstance) {
          OUT_BATCH(GEN6_VE0_VALID |
                    brw->vb.nr_buffers << GEN6_VE0_INDEX_SHIFT |
-                   BRW_SURFACEFORMAT_R32G32_UINT << BRW_VE0_FORMAT_SHIFT);
+                   ISL_FORMAT_R32G32_UINT << BRW_VE0_FORMAT_SHIFT);
          OUT_BATCH((BRW_VE1_COMPONENT_STORE_SRC << BRW_VE1_COMPONENT_0_SHIFT) |
                    (BRW_VE1_COMPONENT_STORE_SRC << BRW_VE1_COMPONENT_1_SHIFT) |
                    (BRW_VE1_COMPONENT_STORE_0 << BRW_VE1_COMPONENT_2_SHIFT) |
@@ -298,7 +298,7 @@ gen8_emit_vertices(struct brw_context *brw)
    if (vs_prog_data->uses_drawid) {
       OUT_BATCH(GEN6_VE0_VALID |
                 ((brw->vb.nr_buffers + 1) << GEN6_VE0_INDEX_SHIFT) |
-                (BRW_SURFACEFORMAT_R32_UINT << BRW_VE0_FORMAT_SHIFT));
+                (ISL_FORMAT_R32_UINT << BRW_VE0_FORMAT_SHIFT));
       OUT_BATCH((BRW_VE1_COMPONENT_STORE_SRC << BRW_VE1_COMPONENT_0_SHIFT) |
                    (BRW_VE1_COMPONENT_STORE_0 << BRW_VE1_COMPONENT_1_SHIFT) |
                    (BRW_VE1_COMPONENT_STORE_0 << BRW_VE1_COMPONENT_2_SHIFT) |

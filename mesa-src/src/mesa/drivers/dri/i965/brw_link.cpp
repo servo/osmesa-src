@@ -22,9 +22,7 @@
  */
 
 #include "brw_context.h"
-#include "brw_shader.h"
-#include "brw_fs.h"
-#include "brw_nir.h"
+#include "compiler/brw_nir.h"
 #include "brw_program.h"
 #include "compiler/glsl/ir.h"
 #include "compiler/glsl/ir_optimization.h"
@@ -50,10 +48,10 @@ brw_shader_precompile(struct gl_context *ctx,
    struct gl_linked_shader *fs = sh_prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
    struct gl_linked_shader *cs = sh_prog->_LinkedShaders[MESA_SHADER_COMPUTE];
 
-   if (fs && !brw_fs_precompile(ctx, sh_prog, fs->Program))
+   if (fs && !brw_fs_precompile(ctx, fs->Program))
       return false;
 
-   if (gs && !brw_gs_precompile(ctx, sh_prog, gs->Program))
+   if (gs && !brw_gs_precompile(ctx, gs->Program))
       return false;
 
    if (tes && !brw_tes_precompile(ctx, sh_prog, tes->Program))
@@ -62,10 +60,10 @@ brw_shader_precompile(struct gl_context *ctx,
    if (tcs && !brw_tcs_precompile(ctx, sh_prog, tcs->Program))
       return false;
 
-   if (vs && !brw_vs_precompile(ctx, sh_prog, vs->Program))
+   if (vs && !brw_vs_precompile(ctx, vs->Program))
       return false;
 
-   if (cs && !brw_cs_precompile(ctx, sh_prog, cs->Program))
+   if (cs && !brw_cs_precompile(ctx, cs->Program))
       return false;
 
    return true;
@@ -134,21 +132,6 @@ process_glsl_ir(struct brw_context *brw,
    lower_noise(shader->ir);
    lower_quadop_vector(shader->ir, false);
 
-   do_copy_propagation(shader->ir);
-
-   bool lowered_variable_indexing =
-      lower_variable_index_to_cond_assign(shader->Stage, shader->ir,
-                                          options->EmitNoIndirectInput,
-                                          options->EmitNoIndirectOutput,
-                                          options->EmitNoIndirectTemp,
-                                          options->EmitNoIndirectUniform);
-
-   if (unlikely(brw->perf_debug && lowered_variable_indexing)) {
-      perf_debug("Unsupported form of variable indexing in %s; falling "
-                 "back to very inefficient code generation\n",
-                 _mesa_shader_stage_to_abbrev(shader->Stage));
-   }
-
    bool progress;
    do {
       progress = false;
@@ -159,12 +142,6 @@ process_glsl_ir(struct brw_context *brw,
             brw_do_channel_expressions(shader->ir);
          brw_do_vector_splitting(shader->ir);
       }
-
-      progress = do_lower_jumps(shader->ir, true, true,
-                                true, /* main return */
-                                false, /* continue */
-                                false /* loops */
-                                ) || progress;
 
       progress = do_common_optimization(shader->ir, true, true,
                                         options, ctx->Const.NativeIntegers) || progress;
@@ -195,19 +172,6 @@ process_glsl_ir(struct brw_context *brw,
    }
 }
 
-extern "C" struct gl_linked_shader *
-brw_new_shader(gl_shader_stage stage)
-{
-   struct brw_shader *shader;
-
-   shader = rzalloc(NULL, struct brw_shader);
-   if (shader) {
-      shader->base.Stage = stage;
-   }
-
-   return &shader->base;
-}
-
 static void
 unify_interfaces(struct shader_info **infos)
 {
@@ -218,9 +182,12 @@ unify_interfaces(struct shader_info **infos)
          continue;
 
       if (prev_info) {
-         prev_info->outputs_written |= infos[i]->inputs_read;
+         prev_info->outputs_written |= infos[i]->inputs_read &
+            ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
+         infos[i]->inputs_read |= prev_info->outputs_written &
+            ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
+
          prev_info->patch_outputs_written |= infos[i]->patch_inputs_read;
-         infos[i]->inputs_read |= prev_info->outputs_written;
          infos[i]->patch_inputs_read |= prev_info->patch_outputs_written;
       }
       prev_info = infos[i];
@@ -247,11 +214,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       _mesa_copy_linked_program_data(shProg, shader);
 
-      prog->SamplersUsed = shader->active_samplers;
       prog->ShadowSamplers = shader->shadow_samplers;
       _mesa_update_shader_textures_used(shProg, prog);
-
-      brw_add_texrect_params(prog);
 
       bool debug_enabled =
          (INTEL_DEBUG & intel_debug_flag_for_shader_stage(shader->Stage));

@@ -24,10 +24,13 @@
 #include "anv_private.h"
 #include "wsi_common.h"
 #include "vk_format_info.h"
+#include "util/vk_util.h"
 
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
 static const struct wsi_callbacks wsi_cbs = {
    .get_phys_device_format_properties = anv_GetPhysicalDeviceFormatProperties,
 };
+#endif
 
 VkResult
 anv_init_wsi(struct anv_physical_device *physical_device)
@@ -74,7 +77,7 @@ void anv_DestroySurfaceKHR(
     const VkAllocationCallbacks*                 pAllocator)
 {
    ANV_FROM_HANDLE(anv_instance, instance, _instance);
-   ANV_FROM_HANDLE(_VkIcdSurfaceBase, surface, _surface);
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
 
    if (!surface)
       return;
@@ -89,12 +92,12 @@ VkResult anv_GetPhysicalDeviceSurfaceSupportKHR(
     VkBool32*                                   pSupported)
 {
    ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
-   ANV_FROM_HANDLE(_VkIcdSurfaceBase, surface, _surface);
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
    struct wsi_interface *iface = device->wsi_device.wsi[surface->platform];
 
    return iface->get_support(surface, &device->wsi_device,
                              &device->instance->alloc,
-                             queueFamilyIndex, pSupported);
+                             queueFamilyIndex, device->local_fd, false, pSupported);
 }
 
 VkResult anv_GetPhysicalDeviceSurfaceCapabilitiesKHR(
@@ -103,7 +106,7 @@ VkResult anv_GetPhysicalDeviceSurfaceCapabilitiesKHR(
     VkSurfaceCapabilitiesKHR*                   pSurfaceCapabilities)
 {
    ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
-   ANV_FROM_HANDLE(_VkIcdSurfaceBase, surface, _surface);
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
    struct wsi_interface *iface = device->wsi_device.wsi[surface->platform];
 
    return iface->get_capabilities(surface, pSurfaceCapabilities);
@@ -116,7 +119,7 @@ VkResult anv_GetPhysicalDeviceSurfaceFormatsKHR(
     VkSurfaceFormatKHR*                         pSurfaceFormats)
 {
    ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
-   ANV_FROM_HANDLE(_VkIcdSurfaceBase, surface, _surface);
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
    struct wsi_interface *iface = device->wsi_device.wsi[surface->platform];
 
    return iface->get_formats(surface, &device->wsi_device, pSurfaceFormatCount,
@@ -130,7 +133,7 @@ VkResult anv_GetPhysicalDeviceSurfacePresentModesKHR(
     VkPresentModeKHR*                           pPresentModes)
 {
    ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
-   ANV_FROM_HANDLE(_VkIcdSurfaceBase, surface, _surface);
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
    struct wsi_interface *iface = device->wsi_device.wsi[surface->platform];
 
    return iface->get_present_modes(surface, pPresentModeCount,
@@ -142,6 +145,8 @@ static VkResult
 x11_anv_wsi_image_create(VkDevice device_h,
                          const VkSwapchainCreateInfoKHR *pCreateInfo,
                          const VkAllocationCallbacks* pAllocator,
+                         bool different_gpu,
+                         bool linear,
                          VkImage *image_p,
                          VkDeviceMemory *memory_p,
                          uint32_t *size,
@@ -198,7 +203,12 @@ x11_anv_wsi_image_create(VkDevice device_h,
       goto fail_create_image;
 
    memory = anv_device_memory_from_handle(memory_h);
-   memory->bo.is_winsys_bo = true;
+
+   /* We need to set the WRITE flag on window system buffers so that GEM will
+    * know we're writing to them and synchronize uses on other rings (eg if
+    * the display server uses the blitter ring).
+    */
+   memory->bo.flags |= EXEC_OBJECT_WRITE;
 
    anv_BindImageMemory(device_h, image_h, memory_h, 0);
 
@@ -260,7 +270,7 @@ VkResult anv_CreateSwapchainKHR(
     VkSwapchainKHR*                              pSwapchain)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(_VkIcdSurfaceBase, surface, pCreateInfo->surface);
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, pCreateInfo->surface);
    struct wsi_interface *iface =
       device->instance->physicalDevice.wsi_device.wsi[surface->platform];
    struct wsi_swapchain *swapchain;
@@ -272,6 +282,7 @@ VkResult anv_CreateSwapchainKHR(
      alloc = &device->alloc;
    VkResult result = iface->create_swapchain(surface, _device,
                                              &device->instance->physicalDevice.wsi_device,
+                                             device->instance->physicalDevice.local_fd,
                                              pCreateInfo,
                                              alloc, &anv_wsi_image_fns,
                                              &swapchain);
@@ -350,21 +361,32 @@ VkResult anv_QueuePresentKHR(
     const VkPresentInfoKHR*                  pPresentInfo)
 {
    ANV_FROM_HANDLE(anv_queue, queue, _queue);
-   VkResult result;
+   VkResult result = VK_SUCCESS;
+
+   const VkPresentRegionsKHR *regions =
+      vk_find_struct_const(pPresentInfo->pNext, PRESENT_REGIONS_KHR);
 
    for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
       ANV_FROM_HANDLE(wsi_swapchain, swapchain, pPresentInfo->pSwapchains[i]);
+      VkResult item_result;
+
+      const VkPresentRegionKHR *region = NULL;
+      if (regions && regions->pRegions)
+         region = &regions->pRegions[i];
 
       assert(anv_device_from_handle(swapchain->device) == queue->device);
 
       if (swapchain->fences[0] == VK_NULL_HANDLE) {
-         result = anv_CreateFence(anv_device_to_handle(queue->device),
+         item_result = anv_CreateFence(anv_device_to_handle(queue->device),
             &(VkFenceCreateInfo) {
                .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
                .flags = 0,
             }, &swapchain->alloc, &swapchain->fences[0]);
-         if (result != VK_SUCCESS)
-            return result;
+         if (pPresentInfo->pResults != NULL)
+            pPresentInfo->pResults[i] = item_result;
+         result = result == VK_SUCCESS ? item_result : result;
+         if (item_result != VK_SUCCESS)
+            continue;
       } else {
          anv_ResetFences(anv_device_to_handle(queue->device),
                          1, &swapchain->fences[0]);
@@ -372,11 +394,15 @@ VkResult anv_QueuePresentKHR(
 
       anv_QueueSubmit(_queue, 0, NULL, swapchain->fences[0]);
 
-      result = swapchain->queue_present(swapchain,
-                                        pPresentInfo->pImageIndices[i]);
+      item_result = swapchain->queue_present(swapchain,
+                                             pPresentInfo->pImageIndices[i],
+                                             region);
       /* TODO: What if one of them returns OUT_OF_DATE? */
-      if (result != VK_SUCCESS)
-         return result;
+      if (pPresentInfo->pResults != NULL)
+         pPresentInfo->pResults[i] = item_result;
+      result = result == VK_SUCCESS ? item_result : result;
+      if (item_result != VK_SUCCESS)
+            continue;
 
       VkFence last = swapchain->fences[2];
       swapchain->fences[2] = swapchain->fences[1];

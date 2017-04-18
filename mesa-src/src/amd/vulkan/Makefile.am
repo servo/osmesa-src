@@ -21,9 +21,7 @@
 
 include Makefile.sources
 
-vulkan_includedir = $(includedir)/vulkan
-
-vulkan_include_HEADERS = \
+noinst_HEADERS = \
 	$(top_srcdir)/include/vulkan/vk_platform.h \
 	$(top_srcdir)/include/vulkan/vulkan.h
 
@@ -32,13 +30,12 @@ lib_LTLIBRARIES = libvulkan_radeon.la
 # The gallium includes are for the util/u_math.h include from main/macros.h
 
 AM_CPPFLAGS = \
-	$(AMDGPU_CFLAGS) \
-	$(VALGRIND_CFLAGS) \
-	$(DEFINES) \
 	-I$(top_srcdir)/include \
 	-I$(top_builddir)/src \
 	-I$(top_srcdir)/src \
 	-I$(top_srcdir)/src/vulkan/wsi \
+	-I$(top_builddir)/src/vulkan/util \
+	-I$(top_srcdir)/src/vulkan/util \
 	-I$(top_srcdir)/src/amd \
 	-I$(top_srcdir)/src/amd/common \
 	-I$(top_builddir)/src/compiler \
@@ -48,7 +45,10 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/mesa \
 	-I$(top_srcdir)/src/mesa/drivers/dri/common \
 	-I$(top_srcdir)/src/gallium/auxiliary \
-	-I$(top_srcdir)/src/gallium/include
+	-I$(top_srcdir)/src/gallium/include \
+	$(AMDGPU_CFLAGS) \
+	$(VALGRIND_CFLAGS) \
+	$(DEFINES)
 
 AM_CFLAGS = \
 	$(VISIBILITY_CFLAGS) \
@@ -77,15 +77,12 @@ endif
 
 if HAVE_PLATFORM_WAYLAND
 AM_CPPFLAGS += \
-	-I$(top_builddir)/src/egl/wayland/wayland-drm \
-	-I$(top_srcdir)/src/egl/wayland/wayland-drm \
 	$(WAYLAND_CFLAGS) \
 	-DVK_USE_PLATFORM_WAYLAND_KHR
 
 VULKAN_SOURCES += $(VULKAN_WSI_WAYLAND_FILES)
 
 VULKAN_LIB_DEPS += \
-	$(top_builddir)/src/egl/wayland/wayland-drm/libwayland-drm.la \
 	$(WAYLAND_LIBS)
 endif
 
@@ -94,7 +91,8 @@ libvulkan_common_la_SOURCES = $(VULKAN_SOURCES)
 
 VULKAN_LIB_DEPS += \
 	libvulkan_common.la \
-	$(top_builddir)/src/vulkan/wsi/libvulkan_wsi.la \
+	$(top_builddir)/src/vulkan/libvulkan_util.la \
+	$(top_builddir)/src/vulkan/libvulkan_wsi.la \
 	$(top_builddir)/src/amd/common/libamd_common.la \
 	$(top_builddir)/src/amd/addrlib/libamdgpu_addrlib.la \
 	$(top_builddir)/src/compiler/nir/libnir.la \
@@ -111,12 +109,14 @@ VULKAN_LIB_DEPS += \
 nodist_EXTRA_libvulkan_radeon_la_SOURCES = dummy.cpp
 libvulkan_radeon_la_SOURCES = $(VULKAN_GEM_FILES)
 
-radv_entrypoints.h : radv_entrypoints_gen.py $(vulkan_include_HEADERS)
-	$(AM_V_GEN) cat $(vulkan_include_HEADERS) |\
+vulkan_api_xml = $(top_srcdir)/src/vulkan/registry/vk.xml
+
+radv_entrypoints.h : radv_entrypoints_gen.py $(vulkan_api_xml)
+	$(AM_V_GEN) cat $(vulkan_api_xml) |\
 	$(PYTHON2) $(srcdir)/radv_entrypoints_gen.py header > $@
 
-radv_entrypoints.c : radv_entrypoints_gen.py $(vulkan_include_HEADERS)
-	$(AM_V_GEN) cat $(vulkan_include_HEADERS) |\
+radv_entrypoints.c : radv_entrypoints_gen.py $(vulkan_api_xml)
+	$(AM_V_GEN) cat $(vulkan_api_xml) |\
 	$(PYTHON2) $(srcdir)/radv_entrypoints_gen.py code > $@
 
 vk_format_table.c: vk_format_table.py \

@@ -58,8 +58,14 @@ struct ir3_register {
 		IR3_REG_CONST  = 0x001,
 		IR3_REG_IMMED  = 0x002,
 		IR3_REG_HALF   = 0x004,
-		IR3_REG_RELATIV= 0x008,
-		IR3_REG_R      = 0x010,
+		/* high registers are used for some things in compute shaders,
+		 * for example.  Seems to be for things that are global to all
+		 * threads in a wave, so possibly these are global/shared by
+		 * all the threads in the wave?
+		 */
+		IR3_REG_HIGH   = 0x008,
+		IR3_REG_RELATIV= 0x010,
+		IR3_REG_R      = 0x020,
 		/* Most instructions, it seems, can do float abs/neg but not
 		 * integer.  The CP pass needs to know what is intended (int or
 		 * float) in order to do the right thing.  For this reason the
@@ -68,23 +74,23 @@ struct ir3_register {
 		 * bitwise not, so split that out into a new flag to make it
 		 * more clear.
 		 */
-		IR3_REG_FNEG   = 0x020,
-		IR3_REG_FABS   = 0x040,
-		IR3_REG_SNEG   = 0x080,
-		IR3_REG_SABS   = 0x100,
-		IR3_REG_BNOT   = 0x200,
-		IR3_REG_EVEN   = 0x400,
-		IR3_REG_POS_INF= 0x800,
+		IR3_REG_FNEG   = 0x040,
+		IR3_REG_FABS   = 0x080,
+		IR3_REG_SNEG   = 0x100,
+		IR3_REG_SABS   = 0x200,
+		IR3_REG_BNOT   = 0x400,
+		IR3_REG_EVEN   = 0x800,
+		IR3_REG_POS_INF= 0x1000,
 		/* (ei) flag, end-input?  Set on last bary, presumably to signal
 		 * that the shader needs no more input:
 		 */
-		IR3_REG_EI     = 0x1000,
+		IR3_REG_EI     = 0x2000,
 		/* meta-flags, for intermediate stages of IR, ie.
 		 * before register assignment is done:
 		 */
-		IR3_REG_SSA    = 0x2000,   /* 'instr' is ptr to assigning instr */
-		IR3_REG_ARRAY  = 0x4000,
-		IR3_REG_PHI_SRC= 0x8000,   /* phi src, regs[0]->instr points to phi */
+		IR3_REG_SSA    = 0x4000,   /* 'instr' is ptr to assigning instr */
+		IR3_REG_ARRAY  = 0x8000,
+		IR3_REG_PHI_SRC= 0x10000,  /* phi src, regs[0]->instr points to phi */
 
 	} flags;
 	union {
@@ -369,12 +375,6 @@ struct ir3 {
 	unsigned predicates_count, predicates_sz;
 	struct ir3_instruction **predicates;
 
-	/* Track instructions which do not write a register but other-
-	 * wise must not be discarded (such as kill, stg, etc)
-	 */
-	unsigned keeps_count, keeps_sz;
-	struct ir3_instruction **keeps;
-
 	/* Track texture sample instructions which need texture state
 	 * patched in (for astc-srgb workaround):
 	 */
@@ -434,6 +434,12 @@ struct ir3_block {
 	struct ir3_block *successors[2];
 
 	uint16_t start_ip, end_ip;
+
+	/* Track instructions which do not write a register but other-
+	 * wise must not be discarded (such as kill, stg, etc)
+	 */
+	unsigned keeps_count, keeps_sz;
+	struct ir3_instruction **keeps;
 
 	/* used for per-pass extra block data.  Mainly used right
 	 * now in RA step to track livein/liveout.
@@ -854,10 +860,10 @@ static inline unsigned ir3_cat3_absneg(opc_t opc)
 	}
 }
 
-#define array_insert(arr, val) do { \
+#define array_insert(ctx, arr, val) do { \
 		if (arr ## _count == arr ## _sz) { \
 			arr ## _sz = MAX2(2 * arr ## _sz, 16); \
-			arr = realloc(arr, arr ## _sz * sizeof(arr[0])); \
+			arr = reralloc_size(ctx, arr, arr ## _sz * sizeof(arr[0])); \
 		} \
 		arr[arr ##_count++] = val; \
 	} while (0)

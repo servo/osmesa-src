@@ -27,7 +27,7 @@
 #include "util/format_rgb9e5.h"
 
 #include "blorp_priv.h"
-#include "brw_defines.h"
+#include "compiler/brw_eu_defines.h"
 
 #include "compiler/nir/nir_builder.h"
 
@@ -40,7 +40,7 @@ struct brw_blorp_const_color_prog_key
    bool pad[3];
 };
 
-static void
+static bool
 blorp_params_get_clear_kernel(struct blorp_context *blorp,
                               struct blorp_params *params,
                               bool use_replicated_data)
@@ -52,7 +52,7 @@ blorp_params_get_clear_kernel(struct blorp_context *blorp,
 
    if (blorp->lookup_shader(blorp, &blorp_key, sizeof(blorp_key),
                             &params->wm_prog_kernel, &params->wm_prog_data))
-      return;
+      return true;
 
    void *mem_ctx = ralloc_context(NULL);
 
@@ -79,12 +79,14 @@ blorp_params_get_clear_kernel(struct blorp_context *blorp,
       blorp_compile_fs(blorp, mem_ctx, b.shader, &wm_key, use_replicated_data,
                        &prog_data, &program_size);
 
-   blorp->upload_shader(blorp, &blorp_key, sizeof(blorp_key),
-                        program, program_size,
-                        &prog_data.base, sizeof(prog_data),
-                        &params->wm_prog_kernel, &params->wm_prog_data);
+   bool result =
+      blorp->upload_shader(blorp, &blorp_key, sizeof(blorp_key),
+                           program, program_size,
+                           &prog_data.base, sizeof(prog_data),
+                           &params->wm_prog_kernel, &params->wm_prog_data);
 
    ralloc_free(mem_ctx);
+   return result;
 }
 
 struct layer_offset_vs_key {
@@ -99,7 +101,7 @@ struct layer_offset_vs_key {
  * no real concept of "base instance", so we have to do it manually in a
  * vertex shader.
  */
-static void
+static bool
 blorp_params_get_layer_offset_vs(struct blorp_context *blorp,
                                  struct blorp_params *params)
 {
@@ -112,7 +114,7 @@ blorp_params_get_layer_offset_vs(struct blorp_context *blorp,
 
    if (blorp->lookup_shader(blorp, &blorp_key, sizeof(blorp_key),
                             &params->vs_prog_kernel, &params->vs_prog_data))
-      return;
+      return true;
 
    void *mem_ctx = ralloc_context(NULL);
 
@@ -168,12 +170,14 @@ blorp_params_get_layer_offset_vs(struct blorp_context *blorp,
    const unsigned *program =
       blorp_compile_vs(blorp, mem_ctx, b.shader, &vs_prog_data, &program_size);
 
-   blorp->upload_shader(blorp, &blorp_key, sizeof(blorp_key),
-                        program, program_size,
-                        &vs_prog_data.base.base, sizeof(vs_prog_data),
-                        &params->vs_prog_kernel, &params->vs_prog_data);
+   bool result =
+      blorp->upload_shader(blorp, &blorp_key, sizeof(blorp_key),
+                           program, program_size,
+                           &vs_prog_data.base.base, sizeof(vs_prog_data),
+                           &params->vs_prog_kernel, &params->vs_prog_data);
 
    ralloc_free(mem_ctx);
+   return result;
 }
 
 /* The x0, y0, x1, and y1 parameters must already be populated with the render
@@ -319,7 +323,8 @@ blorp_fast_clear(struct blorp_batch *batch,
    get_fast_clear_rect(batch->blorp->isl_dev, surf->aux_surf,
                        &params.x0, &params.y0, &params.x1, &params.y1);
 
-   blorp_params_get_clear_kernel(batch->blorp, &params, true);
+   if (!blorp_params_get_clear_kernel(batch->blorp, &params, true))
+      return;
 
    brw_blorp_surface_info_init(batch->blorp, &params.dst, surf, level,
                                start_layer, format, true);
@@ -328,6 +333,26 @@ blorp_fast_clear(struct blorp_batch *batch,
    batch->blorp->exec(batch, &params);
 }
 
+static union isl_color_value
+swizzle_color_value(union isl_color_value src, struct isl_swizzle swizzle)
+{
+   union isl_color_value dst = { .u32 = { 0, } };
+
+   /* We assign colors in ABGR order so that the first one will be taken in
+    * RGBA precedence order.  According to the PRM docs for shader channel
+    * select, this matches Haswell hardware behavior.
+    */
+   if ((unsigned)(swizzle.a - ISL_CHANNEL_SELECT_RED) < 4)
+      dst.u32[swizzle.a - ISL_CHANNEL_SELECT_RED] = src.u32[3];
+   if ((unsigned)(swizzle.b - ISL_CHANNEL_SELECT_RED) < 4)
+      dst.u32[swizzle.b - ISL_CHANNEL_SELECT_RED] = src.u32[2];
+   if ((unsigned)(swizzle.g - ISL_CHANNEL_SELECT_RED) < 4)
+      dst.u32[swizzle.g - ISL_CHANNEL_SELECT_RED] = src.u32[1];
+   if ((unsigned)(swizzle.r - ISL_CHANNEL_SELECT_RED) < 4)
+      dst.u32[swizzle.r - ISL_CHANNEL_SELECT_RED] = src.u32[0];
+
+   return dst;
+}
 
 void
 blorp_clear(struct blorp_batch *batch,
@@ -346,9 +371,24 @@ blorp_clear(struct blorp_batch *batch,
    params.x1 = x1;
    params.y1 = y1;
 
+   /* Manually apply the clear destination swizzle.  This way swizzled clears
+    * will work for swizzles which we can't normally use for rendering and it
+    * also ensures that they work on pre-Haswell hardware which can't swizlle
+    * at all.
+    */
+   clear_color = swizzle_color_value(clear_color, swizzle);
+   swizzle = ISL_SWIZZLE_IDENTITY;
+
    if (format == ISL_FORMAT_R9G9B9E5_SHAREDEXP) {
       clear_color.u32[0] = float3_to_rgb9e5(clear_color.f32);
       format = ISL_FORMAT_R32_UINT;
+   } else if (format == ISL_FORMAT_A4B4G4R4_UNORM) {
+      /* Broadwell and earlier cannot render to this format so we need to work
+       * around it by swapping the colors around and using B4G4R4A4 instead.
+       */
+      const struct isl_swizzle ARGB = ISL_SWIZZLE(ALPHA, RED, GREEN, BLUE);
+      clear_color = swizzle_color_value(clear_color, ARGB);
+      format = ISL_FORMAT_B4G4R4A4_UNORM;
    }
 
    memcpy(&params.wm_inputs.clear_color, clear_color.f32, sizeof(float) * 4);
@@ -375,8 +415,9 @@ blorp_clear(struct blorp_batch *batch,
       }
    }
 
-   blorp_params_get_clear_kernel(batch->blorp, &params,
-                                 use_simd16_replicated_data);
+   if (!blorp_params_get_clear_kernel(batch->blorp, &params,
+                                      use_simd16_replicated_data))
+      return;
 
    while (num_layers > 0) {
       brw_blorp_surface_info_init(batch->blorp, &params.dst, surf, level,
@@ -470,6 +511,87 @@ blorp_clear_depth_stencil(struct blorp_batch *batch,
    }
 }
 
+bool
+blorp_can_hiz_clear_depth(uint8_t gen, enum isl_format format,
+                          uint32_t num_samples,
+                          uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
+{
+   /* This function currently doesn't support any gen prior to gen8 */
+   assert(gen >= 8);
+
+   if (gen == 8 && format == ISL_FORMAT_R16_UNORM) {
+      /* Apply the D16 alignment restrictions. On BDW, HiZ has an 8x4 sample
+       * block with the following property: as the number of samples increases,
+       * the number of pixels representable by this block decreases by a factor
+       * of the sample dimensions. Sample dimensions scale following the MSAA
+       * interleaved pattern.
+       *
+       * Sample|Sample|Pixel
+       * Count |Dim   |Dim
+       * ===================
+       *    1  | 1x1  | 8x4
+       *    2  | 2x1  | 4x4
+       *    4  | 2x2  | 4x2
+       *    8  | 4x2  | 2x2
+       *   16  | 4x4  | 2x1
+       *
+       * Table: Pixel Dimensions in a HiZ Sample Block Pre-SKL
+       */
+      const struct isl_extent2d sa_block_dim =
+         isl_get_interleaved_msaa_px_size_sa(num_samples);
+      const uint8_t align_px_w = 8 / sa_block_dim.w;
+      const uint8_t align_px_h = 4 / sa_block_dim.h;
+
+      /* Fast depth clears clear an entire sample block at a time. As a result,
+       * the rectangle must be aligned to the dimensions of the encompassing
+       * pixel block for a successful operation.
+       *
+       * Fast clears can still work if the upper-left corner is aligned and the
+       * bottom-rigtht corner touches the edge of a depth buffer whose extent
+       * is unaligned. This is because each miplevel in the depth buffer is
+       * padded by the Pixel Dim (similar to a standard compressed texture).
+       * In this case, the clear rectangle could be padded by to match the full
+       * depth buffer extent but to support multiple clearing techniques, we
+       * chose to be unaware of the depth buffer's extent and thus don't handle
+       * this case.
+       */
+      if (x0 % align_px_w || y0 % align_px_h ||
+          x1 % align_px_w || y1 % align_px_h)
+         return false;
+   }
+   return true;
+}
+
+/* Given a depth stencil attachment, this function performs a fast depth clear
+ * on a depth portion and a regular clear on the stencil portion. When
+ * performing a fast depth clear on the depth portion, the HiZ buffer is simply
+ * tagged as cleared so the depth clear value is not actually needed.
+ */
+void
+blorp_gen8_hiz_clear_attachments(struct blorp_batch *batch,
+                                 uint32_t num_samples,
+                                 uint32_t x0, uint32_t y0,
+                                 uint32_t x1, uint32_t y1,
+                                 bool clear_depth, bool clear_stencil,
+                                 uint8_t stencil_value)
+{
+   assert(batch->flags & BLORP_BATCH_NO_EMIT_DEPTH_STENCIL);
+
+   struct blorp_params params;
+   blorp_params_init(&params);
+   params.num_layers = 1;
+   params.hiz_op = BLORP_HIZ_OP_DEPTH_CLEAR;
+   params.x0 = x0;
+   params.y0 = y0;
+   params.x1 = x1;
+   params.y1 = y1;
+   params.num_samples = num_samples;
+   params.depth.enabled = clear_depth;
+   params.stencil.enabled = clear_stencil;
+   params.stencil_ref = stencil_value;
+   batch->blorp->exec(batch, &params);
+}
+
 /** Clear active color/depth/stencili attachments
  *
  * This function performs a clear operation on the currently bound
@@ -517,7 +639,8 @@ blorp_clear_attachments(struct blorp_batch *batch,
        * is tiled or not, we have to assume it may be linear.  This means no
        * SIMD16_REPDATA for us. :-(
        */
-      blorp_params_get_clear_kernel(batch->blorp, &params, false);
+      if (!blorp_params_get_clear_kernel(batch->blorp, &params, false))
+         return;
    }
 
    if (clear_depth) {
@@ -534,7 +657,9 @@ blorp_clear_attachments(struct blorp_batch *batch,
       params.stencil_ref = stencil_value;
    }
 
-   blorp_params_get_layer_offset_vs(batch->blorp, &params);
+   if (!blorp_params_get_layer_offset_vs(batch->blorp, &params))
+      return;
+
    params.vs_inputs.base_layer = start_layer;
 
    batch->blorp->exec(batch, &params);
@@ -601,7 +726,8 @@ blorp_ccs_resolve(struct blorp_batch *batch,
     * color" message.
     */
 
-   blorp_params_get_clear_kernel(batch->blorp, &params, true);
+   if (!blorp_params_get_clear_kernel(batch->blorp, &params, true))
+      return;
 
    batch->blorp->exec(batch, &params);
 }

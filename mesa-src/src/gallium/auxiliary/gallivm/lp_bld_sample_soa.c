@@ -159,7 +159,7 @@ lp_build_sample_texel_soa(struct lp_build_sample_context *bld,
 
    lp_build_fetch_rgba_soa(bld->gallivm,
                            bld->format_desc,
-                           bld->texel_type,
+                           bld->texel_type, TRUE,
                            data_ptr, offset,
                            i, j,
                            bld->cache,
@@ -2406,7 +2406,7 @@ lp_build_fetch_texel(struct lp_build_sample_context *bld,
 
    lp_build_fetch_rgba_soa(bld->gallivm,
                            bld->format_desc,
-                           bld->texel_type,
+                           bld->texel_type, TRUE,
                            bld->base_ptr, offset,
                            i, j,
                            bld->cache,
@@ -3462,7 +3462,7 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
                         struct lp_sampler_dynamic_state *dynamic_state,
                         const struct lp_sampler_size_query_params *params)
 {
-   LLVMValueRef lod, level, size;
+   LLVMValueRef lod, level = 0, size;
    LLVMValueRef first_level = NULL;
    int dims, i;
    boolean has_array;

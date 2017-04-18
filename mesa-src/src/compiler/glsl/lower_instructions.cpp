@@ -54,8 +54,8 @@
  * want to recognize add(op0, neg(op1)) or the other way around to
  * produce a subtract anyway.
  *
- * DIV_TO_MUL_RCP and INT_DIV_TO_MUL_RCP:
- * --------------------------------------
+ * FDIV_TO_MUL_RCP, DDIV_TO_MUL_RCP, and INT_DIV_TO_MUL_RCP:
+ * ---------------------------------------------------------
  * Breaks an ir_binop_div expression down to op0 * (rcp(op1)).
  *
  * Many GPUs don't have a divide instruction (945 and 965 included),
@@ -63,9 +63,11 @@
  * reciprocal.  By breaking the operation down, constant reciprocals
  * can get constant folded.
  *
- * DIV_TO_MUL_RCP only lowers floating point division; INT_DIV_TO_MUL_RCP
- * handles the integer case, converting to and from floating point so that
- * RCP is possible.
+ * FDIV_TO_MUL_RCP only lowers single-precision floating point division;
+ * DDIV_TO_MUL_RCP only lowers double-precision floating point division.
+ * DIV_TO_MUL_RCP is a convenience macro that sets both flags.
+ * INT_DIV_TO_MUL_RCP handles the integer case, converting to and from floating
+ * point so that RCP is possible.
  *
  * EXP_TO_EXP2 and LOG_TO_LOG2:
  * ----------------------------
@@ -166,6 +168,7 @@ private:
    void find_lsb_to_float_cast(ir_expression *ir);
    void find_msb_to_float_cast(ir_expression *ir);
    void imul_high_to_mul(ir_expression *ir);
+   void sqrt_to_abs_sqrt(ir_expression *ir);
 
    ir_expression *_carry(operand a, operand b);
 };
@@ -326,7 +329,8 @@ lower_instructions_visitor::mod_to_floor(ir_expression *ir)
    /* Don't generate new IR that would need to be lowered in an additional
     * pass.
     */
-   if (lowering(DIV_TO_MUL_RCP) && (ir->type->is_float() || ir->type->is_double()))
+   if ((lowering(FDIV_TO_MUL_RCP) && ir->type->is_float()) ||
+       (lowering(DDIV_TO_MUL_RCP) && ir->type->is_double()))
       div_to_mul_rcp(div_expr);
 
    ir_expression *const floor_expr =
@@ -1579,6 +1583,13 @@ lower_instructions_visitor::imul_high_to_mul(ir_expression *ir)
    }
 }
 
+void
+lower_instructions_visitor::sqrt_to_abs_sqrt(ir_expression *ir)
+{
+   ir->operands[0] = new(ir) ir_expression(ir_unop_abs, ir->operands[0]);
+   this->progress = true;
+}
+
 ir_visitor_status
 lower_instructions_visitor::visit_leave(ir_expression *ir)
 {
@@ -1599,8 +1610,8 @@ lower_instructions_visitor::visit_leave(ir_expression *ir)
    case ir_binop_div:
       if (ir->operands[1]->type->is_integer() && lowering(INT_DIV_TO_MUL_RCP))
 	 int_div_to_mul_rcp(ir);
-      else if ((ir->operands[1]->type->is_float() ||
-                ir->operands[1]->type->is_double()) && lowering(DIV_TO_MUL_RCP))
+      else if ((ir->operands[1]->type->is_float() && lowering(FDIV_TO_MUL_RCP)) ||
+               (ir->operands[1]->type->is_double() && lowering(DDIV_TO_MUL_RCP)))
 	 div_to_mul_rcp(ir);
       break;
 
@@ -1714,6 +1725,12 @@ lower_instructions_visitor::visit_leave(ir_expression *ir)
    case ir_binop_imul_high:
       if (lowering(IMUL_HIGH_TO_MUL))
          imul_high_to_mul(ir);
+      break;
+
+   case ir_unop_rsq:
+   case ir_unop_sqrt:
+      if (lowering(SQRT_TO_ABS_SQRT))
+         sqrt_to_abs_sqrt(ir);
       break;
 
    default:

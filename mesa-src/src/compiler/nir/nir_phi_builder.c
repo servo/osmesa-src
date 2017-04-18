@@ -216,7 +216,7 @@ nir_phi_builder_value_get_block_def(struct nir_phi_builder_value *val,
                         val->bit_size, NULL);
       phi->instr.block = dom;
       exec_list_push_tail(&val->phis, &phi->instr.node);
-      def = &phi->dest.ssa;
+      def = val->defs[dom->index] = &phi->dest.ssa;
    } else {
       /* In this case, we have an actual SSA def.  It's either the result of a
        * phi node created by the case above or one passed to us through
@@ -241,8 +241,8 @@ nir_phi_builder_value_get_block_def(struct nir_phi_builder_value *val,
 static int
 compare_blocks(const void *_a, const void *_b)
 {
-   nir_block * const * a = _a;
-   nir_block * const * b = _b;
+   const nir_block * const * a = _a;
+   const nir_block * const * b = _b;
 
    return (*a)->index - (*b)->index;
 }

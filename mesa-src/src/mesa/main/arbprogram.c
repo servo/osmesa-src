@@ -83,7 +83,7 @@ _mesa_BindProgramARB(GLenum target, GLuint id)
       newProg = _mesa_lookup_program(ctx, id);
       if (!newProg || newProg == &_mesa_DummyProgram) {
          /* allocate a new program now */
-         newProg = ctx->Driver.NewProgram(ctx, target, id);
+         newProg = ctx->Driver.NewProgram(ctx, target, id, true);
          if (!newProg) {
             _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindProgramARB");
             return;
@@ -118,9 +118,6 @@ _mesa_BindProgramARB(GLenum target, GLuint id)
    /* Never null pointers */
    assert(ctx->VertexProgram.Current);
    assert(ctx->FragmentProgram.Current);
-
-   if (ctx->Driver.BindProgram)
-      ctx->Driver.BindProgram(ctx, target, newProg);
 }
 
 

@@ -29,39 +29,24 @@
 
 #include "brw_gs.h"
 #include "brw_context.h"
-#include "brw_vec4_gs_visitor.h"
 #include "brw_state.h"
 #include "brw_ff_gs.h"
-#include "brw_nir.h"
+#include "compiler/brw_nir.h"
 #include "brw_program.h"
 #include "compiler/glsl/ir_uniform.h"
 
 static void
-brw_gs_debug_recompile(struct brw_context *brw,
-                       struct gl_shader_program *shader_prog,
+brw_gs_debug_recompile(struct brw_context *brw, struct gl_program *prog,
                        const struct brw_gs_prog_key *key)
 {
-   struct brw_cache_item *c = NULL;
-   const struct brw_gs_prog_key *old_key = NULL;
+   perf_debug("Recompiling geometry shader for program %d\n", prog->Id);
+
    bool found = false;
+   const struct brw_gs_prog_key *old_key =
+      brw_find_previous_compile(&brw->cache, BRW_CACHE_GS_PROG,
+                                key->program_string_id);
 
-   perf_debug("Recompiling geometry shader for program %d\n",
-              shader_prog->Name);
-
-   for (unsigned int i = 0; i < brw->cache.size; i++) {
-      for (c = brw->cache.items[i]; c; c = c->next) {
-         if (c->cache_id == BRW_CACHE_GS_PROG) {
-            old_key = c->key;
-
-            if (old_key->program_string_id == key->program_string_id)
-               break;
-         }
-      }
-      if (c)
-         break;
-   }
-
-   if (!c) {
+   if (!old_key) {
       perf_debug("  Didn't find previous compile in the shader cache for "
                  "debug\n");
       return;
@@ -76,7 +61,6 @@ brw_gs_debug_recompile(struct brw_context *brw,
 
 static void
 assign_gs_binding_table_offsets(const struct gen_device_info *devinfo,
-                                const struct gl_shader_program *shader_prog,
                                 const struct gl_program *prog,
                                 struct brw_gs_prog_data *prog_data)
 {
@@ -85,15 +69,12 @@ assign_gs_binding_table_offsets(const struct gen_device_info *devinfo,
     */
    uint32_t reserved = devinfo->gen == 6 ? BRW_MAX_SOL_BINDINGS : 0;
 
-   brw_assign_common_binding_table_offsets(MESA_SHADER_GEOMETRY, devinfo,
-                                           shader_prog, prog,
-                                           &prog_data->base.base,
-                                           reserved);
+   brw_assign_common_binding_table_offsets(devinfo, prog,
+                                           &prog_data->base.base, reserved);
 }
 
-bool
+static bool
 brw_codegen_gs_prog(struct brw_context *brw,
-                    struct gl_shader_program *prog,
                     struct brw_program *gp,
                     struct brw_gs_prog_key *key)
 {
@@ -106,7 +87,7 @@ brw_codegen_gs_prog(struct brw_context *brw,
 
    memset(&prog_data, 0, sizeof(prog_data));
 
-   assign_gs_binding_table_offsets(devinfo, prog, &gp->program, &prog_data);
+   assign_gs_binding_table_offsets(devinfo, &gp->program, &prog_data);
 
    /* Allocate the references to the uniforms that will end up in the
     * prog_data associated with the compiled program, and which will be freed
@@ -116,8 +97,6 @@ brw_codegen_gs_prog(struct brw_context *brw,
     * padding around uniform values below vec4 size, so the worst case is that
     * every uniform is a float which gets padded to the size of a vec4.
     */
-   struct gl_linked_shader *gs = prog->_LinkedShaders[MESA_SHADER_GEOMETRY];
-   struct brw_shader *bgs = (struct brw_shader *) gs;
    int param_count = gp->program.nir->num_uniforms / 4;
 
    prog_data.base.base.param =
@@ -130,7 +109,7 @@ brw_codegen_gs_prog(struct brw_context *brw,
    prog_data.base.base.nr_params = param_count;
    prog_data.base.base.nr_image_params = gp->program.info.num_images;
 
-   brw_nir_setup_glsl_uniforms(gp->program.nir, prog, &gp->program,
+   brw_nir_setup_glsl_uniforms(gp->program.nir, &gp->program,
                                &prog_data.base.base,
                                compiler->scalar_stage[MESA_SHADER_GEOMETRY]);
 
@@ -138,14 +117,14 @@ brw_codegen_gs_prog(struct brw_context *brw,
 
    brw_compute_vue_map(devinfo,
                        &prog_data.base.vue_map, outputs_written,
-                       prog->SeparateShader);
+                       gp->program.info.separate_shader);
 
    int st_index = -1;
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
-      st_index = brw_get_shader_time_index(brw, prog, NULL, ST_GS);
+      st_index = brw_get_shader_time_index(brw, &gp->program, ST_GS, true);
 
    if (unlikely(brw->perf_debug)) {
-      start_busy = brw->batch.last_bo && drm_intel_bo_busy(brw->batch.last_bo);
+      start_busy = brw->batch.last_bo && brw_bo_busy(brw->batch.last_bo);
       start_time = get_time();
    }
 
@@ -154,10 +133,10 @@ brw_codegen_gs_prog(struct brw_context *brw,
    char *error_str;
    const unsigned *program =
       brw_compile_gs(brw->screen->compiler, brw, mem_ctx, key,
-                     &prog_data, gs->Program->nir, prog,
+                     &prog_data, gp->program.nir, &gp->program,
                      st_index, &program_size, &error_str);
    if (program == NULL) {
-      ralloc_strcat(&prog->data->InfoLog, error_str);
+      ralloc_strcat(&gp->program.sh.data->InfoLog, error_str);
       _mesa_problem(NULL, "Failed to compile geometry shader: %s\n", error_str);
 
       ralloc_free(mem_ctx);
@@ -165,14 +144,14 @@ brw_codegen_gs_prog(struct brw_context *brw,
    }
 
    if (unlikely(brw->perf_debug)) {
-      if (bgs->compiled_once) {
-         brw_gs_debug_recompile(brw, prog, key);
+      if (gp->compiled_once) {
+         brw_gs_debug_recompile(brw, &gp->program, key);
       }
-      if (start_busy && !drm_intel_bo_busy(brw->batch.last_bo)) {
+      if (start_busy && !brw_bo_busy(brw->batch.last_bo)) {
          perf_debug("GS compile took %.03f ms and stalled the GPU\n",
                     (get_time() - start_time) * 1000);
       }
-      bgs->compiled_once = true;
+      gp->compiled_once = true;
    }
 
    /* Scratch space is used for register spilling */
@@ -217,8 +196,6 @@ brw_gs_populate_key(struct brw_context *brw,
 void
 brw_upload_gs_prog(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->ctx;
-   struct gl_shader_program **current = ctx->_Shader->CurrentProgram;
    struct brw_stage_state *stage_state = &brw->gs.base;
    struct brw_gs_prog_key key;
    /* BRW_NEW_GEOMETRY_PROGRAM */
@@ -249,17 +226,14 @@ brw_upload_gs_prog(struct brw_context *brw)
                          &key, sizeof(key),
                          &stage_state->prog_offset,
                          &brw->gs.base.prog_data)) {
-      bool success = brw_codegen_gs_prog(brw, current[MESA_SHADER_GEOMETRY],
-                                         gp, &key);
+      bool success = brw_codegen_gs_prog(brw, gp, &key);
       assert(success);
       (void)success;
    }
 }
 
 bool
-brw_gs_precompile(struct gl_context *ctx,
-                  struct gl_shader_program *shader_prog,
-                  struct gl_program *prog)
+brw_gs_precompile(struct gl_context *ctx, struct gl_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_gs_prog_key key;
@@ -274,7 +248,7 @@ brw_gs_precompile(struct gl_context *ctx,
    brw_setup_tex_for_precompile(brw, &key.tex, prog);
    key.program_string_id = bgp->id;
 
-   success = brw_codegen_gs_prog(brw, shader_prog, bgp, &key);
+   success = brw_codegen_gs_prog(brw, bgp, &key);
 
    brw->gs.base.prog_offset = old_prog_offset;
    brw->gs.base.prog_data = old_prog_data;

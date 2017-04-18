@@ -62,7 +62,7 @@ struct cpufreq_info
 
 static int gcpufreq_count = 0;
 static struct list_head gcpufreq_list;
-pipe_static_mutex(gcpufreq_mutex);
+static mtx_t gcpufreq_mutex = _MTX_INITIALIZER_NP;
 
 static struct cpufreq_info *
 find_cfi_by_index(int cpu_index, int mode)
@@ -149,6 +149,7 @@ hud_cpufreq_graph_install(struct hud_pane *pane, int cpu_index,
       break;
    case CPUFREQ_MAXIMUM:
       snprintf(gr->name, sizeof(gr->name), "%s-Max", cfi->name);
+      break;
    default:
       return;
    }
@@ -188,9 +189,9 @@ hud_get_num_cpufreq(bool displayhelp)
    int cpu_index;
 
    /* Return the number of CPU metrics we support. */
-   pipe_mutex_lock(gcpufreq_mutex);
+   mtx_lock(&gcpufreq_mutex);
    if (gcpufreq_count) {
-      pipe_mutex_unlock(gcpufreq_mutex);
+      mtx_unlock(&gcpufreq_mutex);
       return gcpufreq_count;
    }
 
@@ -200,7 +201,7 @@ hud_get_num_cpufreq(bool displayhelp)
    list_inithead(&gcpufreq_list);
    DIR *dir = opendir("/sys/devices/system/cpu");
    if (!dir) {
-      pipe_mutex_unlock(gcpufreq_mutex);
+      mtx_unlock(&gcpufreq_mutex);
       return 0;
    }
 
@@ -246,7 +247,7 @@ hud_get_num_cpufreq(bool displayhelp)
       }
    }
 
-   pipe_mutex_unlock(gcpufreq_mutex);
+   mtx_unlock(&gcpufreq_mutex);
    return gcpufreq_count;
 }
 

@@ -1119,37 +1119,14 @@ track_params(struct i915_fragment_program *p)
    p->on_hardware = 0;          /* overkill */
 }
 
-
-static void
-i915BindProgram(struct gl_context * ctx, GLenum target, struct gl_program *prog)
-{
-   if (target == GL_FRAGMENT_PROGRAM_ARB) {
-      struct i915_context *i915 = I915_CONTEXT(ctx);
-      struct i915_fragment_program *p = (struct i915_fragment_program *) prog;
-
-      if (i915->current_program == p)
-         return;
-
-      if (i915->current_program) {
-         i915->current_program->on_hardware = 0;
-         i915->current_program->params_uptodate = 0;
-      }
-
-      i915->current_program = p;
-
-      assert(p->on_hardware == 0);
-      assert(p->params_uptodate == 0);
-
-   }
-}
-
 static struct gl_program *
-i915NewProgram(struct gl_context * ctx, GLenum target, GLuint id)
+i915NewProgram(struct gl_context * ctx, GLenum target, GLuint id,
+               bool is_arb_asm)
 {
    switch (target) {
    case GL_VERTEX_PROGRAM_ARB: {
       struct gl_program *prog = rzalloc(NULL, struct gl_program);
-      return _mesa_init_gl_program(prog, target, id);
+      return _mesa_init_gl_program(prog, target, id, is_arb_asm);
    }
 
    case GL_FRAGMENT_PROGRAM_ARB:{
@@ -1158,7 +1135,8 @@ i915NewProgram(struct gl_context * ctx, GLenum target, GLuint id)
          if (prog) {
             i915_init_program(I915_CONTEXT(ctx), prog);
 
-            return _mesa_init_gl_program(&prog->FragProg, target, id);
+            return _mesa_init_gl_program(&prog->FragProg, target, id,
+                                         is_arb_asm);
          }
          else
             return NULL;
@@ -1167,7 +1145,7 @@ i915NewProgram(struct gl_context * ctx, GLenum target, GLuint id)
    default:
       /* Just fallback:
        */
-      return _mesa_new_program(ctx, target, id);
+      return _mesa_new_program(ctx, target, id, is_arb_asm);
    }
 }
 
@@ -1370,7 +1348,6 @@ i915ValidateFragmentProgram(struct i915_context *i915)
 void
 i915InitFragProgFuncs(struct dd_function_table *functions)
 {
-   functions->BindProgram = i915BindProgram;
    functions->NewProgram = i915NewProgram;
    functions->DeleteProgram = i915DeleteProgram;
    functions->IsProgramNative = i915IsProgramNative;

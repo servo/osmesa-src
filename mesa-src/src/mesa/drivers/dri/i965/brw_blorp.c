@@ -34,7 +34,7 @@
 #include "brw_meta_util.h"
 #include "brw_state.h"
 #include "intel_fbo.h"
-#include "intel_debug.h"
+#include "common/gen_debug.h"
 
 #define FILE_DEBUG_FLAG DEBUG_BLORP
 
@@ -48,7 +48,7 @@ brw_blorp_lookup_shader(struct blorp_context *blorp,
                            key, key_size, kernel_out, prog_data_out);
 }
 
-static void
+static bool
 brw_blorp_upload_shader(struct blorp_context *blorp,
                         const void *key, uint32_t key_size,
                         const void *kernel, uint32_t kernel_size,
@@ -60,6 +60,7 @@ brw_blorp_upload_shader(struct blorp_context *blorp,
    brw_upload_cache(&brw->cache, BRW_CACHE_BLORP_PROG, key, key_size,
                     kernel, kernel_size, prog_data, prog_data_size,
                     kernel_out, prog_data_out);
+   return true;
 }
 
 void
@@ -244,24 +245,22 @@ blorp_surf_for_miptree(struct brw_context *brw,
          surf->aux_addr.offset = mt->mcs_buf->offset;
       } else {
          assert(surf->aux_usage == ISL_AUX_USAGE_HIZ);
+
+         surf->aux_addr.buffer = mt->hiz_buf->aux_base.bo;
+         surf->aux_addr.offset = mt->hiz_buf->aux_base.offset;
+
          struct intel_mipmap_tree *hiz_mt = mt->hiz_buf->mt;
          if (hiz_mt) {
-            surf->aux_addr.buffer = hiz_mt->bo;
-            if (brw->gen == 6 &&
-                hiz_mt->array_layout == ALL_SLICES_AT_EACH_LOD) {
-               /* gen6 requires the HiZ buffer to be manually offset to the
-                * right location.  We could fixup the surf but it doesn't
-                * matter since most of those fields don't matter.
-                */
-               apply_gen6_stencil_hiz_offset(aux_surf, hiz_mt, *level,
-                                             &surf->aux_addr.offset);
-            } else {
-               surf->aux_addr.offset = 0;
-            }
+            assert(brw->gen == 6 &&
+                   hiz_mt->array_layout == ALL_SLICES_AT_EACH_LOD);
+
+            /* gen6 requires the HiZ buffer to be manually offset to the
+             * right location.  We could fixup the surf but it doesn't
+             * matter since most of those fields don't matter.
+             */
+            apply_gen6_stencil_hiz_offset(aux_surf, hiz_mt, *level,
+                                          &surf->aux_addr.offset);
             assert(hiz_mt->pitch == aux_surf->row_pitch);
-         } else {
-            surf->aux_addr.buffer = mt->hiz_buf->aux_base.bo;
-            surf->aux_addr.offset = mt->hiz_buf->aux_base.offset;
          }
       }
    } else {
@@ -284,8 +283,10 @@ brw_blorp_to_isl_format(struct brw_context *brw, mesa_format format,
    case MESA_FORMAT_S_UINT8:
       return ISL_FORMAT_R8_UINT;
    case MESA_FORMAT_Z24_UNORM_X8_UINT:
+   case MESA_FORMAT_Z24_UNORM_S8_UINT:
       return ISL_FORMAT_R24_UNORM_X8_TYPELESS;
    case MESA_FORMAT_Z_FLOAT32:
+   case MESA_FORMAT_Z32_FLOAT_S8X24_UINT:
       return ISL_FORMAT_R32_FLOAT;
    case MESA_FORMAT_Z_UNORM16:
       return ISL_FORMAT_R16_UNORM;
@@ -294,7 +295,7 @@ brw_blorp_to_isl_format(struct brw_context *brw, mesa_format format,
          assert(brw->format_supported_as_render_target[format]);
          return brw->render_target_format[format];
       } else {
-         return brw_format_for_mesa_format(format);
+         return brw_isl_format_for_mesa_format(format);
       }
       break;
    }
@@ -808,7 +809,7 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
    if (set_write_disables(irb, ctx->Color.ColorMask[buf], color_write_disable))
       can_fast_clear = false;
 
-   if (irb->mt->no_ccs ||
+   if (irb->mt->aux_disable & INTEL_AUX_DISABLE_CCS ||
        !brw_is_color_fast_clear_compatible(brw, irb->mt, &ctx->Color.ClearColor))
       can_fast_clear = false;
 
@@ -908,6 +909,17 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       blorp_batch_finish(&batch);
    }
 
+   /*
+    * Ivybrigde PRM Vol 2, Part 1, "11.7 MCS Buffer for Render Target(s)":
+    *
+    *  Any transition from any value in {Clear, Render, Resolve} to a
+    *  different value in {Clear, Render, Resolve} requires end of pipe
+    *  synchronization.
+    */
+   brw_emit_pipe_control_flush(brw,
+                               PIPE_CONTROL_RENDER_TARGET_FLUSH |
+                               PIPE_CONTROL_CS_STALL);
+
    return true;
 }
 
@@ -975,6 +987,17 @@ brw_blorp_resolve_color(struct brw_context *brw, struct intel_mipmap_tree *mt,
                      brw_blorp_to_isl_format(brw, format, true),
                      resolve_op);
    blorp_batch_finish(&batch);
+
+   /*
+    * Ivybrigde PRM Vol 2, Part 1, "11.7 MCS Buffer for Render Target(s)":
+    *
+    *  Any transition from any value in {Clear, Render, Resolve} to a
+    *  different value in {Clear, Render, Resolve} requires end of pipe
+    *  synchronization.
+    */
+   brw_emit_pipe_control_flush(brw,
+                               PIPE_CONTROL_RENDER_TARGET_FLUSH |
+                               PIPE_CONTROL_CS_STALL);
 }
 
 static void

@@ -44,7 +44,7 @@ struct fd_bo;
 struct fd_screen {
 	struct pipe_screen base;
 
-	pipe_mutex lock;
+	mtx_t lock;
 
 	/* it would be tempting to use pipe_reference here, but that
 	 * really doesn't work well if it isn't the first member of
@@ -124,7 +124,7 @@ is_a5xx(struct fd_screen *screen)
 static inline boolean
 is_ir3(struct fd_screen *screen)
 {
-	return is_a3xx(screen) || is_a4xx(screen);
+	return is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen);
 }
 
 #endif /* FREEDRENO_SCREEN_H_ */

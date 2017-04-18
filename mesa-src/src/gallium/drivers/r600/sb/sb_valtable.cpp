@@ -212,25 +212,39 @@ void value_table::get_values(vvec& v) {
 	}
 }
 
-void value::add_use(node* n, use_kind kind, int arg) {
+void value::add_use(node* n) {
 	if (0) {
 	sblog << "add_use ";
 	dump::dump_val(this);
 	sblog << "   =>  ";
 	dump::dump_op(n);
-	sblog << "     kind " << kind << "    arg " << arg << "\n";
 	}
-	uses = new use_info(n, kind, arg, uses);
+	uses.push_back(n);
+}
+
+struct use_node_comp {
+	explicit use_node_comp(const node *n) : n(n) {}
+	bool operator() (const node *o) {
+		return o->hash() == n->hash();
+	}
+
+	private:
+		const node *n;
+};
+
+void value::remove_use(const node *n) {
+	uselist::iterator it =
+		std::find_if(uses.begin(), uses.end(), use_node_comp(n));
+
+	if (it != uses.end())
+	{
+		// We only ever had a pointer, so don't delete it here
+		uses.erase(it);
+	}
 }
 
 unsigned value::use_count() {
-	use_info *u = uses;
-	unsigned c = 0;
-	while (u) {
-		++c;
-		u = u->next;
-	}
-	return c;
+	return uses.size();
 }
 
 bool value::is_global() {
@@ -274,13 +288,8 @@ bool value::is_prealloc() {
 }
 
 void value::delete_uses() {
-	use_info *u, *c = uses;
-	while (c) {
-		u = c->next;
-		delete c;
-		c = u;
-	}
-	uses = NULL;
+	// We only ever had pointers, so don't delete them here
+	uses.erase(uses.begin(), uses.end());
 }
 
 void ra_constraint::update_values() {
@@ -468,7 +477,7 @@ bool r600_sb::sb_value_set::add_vec(vvec& vv) {
 bool r600_sb::sb_value_set::contains(value* v) {
 	unsigned b = v->uid - 1;
 	if (b < bs.size())
-		return bs.get(v->uid - 1);
+		return bs.get(b);
 	else
 		return false;
 }

@@ -121,7 +121,7 @@ lower_offset(nir_builder *b, nir_tex_instr *tex)
    nir_ssa_def *offset_coord;
    if (nir_tex_instr_src_type(tex, coord_index) == nir_type_float) {
       assert(tex->sampler_dim == GLSL_SAMPLER_DIM_RECT);
-      offset_coord = nir_fadd(b, coord, nir_i2f(b, offset));
+      offset_coord = nir_fadd(b, coord, nir_i2f32(b, offset));
    } else {
       offset_coord = nir_iadd(b, coord, offset);
    }
@@ -163,21 +163,20 @@ get_texture_size(nir_builder *b, nir_tex_instr *tex)
    txs->is_shadow = tex->is_shadow;
    txs->is_new_style_shadow = tex->is_new_style_shadow;
    txs->texture_index = tex->texture_index;
-   txs->texture = (nir_deref_var *)
-      nir_copy_deref(txs, &tex->texture->deref);
+   txs->texture = nir_deref_var_clone(tex->texture, txs);
    txs->sampler_index = tex->sampler_index;
-   txs->sampler = (nir_deref_var *)
-      nir_copy_deref(txs, &tex->sampler->deref);
+   txs->sampler = nir_deref_var_clone(tex->sampler, txs);
    txs->dest_type = nir_type_int;
 
    /* only single src, the lod: */
    txs->src[0].src = nir_src_for_ssa(nir_imm_int(b, 0));
    txs->src[0].src_type = nir_tex_src_lod;
 
-   nir_ssa_dest_init(&txs->instr, &txs->dest, tex->coord_components, 32, NULL);
+   nir_ssa_dest_init(&txs->instr, &txs->dest,
+                     nir_tex_instr_dest_size(txs), 32, NULL);
    nir_builder_instr_insert(b, &txs->instr);
 
-   return nir_i2f(b, &txs->dest.ssa);
+   return nir_i2f32(b, &txs->dest.ssa);
 }
 
 static void
@@ -221,11 +220,9 @@ sample_plane(nir_builder *b, nir_tex_instr *tex, int plane)
    plane_tex->coord_components = 2;
 
    plane_tex->texture_index = tex->texture_index;
-   plane_tex->texture = (nir_deref_var *)
-      nir_copy_deref(plane_tex, &tex->texture->deref);
+   plane_tex->texture = nir_deref_var_clone(tex->texture, plane_tex);
    plane_tex->sampler_index = tex->sampler_index;
-   plane_tex->sampler = (nir_deref_var *)
-      nir_copy_deref(plane_tex, &tex->sampler->deref);
+   plane_tex->sampler = nir_deref_var_clone(tex->sampler, plane_tex);
 
    nir_ssa_dest_init(&plane_tex->instr, &plane_tex->dest, 4, 32, NULL);
 
@@ -325,10 +322,8 @@ replace_gradient_with_lod(nir_builder *b, nir_ssa_def *lod, nir_tex_instr *tex)
    txl->is_shadow = tex->is_shadow;
    txl->is_new_style_shadow = tex->is_new_style_shadow;
    txl->sampler_index = tex->sampler_index;
-   txl->texture = (nir_deref_var *)
-      nir_copy_deref(txl, &tex->texture->deref);
-   txl->sampler = (nir_deref_var *)
-      nir_copy_deref(txl, &tex->sampler->deref);
+   txl->texture = nir_deref_var_clone(tex->texture, txl);
+   txl->sampler = nir_deref_var_clone(tex->sampler, txl);
    txl->coord_components = tex->coord_components;
 
    nir_ssa_dest_init(&txl->instr, &txl->dest, 4, 32, NULL);
@@ -349,7 +344,8 @@ replace_gradient_with_lod(nir_builder *b, nir_ssa_def *lod, nir_tex_instr *tex)
 
    assert(src_num == num_srcs);
 
-   nir_ssa_dest_init(&txl->instr, &txl->dest, 4, 32, NULL);
+   nir_ssa_dest_init(&txl->instr, &txl->dest,
+                     tex->dest.ssa.num_components, 32, NULL);
    nir_builder_instr_insert(b, &txl->instr);
 
    nir_ssa_def_rewrite_uses(&tex->dest.ssa, nir_src_for_ssa(&txl->dest.ssa));
@@ -649,7 +645,7 @@ swizzle_result(nir_builder *b, nir_tex_instr *tex, const uint8_t swizzle[4])
       if (swizzle[0] < 4 && swizzle[1] < 4 &&
           swizzle[2] < 4 && swizzle[3] < 4) {
          unsigned swiz[4] = { swizzle[0], swizzle[1], swizzle[2], swizzle[3] };
-         /* We have no 0's or 1's, just emit a swizzling MOV */
+         /* We have no 0s or 1s, just emit a swizzling MOV */
          swizzled = nir_swizzle(b, &tex->dest.ssa, swiz, 4, false);
       } else {
          nir_ssa_def *srcs[4];

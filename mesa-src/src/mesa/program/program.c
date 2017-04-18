@@ -34,11 +34,13 @@
 #include "main/framebuffer.h"
 #include "main/hash.h"
 #include "main/macros.h"
+#include "main/shaderobj.h"
 #include "program.h"
 #include "prog_cache.h"
 #include "prog_parameter.h"
 #include "prog_instruction.h"
 #include "util/ralloc.h"
+#include "util/u_atomic.h"
 
 
 /**
@@ -177,23 +179,36 @@ _mesa_set_program_error(struct gl_context *ctx, GLint pos, const char *string)
  * Initialize a new gl_program object.
  */
 struct gl_program *
-_mesa_init_gl_program(struct gl_program *prog, GLenum target, GLuint id)
+_mesa_init_gl_program(struct gl_program *prog, GLenum target, GLuint id,
+                      bool is_arb_asm)
 {
-   GLuint i;
-
    if (!prog)
       return NULL;
 
    memset(prog, 0, sizeof(*prog));
-   mtx_init(&prog->Mutex, mtx_plain);
    prog->Id = id;
    prog->Target = target;
    prog->RefCount = 1;
    prog->Format = GL_PROGRAM_FORMAT_ASCII_ARB;
+   prog->info.stage = _mesa_program_enum_to_shader_stage(target);
+   prog->is_arb_asm = is_arb_asm;
 
-   /* default mapping from samplers to texture units */
-   for (i = 0; i < MAX_SAMPLERS; i++)
-      prog->SamplerUnits[i] = i;
+   /* Uniforms that lack an initializer in the shader code have an initial
+    * value of zero.  This includes sampler uniforms.
+    *
+    * Page 24 (page 30 of the PDF) of the GLSL 1.20 spec says:
+    *
+    *     "The link time initial value is either the value of the variable's
+    *     initializer, if present, or 0 if no initializer is present. Sampler
+    *     types cannot have initializers."
+    *
+    * So we only initialise ARB assembly style programs.
+    */
+   if (is_arb_asm) {
+      /* default mapping from samplers to texture units */
+      for (unsigned i = 0; i < MAX_SAMPLERS; i++)
+         prog->SamplerUnits[i] = i;
+   }
 
    return prog;
 }
@@ -212,7 +227,8 @@ _mesa_init_gl_program(struct gl_program *prog, GLenum target, GLuint id)
  * \return  pointer to new program object
  */
 struct gl_program *
-_mesa_new_program(struct gl_context *ctx, GLenum target, GLuint id)
+_mesa_new_program(struct gl_context *ctx, GLenum target, GLuint id,
+                  bool is_arb_asm)
 {
    switch (target) {
    case GL_VERTEX_PROGRAM_ARB: /* == GL_VERTEX_PROGRAM_NV */
@@ -222,7 +238,7 @@ _mesa_new_program(struct gl_context *ctx, GLenum target, GLuint id)
    case GL_FRAGMENT_PROGRAM_ARB:
    case GL_COMPUTE_PROGRAM_NV: {
       struct gl_program *prog = rzalloc(NULL, struct gl_program);
-      return _mesa_init_gl_program(prog, target, id);
+      return _mesa_init_gl_program(prog, target, id, is_arb_asm);
    }
    default:
       _mesa_problem(ctx, "bad target in _mesa_new_program");
@@ -255,7 +271,6 @@ _mesa_delete_program(struct gl_context *ctx, struct gl_program *prog)
       ralloc_free(prog->nir);
    }
 
-   mtx_destroy(&prog->Mutex);
    ralloc_free(prog);
 }
 
@@ -300,18 +315,13 @@ _mesa_reference_program_(struct gl_context *ctx,
 #endif
 
    if (*ptr) {
-      GLboolean deleteFlag;
       struct gl_program *oldProg = *ptr;
 
-      mtx_lock(&oldProg->Mutex);
       assert(oldProg->RefCount > 0);
-      oldProg->RefCount--;
 
-      deleteFlag = (oldProg->RefCount == 0);
-      mtx_unlock(&oldProg->Mutex);
-
-      if (deleteFlag) {
+      if (p_atomic_dec_zero(&oldProg->RefCount)) {
          assert(ctx);
+         _mesa_reference_shader_program_data(ctx, &oldProg->sh.data, NULL);
          ctx->Driver.DeleteProgram(ctx, oldProg);
       }
 
@@ -320,9 +330,7 @@ _mesa_reference_program_(struct gl_context *ctx,
 
    assert(!*ptr);
    if (prog) {
-      mtx_lock(&prog->Mutex);
-      prog->RefCount++;
-      mtx_unlock(&prog->Mutex);
+      p_atomic_inc(&prog->RefCount);
    }
 
    *ptr = prog;

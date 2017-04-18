@@ -32,10 +32,7 @@
 #include <fcntl.h>
 #include <xf86drm.h>
 #include <stdbool.h>
-
-#if ANDROID_VERSION >= 0x402
 #include <sync/sync.h>
-#endif
 
 #include "loader.h"
 #include "egl_dri2.h"
@@ -160,7 +157,6 @@ get_native_buffer_name(struct ANativeWindowBuffer *buf)
 static EGLBoolean
 droid_window_dequeue_buffer(struct dri2_egl_surface *dri2_surf)
 {
-#if ANDROID_VERSION >= 0x0402
    int fence_fd;
 
    if (dri2_surf->window->dequeueBuffer(dri2_surf->window, &dri2_surf->buffer,
@@ -195,13 +191,33 @@ droid_window_dequeue_buffer(struct dri2_egl_surface *dri2_surf)
    }
 
    dri2_surf->buffer->common.incRef(&dri2_surf->buffer->common);
-#else
-   if (dri2_surf->window->dequeueBuffer(dri2_surf->window, &dri2_surf->buffer))
-      return EGL_FALSE;
 
-   dri2_surf->buffer->common.incRef(&dri2_surf->buffer->common);
-   dri2_surf->window->lockBuffer(dri2_surf->window, dri2_surf->buffer);
-#endif
+   /* Record all the buffers created by ANativeWindow and update back buffer
+    * for updating buffer's age in swap_buffers.
+    */
+   EGLBoolean updated = EGL_FALSE;
+   for (int i = 0; i < ARRAY_SIZE(dri2_surf->color_buffers); i++) {
+      if (!dri2_surf->color_buffers[i].buffer) {
+         dri2_surf->color_buffers[i].buffer = dri2_surf->buffer;
+      }
+      if (dri2_surf->color_buffers[i].buffer == dri2_surf->buffer) {
+         dri2_surf->back = &dri2_surf->color_buffers[i];
+         updated = EGL_TRUE;
+         break;
+      }
+   }
+
+   if (!updated) {
+      /* In case of all the buffers were recreated by ANativeWindow, reset
+       * the color_buffers
+       */
+      for (int i = 0; i < ARRAY_SIZE(dri2_surf->color_buffers); i++) {
+         dri2_surf->color_buffers[i].buffer = NULL;
+         dri2_surf->color_buffers[i].age = 0;
+      }
+      dri2_surf->color_buffers[0].buffer = dri2_surf->buffer;
+      dri2_surf->back = &dri2_surf->color_buffers[0];
+   }
 
    return EGL_TRUE;
 }
@@ -217,7 +233,6 @@ droid_window_enqueue_buffer(_EGLDisplay *disp, struct dri2_egl_surface *dri2_sur
     */
    mtx_unlock(&disp->Mutex);
 
-#if ANDROID_VERSION >= 0x0402
    /* Queue the buffer without a sync fence. This informs the ANativeWindow
     * that it may access the buffer immediately.
     *
@@ -233,12 +248,10 @@ droid_window_enqueue_buffer(_EGLDisplay *disp, struct dri2_egl_surface *dri2_sur
    int fence_fd = -1;
    dri2_surf->window->queueBuffer(dri2_surf->window, dri2_surf->buffer,
                                   fence_fd);
-#else
-   dri2_surf->window->queueBuffer(dri2_surf->window, dri2_surf->buffer);
-#endif
 
    dri2_surf->buffer->common.decRef(&dri2_surf->buffer->common);
    dri2_surf->buffer = NULL;
+   dri2_surf->back = NULL;
 
    mtx_lock(&disp->Mutex);
 
@@ -339,8 +352,8 @@ droid_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
       goto cleanup_surface;
 
    dri2_surf->dri_drawable =
-      (*dri2_dpy->dri2->createNewDrawable)(dri2_dpy->dri_screen, config,
-                                           dri2_surf);
+      dri2_dpy->dri2->createNewDrawable(dri2_dpy->dri_screen, config,
+                                        dri2_surf);
    if (dri2_surf->dri_drawable == NULL) {
       _eglError(EGL_BAD_ALLOC, "dri2->createNewDrawable");
       goto cleanup_surface;
@@ -403,7 +416,7 @@ droid_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
       dri2_surf->dri_image_front = NULL;
    }
 
-   (*dri2_dpy->core->destroyDrawable)(dri2_surf->dri_drawable);
+   dri2_dpy->core->destroyDrawable(dri2_surf->dri_drawable);
 
    free(dri2_surf);
 
@@ -434,7 +447,40 @@ update_buffers(struct dri2_egl_surface *dri2_surf)
 }
 
 static int
-get_back_bo(struct dri2_egl_surface *dri2_surf)
+get_front_bo(struct dri2_egl_surface *dri2_surf, unsigned int format)
+{
+   struct dri2_egl_display *dri2_dpy =
+      dri2_egl_display(dri2_surf->base.Resource.Display);
+
+   if (dri2_surf->dri_image_front)
+      return 0;
+
+   if (dri2_surf->base.Type == EGL_WINDOW_BIT) {
+      /* According current EGL spec, front buffer rendering
+       * for window surface is not supported now.
+       * and mesa doesn't have the implementation of this case.
+       * Add warning message, but not treat it as error.
+       */
+      _eglLog(_EGL_DEBUG, "DRI driver requested unsupported front buffer for window surface");
+   } else if (dri2_surf->base.Type == EGL_PBUFFER_BIT) {
+      dri2_surf->dri_image_front =
+          dri2_dpy->image->createImage(dri2_dpy->dri_screen,
+                                              dri2_surf->base.Width,
+                                              dri2_surf->base.Height,
+                                              format,
+                                              0,
+                                              dri2_surf);
+      if (!dri2_surf->dri_image_front) {
+         _eglLog(_EGL_WARNING, "dri2_image_front allocation failed");
+         return -1;
+      }
+   }
+
+   return 0;
+}
+
+static int
+get_back_bo(struct dri2_egl_surface *dri2_surf, unsigned int format)
 {
    struct dri2_egl_display *dri2_dpy =
       dri2_egl_display(dri2_surf->base.Resource.Display);
@@ -444,71 +490,44 @@ get_back_bo(struct dri2_egl_surface *dri2_surf)
    if (dri2_surf->dri_image_back)
       return 0;
 
-   if (!dri2_surf->buffer)
-      return -1;
-
-   fd = get_native_buffer_fd(dri2_surf->buffer);
-   if (fd < 0) {
-      _eglLog(_EGL_WARNING, "Could not get native buffer FD");
-      return -1;
-   }
-
-   fourcc = get_fourcc(dri2_surf->buffer->format);
-
-   pitch = dri2_surf->buffer->stride *
-      get_format_bpp(dri2_surf->buffer->format);
-
-   if (fourcc == -1 || pitch == 0) {
-      _eglLog(_EGL_WARNING, "Invalid buffer fourcc(%x) or pitch(%d)",
-              fourcc, pitch);
-      return -1;
-   }
-
-   dri2_surf->dri_image_back =
-      dri2_dpy->image->createImageFromFds(dri2_dpy->dri_screen,
-                                          dri2_surf->base.Width,
-                                          dri2_surf->base.Height,
-                                          fourcc,
-                                          &fd,
-                                          1,
-                                          &pitch,
-                                          &offset,
-                                          dri2_surf);
-   if (!dri2_surf->dri_image_back)
-      return -1;
-
-   return 0;
-}
-
-static int
-droid_image_get_buffers(__DRIdrawable *driDrawable,
-                  unsigned int format,
-                  uint32_t *stamp,
-                  void *loaderPrivate,
-                  uint32_t buffer_mask,
-                  struct __DRIimageList *images)
-{
-   struct dri2_egl_surface *dri2_surf = loaderPrivate;
-   struct dri2_egl_display *dri2_dpy =
-      dri2_egl_display(dri2_surf->base.Resource.Display);
-
-   images->image_mask = 0;
-   images->front = NULL;
-   images->back = NULL;
-
-   if (update_buffers(dri2_surf) < 0)
-      return 0;
-
-   if (buffer_mask & __DRI_IMAGE_BUFFER_FRONT) {
-      if (dri2_surf->base.Type == EGL_WINDOW_BIT) {
-         /* According current EGL spec,
-          * front buffer rendering for window surface is not supported now */
-         _eglLog(_EGL_WARNING,
-                 "%s:%d front buffer rendering for window surface is not supported!",
-                 __func__, __LINE__);
-         return 0;
+   if (dri2_surf->base.Type == EGL_WINDOW_BIT) {
+      if (!dri2_surf->buffer) {
+         _eglLog(_EGL_WARNING, "Could not get native buffer");
+         return -1;
       }
 
+      fd = get_native_buffer_fd(dri2_surf->buffer);
+      if (fd < 0) {
+         _eglLog(_EGL_WARNING, "Could not get native buffer FD");
+         return -1;
+      }
+
+      fourcc = get_fourcc(dri2_surf->buffer->format);
+
+      pitch = dri2_surf->buffer->stride *
+         get_format_bpp(dri2_surf->buffer->format);
+
+      if (fourcc == -1 || pitch == 0) {
+         _eglLog(_EGL_WARNING, "Invalid buffer fourcc(%x) or pitch(%d)",
+                 fourcc, pitch);
+         return -1;
+      }
+
+      dri2_surf->dri_image_back =
+         dri2_dpy->image->createImageFromFds(dri2_dpy->dri_screen,
+                                             dri2_surf->base.Width,
+                                             dri2_surf->base.Height,
+                                             fourcc,
+                                             &fd,
+                                             1,
+                                             &pitch,
+                                             &offset,
+                                             dri2_surf);
+      if (!dri2_surf->dri_image_back) {
+         _eglLog(_EGL_WARNING, "failed to create DRI image from FD");
+         return -1;
+      }
+   } else if (dri2_surf->base.Type == EGL_PBUFFER_BIT) {
       /* The EGL 1.5 spec states that pbuffers are single-buffered. Specifically,
        * the spec states that they have a back buffer but no front buffer, in
        * contrast to pixmaps, which have a front buffer but no back buffer.
@@ -522,46 +541,69 @@ droid_image_get_buffers(__DRIdrawable *driDrawable,
        * behavior instead of trying to fix (and hence potentially breaking) the
        * world.
        */
-      if (!dri2_surf->dri_image_front &&
-          dri2_surf->base.Type == EGL_PBUFFER_BIT) {
-         dri2_surf->dri_image_front =
-            dri2_dpy->image->createImage(dri2_dpy->dri_screen,
-                                         dri2_surf->base.Width,
-                                         dri2_surf->base.Height,
-                                         format,
-                                         0,
-                                         dri2_surf);
-      }
+      _eglLog(_EGL_DEBUG, "DRI driver requested unsupported back buffer for pbuffer surface");
+   }
 
-      if (!dri2_surf->dri_image_front) {
-         _eglLog(_EGL_WARNING,
-                 "%s:%d dri2_image front buffer allocation failed!",
-                 __func__, __LINE__);
+   return 0;
+}
+
+/* Some drivers will pass multiple bits in buffer_mask.
+ * For such case, will go through all the bits, and
+ * will not return error when unsupported buffer is requested, only
+ * return error when the allocation for supported buffer failed.
+ */
+static int
+droid_image_get_buffers(__DRIdrawable *driDrawable,
+                  unsigned int format,
+                  uint32_t *stamp,
+                  void *loaderPrivate,
+                  uint32_t buffer_mask,
+                  struct __DRIimageList *images)
+{
+   struct dri2_egl_surface *dri2_surf = loaderPrivate;
+
+   images->image_mask = 0;
+   images->front = NULL;
+   images->back = NULL;
+
+   if (update_buffers(dri2_surf) < 0)
+      return 0;
+
+   if (buffer_mask & __DRI_IMAGE_BUFFER_FRONT) {
+      if (get_front_bo(dri2_surf, format) < 0)
          return 0;
-      }
 
-      images->front = dri2_surf->dri_image_front;
-      images->image_mask |= __DRI_IMAGE_BUFFER_FRONT;
+      if (dri2_surf->dri_image_front) {
+         images->front = dri2_surf->dri_image_front;
+         images->image_mask |= __DRI_IMAGE_BUFFER_FRONT;
+      }
    }
 
    if (buffer_mask & __DRI_IMAGE_BUFFER_BACK) {
-      if (dri2_surf->base.Type == EGL_WINDOW_BIT) {
-         if (get_back_bo(dri2_surf) < 0)
-            return 0;
-      }
-
-      if (!dri2_surf->dri_image_back) {
-         _eglLog(_EGL_WARNING,
-                 "%s:%d dri2_image back buffer allocation failed!",
-                 __func__, __LINE__);
+      if (get_back_bo(dri2_surf, format) < 0)
          return 0;
-      }
 
-      images->back = dri2_surf->dri_image_back;
-      images->image_mask |= __DRI_IMAGE_BUFFER_BACK;
+      if (dri2_surf->dri_image_back) {
+         images->back = dri2_surf->dri_image_back;
+         images->image_mask |= __DRI_IMAGE_BUFFER_BACK;
+      }
    }
 
    return 1;
+}
+
+static EGLint
+droid_query_buffer_age(_EGLDriver *drv,
+                          _EGLDisplay *disp, _EGLSurface *surface)
+{
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surface);
+
+   if (update_buffers(dri2_surf) < 0) {
+      _eglError(EGL_BAD_ALLOC, "droid_query_buffer_age");
+      return 0;
+   }
+
+   return dri2_surf->back->age;
 }
 
 static EGLBoolean
@@ -573,12 +615,26 @@ droid_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
    if (dri2_surf->base.Type != EGL_WINDOW_BIT)
       return EGL_TRUE;
 
+   for (int i = 0; i < ARRAY_SIZE(dri2_surf->color_buffers); i++) {
+      if (dri2_surf->color_buffers[i].age > 0)
+         dri2_surf->color_buffers[i].age++;
+   }
+
+   /* Make sure we have a back buffer in case we're swapping without
+    * ever rendering. */
+   if (get_back_bo(dri2_surf, 0) < 0) {
+      _eglError(EGL_BAD_ALLOC, "dri2_swap_buffers");
+      return EGL_FALSE;
+   }
+
+   dri2_surf->back->age = 1;
+
    dri2_flush_drawable_for_swapbuffers(disp, draw);
 
    if (dri2_surf->buffer)
       droid_window_enqueue_buffer(disp, dri2_surf);
 
-   (*dri2_dpy->flush->invalidate)(dri2_surf->dri_drawable);
+   dri2_dpy->flush->invalidate(dri2_surf->dri_drawable);
 
    return EGL_TRUE;
 }
@@ -614,7 +670,7 @@ droid_create_image_from_prime_fd_yuv(_EGLDisplay *disp, _EGLContext *ctx,
     * so they can be interpreted as offsets. */
    offsets[0] = (size_t)ycbcr.y;
    /* We assume here that all the planes are located in one DMA-buf. */
-   is_ycrcb = (size_t)ycbcr.cb < (size_t)ycbcr.cr;
+   is_ycrcb = (size_t)ycbcr.cr < (size_t)ycbcr.cb;
    if (is_ycrcb) {
       offsets[1] = (size_t)ycbcr.cr;
       offsets[2] = (size_t)ycbcr.cb;
@@ -1027,7 +1083,7 @@ static struct dri2_egl_display_vtbl droid_display_vtbl = {
    .swap_buffers_region = dri2_fallback_swap_buffers_region,
    .post_sub_buffer = dri2_fallback_post_sub_buffer,
    .copy_buffers = dri2_fallback_copy_buffers,
-   .query_buffer_age = dri2_fallback_query_buffer_age,
+   .query_buffer_age = droid_query_buffer_age,
    .query_surface = droid_query_surface,
    .create_wayland_buffer_from_image = dri2_fallback_create_wayland_buffer_from_image,
    .get_sync_values = dri2_fallback_get_sync_values,
@@ -1126,6 +1182,7 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
    dpy->Extensions.ANDROID_framebuffer_target = EGL_TRUE;
    dpy->Extensions.ANDROID_image_native_buffer = EGL_TRUE;
    dpy->Extensions.ANDROID_recordable = EGL_TRUE;
+   dpy->Extensions.EXT_buffer_age = EGL_TRUE;
 
    /* Fill vtbl last to prevent accidentally calling virtual function during
     * initialization.

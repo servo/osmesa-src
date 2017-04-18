@@ -58,6 +58,7 @@ static const struct qir_op_info qir_op_info[] = {
         [QOP_ASR] = { "asr", 1, 2 },
         [QOP_SHL] = { "shl", 1, 2 },
         [QOP_MIN] = { "min", 1, 2 },
+        [QOP_MIN_NOIMM] = { "min_noimm", 1, 2 },
         [QOP_MAX] = { "max", 1, 2 },
         [QOP_AND] = { "and", 1, 2 },
         [QOP_OR] = { "or", 1, 2 },
@@ -645,6 +646,7 @@ qir_compile_init(void)
 
         list_inithead(&c->blocks);
         qir_set_emit_block(c, qir_new_block(c));
+        c->last_top_block = c->cur_block;
 
         c->output_position_index = -1;
         c->output_color_index = -1;

@@ -1761,7 +1761,11 @@ __glXSwapIntervalSGI(int interval)
           psc->driScreen->setSwapInterval) {
       __GLXDRIdrawable *pdraw =
 	 GetGLXDRIDrawable(gc->currentDpy, gc->currentDrawable);
-      psc->driScreen->setSwapInterval(pdraw, interval);
+      /* Simply ignore the command if the GLX drawable has been destroyed but
+       * the context is still bound.
+       */
+      if (pdraw)
+         psc->driScreen->setSwapInterval(pdraw, interval);
       return 0;
    }
 #endif
@@ -1807,7 +1811,14 @@ __glXSwapIntervalMESA(unsigned int interval)
       if (psc && psc->driScreen && psc->driScreen->setSwapInterval) {
          __GLXDRIdrawable *pdraw =
 	    GetGLXDRIDrawable(gc->currentDpy, gc->currentDrawable);
-	 return psc->driScreen->setSwapInterval(pdraw, interval);
+
+         /* Simply ignore the command if the GLX drawable has been destroyed but
+          * the context is still bound.
+          */
+         if (!pdraw)
+            return 0;
+
+         return psc->driScreen->setSwapInterval(pdraw, interval);
       }
    }
 #endif
@@ -1829,7 +1840,8 @@ __glXGetSwapIntervalMESA(void)
       if (psc && psc->driScreen && psc->driScreen->getSwapInterval) {
          __GLXDRIdrawable *pdraw =
 	    GetGLXDRIDrawable(gc->currentDpy, gc->currentDrawable);
-	 return psc->driScreen->getSwapInterval(pdraw);
+         if (pdraw)
+            return psc->driScreen->getSwapInterval(pdraw);
       }
    }
 #endif
@@ -2663,19 +2675,10 @@ _GLX_PUBLIC void (*glXGetProcAddressARB(const GLubyte * procName)) (void)
  *
  * \sa glXGetProcAddressARB
  */
-_GLX_PUBLIC void (*glXGetProcAddress(const GLubyte * procName)) (void)
-#if defined(__GNUC__) && !defined(GLX_ALIAS_UNSUPPORTED)
-# if defined(USE_MGL_NAMESPACE)
-   __attribute__ ((alias("mglXGetProcAddressARB")));
-# else
-   __attribute__ ((alias("glXGetProcAddressARB")));
-# endif
-#else
-{
-   return glXGetProcAddressARB(procName);
-}
-#endif /* __GNUC__ */
-
+_GLX_PUBLIC
+GLX_ALIAS(__GLXextFuncPtr, glXGetProcAddress,
+          (const GLubyte * procName),
+          (procName), glXGetProcAddressARB)
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
 /**

@@ -72,17 +72,13 @@ brw_upload_tcs_ubo_surfaces(struct brw_context *brw)
    struct gl_context *ctx = &brw->ctx;
 
    /* _NEW_PROGRAM */
-   struct gl_shader_program *prog =
+   struct gl_program *prog =
       ctx->_Shader->CurrentProgram[MESA_SHADER_TESS_CTRL];
-
-   if (!prog)
-      return;
 
    /* BRW_NEW_TCS_PROG_DATA */
    struct brw_stage_prog_data *prog_data = brw->tcs.base.prog_data;
 
-   brw_upload_ubo_surfaces(brw, prog->_LinkedShaders[MESA_SHADER_TESS_CTRL],
-			   &brw->tcs.base, prog_data);
+   brw_upload_ubo_surfaces(brw, prog, &brw->tcs.base, prog_data);
 }
 
 const struct brw_tracked_state brw_tcs_ubo_surfaces = {
@@ -123,16 +119,13 @@ const struct brw_tracked_state brw_tcs_abo_surfaces = {
 static void
 brw_upload_tcs_image_surfaces(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_TESS_PROGRAMS */
-   struct gl_shader_program *prog =
-      ctx->_Shader->CurrentProgram[MESA_SHADER_TESS_CTRL];
    const struct gl_program *tcp = brw->tess_ctrl_program;
 
-   if (tcp && prog) {
+   if (tcp) {
       /* BRW_NEW_TCS_PROG_DATA, BRW_NEW_IMAGE_UNITS */
-      brw_upload_image_surfaces(brw, prog->_LinkedShaders[MESA_SHADER_TESS_CTRL],
-                                tcp, &brw->tcs.base, brw->tcs.base.prog_data);
+      brw_upload_image_surfaces(brw, tcp, &brw->tcs.base,
+                                brw->tcs.base.prog_data);
    }
 }
 

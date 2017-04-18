@@ -8,6 +8,7 @@ AM_CFLAGS = \
 	-I$(top_builddir)/src/compiler/nir \
 	-I$(top_srcdir)/src/gallium/auxiliary/util \
 	$(GALLIUM_CFLAGS) \
+	$(LIBUNWIND_CFLAGS) \
 	$(VISIBILITY_CFLAGS) \
 	$(MSVC2013_COMPAT_CFLAGS)
 
@@ -19,6 +20,16 @@ libgallium_la_SOURCES = \
 	$(C_SOURCES) \
 	$(NIR_SOURCES) \
 	$(GENERATED_SOURCES)
+
+if HAVE_LIBDRM
+
+AM_CFLAGS += \
+	$(LIBDRM_CFLAGS)
+
+libgallium_la_SOURCES += \
+	$(RENDERONLY_SOURCES)
+
+endif
 
 if HAVE_GALLIUM_LLVM
 
@@ -33,8 +44,6 @@ libgallium_la_SOURCES += \
 	$(GALLIVM_SOURCES)
 
 endif
-
-libgallium_la_LDFLAGS = $(LIBSENSORS_LDFLAGS)
 
 MKDIR_GEN = $(AM_V_at)$(MKDIR_P) $(@D)
 PYTHON_GEN =  $(AM_V_GEN)$(PYTHON2) $(PYTHON_FLAGS)

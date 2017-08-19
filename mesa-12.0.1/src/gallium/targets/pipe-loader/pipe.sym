@@ -1,7 +1,0 @@
-{
-	global:
-		driver_descriptor;
-		swrast_driver_descriptor;
-	local:
-		*;
-};

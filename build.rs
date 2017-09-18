@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    let src = env::current_dir().unwrap();
+    let src = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     // Prevent aclocal being run due to timestamps being messed up by git.

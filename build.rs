@@ -40,6 +40,7 @@ fn main() {
 
     run(Command::new("make")
                 .arg(format!("-j{}", env::var("NUM_JOBS").unwrap()))
+                .env("PYTHONPATH", src.join("Mako-1.0.7.zip"))
                 .current_dir(&dst));
 }
 

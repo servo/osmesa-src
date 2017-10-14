@@ -26,6 +26,10 @@ fn main() {
                 .current_dir(&dst)
                 .env("PTHREADSTUBS_CFLAGS", ".")
                 .env("PTHREADSTUBS_LIBS", ".")
+                .env("XCB_DRI2_CFLAGS", ".")
+                .env("XCB_DRI2_LIBS", ".")
+                .env("EXPAT_CFLAGS", ".")
+                .env("EXPAT_LIBS", ".")
                 .arg("--disable-dri")
                 .arg("--disable-driglx-direct")
                 .arg("--disable-dri3")
@@ -35,6 +39,7 @@ fn main() {
                 .arg("--disable-gles2")
                 .arg("--disable-glx")
                 .arg("--disable-llvm-shared-libs")
+                .arg("--with-platforms=")
                 .arg("--enable-gallium-osmesa")
                 .arg("--with-gallium-drivers=swrast"));
 

@@ -62,7 +62,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* Radeon configuration
  */
-#include "xmlpool.h"
+#include "util/xmlpool.h"
 
 #define DRI_CONF_COMMAND_BUFFER_SIZE(def,min,max) \
 DRI_CONF_OPT_BEGIN_V(command_buffer_size,int,def, # min ":" # max ) \
@@ -78,7 +78,6 @@ DRI_CONF_BEGIN
     DRI_CONF_SECTION_PERFORMANCE
         DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
         DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
-        DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
         DRI_CONF_MAX_TEXTURE_UNITS(3,2,3)
         DRI_CONF_HYPERZ("false")
         DRI_CONF_COMMAND_BUFFER_SIZE(8, 8, 32)
@@ -87,7 +86,6 @@ DRI_CONF_BEGIN
         DRI_CONF_TEXTURE_DEPTH(DRI_CONF_TEXTURE_DEPTH_FB)
         DRI_CONF_DEF_MAX_ANISOTROPY(1.0,"1.0,2.0,4.0,8.0,16.0")
         DRI_CONF_NO_NEG_LOD_BIAS("false")
-        DRI_CONF_FORCE_S3TC_ENABLE("false")
         DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
         DRI_CONF_ROUND_MODE(DRI_CONF_ROUND_TRUNC)
         DRI_CONF_DITHER_MODE(DRI_CONF_DITHER_XERRORDIFF)
@@ -106,7 +104,6 @@ DRI_CONF_BEGIN
     DRI_CONF_SECTION_PERFORMANCE
         DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
         DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
-        DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
         DRI_CONF_MAX_TEXTURE_UNITS(6,2,6)
         DRI_CONF_HYPERZ("false")
         DRI_CONF_COMMAND_BUFFER_SIZE(8, 8, 32)
@@ -115,7 +112,6 @@ DRI_CONF_BEGIN
         DRI_CONF_TEXTURE_DEPTH(DRI_CONF_TEXTURE_DEPTH_FB)
         DRI_CONF_DEF_MAX_ANISOTROPY(1.0,"1.0,2.0,4.0,8.0,16.0")
         DRI_CONF_NO_NEG_LOD_BIAS("false")
-        DRI_CONF_FORCE_S3TC_ENABLE("false")
         DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
         DRI_CONF_ROUND_MODE(DRI_CONF_ROUND_TRUNC)
         DRI_CONF_DITHER_MODE(DRI_CONF_DITHER_XERRORDIFF)
@@ -544,6 +540,7 @@ static const __DRIextension *radeon_screen_extensions[] = {
     &radeonFlushExtension.base,
     &radeonImageExtension.base,
     &radeonRendererQueryExtension.base,
+    &dri2NoErrorExtension.base,
     NULL
 };
 
@@ -771,11 +768,9 @@ __DRIconfig **radeonInitScreen2(__DRIscreen *psp)
       MESA_FORMAT_B8G8R8X8_UNORM,
       MESA_FORMAT_B8G8R8A8_UNORM
    };
-   /* GLX_SWAP_COPY_OML is only supported because the Intel driver doesn't
-    * support pageflipping at all.
-    */
+
    static const GLenum back_buffer_modes[] = {
-     GLX_NONE, GLX_SWAP_UNDEFINED_OML, /*, GLX_SWAP_COPY_OML*/
+      __DRI_ATTRIB_SWAP_NONE, __DRI_ATTRIB_SWAP_UNDEFINED
    };
    uint8_t depth_bits[4], stencil_bits[4], msaa_samples_array[1];
    int color;

@@ -75,9 +75,6 @@ void
 validate_interstage_uniform_blocks(struct gl_shader_program *prog,
                                    gl_linked_shader **stages);
 
-unsigned
-values_for_type(const glsl_type *type);
-
 extern void
 link_assign_atomic_counter_resources(struct gl_context *ctx,
                                      struct gl_shader_program *prog);
@@ -125,7 +122,7 @@ public:
     * matter.  For example, enumerating the names of members of the block, but
     * not for determining the offsets of members.
     */
-   void process(ir_variable *var);
+   void process(ir_variable *var, bool use_std430_as_default);
 
    /**
     * Begin processing a variable of a structured type.
@@ -142,7 +139,8 @@ public:
     * \c type must be \c GLSL_TYPE_RECORD, \c GLSL_TYPE_INTERFACE, or an array
     * there of.
     */
-   void process(const glsl_type *type, const char *name);
+   void process(const glsl_type *type, const char *name,
+                bool use_std430_as_default);
 
 protected:
    /**

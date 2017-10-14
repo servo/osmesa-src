@@ -21,18 +21,7 @@
 
 .PHONY: git_sha1.h.tmp
 git_sha1.h.tmp:
-	@# Don't assume that $(top_srcdir)/.git is a directory. It may be
-	@# a gitlink file if $(top_srcdir) is a submodule checkout or a linked
-	@# worktree.
-	@# If we are building from a release tarball copy the bundled header.
-	@touch git_sha1.h.tmp
-	@if test -e $(top_srcdir)/.git; then \
-		if which git > /dev/null; then \
-		    git --git-dir=$(top_srcdir)/.git log -n 1 --oneline | \
-			sed 's/^\([^ ]*\) .*/#define MESA_GIT_SHA1 "git-\1"/' \
-			> git_sha1.h.tmp ; \
-		fi \
-	fi
+	@$(PYTHON2) $(top_srcdir)/bin/git_sha1_gen.py > $@
 
 git_sha1.h: git_sha1.h.tmp
 	@echo "updating git_sha1.h"
@@ -75,7 +64,7 @@ endif
 # include only conditionally ?
 SUBDIRS += compiler
 
-## Optionally required by GBM, EGL and Vulkan
+## Optionally required by GBM, EGL
 if HAVE_PLATFORM_WAYLAND
 SUBDIRS += egl/wayland/wayland-drm
 endif
@@ -83,7 +72,9 @@ endif
 if HAVE_VULKAN_COMMON
 SUBDIRS += vulkan
 endif
+
 EXTRA_DIST += vulkan/registry/vk.xml
+EXTRA_DIST += vulkan/registry/vk_android_native_buffer.xml
 
 if HAVE_AMD_DRIVERS
 SUBDIRS += amd
@@ -91,6 +82,10 @@ endif
 
 if HAVE_INTEL_DRIVERS
 SUBDIRS += intel
+endif
+
+if HAVE_BROADCOM_DRIVERS
+SUBDIRS += broadcom
 endif
 
 if NEED_OPENGL_COMMON

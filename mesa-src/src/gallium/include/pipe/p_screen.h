@@ -59,6 +59,7 @@ struct pipe_transfer;
 struct pipe_box;
 struct pipe_memory_info;
 struct disk_cache;
+struct driOptionCache;
 
 
 /**
@@ -204,6 +205,23 @@ struct pipe_screen {
                                                        void *user_memory);
 
    /**
+    * Unlike pipe_resource::bind, which describes what state trackers want,
+    * resources can have much greater capabilities in practice, often implied
+    * by the tiling layout or memory placement. This function allows querying
+    * whether a capability is supported beyond what was requested by state
+    * trackers. It's also useful for querying capabilities of imported
+    * resources where the capabilities are unknown at first.
+    *
+    * Only these flags are allowed:
+    * - PIPE_BIND_SCANOUT
+    * - PIPE_BIND_CURSOR
+    * - PIPE_BIND_LINEAR
+    */
+   bool (*check_resource_capability)(struct pipe_screen *screen,
+                                     struct pipe_resource *resource,
+                                     unsigned bind);
+
+   /**
     * Get a winsys_handle from a texture. Some platforms/winsys requires
     * that the texture is created with a special usage flag like
     * DISPLAYTARGET or PRIMARY.
@@ -328,6 +346,92 @@ struct pipe_screen {
     * driver doesn't support an on-disk shader cache.
     */
    struct disk_cache *(*get_disk_shader_cache)(struct pipe_screen *screen);
+
+   /**
+    * Create a new texture object from the given template info, taking
+    * format modifiers into account. \p modifiers specifies a list of format
+    * modifier tokens, as defined in drm_fourcc.h. The driver then picks the
+    * best modifier among these and creates the resource. \p count must
+    * contain the size of \p modifiers array.
+    *
+    * Returns NULL if an entry in \p modifiers is unsupported by the driver,
+    * or if only DRM_FORMAT_MOD_INVALID is provided.
+    */
+   struct pipe_resource * (*resource_create_with_modifiers)(
+                           struct pipe_screen *,
+                           const struct pipe_resource *templat,
+                           const uint64_t *modifiers, int count);
+
+   /**
+    * Get supported modifiers for a format.
+    * If \p max is 0, the total number of supported modifiers for the supplied
+    * format is returned in \p count, with no modification to \p modifiers.
+    * Otherwise, \p modifiers is filled with upto \p max supported modifier
+    * codes, and \p count with the number of modifiers copied.
+    * The \p external_only array is used to return whether the format and
+    * modifier combination can only be used with an external texture target.
+    */
+   void (*query_dmabuf_modifiers)(struct pipe_screen *screen,
+                                  enum pipe_format format, int max,
+                                  uint64_t *modifiers,
+                                  unsigned int *external_only, int *count);
+
+   /**
+    * Create a memory object from a winsys handle
+    *
+    * The underlying memory is most often allocated in by a foregin API.
+    * Then the underlying memory object is then exported through interfaces
+    * compatible with EXT_external_resources.
+    *
+    * Note: For DRM_API_HANDLE_TYPE_FD handles, the caller retains ownership
+    * of the fd.
+    *
+    * \param handle  A handle representing the memory object to import
+    */
+   struct pipe_memory_object *(*memobj_create_from_handle)(struct pipe_screen *screen,
+                                                           struct winsys_handle *handle,
+                                                           bool dedicated);
+
+   /**
+    * Destroy a memory object
+    *
+    * \param memobj  The memory object to destroy
+    */
+   void (*memobj_destroy)(struct pipe_screen *screen,
+                          struct pipe_memory_object *memobj);
+
+   /**
+    * Create a texture from a memory object
+    *
+    * \param t       texture template
+    * \param memobj  The memory object used to back the texture
+    */
+   struct pipe_resource * (*resource_from_memobj)(struct pipe_screen *screen,
+                                                  const struct pipe_resource *t,
+                                                  struct pipe_memory_object *memobj,
+                                                  uint64_t offset);
+
+   /**
+    * Fill @uuid with a unique driver identifier
+    *
+    * \param uuid    pointer to a memory region of PIPE_UUID_SIZE bytes
+    */
+   void (*get_driver_uuid)(struct pipe_screen *screen, char *uuid);
+
+   /**
+    * Fill @uuid with a unique device identifier
+    *
+    * \param uuid    pointer to a memory region of PIPE_UUID_SIZE bytes
+    */
+   void (*get_device_uuid)(struct pipe_screen *screen, char *uuid);
+};
+
+
+/**
+ * Global configuration options for screen creation.
+ */
+struct pipe_screen_config {
+   const struct driOptionCache *options;
 };
 
 

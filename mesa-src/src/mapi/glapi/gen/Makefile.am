@@ -119,6 +119,7 @@ API_XML = \
 	gl_and_glX_API.xml \
 	ARB_base_instance.xml \
 	ARB_blend_func_extended.xml \
+	ARB_bindless_texture.xml \
 	ARB_clear_buffer_object.xml \
 	ARB_clear_texture.xml \
 	ARB_clip_control.xml \
@@ -191,6 +192,8 @@ API_XML = \
 	APPLE_object_purgeable.xml \
 	APPLE_vertex_array_object.xml \
 	EXT_draw_buffers2.xml \
+	EXT_external_objects.xml \
+	EXT_external_objects_fd.xml \
 	EXT_framebuffer_object.xml \
 	EXT_gpu_shader4.xml \
 	EXT_packed_depth_stencil.xml \
@@ -207,6 +210,7 @@ API_XML = \
 	KHR_robustness.xml \
 	KHR_robustness_es.xml \
 	KHR_texture_compression_astc.xml \
+	MESA_tile_raster_order.xml \
 	NV_conditional_render.xml \
 	NV_primitive_restart.xml \
 	NV_texture_barrier.xml \
@@ -260,7 +264,7 @@ $(XORG_GLAPI_DIR)/%.h: $(MESA_GLAPI_DIR)/%.h
 
 $(MESA_GLAPI_DIR)/glapi_mapi_tmp.h: $(MESA_MAPI_DIR)/mapi_abi.py $(COMMON)
 	$(PYTHON_GEN) $(MESA_MAPI_DIR)/mapi_abi.py \
-		--printer glapi --mode lib $(srcdir)/gl_and_es_API.xml > $@
+		--printer glapi $(srcdir)/gl_and_es_API.xml > $@
 
 $(MESA_GLAPI_DIR)/glprocs.h: gl_procs.py $(COMMON)
 	$(PYTHON_GEN) $(srcdir)/gl_procs.py -c -f $(srcdir)/gl_and_es_API.xml > $@

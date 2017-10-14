@@ -39,6 +39,23 @@
 
 static void radv_amdgpu_winsys_bo_destroy(struct radeon_winsys_bo *_bo);
 
+static int
+radv_amdgpu_bo_va_op(amdgpu_device_handle dev,
+		     amdgpu_bo_handle bo,
+		     uint64_t offset,
+		     uint64_t size,
+		     uint64_t addr,
+		     uint64_t flags,
+		     uint32_t ops)
+{
+	size = ALIGN(size, getpagesize());
+	flags |= (AMDGPU_VM_PAGE_READABLE |
+		  AMDGPU_VM_PAGE_WRITEABLE |
+		  AMDGPU_VM_PAGE_EXECUTABLE);
+	return amdgpu_bo_va_op_raw(dev, bo, offset, size, addr,
+				   flags, ops);
+}
+
 static void
 radv_amdgpu_winsys_virtual_map(struct radv_amdgpu_winsys_bo *bo,
                                const struct radv_amdgpu_map_range *range)
@@ -49,8 +66,8 @@ radv_amdgpu_winsys_virtual_map(struct radv_amdgpu_winsys_bo *bo,
 		return; /* TODO: PRT mapping */
 
 	p_atomic_inc(&range->bo->ref_count);
-	int r = amdgpu_bo_va_op(range->bo->bo, range->bo_offset, range->size,
-	                        range->offset + bo->va, 0, AMDGPU_VA_OP_MAP);
+	int r = radv_amdgpu_bo_va_op(bo->ws->dev, range->bo->bo, range->bo_offset, range->size,
+				     range->offset + bo->base.va, 0, AMDGPU_VA_OP_MAP);
 	if (r)
 		abort();
 }
@@ -64,8 +81,8 @@ radv_amdgpu_winsys_virtual_unmap(struct radv_amdgpu_winsys_bo *bo,
 	if (!range->bo)
 		return; /* TODO: PRT mapping */
 
-	int r = amdgpu_bo_va_op(range->bo->bo, range->bo_offset, range->size,
-	                        range->offset + bo->va, 0, AMDGPU_VA_OP_UNMAP);
+	int r = radv_amdgpu_bo_va_op(bo->ws->dev, range->bo->bo, range->bo_offset, range->size,
+				     range->offset + bo->base.va, 0, AMDGPU_VA_OP_UNMAP);
 	if (r)
 		abort();
 	radv_amdgpu_winsys_bo_destroy((struct radeon_winsys_bo *)range->bo);
@@ -149,6 +166,7 @@ radv_amdgpu_winsys_bo_virtual_bind(struct radeon_winsys_bo *_parent,
 	if (parent->ranges[first].bo == bo && (!bo || offset - bo_offset == parent->ranges[first].offset - parent->ranges[first].bo_offset)) {
 		size += offset - parent->ranges[first].offset;
 		offset = parent->ranges[first].offset;
+		bo_offset = parent->ranges[first].bo_offset;
 		remove_first = true;
 	}
 
@@ -234,7 +252,7 @@ static void radv_amdgpu_winsys_bo_destroy(struct radeon_winsys_bo *_bo)
 			bo->ws->num_buffers--;
 			pthread_mutex_unlock(&bo->ws->global_bo_list_lock);
 		}
-		amdgpu_bo_va_op(bo->bo, 0, bo->size, bo->va, 0, AMDGPU_VA_OP_UNMAP);
+		radv_amdgpu_bo_va_op(bo->ws->dev, bo->bo, 0, bo->size, bo->base.va, 0, AMDGPU_VA_OP_UNMAP);
 		amdgpu_bo_free(bo->bo);
 	}
 	amdgpu_va_range_free(bo->va_handle);
@@ -277,7 +295,7 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws,
 	if (r)
 		goto error_va_alloc;
 
-	bo->va = va;
+	bo->base.va = va;
 	bo->va_handle = va_handle;
 	bo->size = size;
 	bo->ws = ws;
@@ -313,6 +331,9 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws,
 	if (flags & RADEON_FLAG_GTT_WC)
 		request.flags |= AMDGPU_GEM_CREATE_CPU_GTT_USWC;
 
+	/* this won't do anything on pre 4.9 kernels */
+	if (ws->zero_all_vram_allocs && (initial_domain & RADEON_DOMAIN_VRAM))
+		request.flags |= AMDGPU_GEM_CREATE_VRAM_CLEARED;
 	r = amdgpu_bo_alloc(ws->dev, &request, &buf_handle);
 	if (r) {
 		fprintf(stderr, "amdgpu: Failed to allocate a buffer:\n");
@@ -322,7 +343,11 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws,
 		goto error_bo_alloc;
 	}
 
-	r = amdgpu_bo_va_op(buf_handle, 0, size, va, 0, AMDGPU_VA_OP_MAP);
+
+	uint32_t va_flags = 0;
+	if ((flags & RADEON_FLAG_VA_UNCACHED) && ws->info.chip_class >= GFX9)
+		va_flags |= AMDGPU_VM_MTYPE_UC;
+	r = radv_amdgpu_bo_va_op(ws->dev, buf_handle, 0, size, va, va_flags, AMDGPU_VA_OP_MAP);
 	if (r)
 		goto error_va_map;
 
@@ -340,12 +365,6 @@ error_bo_alloc:
 error_va_alloc:
 	FREE(bo);
 	return NULL;
-}
-
-static uint64_t radv_amdgpu_winsys_bo_get_va(struct radeon_winsys_bo *_bo)
-{
-	struct radv_amdgpu_winsys_bo *bo = radv_amdgpu_winsys_bo(_bo);
-	return bo->va;
 }
 
 static void *
@@ -398,7 +417,7 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws,
 	if (r)
 		goto error_query;
 
-	r = amdgpu_bo_va_op(result.buf_handle, 0, result.alloc_size, va, 0, AMDGPU_VA_OP_MAP);
+	r = radv_amdgpu_bo_va_op(ws->dev, result.buf_handle, 0, result.alloc_size, va, 0, AMDGPU_VA_OP_MAP);
 	if (r)
 		goto error_va_map;
 
@@ -408,7 +427,7 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws,
 		initial |= RADEON_DOMAIN_GTT;
 
 	bo->bo = result.buf_handle;
-	bo->va = va;
+	bo->base.va = va;
 	bo->va_handle = va_handle;
 	bo->initial_domain = initial;
 	bo->size = result.alloc_size;
@@ -467,25 +486,29 @@ radv_amdgpu_winsys_bo_set_metadata(struct radeon_winsys_bo *_bo,
 	struct amdgpu_bo_metadata metadata = {0};
 	uint32_t tiling_flags = 0;
 
-	if (md->macrotile == RADEON_LAYOUT_TILED)
-		tiling_flags |= AMDGPU_TILING_SET(ARRAY_MODE, 4); /* 2D_TILED_THIN1 */
-	else if (md->microtile == RADEON_LAYOUT_TILED)
-		tiling_flags |= AMDGPU_TILING_SET(ARRAY_MODE, 2); /* 1D_TILED_THIN1 */
-	else
-		tiling_flags |= AMDGPU_TILING_SET(ARRAY_MODE, 1); /* LINEAR_ALIGNED */
+	if (bo->ws->info.chip_class >= GFX9) {
+		tiling_flags |= AMDGPU_TILING_SET(SWIZZLE_MODE, md->u.gfx9.swizzle_mode);
+	} else {
+		if (md->u.legacy.macrotile == RADEON_LAYOUT_TILED)
+			tiling_flags |= AMDGPU_TILING_SET(ARRAY_MODE, 4); /* 2D_TILED_THIN1 */
+		else if (md->u.legacy.microtile == RADEON_LAYOUT_TILED)
+			tiling_flags |= AMDGPU_TILING_SET(ARRAY_MODE, 2); /* 1D_TILED_THIN1 */
+		else
+			tiling_flags |= AMDGPU_TILING_SET(ARRAY_MODE, 1); /* LINEAR_ALIGNED */
 
-	tiling_flags |= AMDGPU_TILING_SET(PIPE_CONFIG, md->pipe_config);
-	tiling_flags |= AMDGPU_TILING_SET(BANK_WIDTH, util_logbase2(md->bankw));
-	tiling_flags |= AMDGPU_TILING_SET(BANK_HEIGHT, util_logbase2(md->bankh));
-	if (md->tile_split)
-		tiling_flags |= AMDGPU_TILING_SET(TILE_SPLIT, radv_eg_tile_split_rev(md->tile_split));
-	tiling_flags |= AMDGPU_TILING_SET(MACRO_TILE_ASPECT, util_logbase2(md->mtilea));
-	tiling_flags |= AMDGPU_TILING_SET(NUM_BANKS, util_logbase2(md->num_banks)-1);
+		tiling_flags |= AMDGPU_TILING_SET(PIPE_CONFIG, md->u.legacy.pipe_config);
+		tiling_flags |= AMDGPU_TILING_SET(BANK_WIDTH, util_logbase2(md->u.legacy.bankw));
+		tiling_flags |= AMDGPU_TILING_SET(BANK_HEIGHT, util_logbase2(md->u.legacy.bankh));
+		if (md->u.legacy.tile_split)
+			tiling_flags |= AMDGPU_TILING_SET(TILE_SPLIT, radv_eg_tile_split_rev(md->u.legacy.tile_split));
+		tiling_flags |= AMDGPU_TILING_SET(MACRO_TILE_ASPECT, util_logbase2(md->u.legacy.mtilea));
+		tiling_flags |= AMDGPU_TILING_SET(NUM_BANKS, util_logbase2(md->u.legacy.num_banks)-1);
 
-	if (md->scanout)
-		tiling_flags |= AMDGPU_TILING_SET(MICRO_TILE_MODE, 0); /* DISPLAY_MICRO_TILING */
-	else
-		tiling_flags |= AMDGPU_TILING_SET(MICRO_TILE_MODE, 1); /* THIN_MICRO_TILING */
+		if (md->u.legacy.scanout)
+			tiling_flags |= AMDGPU_TILING_SET(MICRO_TILE_MODE, 0); /* DISPLAY_MICRO_TILING */
+		else
+			tiling_flags |= AMDGPU_TILING_SET(MICRO_TILE_MODE, 1); /* THIN_MICRO_TILING */
+	}
 
 	metadata.tiling_info = tiling_flags;
 	metadata.size_metadata = md->size_metadata;
@@ -498,7 +521,6 @@ void radv_amdgpu_bo_init_functions(struct radv_amdgpu_winsys *ws)
 {
 	ws->base.buffer_create = radv_amdgpu_winsys_bo_create;
 	ws->base.buffer_destroy = radv_amdgpu_winsys_bo_destroy;
-	ws->base.buffer_get_va = radv_amdgpu_winsys_bo_get_va;
 	ws->base.buffer_map = radv_amdgpu_winsys_bo_map;
 	ws->base.buffer_unmap = radv_amdgpu_winsys_bo_unmap;
 	ws->base.buffer_from_fd = radv_amdgpu_winsys_bo_from_fd;

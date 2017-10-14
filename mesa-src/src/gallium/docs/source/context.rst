@@ -53,8 +53,6 @@ buffers, surfaces) are bound to the driver.
 
 * ``set_vertex_buffers``
 
-* ``set_index_buffer``
-
 
 Non-CSO State
 ^^^^^^^^^^^^^
@@ -101,6 +99,14 @@ objects. They all follow simple, one-method binding calls, e.g.
   various debug messages, eventually reported via KHR_debug and
   similar mechanisms.
 
+Samplers
+^^^^^^^^
+
+pipe_sampler_state objects control how textures are sampled (coordinate
+wrap modes, interpolation modes, etc).  Note that samplers are not used
+for texture buffer objects.  That is, pipe_context::bind_sampler_views()
+will not bind a sampler if the corresponding sampler view refers to a
+PIPE_BUFFER resource.
 
 Sampler Views
 ^^^^^^^^^^^^^
@@ -112,7 +118,7 @@ If texture format is different than template format, it is said the texture
 is being cast to another format. Casting can be done only between compatible
 formats, that is formats that have matching component order and sizes.
 
-Swizzle fields specify they way in which fetched texel components are placed
+Swizzle fields specify the way in which fetched texel components are placed
 in the result register. For example, ``swizzle_r`` specifies what is going to be
 placed in first component of result register.
 
@@ -290,8 +296,8 @@ the mode of the primitive and the vertices to be fetched, in the range between
 Every instance with instanceID in the range between ``start_instance`` and
 ``start_instance``+``instance_count``-1, inclusive, will be drawn.
 
-If there is an index buffer bound, and ``indexed`` field is true, all vertex
-indices will be looked up in the index buffer.
+If  ``index_size`` != 0, all vertex indices will be looked up from the index
+buffer.
 
 In indexed draw, ``min_index`` and ``max_index`` respectively provide a lower
 and upper bound of the indices contained in the index buffer inside the range
@@ -388,6 +394,12 @@ value of FALSE for cases where COUNTER would result in 0 and TRUE
 for all other cases.
 This query can be used with ``render_condition``.
 
+In cases where a conservative approximation of an occlusion query is enough,
+``PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE`` should be used. It behaves
+like ``PIPE_QUERY_OCCLUSION_PREDICATE``, except that it may return TRUE in
+additional, implementation-dependent cases.
+This query can be used with ``render_condition``.
+
 ``PIPE_QUERY_TIME_ELAPSED`` returns the amount of time, in nanoseconds,
 the context takes to perform operations.
 The result is an unsigned 64-bit integer.
@@ -422,9 +434,17 @@ XXX the 2nd value is equivalent to ``PIPE_QUERY_PRIMITIVES_GENERATED`` but it is
 unclear if it should be increased if stream output is not active.
 
 ``PIPE_QUERY_SO_OVERFLOW_PREDICATE`` returns a boolean value indicating
-whether the stream output targets have overflowed as a result of the
+whether a selected stream output target has overflowed as a result of the
 commands issued between ``begin_query`` and ``end_query``.
-This query can be used with ``render_condition``.
+This query can be used with ``render_condition``. The output stream is
+selected by the stream number passed to ``create_query``.
+
+``PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE`` returns a boolean value indicating
+whether any stream output target has overflowed as a result of the commands
+issued between ``begin_query`` and ``end_query``. This query can be used
+with ``render_condition``, and its result is the logical OR of multiple
+``PIPE_QUERY_SO_OVERFLOW_PREDICATE`` queries, one for each stream output
+target.
 
 ``PIPE_QUERY_GPU_FINISHED`` returns a boolean value indicating whether
 all commands issued before ``end_query`` have completed. However, this
@@ -758,6 +778,26 @@ notifications are single-shot, i.e. subsequent calls to
   since the last call or since the last notification by callback.
 * ``set_device_reset_callback`` sets a callback which will be called when
   a device reset is detected. The callback is only called synchronously.
+
+Bindless
+^^^^^^^^
+
+If PIPE_CAP_BINDLESS_TEXTURE is TRUE, the following ``pipe_context`` functions
+are used to create/delete bindless handles, and to make them resident in the
+current context when they are going to be used by shaders.
+
+* ``create_texture_handle`` creates a 64-bit unsigned integer texture handle
+  that is going to be directly used in shaders.
+* ``delete_texture_handle`` deletes a 64-bit unsigned integer texture handle.
+* ``make_texture_handle_resident`` makes a 64-bit unsigned texture handle
+  resident in the current context to be accessible by shaders for texture
+  mapping.
+* ``create_image_handle`` creates a 64-bit unsigned integer image handle that
+  is going to be directly used in shaders.
+* ``delete_image_handle`` deletes a 64-bit unsigned integer image handle.
+* ``make_image_handle_resident`` makes a 64-bit unsigned integer image handle
+  resident in the current context to be accessible by shaders for image loads,
+  stores and atomic operations.
 
 Using several contexts
 ----------------------

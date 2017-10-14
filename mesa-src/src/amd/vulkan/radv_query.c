@@ -44,11 +44,6 @@ static unsigned get_max_db(struct radv_device *device)
 	unsigned num_db = device->physical_device->rad_info.num_render_backends;
 	MAYBE_UNUSED unsigned rb_mask = device->physical_device->rad_info.enabled_rb_mask;
 
-	if (device->physical_device->rad_info.chip_class == SI)
-		num_db = 8;
-	else
-		num_db = MAX2(8, num_db);
-
 	/* Otherwise we need to change the query reset procedure */
 	assert(rb_mask == ((1ull << num_db) - 1));
 
@@ -77,6 +72,8 @@ static struct nir_ssa_def *
 radv_load_push_int(nir_builder *b, unsigned offset, const char *name)
 {
 	nir_intrinsic_instr *flags = nir_intrinsic_instr_create(b->shader, nir_intrinsic_load_push_constant);
+	nir_intrinsic_set_base(flags, 0);
+	nir_intrinsic_set_range(flags, 16);
 	flags->src[0] = nir_src_for_ssa(nir_imm_int(b, offset));
 	flags->num_components = 1;
 	nir_ssa_dest_init(&flags->instr, &flags->dest, 1, 32, name);
@@ -125,10 +122,10 @@ build_occlusion_query_shader(struct radv_device *device) {
 	 */
 	nir_builder b;
 	nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_COMPUTE, NULL);
-	b.shader->info->name = ralloc_strdup(b.shader, "occlusion_query");
-	b.shader->info->cs.local_size[0] = 64;
-	b.shader->info->cs.local_size[1] = 1;
-	b.shader->info->cs.local_size[2] = 1;
+	b.shader->info.name = ralloc_strdup(b.shader, "occlusion_query");
+	b.shader->info.cs.local_size[0] = 64;
+	b.shader->info.cs.local_size[1] = 1;
+	b.shader->info.cs.local_size[2] = 1;
 
 	nir_variable *result = nir_local_variable_create(b.impl, glsl_uint64_t_type(), "result");
 	nir_variable *outer_counter = nir_local_variable_create(b.impl, glsl_int_type(), "outer_counter");
@@ -158,9 +155,9 @@ build_occlusion_query_shader(struct radv_device *device) {
 	nir_ssa_def *invoc_id = nir_load_system_value(&b, nir_intrinsic_load_local_invocation_id, 0);
 	nir_ssa_def *wg_id = nir_load_system_value(&b, nir_intrinsic_load_work_group_id, 0);
 	nir_ssa_def *block_size = nir_imm_ivec4(&b,
-	                                        b.shader->info->cs.local_size[0],
-	                                        b.shader->info->cs.local_size[1],
-	                                        b.shader->info->cs.local_size[2], 0);
+	                                        b.shader->info.cs.local_size[0],
+	                                        b.shader->info.cs.local_size[1],
+	                                        b.shader->info.cs.local_size[2], 0);
 	nir_ssa_def *global_id = nir_iadd(&b, nir_imul(&b, wg_id, block_size), invoc_id);
 	global_id = nir_channel(&b, global_id, 0); // We only care about x here.
 
@@ -320,10 +317,10 @@ build_pipeline_statistics_query_shader(struct radv_device *device) {
 	 */
 	nir_builder b;
 	nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_COMPUTE, NULL);
-	b.shader->info->name = ralloc_strdup(b.shader, "pipeline_statistics_query");
-	b.shader->info->cs.local_size[0] = 64;
-	b.shader->info->cs.local_size[1] = 1;
-	b.shader->info->cs.local_size[2] = 1;
+	b.shader->info.name = ralloc_strdup(b.shader, "pipeline_statistics_query");
+	b.shader->info.cs.local_size[0] = 64;
+	b.shader->info.cs.local_size[1] = 1;
+	b.shader->info.cs.local_size[2] = 1;
 
 	nir_variable *output_offset = nir_local_variable_create(b.impl, glsl_int_type(), "output_offset");
 
@@ -350,9 +347,9 @@ build_pipeline_statistics_query_shader(struct radv_device *device) {
 	nir_ssa_def *invoc_id = nir_load_system_value(&b, nir_intrinsic_load_local_invocation_id, 0);
 	nir_ssa_def *wg_id = nir_load_system_value(&b, nir_intrinsic_load_work_group_id, 0);
 	nir_ssa_def *block_size = nir_imm_ivec4(&b,
-	                                        b.shader->info->cs.local_size[0],
-	                                        b.shader->info->cs.local_size[1],
-	                                        b.shader->info->cs.local_size[2], 0);
+	                                        b.shader->info.cs.local_size[0],
+	                                        b.shader->info.cs.local_size[1],
+	                                        b.shader->info.cs.local_size[2], 0);
 	nir_ssa_def *global_id = nir_iadd(&b, nir_imul(&b, wg_id, block_size), invoc_id);
 	global_id = nir_channel(&b, global_id, 0); // We only care about x here.
 
@@ -522,8 +519,6 @@ VkResult radv_device_init_meta_query_state(struct radv_device *device)
 	struct radv_shader_module occlusion_cs = { .nir = NULL };
 	struct radv_shader_module pipeline_statistics_cs = { .nir = NULL };
 
-	zero(device->meta_state.query);
-
 	occlusion_cs.nir = build_occlusion_query_shader(device);
 	pipeline_statistics_cs.nir = build_pipeline_statistics_query_shader(device);
 
@@ -612,12 +607,10 @@ VkResult radv_device_init_meta_query_state(struct radv_device *device)
 					     radv_pipeline_cache_to_handle(&device->meta_state.cache),
 					     1, &pipeline_statistics_vk_pipeline_info, NULL,
 					     &device->meta_state.query.pipeline_statistics_query_pipeline);
-	if (result != VK_SUCCESS)
-		goto fail;
 
-	return VK_SUCCESS;
 fail:
-	radv_device_finish_meta_query_state(device);
+	if (result != VK_SUCCESS)
+		radv_device_finish_meta_query_state(device);
 	ralloc_free(occlusion_cs.nir);
 	ralloc_free(pipeline_statistics_cs.nir);
 	return result;
@@ -656,9 +649,12 @@ static void radv_query_shader(struct radv_cmd_buffer *cmd_buffer,
                               uint32_t pipeline_stats_mask, uint32_t avail_offset)
 {
 	struct radv_device *device = cmd_buffer->device;
-	struct radv_meta_saved_compute_state saved_state;
+	struct radv_meta_saved_state saved_state;
 
-	radv_meta_save_compute(&saved_state, cmd_buffer, 4);
+	radv_meta_save(&saved_state, cmd_buffer,
+		       RADV_META_SAVE_COMPUTE_PIPELINE |
+		       RADV_META_SAVE_CONSTANTS |
+		       RADV_META_SAVE_DESCRIPTORS);
 
 	struct radv_buffer dst_buffer = {
 		.bo = dst_bo,
@@ -742,7 +738,7 @@ static void radv_query_shader(struct radv_cmd_buffer *cmd_buffer,
 	                                RADV_CMD_FLAG_INV_VMEM_L1 |
 	                                RADV_CMD_FLAG_CS_PARTIAL_FLUSH;
 
-	radv_meta_restore_compute(&saved_state, cmd_buffer, 4);
+	radv_meta_restore(&saved_state, cmd_buffer);
 }
 
 VkResult radv_CreateQueryPool(
@@ -957,8 +953,8 @@ void radv_CmdCopyQueryPoolResults(
 	RADV_FROM_HANDLE(radv_buffer, dst_buffer, dstBuffer);
 	struct radeon_winsys_cs *cs = cmd_buffer->cs;
 	unsigned elem_size = (flags & VK_QUERY_RESULT_64_BIT) ? 8 : 4;
-	uint64_t va = cmd_buffer->device->ws->buffer_get_va(pool->bo);
-	uint64_t dest_va = cmd_buffer->device->ws->buffer_get_va(dst_buffer->bo);
+	uint64_t va = radv_buffer_get_va(pool->bo);
+	uint64_t dest_va = radv_buffer_get_va(dst_buffer->bo);
 	dest_va += dst_buffer->offset + dstOffset;
 
 	cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, pool->bo, 8);
@@ -997,13 +993,7 @@ void radv_CmdCopyQueryPoolResults(
 				uint64_t avail_va = va + pool->availability_offset + 4 * query;
 
 				/* This waits on the ME. All copies below are done on the ME */
-				radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, 0));
-				radeon_emit(cs, WAIT_REG_MEM_EQUAL | WAIT_REG_MEM_MEM_SPACE(1));
-				radeon_emit(cs, avail_va);
-				radeon_emit(cs, avail_va >> 32);
-				radeon_emit(cs, 1); /* reference value */
-				radeon_emit(cs, 0xffffffff); /* mask */
-				radeon_emit(cs, 4); /* poll interval */
+				si_emit_wait_fence(cs, false, avail_va, 1, 0xffffffff);
 			}
 		}
 		radv_query_shader(cmd_buffer, cmd_buffer->device->meta_state.query.pipeline_statistics_query_pipeline,
@@ -1026,13 +1016,7 @@ void radv_CmdCopyQueryPoolResults(
 				uint64_t avail_va = va + pool->availability_offset + 4 * query;
 
 				/* This waits on the ME. All copies below are done on the ME */
-				radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, 0));
-				radeon_emit(cs, WAIT_REG_MEM_EQUAL | WAIT_REG_MEM_MEM_SPACE(1));
-				radeon_emit(cs, avail_va);
-				radeon_emit(cs, avail_va >> 32);
-				radeon_emit(cs, 1); /* reference value */
-				radeon_emit(cs, 0xffffffff); /* mask */
-				radeon_emit(cs, 4); /* poll interval */
+				si_emit_wait_fence(cs, false, avail_va, 1, 0xffffffff);
 			}
 			if (flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) {
 				uint64_t avail_va = va + pool->availability_offset + 4 * query;
@@ -1074,7 +1058,7 @@ void radv_CmdResetQueryPool(
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
-	uint64_t va = cmd_buffer->device->ws->buffer_get_va(pool->bo);
+	uint64_t va = radv_buffer_get_va(pool->bo);
 
 	cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, pool->bo, 8);
 
@@ -1095,7 +1079,7 @@ void radv_CmdBeginQuery(
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
 	struct radeon_winsys_cs *cs = cmd_buffer->cs;
-	uint64_t va = cmd_buffer->device->ws->buffer_get_va(pool->bo);
+	uint64_t va = radv_buffer_get_va(pool->bo);
 	va += pool->stride * query;
 
 	cmd_buffer->device->ws->cs_add_buffer(cs, pool->bo, 8);
@@ -1135,7 +1119,7 @@ void radv_CmdEndQuery(
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
 	struct radeon_winsys_cs *cs = cmd_buffer->cs;
-	uint64_t va = cmd_buffer->device->ws->buffer_get_va(pool->bo);
+	uint64_t va = radv_buffer_get_va(pool->bo);
 	uint64_t avail_va = va + pool->availability_offset + 4 * query;
 	va += pool->stride * query;
 
@@ -1156,7 +1140,7 @@ void radv_CmdEndQuery(
 
 		break;
 	case VK_QUERY_TYPE_PIPELINE_STATISTICS:
-		radeon_check_space(cmd_buffer->device->ws, cs, 10);
+		radeon_check_space(cmd_buffer->device->ws, cs, 16);
 
 		va += pipelinestat_block_size;
 
@@ -1165,13 +1149,12 @@ void radv_CmdEndQuery(
 		radeon_emit(cs, va);
 		radeon_emit(cs, va >> 32);
 
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_BOTTOM_OF_PIPE_TS) |
-				EVENT_INDEX(5));
-		radeon_emit(cs, avail_va);
-		radeon_emit(cs, (avail_va >> 32) | EOP_DATA_SEL(1));
-		radeon_emit(cs, 1);
-		radeon_emit(cs, 0);
+		si_cs_emit_write_event_eop(cs,
+					   false,
+					   cmd_buffer->device->physical_device->rad_info.chip_class,
+					   false,
+					   V_028A90_BOTTOM_OF_PIPE_TS, 0,
+					   1, avail_va, 0, 1);
 		break;
 	default:
 		unreachable("ending unhandled query type");
@@ -1188,38 +1171,48 @@ void radv_CmdWriteTimestamp(
 	RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
 	bool mec = radv_cmd_buffer_uses_mec(cmd_buffer);
 	struct radeon_winsys_cs *cs = cmd_buffer->cs;
-	uint64_t va = cmd_buffer->device->ws->buffer_get_va(pool->bo);
+	uint64_t va = radv_buffer_get_va(pool->bo);
 	uint64_t avail_va = va + pool->availability_offset + 4 * query;
 	uint64_t query_va = va + pool->stride * query;
 
 	cmd_buffer->device->ws->cs_add_buffer(cs, pool->bo, 5);
 
-	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 12);
+	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 28);
 
-	if (mec) {
-		radeon_emit(cs, PKT3(PKT3_RELEASE_MEM, 5, 0));
-		radeon_emit(cs, EVENT_TYPE(V_028A90_BOTTOM_OF_PIPE_TS) | EVENT_INDEX(5));
-		radeon_emit(cs, 3 << 29);
+	switch(pipelineStage) {
+	case VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:
+		radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
+		radeon_emit(cs, COPY_DATA_COUNT_SEL | COPY_DATA_WR_CONFIRM |
+		                COPY_DATA_SRC_SEL(COPY_DATA_TIMESTAMP) |
+		                COPY_DATA_DST_SEL(V_370_MEM_ASYNC));
+		radeon_emit(cs, 0);
+		radeon_emit(cs, 0);
 		radeon_emit(cs, query_va);
 		radeon_emit(cs, query_va >> 32);
-		radeon_emit(cs, 0);
-		radeon_emit(cs, 0);
-	} else {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
-		radeon_emit(cs, EVENT_TYPE(V_028A90_BOTTOM_OF_PIPE_TS) | EVENT_INDEX(5));
-		radeon_emit(cs, query_va);
-		radeon_emit(cs, (3 << 29) | ((query_va >> 32) & 0xFFFF));
-		radeon_emit(cs, 0);
-		radeon_emit(cs, 0);
-	}
 
-	radeon_emit(cs, PKT3(PKT3_WRITE_DATA, 3, 0));
-	radeon_emit(cs, S_370_DST_SEL(mec ? V_370_MEM_ASYNC : V_370_MEMORY_SYNC) |
-		    S_370_WR_CONFIRM(1) |
-		    S_370_ENGINE_SEL(V_370_ME));
-	radeon_emit(cs, avail_va);
-	radeon_emit(cs, avail_va >> 32);
-	radeon_emit(cs, 1);
+		radeon_emit(cs, PKT3(PKT3_WRITE_DATA, 3, 0));
+		radeon_emit(cs, S_370_DST_SEL(V_370_MEM_ASYNC) |
+		                S_370_WR_CONFIRM(1) |
+		                S_370_ENGINE_SEL(V_370_ME));
+		radeon_emit(cs, avail_va);
+		radeon_emit(cs, avail_va >> 32);
+		radeon_emit(cs, 1);
+		break;
+	default:
+		si_cs_emit_write_event_eop(cs,
+					   false,
+					   cmd_buffer->device->physical_device->rad_info.chip_class,
+					   mec,
+					   V_028A90_BOTTOM_OF_PIPE_TS, 0,
+					   3, query_va, 0, 0);
+		si_cs_emit_write_event_eop(cs,
+					   false,
+					   cmd_buffer->device->physical_device->rad_info.chip_class,
+					   mec,
+					   V_028A90_BOTTOM_OF_PIPE_TS, 0,
+					   1, avail_va, 0, 1);
+		break;
+	}
 
 	assert(cmd_buffer->cs->cdw <= cdw_max);
 }

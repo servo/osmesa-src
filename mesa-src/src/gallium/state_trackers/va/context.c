@@ -88,7 +88,10 @@ static struct VADriverVTable vtable =
    &vlVaCreateSurfaces2,
    &vlVaQuerySurfaceAttributes,
    &vlVaAcquireBufferHandle,
-   &vlVaReleaseBufferHandle
+   &vlVaReleaseBufferHandle,
+#if VA_CHECK_VERSION(1, 0, 0)
+   &vlVaExportSurfaceHandle,
+#endif
 };
 
 static struct VADriverVTableVPP vtable_vpp =
@@ -103,7 +106,6 @@ PUBLIC VAStatus
 VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
 {
    vlVaDriver *drv;
-   struct drm_state *drm_info;
 
    if (!ctx)
       return VA_STATUS_ERROR_INVALID_CONTEXT;
@@ -118,18 +120,14 @@ VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
       return VA_STATUS_ERROR_UNIMPLEMENTED;
    case VA_DISPLAY_GLX:
    case VA_DISPLAY_X11:
-#if defined(HAVE_DRI3)
       drv->vscreen = vl_dri3_screen_create(ctx->native_dpy, ctx->x11_screen);
-#endif
       if (!drv->vscreen)
          drv->vscreen = vl_dri2_screen_create(ctx->native_dpy, ctx->x11_screen);
-      if (!drv->vscreen)
-         goto error_screen;
       break;
    case VA_DISPLAY_WAYLAND:
    case VA_DISPLAY_DRM:
    case VA_DISPLAY_DRM_RENDERNODES: {
-      drm_info = (struct drm_state *) ctx->drm_state;
+      const struct drm_state *drm_info = (struct drm_state *) ctx->drm_state;
 
       if (!drm_info || drm_info->fd < 0) {
          FREE(drv);
@@ -137,17 +135,18 @@ VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
       }
 
       drv->vscreen = vl_drm_screen_create(drm_info->fd);
-      if (!drv->vscreen)
-         goto error_screen;
-      }
       break;
+   }
    default:
       FREE(drv);
       return VA_STATUS_ERROR_INVALID_DISPLAY;
    }
 
+   if (!drv->vscreen)
+      goto error_screen;
+
    drv->pipe = drv->vscreen->pscreen->context_create(drv->vscreen->pscreen,
-                                                     drv->vscreen, 0);
+                                                     NULL, 0);
    if (!drv->pipe)
       goto error_pipe;
 
@@ -171,7 +170,7 @@ VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
    *ctx->vtable = vtable;
    *ctx->vtable_vpp = vtable_vpp;
    ctx->max_profiles = PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH - PIPE_VIDEO_PROFILE_UNKNOWN;
-   ctx->max_entrypoints = 1;
+   ctx->max_entrypoints = 2;
    ctx->max_attributes = 1;
    ctx->max_image_formats = VL_VA_MAX_IMAGE_FORMATS;
    ctx->max_subpic_formats = 1;
@@ -284,8 +283,10 @@ vlVaCreateContext(VADriverContextP ctx, VAConfigID config_id, int picture_width,
 
    context->desc.base.profile = config->profile;
    context->desc.base.entry_point = config->entrypoint;
-   if (config->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE)
+   if (config->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
       context->desc.h264enc.rate_ctrl.rate_ctrl_method = config->rc;
+      context->desc.h264enc.frame_idx = util_hash_table_create(handle_hash, handle_compare);
+   }
 
    mtx_lock(&drv->mutex);
    *context_id = handle_table_add(drv->htab, context);
@@ -312,7 +313,10 @@ vlVaDestroyContext(VADriverContextP ctx, VAContextID context_id)
    }
 
    if (context->decoder) {
-      if (context->desc.base.entry_point != PIPE_VIDEO_ENTRYPOINT_ENCODE) {
+      if (context->desc.base.entry_point == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
+         if (context->desc.h264enc.frame_idx)
+            util_hash_table_destroy (context->desc.h264enc.frame_idx);
+      } else {
          if (u_reduce_video_profile(context->decoder->profile) ==
                PIPE_VIDEO_FORMAT_MPEG4_AVC) {
             FREE(context->desc.h264.pps->sps);

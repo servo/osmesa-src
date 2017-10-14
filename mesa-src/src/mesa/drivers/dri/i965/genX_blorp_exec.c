@@ -32,6 +32,10 @@
 
 #include "blorp/blorp_genX_exec.h"
 
+#if GEN_GEN <= 5
+#include "gen4_blorp_exec.h"
+#endif
+
 #include "brw_blorp.h"
 
 static void *
@@ -53,12 +57,21 @@ blorp_emit_reloc(struct blorp_batch *batch,
 {
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
+   uint32_t offset;
 
-   uint32_t offset = (char *)location - (char *)brw->batch.map;
-   return brw_emit_reloc(&brw->batch, offset,
-                         address.buffer, address.offset + delta,
-                         address.read_domains,
-                         address.write_domain);
+   if (GEN_GEN < 6 && brw_ptr_in_state_buffer(&brw->batch, location)) {
+      offset = (char *)location - (char *)brw->batch.state_map;
+      return brw_state_reloc(&brw->batch, offset,
+                             address.buffer, address.offset + delta,
+                             address.reloc_flags);
+   }
+
+   assert(!brw_ptr_in_state_buffer(&brw->batch, location));
+
+   offset = (char *)location - (char *)brw->batch.map;
+   return brw_batch_reloc(&brw->batch, offset,
+                          address.buffer, address.offset + delta,
+                          address.reloc_flags);
 }
 
 static void
@@ -69,11 +82,11 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
    struct brw_context *brw = batch->driver_batch;
    struct brw_bo *bo = address.buffer;
 
-   brw_emit_reloc(&brw->batch, ss_offset, bo, address.offset + delta,
-                  address.read_domains, address.write_domain);
+   uint64_t reloc_val =
+      brw_state_reloc(&brw->batch, ss_offset, bo, address.offset + delta,
+                      address.reloc_flags);
 
-   uint64_t reloc_val = bo->offset64 + address.offset + delta;
-   void *reloc_ptr = (void *)brw->batch.map + ss_offset;
+   void *reloc_ptr = (void *)brw->batch.state_map + ss_offset;
 #if GEN_GEN >= 8
    *(uint64_t *)reloc_ptr = reloc_val;
 #else
@@ -137,14 +150,25 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    void *data = brw_state_batch(brw, size, 64, &offset);
 
    *addr = (struct blorp_address) {
-      .buffer = brw->batch.bo,
-      .read_domains = I915_GEM_DOMAIN_VERTEX,
-      .write_domain = 0,
+      .buffer = brw->batch.state_bo,
       .offset = offset,
    };
 
    return data;
 }
+
+#if GEN_GEN >= 8
+static struct blorp_address
+blorp_get_workaround_page(struct blorp_batch *batch)
+{
+   assert(batch->blorp->driver_ctx == batch->driver_batch);
+   struct brw_context *brw = batch->driver_batch;
+
+   return (struct blorp_address) {
+      .buffer = brw->workaround_bo,
+   };
+}
+#endif
 
 static void
 blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
@@ -155,21 +179,22 @@ blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
 }
 
 static void
-blorp_emit_urb_config(struct blorp_batch *batch, unsigned vs_entry_size)
+blorp_emit_urb_config(struct blorp_batch *batch,
+                      unsigned vs_entry_size, unsigned sf_entry_size)
 {
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
 
 #if GEN_GEN >= 7
-   if (!(brw->ctx.NewDriverState & (BRW_NEW_CONTEXT | BRW_NEW_URB_SIZE)) &&
-       brw->urb.vsize >= vs_entry_size)
+   if (brw->urb.vsize >= vs_entry_size)
       return;
 
-   brw->ctx.NewDriverState |= BRW_NEW_URB_SIZE;
-
    gen7_upload_urb(brw, vs_entry_size, false, false);
-#else
+#elif GEN_GEN == 6
    gen6_upload_urb(brw, vs_entry_size, false, 0);
+#else
+   /* We calculate it now and emit later. */
+   brw_calculate_urb_fence(brw, 0, vs_entry_size, sf_entry_size);
 #endif
 }
 
@@ -180,7 +205,6 @@ genX(blorp_exec)(struct blorp_batch *batch,
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
    struct gl_context *ctx = &brw->ctx;
-   const uint32_t estimated_max_batch_usage = GEN_GEN >= 8 ? 1920 : 1500;
    bool check_aperture_failed_once = false;
 
    /* Flush the sampler and render caches.  We definitely need to flush the
@@ -197,11 +221,10 @@ genX(blorp_exec)(struct blorp_batch *batch,
    brw_select_pipeline(brw, BRW_RENDER_PIPELINE);
 
 retry:
-   intel_batchbuffer_require_space(brw, estimated_max_batch_usage, RENDER_RING);
+   intel_batchbuffer_require_space(brw, 1400, RENDER_RING);
+   brw_require_statebuffer_space(brw, 600);
    intel_batchbuffer_save_state(brw);
-   struct brw_bo *saved_bo = brw->batch.bo;
-   uint32_t saved_used = USED_BATCH(brw->batch);
-   uint32_t saved_state_batch_offset = brw->batch.state_batch_offset;
+   brw->batch.no_wrap = true;
 
 #if GEN_GEN == 6
    /* Emit workaround flushes when we switch from drawing to blorping. */
@@ -214,7 +237,9 @@ retry:
    gen7_l3_state.emit(brw);
 #endif
 
+#if GEN_GEN >= 6
    brw_emit_depth_stall_flushes(brw);
+#endif
 
 #if GEN_GEN == 8
    gen8_write_pma_stall_bits(brw, 0);
@@ -227,17 +252,7 @@ retry:
 
    blorp_exec(batch, params);
 
-   /* Make sure we didn't wrap the batch unintentionally, and make sure we
-    * reserved enough space that a wrap will never happen.
-    */
-   assert(brw->batch.bo == saved_bo);
-   assert((USED_BATCH(brw->batch) - saved_used) * 4 +
-          (saved_state_batch_offset - brw->batch.state_batch_offset) <
-          estimated_max_batch_usage);
-   /* Shut up compiler warnings on release build */
-   (void)saved_bo;
-   (void)saved_used;
-   (void)saved_state_batch_offset;
+   brw->batch.no_wrap = false;
 
    /* Check if the blorp op we just did would make our batch likely to fail to
     * map all the BOs into the GPU at batch exec time later.  If so, flush the
@@ -263,8 +278,9 @@ retry:
     * rendering tracks for GL.
     */
    brw->ctx.NewDriverState |= BRW_NEW_BLORP;
-   brw->no_depth_or_stencil = false;
-   brw->ib.type = -1;
+   brw->no_depth_or_stencil = !params->depth.enabled &&
+                              !params->stencil.enabled;
+   brw->ib.index_size = -1;
 
    if (params->dst.enabled)
       brw_render_cache_set_add_bo(brw, params->dst.addr.buffer);

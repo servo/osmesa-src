@@ -113,6 +113,13 @@
 #define PKT3_INDIRECT_BUFFER_SI                0x32 /* not on CIK */
 #define PKT3_INDIRECT_BUFFER_CONST             0x33
 #define PKT3_STRMOUT_BUFFER_UPDATE             0x34
+#define		STRMOUT_STORE_BUFFER_FILLED_SIZE	1
+#define		STRMOUT_OFFSET_SOURCE(x)	(((unsigned)(x) & 0x3) << 1)
+#define			STRMOUT_OFFSET_FROM_PACKET		0
+#define			STRMOUT_OFFSET_FROM_VGT_FILLED_SIZE	1
+#define			STRMOUT_OFFSET_FROM_MEM			2
+#define			STRMOUT_OFFSET_NONE			3
+#define		STRMOUT_SELECT_BUFFER(x)	(((unsigned)(x) & 0x3) << 8)
 #define PKT3_DRAW_INDEX_OFFSET_2               0x35
 #define PKT3_WRITE_DATA                        0x37
 #define   R_370_CONTROL				0x370 /* 0x[packet number][word index] */
@@ -137,6 +144,7 @@
 #define PKT3_MPEG_INDEX                        0x3A /* not on CIK */
 #define PKT3_WAIT_REG_MEM                      0x3C
 #define		WAIT_REG_MEM_EQUAL		3
+#define         WAIT_REG_MEM_MEM_SPACE(x)       (((unsigned)(x) & 0x3) << 4)
 #define PKT3_MEM_WRITE                         0x3D /* not on CIK */
 #define PKT3_INDIRECT_BUFFER_CIK               0x3F /* new on CIK */
 #define   R_3F0_IB_BASE_LO                     0x3F0
@@ -154,7 +162,9 @@
 #define			COPY_DATA_MEM		1
 #define                 COPY_DATA_PERF          4
 #define                 COPY_DATA_IMM           5
+#define                 COPY_DATA_TIMESTAMP     9
 #define		COPY_DATA_DST_SEL(x)		(((unsigned)(x) & 0xf) << 8)
+#define                 COPY_DATA_MEM_ASYNC     5
 #define		COPY_DATA_COUNT_SEL		(1 << 16)
 #define		COPY_DATA_WR_CONFIRM		(1 << 20)
 #define PKT3_PFP_SYNC_ME		       0x42
@@ -163,13 +173,21 @@
 #define PKT3_COND_WRITE                        0x45
 #define PKT3_EVENT_WRITE                       0x46
 #define PKT3_EVENT_WRITE_EOP                   0x47 /* not on GFX9 */
+#define         EOP_INT_SEL(x)                          ((x) << 24)
+#define			EOP_INT_SEL_NONE			0
+#define			EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM	3
+#define         EOP_DATA_SEL(x)                         ((x) << 29)
+#define			EOP_DATA_SEL_DISCARD		0
+#define			EOP_DATA_SEL_VALUE_32BIT	1
+#define			EOP_DATA_SEL_VALUE_64BIT	2
+#define			EOP_DATA_SEL_TIMESTAMP		3
 /* CP DMA bug: Any use of CP_DMA.DST_SEL=TC must be avoided when EOS packets
  * are used. Use DST_SEL=MC instead. For prefetch, use SRC_SEL=TC and
  * DST_SEL=MC. Only CIK chips are affected.
  */
 /* fix CP DMA before uncommenting: */
 /*#define PKT3_EVENT_WRITE_EOS                   0x48*/ /* not on GFX9 */
-#define PKT3_RELEASE_MEM                       0x49 /* GFX9+ (any ring) or GFX8 (compute ring only) */
+#define PKT3_RELEASE_MEM                       0x49 /* GFX9+ [any ring] or GFX8 [compute ring only] */
 #define PKT3_ONE_REG_WRITE                     0x57 /* not on CIK */
 #define PKT3_ACQUIRE_MEM                       0x58 /* new for CIK */
 #define PKT3_SET_CONFIG_REG                    0x68
@@ -279,6 +297,7 @@
 #define     S_500_DSL_SEL(x)		(((unsigned)(x) & 0x3) << 20)
 #define       V_500_DST_ADDR		0
 #define       V_500_GDS			1 /* program DAS to 1 as well */
+#define       V_500_NOWHERE		2 /* new for GFX9 */
 #define       V_500_DST_ADDR_TC_L2	3 /* new for CIK */
 #define     S_500_ENGINE(x)		((x) & 0x1)
 #define       V_500_ME			0
@@ -2451,6 +2470,8 @@
 #define   S_008F3C_BORDER_COLOR_PTR(x)                                (((unsigned)(x) & 0xFFF) << 0)
 #define   G_008F3C_BORDER_COLOR_PTR(x)                                (((x) >> 0) & 0xFFF)
 #define   C_008F3C_BORDER_COLOR_PTR                                   0xFFFFF000
+/* The UPGRADED_DEPTH field is driver-specific and does not exist in hardware. */
+#define   S_008F3C_UPGRADED_DEPTH(x)                                  (((unsigned)(x) & 0x1) << 29)
 #define   S_008F3C_BORDER_COLOR_TYPE(x)                               (((unsigned)(x) & 0x03) << 30)
 #define   G_008F3C_BORDER_COLOR_TYPE(x)                               (((x) >> 30) & 0x03)
 #define   C_008F3C_BORDER_COLOR_TYPE                                  0x3FFFFFFF
@@ -9093,6 +9114,19 @@
 #define    CIK_SDMA_PACKET_CONSTANT_FILL           0xb
 #define    CIK_SDMA_PACKET_SRBM_WRITE              0xe
 #define    CIK_SDMA_COPY_MAX_SIZE                  0x3fffe0
+
+enum amd_cmp_class_flags {
+	S_NAN = 1 << 0,        // Signaling NaN
+	Q_NAN = 1 << 1,        // Quiet NaN
+	N_INFINITY = 1 << 2,   // Negative infinity
+	N_NORMAL = 1 << 3,     // Negative normal
+	N_SUBNORMAL = 1 << 4,  // Negative subnormal
+	N_ZERO = 1 << 5,       // Negative zero
+	P_ZERO = 1 << 6,       // Positive zero
+	P_SUBNORMAL = 1 << 7,  // Positive subnormal
+	P_NORMAL = 1 << 8,     // Positive normal
+	P_INFINITY = 1 << 9    // Positive infinity
+};
 
 #endif /* _SID_H */
 

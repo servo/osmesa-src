@@ -37,6 +37,7 @@
 #include "state_tracker/drm_driver.h"
 
 #include "pipe/p_context.h"
+#include "pipe-loader/pipe_loader.h"
 #include "state_tracker/st_context.h"
 
 GLboolean
@@ -57,7 +58,10 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    struct st_context_attribs attribs;
    enum st_context_error ctx_err = 0;
    unsigned allowed_flags = __DRI_CTX_FLAG_DEBUG |
-                            __DRI_CTX_FLAG_FORWARD_COMPATIBLE;
+                            __DRI_CTX_FLAG_FORWARD_COMPATIBLE |
+                            __DRI_CTX_FLAG_NO_ERROR;
+   const __DRIbackgroundCallableExtension *backgroundCallable =
+      screen->sPriv->dri2.backgroundCallable;
 
    if (screen->has_reset_status_query)
       allowed_flags |= __DRI_CTX_FLAG_ROBUST_BUFFER_ACCESS;
@@ -104,6 +108,9 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    if (notify_reset)
       attribs.flags |= ST_CONTEXT_FLAG_RESET_NOTIFICATION_ENABLED;
 
+   if (flags & __DRI_CTX_FLAG_NO_ERROR)
+      attribs.flags |= ST_CONTEXT_FLAG_NO_ERROR;
+
    if (sharedContextPrivate) {
       st_share = ((struct dri_context *)sharedContextPrivate)->st;
    }
@@ -117,6 +124,9 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    cPriv->driverPrivate = ctx;
    ctx->cPriv = cPriv;
    ctx->sPriv = sPriv;
+
+   if (driQueryOptionb(&screen->dev->option_cache, "mesa_no_error"))
+      attribs.flags |= ST_CONTEXT_FLAG_NO_ERROR;
 
    attribs.options = screen->options;
    dri_fill_st_visual(&attribs.visual, screen, visual);
@@ -158,10 +168,21 @@ dri_create_context(gl_api api, const struct gl_config * visual,
 
    /* Do this last. */
    if (ctx->st->start_thread &&
-       /* the driver loader must implement this */
-       screen->sPriv->dri2.backgroundCallable &&
-       driQueryOptionb(&screen->optionCache, "mesa_glthread"))
-      ctx->st->start_thread(ctx->st);
+         driQueryOptionb(&screen->dev->option_cache, "mesa_glthread")) {
+
+      if (backgroundCallable && backgroundCallable->base.version >= 2 &&
+            backgroundCallable->isThreadSafe) {
+
+         if (backgroundCallable->isThreadSafe(cPriv->loaderPrivate))
+            ctx->st->start_thread(ctx->st);
+         else
+            fprintf(stderr, "dri_create_context: glthread isn't thread safe "
+                  "- missing call XInitThreads\n");
+      } else {
+         fprintf(stderr, "dri_create_context: requested glthread but driver "
+               "is missing backgroundCallable V2 extension\n");
+      }
+   }
 
    *error = __DRI_CTX_ERROR_SUCCESS;
    return GL_TRUE;

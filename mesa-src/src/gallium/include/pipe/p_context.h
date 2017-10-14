@@ -53,7 +53,6 @@ struct pipe_grid_info;
 struct pipe_fence_handle;
 struct pipe_framebuffer_state;
 struct pipe_image_view;
-struct pipe_index_buffer;
 struct pipe_query;
 struct pipe_poly_stipple;
 struct pipe_rasterizer_state;
@@ -76,6 +75,7 @@ struct pipe_viewport_state;
 struct pipe_compute_state;
 union pipe_color_union;
 union pipe_query_result;
+struct u_log_context;
 struct u_upload_mgr;
 
 /**
@@ -353,9 +353,6 @@ struct pipe_context {
                                unsigned start_slot,
                                unsigned num_buffers,
                                const struct pipe_vertex_buffer * );
-
-   void (*set_index_buffer)( struct pipe_context *pipe,
-                             const struct pipe_index_buffer * );
 
    /*@}*/
 
@@ -753,6 +750,19 @@ struct pipe_context {
                             unsigned flags);
 
    /**
+    * Set the log context to which the driver should write internal debug logs
+    * (internal states, command streams).
+    *
+    * The caller must ensure that the log context is destroyed and reset to
+    * NULL before the pipe context is destroyed, and that log context functions
+    * are only called from the driver thread.
+    *
+    * \param ctx pipe context
+    * \param log logging context
+    */
+   void (*set_log_context)(struct pipe_context *ctx, struct u_log_context *log);
+
+   /**
     * Emit string marker in cmdstream
     */
    void (*emit_string_marker)(struct pipe_context *ctx,
@@ -770,6 +780,65 @@ struct pipe_context {
                               unsigned last_level,
                               unsigned first_layer,
                               unsigned last_layer);
+
+   /**
+    * Create a 64-bit texture handle.
+    *
+    * \param ctx        pipe context
+    * \param view       pipe sampler view object
+    * \param state      pipe sampler state template
+    * \return           a 64-bit texture handle if success, 0 otherwise
+    */
+   uint64_t (*create_texture_handle)(struct pipe_context *ctx,
+                                     struct pipe_sampler_view *view,
+                                     const struct pipe_sampler_state *state);
+
+   /**
+    * Delete a texture handle.
+    *
+    * \param ctx        pipe context
+    * \param handle     64-bit texture handle
+    */
+   void (*delete_texture_handle)(struct pipe_context *ctx, uint64_t handle);
+
+   /**
+    * Make a texture handle resident.
+    *
+    * \param ctx        pipe context
+    * \param handle     64-bit texture handle
+    * \param resident   TRUE for resident, FALSE otherwise
+    */
+   void (*make_texture_handle_resident)(struct pipe_context *ctx,
+                                        uint64_t handle, bool resident);
+
+   /**
+    * Create a 64-bit image handle.
+    *
+    * \param ctx        pipe context
+    * \param image      pipe image view template
+    * \return           a 64-bit image handle if success, 0 otherwise
+    */
+   uint64_t (*create_image_handle)(struct pipe_context *ctx,
+                                   const struct pipe_image_view *image);
+
+   /**
+    * Delete an image handle.
+    *
+    * \param ctx        pipe context
+    * \param handle     64-bit image handle
+    */
+   void (*delete_image_handle)(struct pipe_context *ctx, uint64_t handle);
+
+   /**
+    * Make an image handle resident.
+    *
+    * \param ctx        pipe context
+    * \param handle     64-bit image handle
+    * \param access     GL_READ_ONLY, GL_WRITE_ONLY or GL_READ_WRITE
+    * \param resident   TRUE for resident, FALSE otherwise
+    */
+   void (*make_image_handle_resident)(struct pipe_context *ctx, uint64_t handle,
+                                      unsigned access, bool resident);
 };
 
 

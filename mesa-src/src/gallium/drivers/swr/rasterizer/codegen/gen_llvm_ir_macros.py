@@ -45,6 +45,7 @@ intrinsics = [
         ['VGATHERPD', 'x86_avx2_gather_d_pd_256', ['src', 'pBase', 'indices', 'mask', 'scale']],
         ['VGATHERPS', 'x86_avx2_gather_d_ps_256', ['src', 'pBase', 'indices', 'mask', 'scale']],
         ['VGATHERDD', 'x86_avx2_gather_d_d_256', ['src', 'pBase', 'indices', 'mask', 'scale']],
+        ['VPSRLI', 'x86_avx2_psrli_d', ['src', 'imm']],
         ['VSQRTPS', 'x86_avx_sqrt_ps_256', ['a']],
         ['VRSQRTPS', 'x86_avx_rsqrt_ps_256', ['a']],
         ['VRCPPS', 'x86_avx_rcp_ps_256', ['a']],
@@ -138,6 +139,14 @@ def parse_ir_builder(input_file):
                                 arg_names += [reg_arg.group(1)]
 
                     ignore = False
+
+                    # The following functions need to be ignored in openswr.
+                    # API change in llvm-5.0 breaks baked autogen files
+                    if (
+                        (func_name == 'CreateFence' or
+                         func_name == 'CreateAtomicCmpXchg' or
+                         func_name == 'CreateAtomicRMW')):
+                        ignore = True
 
                     # The following functions need to be ignored.
                     if (func_name == 'CreateInsertNUWNSWBinOp' or

@@ -1,19 +1,24 @@
 /******************************************************************************
+* Copyright (C) 2015-2017 Intel Corporation.   All Rights Reserved.
 *
-* Copyright 2015-2017
-* Intel Corporation
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
 *
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
+* The above copyright notice and this permission notice (including the next
+* paragraph) shall be included in all copies or substantial portions of the
+* Software.
 *
-* http ://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+* IN THE SOFTWARE.
 *
 * @file gen_knobs.h
 *
@@ -32,14 +37,38 @@
 #pragma once
 #include <string>
 
-template <typename T>
-struct Knob
+struct KnobBase
 {
-    const   T&  Value() const               { return m_Value; }
-    const   T&  Value(const T& newValue)    { m_Value = newValue; return Value(); }
+private:
+    // Update the input string.
+    static void autoExpandEnvironmentVariables(std::string &text);
 
 protected:
-    Knob(const T& defaultValue) : m_Value(defaultValue) {}
+    // Leave input alone and return new string.
+    static std::string expandEnvironmentVariables(std::string const &input)
+    {
+        std::string text = input;
+        autoExpandEnvironmentVariables(text);
+        return text;
+    }
+
+    template <typename T>
+    static T expandEnvironmentVariables(T const &input)
+    {
+        return input;
+    }
+};
+
+template <typename T>
+struct Knob : KnobBase
+{
+public:
+    const   T&  Value() const               { return m_Value; }
+    const   T&  Value(T const &newValue)
+    {
+        m_Value = expandEnvironmentVariables(newValue);
+        return Value();
+    }
 
 private:
     T m_Value;
@@ -48,8 +77,8 @@ private:
 #define DEFINE_KNOB(_name, _type, _default)                     \
     struct Knob_##_name : Knob<_type>                           \
     {                                                           \
-        Knob_##_name() : Knob<_type>(_default) { }              \
         static const char* Name() { return "KNOB_" #_name; }    \
+        static _type DefaultValue() { return (_default); }      \
     } _name;
 
 #define GET_KNOB(_name)             g_GlobalKnobs._name.Value()
@@ -168,7 +197,7 @@ struct GlobalKnobs
     // Maximum number of draws outstanding before API thread blocks.
     // This value MUST be evenly divisible into 2^32
     //
-    DEFINE_KNOB(MAX_DRAWS_IN_FLIGHT, uint32_t, 128);
+    DEFINE_KNOB(MAX_DRAWS_IN_FLIGHT, uint32_t, 256);
 
     //-----------------------------------------------------------
     // KNOB_MAX_PRIMS_PER_DRAW
@@ -177,7 +206,7 @@ struct GlobalKnobs
     // Larger primitives are split into smaller Draw calls.
     // Should be a multiple of (3 * vectorWidth).
     //
-    DEFINE_KNOB(MAX_PRIMS_PER_DRAW, uint32_t, 2040);
+    DEFINE_KNOB(MAX_PRIMS_PER_DRAW, uint32_t, 49152);
 
     //-----------------------------------------------------------
     // KNOB_MAX_TESS_PRIMS_PER_DRAW
@@ -194,6 +223,20 @@ struct GlobalKnobs
     // Output directory for debug data.
     //
     DEFINE_KNOB(DEBUG_OUTPUT_DIR, std::string, "/tmp/Rast/DebugOutput");
+
+    //-----------------------------------------------------------
+    // KNOB_JIT_ENABLE_CACHE
+    //
+    // Enables caching of compiled shaders
+    //
+    DEFINE_KNOB(JIT_ENABLE_CACHE, bool, false);
+
+    //-----------------------------------------------------------
+    // KNOB_JIT_CACHE_DIR
+    //
+    // Cache directory for compiled shaders.
+    //
+    DEFINE_KNOB(JIT_CACHE_DIR, std::string, "${HOME}/.swr/jitcache");
 
     //-----------------------------------------------------------
     // KNOB_TOSS_DRAW
@@ -265,8 +308,9 @@ struct GlobalKnobs
     //
     DEFINE_KNOB(TOSS_RS, bool, false);
 
-    GlobalKnobs();
+
     std::string ToString(const char* optPerLinePrefix="");
+    GlobalKnobs();
 };
 extern GlobalKnobs g_GlobalKnobs;
 
@@ -288,6 +332,8 @@ extern GlobalKnobs g_GlobalKnobs;
 #define KNOB_MAX_PRIMS_PER_DRAW          GET_KNOB(MAX_PRIMS_PER_DRAW)
 #define KNOB_MAX_TESS_PRIMS_PER_DRAW     GET_KNOB(MAX_TESS_PRIMS_PER_DRAW)
 #define KNOB_DEBUG_OUTPUT_DIR            GET_KNOB(DEBUG_OUTPUT_DIR)
+#define KNOB_JIT_ENABLE_CACHE            GET_KNOB(JIT_ENABLE_CACHE)
+#define KNOB_JIT_CACHE_DIR               GET_KNOB(JIT_CACHE_DIR)
 #define KNOB_TOSS_DRAW                   GET_KNOB(TOSS_DRAW)
 #define KNOB_TOSS_QUEUE_FE               GET_KNOB(TOSS_QUEUE_FE)
 #define KNOB_TOSS_FETCH                  GET_KNOB(TOSS_FETCH)

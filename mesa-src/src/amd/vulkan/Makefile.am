@@ -59,37 +59,7 @@ VULKAN_SOURCES = \
 	$(VULKAN_GENERATED_FILES) \
 	$(VULKAN_FILES)
 
-VULKAN_LIB_DEPS =
-
-
-if HAVE_PLATFORM_X11
-AM_CPPFLAGS += \
-	$(XCB_DRI3_CFLAGS) \
-	-DVK_USE_PLATFORM_XCB_KHR \
-	-DVK_USE_PLATFORM_XLIB_KHR
-
-VULKAN_SOURCES += $(VULKAN_WSI_X11_FILES)
-
-# FIXME: Use pkg-config for X11-xcb ldflags.
-VULKAN_LIB_DEPS += $(XCB_DRI3_LIBS) -lX11-xcb
-endif
-
-
-if HAVE_PLATFORM_WAYLAND
-AM_CPPFLAGS += \
-	$(WAYLAND_CFLAGS) \
-	-DVK_USE_PLATFORM_WAYLAND_KHR
-
-VULKAN_SOURCES += $(VULKAN_WSI_WAYLAND_FILES)
-
-VULKAN_LIB_DEPS += \
-	$(WAYLAND_LIBS)
-endif
-
-noinst_LTLIBRARIES = libvulkan_common.la
-libvulkan_common_la_SOURCES = $(VULKAN_SOURCES)
-
-VULKAN_LIB_DEPS += \
+VULKAN_LIB_DEPS = \
 	libvulkan_common.la \
 	$(top_builddir)/src/vulkan/libvulkan_util.la \
 	$(top_builddir)/src/vulkan/libvulkan_wsi.la \
@@ -106,18 +76,42 @@ VULKAN_LIB_DEPS += \
 	$(DLOPEN_LIBS) \
 	-lm
 
+if HAVE_PLATFORM_X11
+AM_CPPFLAGS += \
+	$(XCB_DRI3_CFLAGS) \
+	-DVK_USE_PLATFORM_XCB_KHR \
+	-DVK_USE_PLATFORM_XLIB_KHR
+
+VULKAN_SOURCES += $(VULKAN_WSI_X11_FILES)
+
+VULKAN_LIB_DEPS += $(XCB_DRI3_LIBS)
+endif
+
+
+if HAVE_PLATFORM_WAYLAND
+AM_CPPFLAGS += \
+	$(WAYLAND_CLIENT_CFLAGS) \
+	-DVK_USE_PLATFORM_WAYLAND_KHR
+
+VULKAN_SOURCES += $(VULKAN_WSI_WAYLAND_FILES)
+
+VULKAN_LIB_DEPS += \
+	$(WAYLAND_CLIENT_LIBS)
+endif
+
+noinst_LTLIBRARIES = libvulkan_common.la
+libvulkan_common_la_SOURCES = $(VULKAN_SOURCES)
+
 nodist_EXTRA_libvulkan_radeon_la_SOURCES = dummy.cpp
 libvulkan_radeon_la_SOURCES = $(VULKAN_GEM_FILES)
 
 vulkan_api_xml = $(top_srcdir)/src/vulkan/registry/vk.xml
 
-radv_entrypoints.h : radv_entrypoints_gen.py $(vulkan_api_xml)
-	$(AM_V_GEN) cat $(vulkan_api_xml) |\
-	$(PYTHON2) $(srcdir)/radv_entrypoints_gen.py header > $@
-
-radv_entrypoints.c : radv_entrypoints_gen.py $(vulkan_api_xml)
-	$(AM_V_GEN) cat $(vulkan_api_xml) |\
-	$(PYTHON2) $(srcdir)/radv_entrypoints_gen.py code > $@
+radv_entrypoints.c: radv_entrypoints_gen.py $(vulkan_api_xml)
+	$(MKDIR_GEN)
+	$(AM_V_GEN)$(PYTHON2) $(srcdir)/radv_entrypoints_gen.py \
+		--xml $(vulkan_api_xml) --outdir $(builddir)
+radv_entrypoints.h: radv_entrypoints.c
 
 vk_format_table.c: vk_format_table.py \
 		   vk_format_parse.py \
@@ -155,7 +149,7 @@ noinst_DATA = dev_icd.json
 
 dev_icd.json : dev_icd.json.in
 	$(AM_V_GEN) $(SED) \
-		-e "s#@build_libdir@#${abs_top_builddir}/${LIB_DIR}#" \
+		-e "s#@libvulkan_radeon_path@#${abs_top_builddir}/${LIB_DIR}/libvulkan_radeon.so#" \
 		< $(srcdir)/dev_icd.json.in > $@
 
 radeon_icd.@host_cpu@.json : radeon_icd.json.in

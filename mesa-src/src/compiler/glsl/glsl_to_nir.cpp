@@ -133,13 +133,13 @@ static void
 nir_remap_attributes(nir_shader *shader)
 {
    nir_foreach_variable(var, &shader->inputs) {
-      var->data.location += _mesa_bitcount_64(shader->info->double_inputs_read &
+      var->data.location += _mesa_bitcount_64(shader->info.double_inputs_read &
                                               BITFIELD64_MASK(var->data.location));
    }
 
    /* Once the remap is done, reset double_inputs_read, so later it will have
     * which location/slots are doubles */
-   shader->info->double_inputs_read = 0;
+   shader->info.double_inputs_read = 0;
 }
 
 nir_shader *
@@ -166,11 +166,18 @@ glsl_to_nir(const struct gl_shader_program *shader_prog,
    if (shader->stage == MESA_SHADER_VERTEX)
       nir_remap_attributes(shader);
 
-   shader->info->name = ralloc_asprintf(shader, "GLSL%d", shader_prog->Name);
+   shader->info.name = ralloc_asprintf(shader, "GLSL%d", shader_prog->Name);
    if (shader_prog->Label)
-      shader->info->label = ralloc_strdup(shader, shader_prog->Label);
-   shader->info->has_transform_feedback_varyings =
+      shader->info.label = ralloc_strdup(shader, shader_prog->Label);
+
+   /* Check for transform feedback varyings specified via the API */
+   shader->info.has_transform_feedback_varyings =
       shader_prog->TransformFeedback.NumVarying > 0;
+
+   /* Check for transform feedback varyings specified in the Shader */
+   if (shader_prog->last_vert_prog)
+      shader->info.has_transform_feedback_varyings |=
+         shader_prog->last_vert_prog->sh.LinkedTransformFeedback->NumVarying > 0;
 
    return shader;
 }
@@ -278,24 +285,13 @@ constant_copy(ir_constant *ir, void *mem_ctx)
       break;
 
    case GLSL_TYPE_STRUCT:
-      ret->elements = ralloc_array(mem_ctx, nir_constant *,
-                                   ir->type->length);
-      ret->num_elements = ir->type->length;
-
-      i = 0;
-      foreach_in_list(ir_constant, field, &ir->components) {
-         ret->elements[i] = constant_copy(field, mem_ctx);
-         i++;
-      }
-      break;
-
    case GLSL_TYPE_ARRAY:
       ret->elements = ralloc_array(mem_ctx, nir_constant *,
                                    ir->type->length);
       ret->num_elements = ir->type->length;
 
       for (i = 0; i < ir->type->length; i++)
-         ret->elements[i] = constant_copy(ir->array_elements[i], mem_ctx);
+         ret->elements[i] = constant_copy(ir->const_elements[i], mem_ctx);
       break;
 
    default:
@@ -308,10 +304,18 @@ constant_copy(ir_constant *ir, void *mem_ctx)
 void
 nir_visitor::visit(ir_variable *ir)
 {
+   /* TODO: In future we should switch to using the NIR lowering pass but for
+    * now just ignore these variables as GLSL IR should have lowered them.
+    * Anything remaining are just dead vars that weren't cleaned up.
+    */
+   if (ir->data.mode == ir_var_shader_shared)
+      return;
+
    nir_variable *var = ralloc(shader, nir_variable);
    var->type = ir->type;
    var->name = ralloc_strdup(var, ir->name);
 
+   var->data.always_active_io = ir->data.always_active_io;
    var->data.read_only = ir->data.read_only;
    var->data.centroid = ir->data.centroid;
    var->data.sample = ir->data.sample;
@@ -361,7 +365,7 @@ nir_visitor::visit(ir_variable *ir)
       if (glsl_type_is_dual_slot(glsl_without_array(var->type))) {
          for (uint i = 0; i < glsl_count_attribute_slots(var->type, true); i++) {
             uint64_t bitfield = BITFIELD64_BIT(var->data.location + i);
-            shader->info->double_inputs_read |= bitfield;
+            shader->info.double_inputs_read |= bitfield;
          }
       }
       break;
@@ -417,13 +421,14 @@ nir_visitor::visit(ir_variable *ir)
    }
 
    var->data.index = ir->data.index;
+   var->data.descriptor_set = 0;
    var->data.binding = ir->data.binding;
    var->data.offset = ir->data.offset;
-   var->data.image.read_only = ir->data.image_read_only;
-   var->data.image.write_only = ir->data.image_write_only;
-   var->data.image.coherent = ir->data.image_coherent;
-   var->data.image._volatile = ir->data.image_volatile;
-   var->data.image.restrict_flag = ir->data.image_restrict;
+   var->data.image.read_only = ir->data.memory_read_only;
+   var->data.image.write_only = ir->data.memory_write_only;
+   var->data.image.coherent = ir->data.memory_coherent;
+   var->data.image._volatile = ir->data.memory_volatile;
+   var->data.image.restrict_flag = ir->data.memory_restrict;
    var->data.image.format = ir->data.image_format;
    var->data.fb_fetch_output = ir->data.fb_fetch_output;
 
@@ -791,6 +796,24 @@ nir_visitor::visit(ir_call *ir)
       case ir_intrinsic_shared_atomic_comp_swap:
          op = nir_intrinsic_shared_atomic_comp_swap;
          break;
+      case ir_intrinsic_vote_any:
+         op = nir_intrinsic_vote_any;
+         break;
+      case ir_intrinsic_vote_all:
+         op = nir_intrinsic_vote_all;
+         break;
+      case ir_intrinsic_vote_eq:
+         op = nir_intrinsic_vote_eq;
+         break;
+      case ir_intrinsic_ballot:
+         op = nir_intrinsic_ballot;
+         break;
+      case ir_intrinsic_read_invocation:
+         op = nir_intrinsic_read_invocation;
+         break;
+      case ir_intrinsic_read_first_invocation:
+         op = nir_intrinsic_read_first_invocation;
+         break;
       default:
          unreachable("not reached");
       }
@@ -985,7 +1008,7 @@ nir_visitor::visit(ir_call *ir)
           * consider a true boolean to be ~0. Fix this up with a != 0
           * comparison.
           */
-         if (type->base_type == GLSL_TYPE_BOOL) {
+         if (type->is_boolean()) {
             nir_alu_instr *load_ssbo_compare =
                nir_alu_instr_create(shader, nir_op_ine);
             load_ssbo_compare->src[0].src.is_ssa = true;
@@ -1124,6 +1147,53 @@ nir_visitor::visit(ir_call *ir)
          nir_ssa_dest_init(&instr->instr, &instr->dest,
                            ir->return_deref->type->vector_elements,
                            bit_size, NULL);
+         nir_builder_instr_insert(&b, &instr->instr);
+         break;
+      }
+      case nir_intrinsic_vote_any:
+      case nir_intrinsic_vote_all:
+      case nir_intrinsic_vote_eq: {
+         nir_ssa_dest_init(&instr->instr, &instr->dest, 1, 32, NULL);
+
+         ir_rvalue *value = (ir_rvalue *) ir->actual_parameters.get_head();
+         instr->src[0] = nir_src_for_ssa(evaluate_rvalue(value));
+
+         nir_builder_instr_insert(&b, &instr->instr);
+         break;
+      }
+
+      case nir_intrinsic_ballot: {
+         nir_ssa_dest_init(&instr->instr, &instr->dest,
+                           ir->return_deref->type->vector_elements, 64, NULL);
+
+         ir_rvalue *value = (ir_rvalue *) ir->actual_parameters.get_head();
+         instr->src[0] = nir_src_for_ssa(evaluate_rvalue(value));
+
+         nir_builder_instr_insert(&b, &instr->instr);
+         break;
+      }
+      case nir_intrinsic_read_invocation: {
+         nir_ssa_dest_init(&instr->instr, &instr->dest,
+                           ir->return_deref->type->vector_elements, 32, NULL);
+         instr->num_components = ir->return_deref->type->vector_elements;
+
+         ir_rvalue *value = (ir_rvalue *) ir->actual_parameters.get_head();
+         instr->src[0] = nir_src_for_ssa(evaluate_rvalue(value));
+
+         ir_rvalue *invocation = (ir_rvalue *) ir->actual_parameters.get_head()->next;
+         instr->src[1] = nir_src_for_ssa(evaluate_rvalue(invocation));
+
+         nir_builder_instr_insert(&b, &instr->instr);
+         break;
+      }
+      case nir_intrinsic_read_first_invocation: {
+         nir_ssa_dest_init(&instr->instr, &instr->dest,
+                           ir->return_deref->type->vector_elements, 32, NULL);
+         instr->num_components = ir->return_deref->type->vector_elements;
+
+         ir_rvalue *value = (ir_rvalue *) ir->actual_parameters.get_head();
+         instr->src[0] = nir_src_for_ssa(evaluate_rvalue(value));
+
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       }
@@ -1334,7 +1404,7 @@ nir_visitor::visit(ir_expression *ir)
        * a true boolean to be ~0. Fix this up with a != 0 comparison.
        */
 
-      if (ir->type->base_type == GLSL_TYPE_BOOL)
+      if (ir->type->is_boolean())
          this->result = nir_ine(&b, &load->dest.ssa, nir_imm_int(&b, 0));
 
       return;
@@ -1412,11 +1482,11 @@ nir_visitor::visit(ir_expression *ir)
    }
 
    nir_ssa_def *srcs[4];
-   for (unsigned i = 0; i < ir->get_num_operands(); i++)
+   for (unsigned i = 0; i < ir->num_operands; i++)
       srcs[i] = evaluate_rvalue(ir->operands[i]);
 
    glsl_base_type types[4];
-   for (unsigned i = 0; i < ir->get_num_operands(); i++)
+   for (unsigned i = 0; i < ir->num_operands; i++)
       if (supports_ints)
          types[i] = ir->operands[i]->type->base_type;
       else
@@ -2123,7 +2193,7 @@ nir_visitor::visit(ir_dereference_record *ir)
 {
    ir->record->accept(this);
 
-   int field_index = this->deref_tail->type->field_index(ir->field);
+   int field_index = ir->field_idx;
    assert(field_index >= 0);
 
    nir_deref_struct *deref = nir_deref_struct_create(this->deref_tail, field_index);

@@ -65,18 +65,34 @@ struct FetchJit : public Builder
     typedef std::tuple<Value*&, Value*, const Instruction::CastOps, const ConversionType,
         uint32_t&, uint32_t&, const ComponentEnable, const ComponentControl(&)[4], Value*(&)[4],
         const uint32_t(&)[4]> Shuffle8bpcArgs;
+#if USE_SIMD16_SHADERS
+    void Shuffle8bpcGatherd(Shuffle8bpcArgs &args, bool useVertexID2);
+#else
     void Shuffle8bpcGatherd(Shuffle8bpcArgs &args);
+#endif
 
     typedef std::tuple<Value*(&)[2], Value*, const Instruction::CastOps, const ConversionType,
         uint32_t&, uint32_t&, const ComponentEnable, const ComponentControl(&)[4], Value*(&)[4]> Shuffle16bpcArgs;
+#if USE_SIMD16_SHADERS
+    void Shuffle16bpcGather(Shuffle16bpcArgs &args, bool useVertexID2);
+#else
     void Shuffle16bpcGather(Shuffle16bpcArgs &args);
+#endif
 
     void StoreVertexElements(Value* pVtxOut, const uint32_t outputElt, const uint32_t numEltsToStore, Value* (&vVertexElements)[4]);
 
+#if USE_SIMD16_SHADERS
+    Value* GenerateCompCtrlVector(const ComponentControl ctrl, bool useVertexID2);
+#else
     Value* GenerateCompCtrlVector(const ComponentControl ctrl);
+#endif
 
     void JitLoadVertices(const FETCH_COMPILE_STATE &fetchState, Value* streams, Value* vIndices, Value* pVtxOut);
+#if USE_SIMD16_SHADERS
+    void JitGatherVertices(const FETCH_COMPILE_STATE &fetchState, Value* streams, Value* vIndices, Value* pVtxOut, bool useVertexID2);
+#else
     void JitGatherVertices(const FETCH_COMPILE_STATE &fetchState, Value* streams, Value* vIndices, Value* pVtxOut);
+#endif
 
     bool IsOddFormat(SWR_FORMAT format);
     bool IsUniformFormat(SWR_FORMAT format);
@@ -89,13 +105,13 @@ struct FetchJit : public Builder
 
 Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
 {
-    static std::size_t fetchNum = 0;
-
-    std::stringstream fnName("FetchShader", std::ios_base::in | std::ios_base::out | std::ios_base::ate);
-    fnName << fetchNum++;
+    std::stringstream fnName("FetchShader_", std::ios_base::in | std::ios_base::out | std::ios_base::ate);
+    fnName << ComputeCRC(0, &fetchState, sizeof(fetchState));
 
     Function*    fetch = Function::Create(JM()->mFetchShaderTy, GlobalValue::ExternalLinkage, fnName.str(), JM()->mpCurrentModule);
     BasicBlock*    entry = BasicBlock::Create(JM()->mContext, "entry", fetch);
+
+    fetch->getParent()->setModuleIdentifier(fetch->getName());
 
     IRB()->SetInsertPoint(entry);
 
@@ -114,7 +130,15 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
     std::vector<Value*>    vtxInputIndices(2, C(0));
     // GEP
     pVtxOut = GEP(pVtxOut, C(0));
+#if USE_SIMD16_SHADERS
+#if 0
+    pVtxOut = BITCAST(pVtxOut, PointerType::get(VectorType::get(mFP32Ty, mVWidth * 2), 0));
+#else
     pVtxOut = BITCAST(pVtxOut, PointerType::get(VectorType::get(mFP32Ty, mVWidth), 0));
+#endif
+#else
+    pVtxOut = BITCAST(pVtxOut, PointerType::get(VectorType::get(mFP32Ty, mVWidth), 0));
+#endif
 
     // SWR_FETCH_CONTEXT::pStreams
     Value*    streams = LOAD(mpFetchInfo,{0, SWR_FETCH_CONTEXT_pStreams});
@@ -130,38 +154,90 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
     
 
     Value* vIndices;
+#if USE_SIMD16_SHADERS
+    Value* indices2;
+    Value* vIndices2;
+#endif
     switch(fetchState.indexType)
     {
         case R8_UINT:
             indices = BITCAST(indices, Type::getInt8PtrTy(JM()->mContext, 0));
-            if(fetchState.bDisableIndexOOBCheck){
+#if USE_SIMD16_SHADERS
+            indices2 = GEP(indices, C(8));
+#endif
+            if(fetchState.bDisableIndexOOBCheck)
+            {
                 vIndices = LOAD(BITCAST(indices, PointerType::get(VectorType::get(mInt8Ty, mpJitMgr->mVWidth), 0)), {(uint32_t)0});
                 vIndices = Z_EXT(vIndices, mSimdInt32Ty);
+#if USE_SIMD16_SHADERS
+                vIndices2 = LOAD(BITCAST(indices2, PointerType::get(VectorType::get(mInt8Ty, mpJitMgr->mVWidth), 0)), { (uint32_t)0 });
+                vIndices2 = Z_EXT(vIndices2, mSimdInt32Ty);
+#endif
             }
-            else{
+            else
+            {
                 pLastIndex = BITCAST(pLastIndex, Type::getInt8PtrTy(JM()->mContext, 0));
                 vIndices = GetSimdValid8bitIndices(indices, pLastIndex);
+#if USE_SIMD16_SHADERS
+                pLastIndex = BITCAST(pLastIndex, Type::getInt8PtrTy(JM()->mContext, 0));
+                vIndices2 = GetSimdValid8bitIndices(indices2, pLastIndex);
+#endif
             }
             break;
         case R16_UINT: 
             indices = BITCAST(indices, Type::getInt16PtrTy(JM()->mContext, 0)); 
-            if(fetchState.bDisableIndexOOBCheck){
+#if USE_SIMD16_SHADERS
+            indices2 = GEP(indices, C(8));
+#endif
+            if(fetchState.bDisableIndexOOBCheck)
+            {
                 vIndices = LOAD(BITCAST(indices, PointerType::get(VectorType::get(mInt16Ty, mpJitMgr->mVWidth), 0)), {(uint32_t)0});
                 vIndices = Z_EXT(vIndices, mSimdInt32Ty);
+#if USE_SIMD16_SHADERS
+                vIndices2 = LOAD(BITCAST(indices2, PointerType::get(VectorType::get(mInt16Ty, mpJitMgr->mVWidth), 0)), { (uint32_t)0 });
+                vIndices2 = Z_EXT(vIndices2, mSimdInt32Ty);
+#endif
             }
-            else{
+            else
+            {
                 pLastIndex = BITCAST(pLastIndex, Type::getInt16PtrTy(JM()->mContext, 0));
                 vIndices = GetSimdValid16bitIndices(indices, pLastIndex);
+#if USE_SIMD16_SHADERS
+                pLastIndex = BITCAST(pLastIndex, Type::getInt16PtrTy(JM()->mContext, 0));
+                vIndices2 = GetSimdValid16bitIndices(indices2, pLastIndex);
+#endif
             }
             break;
         case R32_UINT:
+#if USE_SIMD16_SHADERS
+            indices2 = GEP(indices, C(8));
+#endif
             (fetchState.bDisableIndexOOBCheck) ? vIndices = LOAD(BITCAST(indices, PointerType::get(mSimdInt32Ty,0)),{(uint32_t)0})
                                                : vIndices = GetSimdValid32bitIndices(indices, pLastIndex);
+#if USE_SIMD16_SHADERS
+            (fetchState.bDisableIndexOOBCheck) ? vIndices2 = LOAD(BITCAST(indices2, PointerType::get(mSimdInt32Ty, 0)), { (uint32_t)0 })
+                                               : vIndices2 = GetSimdValid32bitIndices(indices2, pLastIndex);
+#endif
             break; // incoming type is already 32bit int
         default: SWR_INVALID("Unsupported index type"); vIndices = nullptr; break;
     }
 
+    if(fetchState.bForceSequentialAccessEnable)
+    {
+        Value* pOffsets = C({ 0, 1, 2, 3, 4, 5, 6, 7 });
+
+        // VertexData buffers are accessed sequentially, the index is equal to the vertex number
+        vIndices = VBROADCAST(LOAD(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_StartVertex }));
+        vIndices = ADD(vIndices, pOffsets);
+#if USE_SIMD16_SHADERS
+        vIndices2 = ADD(vIndices, VIMMED1(8));
+#endif
+    }
+
     Value* vVertexId = vIndices;
+#if USE_SIMD16_SHADERS
+    Value* vVertexId2 = vIndices2;
+#endif
     if (fetchState.bVertexIDOffsetEnable)
     {
         // Assuming one of baseVertex or startVertex is 0, so adding both should be functionally correct
@@ -169,10 +245,17 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
         Value* vStartVertex = VBROADCAST(LOAD(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_StartVertex }));
         vVertexId = ADD(vIndices, vBaseVertex);
         vVertexId = ADD(vVertexId, vStartVertex);
+#if USE_SIMD16_SHADERS
+        vVertexId2 = ADD(vIndices2, vBaseVertex);
+        vVertexId2 = ADD(vVertexId2, vStartVertex);
+#endif
     }
 
     // store out vertex IDs
     STORE(vVertexId, GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_VertexID }));
+#if USE_SIMD16_SHADERS
+    STORE(vVertexId2, GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_VertexID2 }));
+#endif
 
     // store out cut mask if enabled
     if (fetchState.bEnableCutIndex)
@@ -180,12 +263,29 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
         Value* vCutIndex = VIMMED1(fetchState.cutIndex);
         Value* cutMask = VMASK(ICMP_EQ(vIndices, vCutIndex));
         STORE(cutMask, GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_CutMask }));
+#if USE_SIMD16_SHADERS
+        Value* cutMask2 = VMASK(ICMP_EQ(vIndices2, vCutIndex));
+        STORE(cutMask2, GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_CutMask2 }));
+#endif
     }
 
     // Fetch attributes from memory and output to a simdvertex struct
     // since VGATHER has a perf penalty on HSW vs BDW, allow client to choose which fetch method to use
+#if USE_SIMD16_SHADERS
+    if (fetchState.bDisableVGATHER)
+    {
+        JitLoadVertices(fetchState, streams, vIndices, pVtxOut);
+        JitLoadVertices(fetchState, streams, vIndices2, GEP(pVtxOut, C(1)));
+    }
+    else
+    {
+        JitGatherVertices(fetchState, streams, vIndices, pVtxOut, false);
+        JitGatherVertices(fetchState, streams, vIndices2, GEP(pVtxOut, C(1)), true);
+    }
+#else
     (fetchState.bDisableVGATHER) ? JitLoadVertices(fetchState, streams, vIndices, pVtxOut)
                                  : JitGatherVertices(fetchState, streams, vIndices, pVtxOut);
+#endif
 
     RET_VOID();
 
@@ -268,11 +368,16 @@ void FetchJit::JitLoadVertices(const FETCH_COMPILE_STATE &fetchState, Value* str
 
         vectors.clear();
 
+        if (fetchState.bInstanceIDOffsetEnable)
+        {
+            SWR_ASSERT((0), "TODO: Fill out more once driver sends this down");
+        }
+
         Value *vCurIndices;
         Value *startOffset;
         if(ied.InstanceEnable)
         {
-            Value* stepRate = C(ied.InstanceDataStepRate);
+            Value* stepRate = C(ied.InstanceAdvancementState);
 
             // prevent a div by 0 for 0 step rate
             Value* isNonZeroStep = ICMP_UGT(stepRate, C(0));
@@ -287,6 +392,10 @@ void FetchJit::JitLoadVertices(const FETCH_COMPILE_STATE &fetchState, Value* str
             vCurIndices = VBROADCAST(calcInstance);
 
             startOffset = startInstance;
+        }
+        else if (ied.InstanceStrideEnable)
+        {
+            SWR_ASSERT((0), "TODO: Fill out more once driver sends this down.");
         }
         else
         {
@@ -531,7 +640,11 @@ void FetchJit::JitLoadVertices(const FETCH_COMPILE_STATE &fetchState, Value* str
 
         for(uint32_t c = 0; c < 4; ++c)
         {
+#if USE_SIMD16_SHADERS
+            Value* dest = GEP(pVtxOut, C(nelt * 8 + c * 2), "destGEP");
+#else
             Value* dest = GEP(pVtxOut, C(nelt * 4 + c), "destGEP");
+#endif
             STORE(elements[c], dest);
         }
     }
@@ -590,64 +703,27 @@ void FetchJit::UnpackComponents(SWR_FORMAT format, Value* vInput, Value* result[
 // gather for odd component size formats
 // gather SIMD full pixels per lane then shift/mask to move each component to their
 // own vector
-void FetchJit::CreateGatherOddFormats(SWR_FORMAT format, Value* pMask, Value* pBase, Value* offsets, Value* result[4])
+void FetchJit::CreateGatherOddFormats(SWR_FORMAT format, Value* pMask, Value* pBase, Value* pOffsets, Value* pResult[4])
 {
     const SWR_FORMAT_INFO &info = GetFormatInfo(format);
 
     // only works if pixel size is <= 32bits
     SWR_ASSERT(info.bpp <= 32);
 
-    Value* gather = VUNDEF_I();
+	Value* pGather = GATHERDD(VIMMED1(0), pBase, pOffsets, pMask, C((char)1));
 
-    // assign defaults
     for (uint32_t comp = 0; comp < 4; ++comp)
     {
-        result[comp] = VIMMED1((int)info.defaults[comp]);
+        pResult[comp] = VIMMED1((int)info.defaults[comp]);
     }
 
-    // load the proper amount of data based on component size
-    PointerType* pLoadTy = nullptr;
-    switch (info.bpp)
-    {
-    case 8: pLoadTy = Type::getInt8PtrTy(JM()->mContext); break;
-    case 16: pLoadTy = Type::getInt16PtrTy(JM()->mContext); break;
-    case 24:
-    case 32: pLoadTy = Type::getInt32PtrTy(JM()->mContext); break;
-    default: SWR_INVALID("Invalid bpp: %d", info.bpp);
-    }
-
-    // allocate temporary memory for masked off lanes
-    Value* pTmp = ALLOCA(pLoadTy->getElementType());
-
-    // gather SIMD pixels
-    for (uint32_t e = 0; e < JM()->mVWidth; ++e)
-    {
-        Value* pElemOffset = VEXTRACT(offsets, C(e));
-        Value* pLoad = GEP(pBase, pElemOffset);
-        Value* pLaneMask = VEXTRACT(pMask, C(e));
-
-        pLoad = POINTER_CAST(pLoad, pLoadTy);
-
-        // mask in tmp pointer for disabled lanes
-        pLoad = SELECT(pLaneMask, pLoad, pTmp);
-
-        // load pixel
-        Value *val = LOAD(pLoad);
-
-        // zero extend to 32bit integer
-        val = INT_CAST(val, mInt32Ty, false);
-
-        // store in simd lane
-        gather = VINSERT(gather, val, C(e));
-    }
-
-    UnpackComponents(format, gather, result);
+    UnpackComponents(format, pGather, pResult);
 
     // cast to fp32
-    result[0] = BITCAST(result[0], mSimdFP32Ty);
-    result[1] = BITCAST(result[1], mSimdFP32Ty);
-    result[2] = BITCAST(result[2], mSimdFP32Ty);
-    result[3] = BITCAST(result[3], mSimdFP32Ty);
+    pResult[0] = BITCAST(pResult[0], mSimdFP32Ty);
+    pResult[1] = BITCAST(pResult[1], mSimdFP32Ty);
+    pResult[2] = BITCAST(pResult[2], mSimdFP32Ty);
+    pResult[3] = BITCAST(pResult[3], mSimdFP32Ty);
 }
 
 void FetchJit::ConvertFormat(SWR_FORMAT format, Value *texels[4])
@@ -715,8 +791,13 @@ void FetchJit::ConvertFormat(SWR_FORMAT format, Value *texels[4])
 /// @param streams - value pointer to the current vertex stream
 /// @param vIndices - vector value of indices to gather
 /// @param pVtxOut - value pointer to output simdvertex struct
+#if USE_SIMD16_SHADERS
 void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
-                                 Value* streams, Value* vIndices, Value* pVtxOut)
+    Value* streams, Value* vIndices, Value* pVtxOut, bool useVertexID2)
+#else
+void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
+    Value* streams, Value* vIndices, Value* pVtxOut)
+#endif
 {
     uint32_t currentVertexElement = 0;
     uint32_t outputElt = 0;
@@ -761,11 +842,19 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
             minVertex = LOAD(minVertex);
         }
 
+        if (fetchState.bInstanceIDOffsetEnable)
+        {
+            // the InstanceID (curInstance) value is offset by StartInstanceLocation
+            curInstance = ADD(curInstance, startInstance);
+        }
+
         Value *vCurIndices;
         Value *startOffset;
+        Value *vInstanceStride = VIMMED1(0);
+
         if(ied.InstanceEnable)
         {
-            Value* stepRate = C(ied.InstanceDataStepRate);
+            Value* stepRate = C(ied.InstanceAdvancementState);
 
             // prevent a div by 0 for 0 step rate
             Value* isNonZeroStep = ICMP_UGT(stepRate, C(0));
@@ -781,9 +870,21 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
 
             startOffset = startInstance;
         }
+        else if (ied.InstanceStrideEnable)
+        {
+            // grab the instance advancement state, determines stride in bytes from one instance to the next
+            Value* stepRate = C(ied.InstanceAdvancementState);
+            vInstanceStride = VBROADCAST(MUL(curInstance, stepRate));
+
+            // offset indices by baseVertex
+            vCurIndices = ADD(vIndices, vBaseVertex);
+
+            startOffset = startVertex;
+            SWR_ASSERT((0), "TODO: Fill out more once driver sends this down.");
+        }
         else
         {
-            // offset indices by baseVertex            
+            // offset indices by baseVertex
             vCurIndices = ADD(vIndices, vBaseVertex);
 
             startOffset = startVertex;
@@ -851,6 +952,11 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
         Value* vOffsets = MUL(vCurIndices, vStride);
         vOffsets = ADD(vOffsets, vAlignmentOffsets);
 
+        // if instance stride enable is:
+        //  true  - add product of the instanceID and advancement state to the offst into the VB
+        //  false - value of vInstanceStride has been initialialized to zero
+        vOffsets = ADD(vOffsets, vInstanceStride);
+
         // Packing and component control 
         ComponentEnable compMask = (ComponentEnable)ied.ComponentPacking;
         const ComponentControl compCtrl[4] { (ComponentControl)ied.ComponentControl0, (ComponentControl)ied.ComponentControl1, 
@@ -860,7 +966,7 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
         if (IsOddFormat((SWR_FORMAT)ied.Format))
         {
             Value* pResults[4];
-            CreateGatherOddFormats((SWR_FORMAT)ied.Format, pMask, pStreamBase, vOffsets, pResults);
+            CreateGatherOddFormats((SWR_FORMAT)ied.Format, vGatherMask, pStreamBase, vOffsets, pResults);
             ConvertFormat((SWR_FORMAT)ied.Format, pResults);
 
             for (uint32_t c = 0; c < 4; ++c)
@@ -924,7 +1030,11 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                             currentVertexElement, outputElt, compMask, compCtrl, vVertexElements);
 
                         // Shuffle gathered components into place in simdvertex struct
+#if USE_SIMD16_SHADERS
+                        Shuffle16bpcGather(args, useVertexID2);  // outputs to vVertexElements ref
+#else
                         Shuffle16bpcGather(args);  // outputs to vVertexElements ref
+#endif
                     }
                 }
                     break;
@@ -941,11 +1051,20 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                                 Value *vMask = vGatherMask;
 
                                 // Gather a SIMD of vertices
-                                vVertexElements[currentVertexElement++] = GATHERPS(gatherSrc, pStreamBase, vOffsets, vMask, C((char)1));
+                                // APIs allow a 4GB range for offsets
+                                // However, GATHERPS uses signed 32-bit offsets, so only a 2GB range :(
+                                // But, we know that elements must be aligned for FETCH. :)
+                                // Right shift the offset by a bit and then scale by 2 to remove the sign extension.
+                                Value* vShiftedOffsets = VPSRLI(vOffsets, C(1));
+                                vVertexElements[currentVertexElement++] = GATHERPS(gatherSrc, pStreamBase, vShiftedOffsets, vMask, C((char)2));
                             }
                             else
                             {
+#if USE_SIMD16_SHADERS
+                                vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i], useVertexID2);
+#else
                                 vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i]);
+#endif
                             }
 
                             if (currentVertexElement > 3)
@@ -997,7 +1116,11 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                             }
                             else
                             {
+#if USE_SIMD16_SHADERS
+                                vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i], useVertexID2);
+#else
                                 vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i]);
+#endif
                             }
 
                             if (currentVertexElement > 3)
@@ -1075,7 +1198,11 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                             currentVertexElement, outputElt, compMask, compCtrl, vVertexElements, info.swizzle);
 
                         // Shuffle gathered components into place in simdvertex struct
+#if USE_SIMD16_SHADERS
+                        Shuffle8bpcGatherd(args, useVertexID2); // outputs to vVertexElements ref
+#else
                         Shuffle8bpcGatherd(args); // outputs to vVertexElements ref
+#endif
                     }
                 }
                 break;
@@ -1115,7 +1242,11 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                             currentVertexElement, outputElt, compMask, compCtrl, vVertexElements);
 
                         // Shuffle gathered components into place in simdvertex struct
+#if USE_SIMD16_SHADERS
+                        Shuffle16bpcGather(args, useVertexID2);  // outputs to vVertexElements ref
+#else
                         Shuffle16bpcGather(args);  // outputs to vVertexElements ref
+#endif
                     }
                 }
                 break;
@@ -1154,7 +1285,11 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                             }
                             else
                             {
+#if USE_SIMD16_SHADERS
+                                vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i], useVertexID2);
+#else
                                 vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i]);
+#endif
                             }
 
                             if (currentVertexElement > 3)
@@ -1302,7 +1437,11 @@ Value* FetchJit::GetSimdValid32bitIndices(Value* pIndices, Value* pLastIndex)
 ///   @param compCtrl - component control val
 ///   @param vVertexElements[4] - vertex components to output
 ///   @param swizzle[4] - component swizzle location
+#if USE_SIMD16_SHADERS
+void FetchJit::Shuffle8bpcGatherd(Shuffle8bpcArgs &args, bool useVertexID2)
+#else
 void FetchJit::Shuffle8bpcGatherd(Shuffle8bpcArgs &args)
+#endif
 {
     // Unpack tuple args
     Value*& vGatherResult = std::get<0>(args);
@@ -1404,7 +1543,11 @@ void FetchJit::Shuffle8bpcGatherd(Shuffle8bpcArgs &args)
                 }
                 else
                 {
+#if USE_SIMD16_SHADERS
+                    vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i], useVertexID2);
+#else
                     vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i]);
+#endif
                 }
 
                 if (currentVertexElement > 3)
@@ -1493,7 +1636,11 @@ void FetchJit::Shuffle8bpcGatherd(Shuffle8bpcArgs &args)
                 }
                 else
                 {
+#if USE_SIMD16_SHADERS
+                    vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i], useVertexID2);
+#else
                     vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i]);
+#endif
                 }
 
                 if (currentVertexElement > 3)
@@ -1525,7 +1672,11 @@ void FetchJit::Shuffle8bpcGatherd(Shuffle8bpcArgs &args)
 ///   @param compMask - component packing mask
 ///   @param compCtrl - component control val
 ///   @param vVertexElements[4] - vertex components to output
+#if USE_SIMD16_SHADERS
+void FetchJit::Shuffle16bpcGather(Shuffle16bpcArgs &args, bool useVertexID2)
+#else
 void FetchJit::Shuffle16bpcGather(Shuffle16bpcArgs &args)
+#endif
 {
     // Unpack tuple args
     Value* (&vGatherResult)[2] = std::get<0>(args);
@@ -1628,7 +1779,11 @@ void FetchJit::Shuffle16bpcGather(Shuffle16bpcArgs &args)
                 }
                 else
                 {
+#if USE_SIMD16_SHADERS
+                    vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i], useVertexID2);
+#else
                     vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i]);
+#endif
                 }
 
                 if (currentVertexElement > 3)
@@ -1707,7 +1862,11 @@ void FetchJit::Shuffle16bpcGather(Shuffle16bpcArgs &args)
                 }
                 else
                 {
+#if USE_SIMD16_SHADERS
+                    vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i], useVertexID2);
+#else
                     vVertexElements[currentVertexElement++] = GenerateCompCtrlVector(compCtrl[i]);
+#endif
                 }
 
                 if (currentVertexElement > 3)
@@ -1752,7 +1911,11 @@ void FetchJit::StoreVertexElements(Value* pVtxOut, const uint32_t outputElt, con
 #endif
         // outputElt * 4 = offsetting by the size of a simdvertex
         // + c offsets to a 32bit x vWidth row within the current vertex
+#if USE_SIMD16_SHADERS
+        Value* dest = GEP(pVtxOut, C(outputElt * 8 + c * 2), "destGEP");
+#else
         Value* dest = GEP(pVtxOut, C(outputElt * 4 + c), "destGEP");
+#endif
         STORE(vVertexElements[c], dest);
     }
 }
@@ -1761,7 +1924,11 @@ void FetchJit::StoreVertexElements(Value* pVtxOut, const uint32_t outputElt, con
 /// @brief Generates a constant vector of values based on the 
 /// ComponentControl value
 /// @param ctrl - ComponentControl value
+#if USE_SIMD16_SHADERS
+Value* FetchJit::GenerateCompCtrlVector(const ComponentControl ctrl, bool useVertexID2)
+#else
 Value* FetchJit::GenerateCompCtrlVector(const ComponentControl ctrl)
+#endif
 {
     switch(ctrl)
     {
@@ -1771,7 +1938,19 @@ Value* FetchJit::GenerateCompCtrlVector(const ComponentControl ctrl)
         case Store1Int: return VIMMED1(1);
         case StoreVertexId:
         {
+#if USE_SIMD16_SHADERS
+            Value* pId;
+            if (useVertexID2)
+            {
+                pId = BITCAST(LOAD(GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_VertexID2 })), mSimdFP32Ty);
+            }
+            else
+            {
+                pId = BITCAST(LOAD(GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_VertexID })), mSimdFP32Ty);
+            }
+#else
             Value* pId = BITCAST(LOAD(GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_VertexID })), mSimdFP32Ty);
+#endif
             return VBROADCAST(pId);
         }
         case StoreInstanceId:

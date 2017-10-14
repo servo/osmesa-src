@@ -77,6 +77,12 @@ enum gbm_bo_format {
    GBM_BO_FORMAT_ARGB8888
 };
 
+
+/**
+ * The FourCC format codes are taken from the drm_fourcc.h definition, and
+ * re-namespaced. New GBM formats must not be added, unless they are
+ * identical ports from drm_fourcc.
+ */
 #define __gbm_fourcc_code(a,b,c,d) ((uint32_t)(a) | ((uint32_t)(b) << 8) | \
 			      ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))
 
@@ -232,6 +238,11 @@ int
 gbm_device_is_format_supported(struct gbm_device *gbm,
                                uint32_t format, uint32_t usage);
 
+int
+gbm_device_get_format_modifier_plane_count(struct gbm_device *gbm,
+                                           uint32_t format,
+                                           uint64_t modifier);
+
 void
 gbm_device_destroy(struct gbm_device *gbm);
 
@@ -252,6 +263,7 @@ gbm_bo_create_with_modifiers(struct gbm_device *gbm,
 #define GBM_BO_IMPORT_WL_BUFFER         0x5501
 #define GBM_BO_IMPORT_EGL_IMAGE         0x5502
 #define GBM_BO_IMPORT_FD                0x5503
+#define GBM_BO_IMPORT_FD_MODIFIER       0x5504
 
 struct gbm_import_fd_data {
    int fd;
@@ -259,6 +271,17 @@ struct gbm_import_fd_data {
    uint32_t height;
    uint32_t stride;
    uint32_t format;
+};
+
+struct gbm_import_fd_modifier_data {
+   uint32_t width;
+   uint32_t height;
+   uint32_t format;
+   uint32_t num_fds;
+   int fds[4];
+   int strides[4];
+   int offsets[4];
+   uint64_t modifier;
 };
 
 struct gbm_bo *
@@ -314,6 +337,9 @@ gbm_bo_get_stride_for_plane(struct gbm_bo *bo, int plane);
 
 uint32_t
 gbm_bo_get_format(struct gbm_bo *bo);
+
+uint32_t
+gbm_bo_get_bpp(struct gbm_bo *bo);
 
 uint32_t
 gbm_bo_get_offset(struct gbm_bo *bo, int plane);

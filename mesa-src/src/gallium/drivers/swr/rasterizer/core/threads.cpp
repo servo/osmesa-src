@@ -169,37 +169,16 @@ void CalculateProcessorTopology(CPUNumaNodes& out_nodes, uint32_t& out_numThread
     std::ifstream input("/proc/cpuinfo");
     std::string line;
     char* c;
-    uint32_t threadId = uint32_t(-1);
+    uint32_t procId = uint32_t(-1);
     uint32_t coreId = uint32_t(-1);
-    uint32_t numaId = uint32_t(-1);
+    uint32_t physId = uint32_t(-1);
 
     while (std::getline(input, line))
     {
         if (line.find("processor") != std::string::npos)
         {
-            if (threadId != uint32_t(-1))
-            {
-                // Save information.
-                if (out_nodes.size() <= numaId)
-                {
-                    out_nodes.resize(numaId + 1);
-                }
-
-                auto& numaNode = out_nodes[numaId];
-                if (numaNode.cores.size() <= coreId)
-                {
-                    numaNode.cores.resize(coreId + 1);
-                }
-
-                auto& core = numaNode.cores[coreId];
-                core.procGroup = coreId;
-                core.threadIds.push_back(threadId);
-
-                out_numThreadsPerProcGroup++;
-            }
-
             auto data_start = line.find(": ") + 2;
-            threadId = std::strtoul(&line.c_str()[data_start], &c, 10);
+            procId = std::strtoul(&line.c_str()[data_start], &c, 10);
             continue;
         }
         if (line.find("core id") != std::string::npos)
@@ -211,29 +190,32 @@ void CalculateProcessorTopology(CPUNumaNodes& out_nodes, uint32_t& out_numThread
         if (line.find("physical id") != std::string::npos)
         {
             auto data_start = line.find(": ") + 2;
-            numaId = std::strtoul(&line.c_str()[data_start], &c, 10);
+            physId = std::strtoul(&line.c_str()[data_start], &c, 10);
             continue;
+        }
+        if (line.length() == 0)
+        {
+            if (physId + 1 > out_nodes.size())
+                out_nodes.resize(physId + 1);
+            auto& numaNode = out_nodes[physId];
+            numaNode.numaId = physId;
+
+            if (coreId + 1 > numaNode.cores.size())
+                numaNode.cores.resize(coreId + 1);
+            auto& core = numaNode.cores[coreId];
+            core.procGroup = coreId;
+            core.threadIds.push_back(procId);
         }
     }
 
-    if (threadId != uint32_t(-1))
+    out_numThreadsPerProcGroup = 0;
+    for (auto &node : out_nodes)
     {
-        // Save information.
-        if (out_nodes.size() <= numaId)
+        for (auto &core : node.cores)
         {
-            out_nodes.resize(numaId + 1);
+            out_numThreadsPerProcGroup = std::max((size_t)out_numThreadsPerProcGroup,
+                                                  core.threadIds.size());
         }
-        auto& numaNode = out_nodes[numaId];
-        numaNode.numaId = numaId;
-        if (numaNode.cores.size() <= coreId)
-        {
-            numaNode.cores.resize(coreId + 1);
-        }
-        auto& core = numaNode.cores[coreId];
-
-        core.procGroup = coreId;
-        core.threadIds.push_back(threadId);
-        out_numThreadsPerProcGroup++;
     }
 
 #else
@@ -316,7 +298,11 @@ void bindThread(SWR_CONTEXT* pContext, uint32_t threadId, uint32_t procGroupId =
     CPU_ZERO(&cpuset);
     CPU_SET(threadId, &cpuset);
 
-    pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+    int err = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+    if (err != 0)
+    {
+        fprintf(stderr, "pthread_setaffinity_np failure for tid %u: %s\n", threadId, strerror(err));
+    }
 
 #endif
 }
@@ -363,7 +349,7 @@ INLINE void UpdateClientStats(SWR_CONTEXT* pContext, uint32_t workerId, DRAW_CON
     }
 
     DRAW_DYNAMIC_STATE& dynState = pDC->dynState;
-    SWR_STATS stats{ 0 };
+    OSALIGNLINE(SWR_STATS) stats{ 0 };
 
     // Sum up stats across all workers before sending to client.
     for (uint32_t i = 0; i < pContext->NumWorkerThreads; ++i)
@@ -393,7 +379,7 @@ INLINE void ExecuteCallbacks(SWR_CONTEXT* pContext, uint32_t workerId, DRAW_CONT
 // inlined-only version
 INLINE int32_t CompleteDrawContextInl(SWR_CONTEXT* pContext, uint32_t workerId, DRAW_CONTEXT* pDC)
 {
-    int32_t result = InterlockedDecrement((volatile LONG*)&pDC->threadsDone);
+    int32_t result = static_cast<int32_t>(InterlockedDecrement(&pDC->threadsDone));
     SWR_ASSERT(result >= 0);
 
     AR_FLUSH(pDC->drawId);
@@ -639,7 +625,7 @@ INLINE void CompleteDrawFE(SWR_CONTEXT* pContext, uint32_t workerId, DRAW_CONTEX
     _mm_mfence();
     pDC->doneFE = true;
 
-    InterlockedDecrement((volatile LONG*)&pContext->drawsOutstandingFE);
+    InterlockedDecrement(&pContext->drawsOutstandingFE);
 }
 
 void WorkOnFifoFE(SWR_CONTEXT *pContext, uint32_t workerId, uint32_t &curDrawFE)
@@ -726,10 +712,11 @@ void WorkOnCompute(
         if (queue.getNumQueued() > 0)
         {
             void* pSpillFillBuffer = nullptr;
+            void* pScratchSpace = nullptr;
             uint32_t threadGroupId = 0;
             while (queue.getWork(threadGroupId))
             {
-                queue.dispatch(pDC, workerId, threadGroupId, pSpillFillBuffer);
+                queue.dispatch(pDC, workerId, threadGroupId, pSpillFillBuffer, pScratchSpace);
                 queue.finishedWork();
             }
 
@@ -747,7 +734,20 @@ DWORD workerThreadMain(LPVOID pData)
     uint32_t threadId = pThreadData->threadId;
     uint32_t workerId = pThreadData->workerId;
 
-    bindThread(pContext, threadId, pThreadData->procGroupId, pThreadData->forceBindProcGroup); 
+    bindThread(pContext, threadId, pThreadData->procGroupId, pThreadData->forceBindProcGroup);
+
+    {
+        char threadName[64];
+        sprintf_s(threadName,
+#if defined(_WIN32)
+                  "SWRWorker_%02d_NUMA%d_Core%02d_T%d",
+#else
+                  // linux pthread name limited to 16 chars (including \0)
+                  "w%03d-n%d-c%03d-t%d",
+#endif
+            workerId, pThreadData->numaId, pThreadData->coreId, pThreadData->htId);
+        SetCurrentThreadName(threadName);
+    }
 
     RDTSC_INIT(threadId);
 
@@ -972,7 +972,7 @@ void CreateThreadPool(SWR_CONTEXT* pContext, THREAD_POOL* pPool)
     // Initialize DRAW_CONTEXT's per-thread stats
     for (uint32_t dc = 0; dc < KNOB_MAX_DRAWS_IN_FLIGHT; ++dc)
     {
-        pContext->dcRing[dc].dynState.pStats = new SWR_STATS[numThreads];
+        pContext->dcRing[dc].dynState.pStats = (SWR_STATS*)AlignedMalloc(sizeof(SWR_STATS) * numThreads, 64);
         memset(pContext->dcRing[dc].dynState.pStats, 0, sizeof(SWR_STATS) * numThreads);
     }
 
@@ -1017,7 +1017,16 @@ void CreateThreadPool(SWR_CONTEXT* pContext, THREAD_POOL* pPool)
     }
     else
     {
-        pPool->numaMask = numNodes - 1; // Only works for 2**n numa nodes (1, 2, 4, etc.)
+        // numa distribution assumes workers on all nodes
+        bool useNuma = true;
+        if (numCoresPerNode * numHyperThreads == 1)
+            useNuma = false;
+
+        if (useNuma) {
+            pPool->numaMask = numNodes - 1; // Only works for 2**n numa nodes (1, 2, 4, etc.)
+        } else {
+            pPool->numaMask = 0;
+        }
 
         uint32_t workerId = 0;
         for (uint32_t n = 0; n < numNodes; ++n)
@@ -1050,7 +1059,7 @@ void CreateThreadPool(SWR_CONTEXT* pContext, THREAD_POOL* pPool)
                     pPool->pThreadData[workerId].workerId = workerId;
                     pPool->pThreadData[workerId].procGroupId = core.procGroup;
                     pPool->pThreadData[workerId].threadId = core.threadIds[t];
-                    pPool->pThreadData[workerId].numaId = node.numaId;
+                    pPool->pThreadData[workerId].numaId = useNuma ? n : 0;
                     pPool->pThreadData[workerId].coreId = c;
                     pPool->pThreadData[workerId].htId = t;
                     pPool->pThreadData[workerId].pContext = pContext;

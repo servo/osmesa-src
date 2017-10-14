@@ -29,6 +29,7 @@
 #include "pipe/p_screen.h"
 
 #include "util/u_video.h"
+#include "util/u_memory.h"
 
 #include "vl/vl_winsys.h"
 
@@ -51,7 +52,7 @@ vlVaQueryConfigProfiles(VADriverContextP ctx, VAProfile *profile_list, int *num_
    *num_profiles = 0;
 
    pscreen = VL_VA_PSCREEN(ctx);
-   for (p = PIPE_VIDEO_PROFILE_MPEG2_SIMPLE; p <= PIPE_VIDEO_PROFILE_HEVC_MAIN_444; ++p) {
+   for (p = PIPE_VIDEO_PROFILE_MPEG2_SIMPLE; p <= PIPE_VIDEO_PROFILE_JPEG_BASELINE; ++p) {
       if (u_reduce_video_profile(p) == PIPE_VIDEO_FORMAT_MPEG4 && !debug_get_option_mpeg4())
          continue;
 
@@ -100,6 +101,8 @@ vlVaQueryConfigEntrypoints(VADriverContextP ctx, VAProfile profile,
 
    if (num_entrypoints == 0)
       return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+
+   assert(*num_entrypoints <= ctx->max_entrypoints);
 
    return VA_STATUS_SUCCESS;
 }

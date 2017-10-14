@@ -621,7 +621,7 @@ nir_load_system_value(nir_builder *build, nir_intrinsic_op op, int index)
    nir_load_##name(nir_builder *build)                                   \
    {                                                                     \
       return nir_load_system_value(build, nir_intrinsic_load_##name, 0); \
-   }                                                                     \
+   }
 
 #include "nir_intrinsics.h"
 
@@ -641,6 +641,31 @@ nir_jump(nir_builder *build, nir_jump_type jump_type)
 {
    nir_jump_instr *jump = nir_jump_instr_create(build->shader, jump_type);
    nir_builder_instr_insert(build, &jump->instr);
+}
+
+static inline nir_ssa_def *
+nir_compare_func(nir_builder *b, enum compare_func func,
+                 nir_ssa_def *src0, nir_ssa_def *src1)
+{
+   switch (func) {
+   case COMPARE_FUNC_NEVER:
+      return nir_imm_int(b, 0);
+   case COMPARE_FUNC_ALWAYS:
+      return nir_imm_int(b, ~0);
+   case COMPARE_FUNC_EQUAL:
+      return nir_feq(b, src0, src1);
+   case COMPARE_FUNC_NOTEQUAL:
+      return nir_fne(b, src0, src1);
+   case COMPARE_FUNC_GREATER:
+      return nir_flt(b, src1, src0);
+   case COMPARE_FUNC_GEQUAL:
+      return nir_fge(b, src0, src1);
+   case COMPARE_FUNC_LESS:
+      return nir_flt(b, src0, src1);
+   case COMPARE_FUNC_LEQUAL:
+      return nir_fge(b, src1, src0);
+   }
+   unreachable("bad compare func");
 }
 
 #endif /* NIR_BUILDER_H */

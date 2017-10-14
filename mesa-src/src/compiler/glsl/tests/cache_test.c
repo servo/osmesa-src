@@ -156,10 +156,10 @@ test_disk_cache_create(void)
    int err;
 
    /* Before doing anything else, ensure that with
-    * MESA_GLSL_CACHE_DISABLE set, that disk_cache_create returns NULL.
+    * MESA_GLSL_CACHE_DISABLE set to true, that disk_cache_create returns NULL.
     */
-   setenv("MESA_GLSL_CACHE_DISABLE", "1", 1);
-   cache = disk_cache_create("test", "make_check");
+   setenv("MESA_GLSL_CACHE_DISABLE", "true", 1);
+   cache = disk_cache_create("test", "make_check", 0);
    expect_null(cache, "disk_cache_create with MESA_GLSL_CACHE_DISABLE set");
 
    unsetenv("MESA_GLSL_CACHE_DISABLE");
@@ -170,22 +170,23 @@ test_disk_cache_create(void)
    unsetenv("MESA_GLSL_CACHE_DIR");
    unsetenv("XDG_CACHE_HOME");
 
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
    expect_non_null(cache, "disk_cache_create with no environment variables");
 
    disk_cache_destroy(cache);
 
    /* Test with XDG_CACHE_HOME set */
    setenv("XDG_CACHE_HOME", CACHE_TEST_TMP "/xdg-cache-home", 1);
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
    expect_null(cache, "disk_cache_create with XDG_CACHE_HOME set with"
                "a non-existing parent directory");
 
    mkdir(CACHE_TEST_TMP, 0755);
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
    expect_non_null(cache, "disk_cache_create with XDG_CACHE_HOME set");
 
-   check_directories_created(CACHE_TEST_TMP "/xdg-cache-home/mesa");
+   check_directories_created(CACHE_TEST_TMP "/xdg-cache-home/"
+                             CACHE_DIR_NAME);
 
    disk_cache_destroy(cache);
 
@@ -194,15 +195,16 @@ test_disk_cache_create(void)
    expect_equal(err, 0, "Removing " CACHE_TEST_TMP);
 
    setenv("MESA_GLSL_CACHE_DIR", CACHE_TEST_TMP "/mesa-glsl-cache-dir", 1);
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
    expect_null(cache, "disk_cache_create with MESA_GLSL_CACHE_DIR set with"
                "a non-existing parent directory");
 
    mkdir(CACHE_TEST_TMP, 0755);
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
    expect_non_null(cache, "disk_cache_create with MESA_GLSL_CACHE_DIR set");
 
-   check_directories_created(CACHE_TEST_TMP "/mesa-glsl-cache-dir/mesa");
+   check_directories_created(CACHE_TEST_TMP "/mesa-glsl-cache-dir/"
+                             CACHE_DIR_NAME);
 
    disk_cache_destroy(cache);
 }
@@ -256,7 +258,7 @@ test_put_and_get(void)
    uint8_t one_KB_key[20], one_MB_key[20];
    int count;
 
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
 
    disk_cache_compute_key(cache, blob, sizeof(blob), blob_key);
 
@@ -266,7 +268,7 @@ test_put_and_get(void)
    expect_equal(size, 0, "disk_cache_get with non-existent item (size)");
 
    /* Simple test of put and get. */
-   disk_cache_put(cache, blob_key, blob, sizeof(blob));
+   disk_cache_put(cache, blob_key, blob, sizeof(blob), NULL);
 
    /* disk_cache_put() hands things off to a thread give it some time to
     * finish.
@@ -281,7 +283,7 @@ test_put_and_get(void)
 
    /* Test put and get of a second item. */
    disk_cache_compute_key(cache, string, sizeof(string), string_key);
-   disk_cache_put(cache, string_key, string, sizeof(string));
+   disk_cache_put(cache, string_key, string, sizeof(string), NULL);
 
    /* disk_cache_put() hands things off to a thread give it some time to
     * finish.
@@ -298,7 +300,7 @@ test_put_and_get(void)
    disk_cache_destroy(cache);
 
    setenv("MESA_GLSL_CACHE_MAX_SIZE", "1K", 1);
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
 
    one_KB = calloc(1, 1024);
 
@@ -322,7 +324,7 @@ test_put_and_get(void)
    disk_cache_compute_key(cache, one_KB, 1024, one_KB_key);
    one_KB_key[0] = blob_key[0];
 
-   disk_cache_put(cache, one_KB_key, one_KB, 1024);
+   disk_cache_put(cache, one_KB_key, one_KB, 1024, NULL);
 
    free(one_KB);
 
@@ -363,10 +365,10 @@ test_put_and_get(void)
    disk_cache_destroy(cache);
 
    setenv("MESA_GLSL_CACHE_MAX_SIZE", "1M", 1);
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
 
-   disk_cache_put(cache, blob_key, blob, sizeof(blob));
-   disk_cache_put(cache, string_key, string, sizeof(string));
+   disk_cache_put(cache, blob_key, blob, sizeof(blob), NULL);
+   disk_cache_put(cache, string_key, string, sizeof(string), NULL);
 
    /* disk_cache_put() hands things off to a thread give it some time to
     * finish.
@@ -392,7 +394,7 @@ test_put_and_get(void)
    disk_cache_compute_key(cache, one_MB, 1024 * 1024, one_MB_key);
    one_MB_key[0] = blob_key[0];
 
-   disk_cache_put(cache, one_MB_key, one_MB, 1024 * 1024);
+   disk_cache_put(cache, one_MB_key, one_MB, 1024 * 1024, NULL);
 
    free(one_MB);
 
@@ -438,7 +440,7 @@ test_put_key_and_get_key(void)
                         { 0,  1, 42, 43, 44, 45, 46, 47, 48, 49,
                          50, 55, 52, 53, 54, 55, 56, 57, 58, 59};
 
-   cache = disk_cache_create("test", "make_check");
+   cache = disk_cache_create("test", "make_check", 0);
 
    /* First test that disk_cache_has_key returns false before disk_cache_put_key */
    result = disk_cache_has_key(cache, key_a);

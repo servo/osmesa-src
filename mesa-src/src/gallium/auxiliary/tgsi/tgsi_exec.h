@@ -58,6 +58,15 @@ extern "C" {
    TGSI_FOR_EACH_CHANNEL( CHAN )\
       TGSI_IF_IS_DST0_CHANNEL_ENABLED( INST, CHAN )
 
+#define TGSI_IS_DST1_CHANNEL_ENABLED( INST, CHAN )\
+   ((INST)->Dst[1].Register.WriteMask & (1 << (CHAN)))
+
+#define TGSI_IF_IS_DST1_CHANNEL_ENABLED( INST, CHAN )\
+   if (TGSI_IS_DST1_CHANNEL_ENABLED( INST, CHAN ))
+
+#define TGSI_FOR_EACH_DST1_ENABLED_CHANNEL( INST, CHAN )\
+   TGSI_FOR_EACH_CHANNEL( CHAN )\
+      TGSI_IF_IS_DST1_CHANNEL_ENABLED( INST, CHAN )
 
 /**
   * Registers may be treated as float, signed int or unsigned int.
@@ -511,6 +520,9 @@ tgsi_exec_get_shader_param(enum pipe_shader_cap param)
       return 1;
    case PIPE_SHADER_CAP_INTEGERS:
       return 1;
+   case PIPE_SHADER_CAP_INT64_ATOMICS:
+   case PIPE_SHADER_CAP_FP16:
+      return 0;
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
       return PIPE_MAX_SAMPLERS;
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
@@ -522,11 +534,13 @@ tgsi_exec_get_shader_param(enum pipe_shader_cap param)
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
       return 1;
    case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+   case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       return 1;
    case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
    case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       return 0;
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       return PIPE_MAX_SHADER_BUFFERS;

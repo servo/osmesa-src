@@ -37,88 +37,11 @@ vec4_visitor::emit_nir_code()
    if (nir->num_uniforms > 0)
       nir_setup_uniforms();
 
-   nir_setup_system_values();
-
    /* get the main function and emit it */
    nir_foreach_function(function, nir) {
       assert(strcmp(function->name, "main") == 0);
       assert(function->impl);
       nir_emit_impl(function->impl);
-   }
-}
-
-void
-vec4_visitor::nir_setup_system_value_intrinsic(nir_intrinsic_instr *instr)
-{
-   dst_reg *reg;
-
-   switch (instr->intrinsic) {
-   case nir_intrinsic_load_vertex_id:
-      unreachable("should be lowered by lower_vertex_id().");
-
-   case nir_intrinsic_load_vertex_id_zero_base:
-      reg = &nir_system_values[SYSTEM_VALUE_VERTEX_ID_ZERO_BASE];
-      if (reg->file == BAD_FILE)
-         *reg = *make_reg_for_system_value(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE);
-      break;
-
-   case nir_intrinsic_load_base_vertex:
-      reg = &nir_system_values[SYSTEM_VALUE_BASE_VERTEX];
-      if (reg->file == BAD_FILE)
-         *reg = *make_reg_for_system_value(SYSTEM_VALUE_BASE_VERTEX);
-      break;
-
-   case nir_intrinsic_load_instance_id:
-      reg = &nir_system_values[SYSTEM_VALUE_INSTANCE_ID];
-      if (reg->file == BAD_FILE)
-         *reg = *make_reg_for_system_value(SYSTEM_VALUE_INSTANCE_ID);
-      break;
-
-   case nir_intrinsic_load_base_instance:
-      reg = &nir_system_values[SYSTEM_VALUE_BASE_INSTANCE];
-      if (reg->file == BAD_FILE)
-         *reg = *make_reg_for_system_value(SYSTEM_VALUE_BASE_INSTANCE);
-      break;
-
-   case nir_intrinsic_load_draw_id:
-      reg = &nir_system_values[SYSTEM_VALUE_DRAW_ID];
-      if (reg->file == BAD_FILE)
-         *reg = *make_reg_for_system_value(SYSTEM_VALUE_DRAW_ID);
-      break;
-
-   default:
-      break;
-   }
-}
-
-static bool
-setup_system_values_block(nir_block *block, vec4_visitor *v)
-{
-   nir_foreach_instr(instr, block) {
-      if (instr->type != nir_instr_type_intrinsic)
-         continue;
-
-      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
-      v->nir_setup_system_value_intrinsic(intrin);
-   }
-
-   return true;
-}
-
-void
-vec4_visitor::nir_setup_system_values()
-{
-   nir_system_values = ralloc_array(mem_ctx, dst_reg, SYSTEM_VALUE_MAX);
-   for (unsigned i = 0; i < SYSTEM_VALUE_MAX; i++) {
-      nir_system_values[i] = dst_reg();
-   }
-
-   nir_foreach_function(function, nir) {
-      assert(strcmp(function->name, "main") == 0);
-      assert(function->impl);
-      nir_foreach_block(block, function->impl) {
-         setup_system_values_block(block, this);
-      }
    }
 }
 
@@ -570,7 +493,7 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
 
          brw_mark_surface_used(&prog_data->base,
                                prog_data->base.binding_table.ssbo_start +
-                               nir->info->num_ssbos - 1);
+                               nir->info.num_ssbos - 1);
       }
 
       /* Offset */
@@ -736,7 +659,7 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
           */
          brw_mark_surface_used(&prog_data->base,
                                prog_data->base.binding_table.ssbo_start +
-                               nir->info->num_ssbos - 1);
+                               nir->info.num_ssbos - 1);
       }
 
       src_reg offset_reg;
@@ -826,14 +749,8 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
    case nir_intrinsic_load_instance_id:
    case nir_intrinsic_load_base_instance:
    case nir_intrinsic_load_draw_id:
-   case nir_intrinsic_load_invocation_id: {
-      gl_system_value sv = nir_system_value_from_intrinsic(instr->intrinsic);
-      src_reg val = src_reg(nir_system_values[sv]);
-      assert(val.file != BAD_FILE);
-      dest = get_nir_dest(instr->dest, val.type);
-      emit(MOV(dest, val));
-      break;
-   }
+   case nir_intrinsic_load_invocation_id:
+      unreachable("should be lowered by brw_nir_lower_vs_inputs()");
 
    case nir_intrinsic_load_uniform: {
       /* Offsets are in bytes but they should always be multiples of 4 */
@@ -852,7 +769,8 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
        * The swizzle also works in the indirect case as the generator adds
        * the swizzle to the offset for us.
        */
-      unsigned shift = (nir_intrinsic_base(instr) % 16) / 4;
+      const int type_size = type_sz(src.type);
+      unsigned shift = (nir_intrinsic_base(instr) % 16) / type_size;
       assert(shift + instr->num_components <= 4);
 
       nir_const_value *const_offset = nir_src_as_const_value(instr->src[0]);
@@ -860,14 +778,20 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
          /* Offsets are in bytes but they should always be multiples of 4 */
          assert(const_offset->u32[0] % 4 == 0);
 
-         unsigned offset = const_offset->u32[0] + shift * 4;
+         src.swizzle = brw_swizzle_for_size(instr->num_components);
+         dest.writemask = brw_writemask_for_size(instr->num_components);
+         unsigned offset = const_offset->u32[0] + shift * type_size;
          src.offset = ROUND_DOWN_TO(offset, 16);
-         shift = (offset % 16) / 4;
+         shift = (offset % 16) / type_size;
+         assert(shift + instr->num_components <= 4);
          src.swizzle += BRW_SWIZZLE4(shift, shift, shift, shift);
 
          emit(MOV(dest, src));
       } else {
-         src.swizzle += BRW_SWIZZLE4(shift, shift, shift, shift);
+         /* Uniform arrays are vec4 aligned, because of std140 alignment
+          * rules.
+          */
+         assert(shift == 0);
 
          src_reg indirect = get_nir_src(instr->src[0], BRW_REGISTER_TYPE_UD, 1);
 
@@ -880,9 +804,17 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
       break;
    }
 
-   case nir_intrinsic_atomic_counter_read:
    case nir_intrinsic_atomic_counter_inc:
-   case nir_intrinsic_atomic_counter_dec: {
+   case nir_intrinsic_atomic_counter_dec:
+   case nir_intrinsic_atomic_counter_read:
+   case nir_intrinsic_atomic_counter_add:
+   case nir_intrinsic_atomic_counter_min:
+   case nir_intrinsic_atomic_counter_max:
+   case nir_intrinsic_atomic_counter_and:
+   case nir_intrinsic_atomic_counter_or:
+   case nir_intrinsic_atomic_counter_xor:
+   case nir_intrinsic_atomic_counter_exchange:
+   case nir_intrinsic_atomic_counter_comp_swap: {
       unsigned surf_index = prog_data->base.binding_table.abo_start +
          (unsigned) instr->const_index[0];
       const vec4_builder bld =
@@ -948,7 +880,7 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
           */
          brw_mark_surface_used(&prog_data->base,
                                prog_data->base.binding_table.ubo_start +
-                               nir->info->num_ubos - 1);
+                               nir->info.num_ubos - 1);
       }
 
       src_reg offset_reg;
@@ -1046,7 +978,7 @@ vec4_visitor::nir_emit_ssbo_atomic(int op, nir_intrinsic_instr *instr)
        */
       brw_mark_surface_used(&prog_data->base,
                             prog_data->base.binding_table.ssbo_start +
-                            nir->info->num_ssbos - 1);
+                            nir->info.num_ssbos - 1);
    }
 
    src_reg offset = get_nir_src(instr->src[1], 1);
@@ -2125,7 +2057,7 @@ vec4_visitor::nir_emit_jump(nir_jump_instr *instr)
    }
 }
 
-enum ir_texture_opcode
+static enum ir_texture_opcode
 ir_texture_opcode_for_nir_texop(nir_texop texop)
 {
    enum ir_texture_opcode op;
@@ -2149,7 +2081,8 @@ ir_texture_opcode_for_nir_texop(nir_texop texop)
 
    return op;
 }
-const glsl_type *
+
+static const glsl_type *
 glsl_type_for_nir_alu_type(nir_alu_type alu_type,
                            unsigned components)
 {
@@ -2293,6 +2226,15 @@ vec4_visitor::nir_emit_texture(nir_tex_instr *instr)
       default:
          unreachable("unknown texture source");
       }
+   }
+
+   /* TXS and TXL require a LOD but not everything we implement using those
+    * two opcodes provides one.  Provide a default LOD of 0.
+    */
+   if ((instr->op == nir_texop_txs ||
+        instr->op == nir_texop_txl) &&
+       lod.file == BAD_FILE) {
+      lod = brw_imm_ud(0u);
    }
 
    if (instr->op == nir_texop_txf_ms ||

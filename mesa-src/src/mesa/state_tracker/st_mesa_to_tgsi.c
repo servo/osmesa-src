@@ -65,8 +65,8 @@ struct st_translate {
    struct ureg_src samplers[PIPE_MAX_SAMPLERS];
    struct ureg_src systemValues[SYSTEM_VALUE_MAX];
 
-   const GLuint *inputMapping;
-   const GLuint *outputMapping;
+   const ubyte *inputMapping;
+   const ubyte *outputMapping;
 
    unsigned procType;  /**< PIPE_SHADER_VERTEX/FRAGMENT */
 };
@@ -219,6 +219,26 @@ st_translate_texture_target(GLuint textarget, GLboolean shadow)
       debug_assert(!"unexpected texture target index");
       return TGSI_TEXTURE_1D;
    }
+}
+
+
+/**
+ * Map GLSL base type to TGSI return type.
+ */
+unsigned
+st_translate_texture_type(enum glsl_base_type type)
+{
+	switch (type) {
+	case GLSL_TYPE_INT:
+		return TGSI_RETURN_TYPE_SINT;
+	case GLSL_TYPE_UINT:
+		return TGSI_RETURN_TYPE_UINT;
+	case GLSL_TYPE_FLOAT:
+		return TGSI_RETURN_TYPE_FLOAT;
+	default:
+		assert(!"unexpected texture type");
+		return TGSI_RETURN_TYPE_UNKNOWN;
+	}
 }
 
 
@@ -437,8 +457,6 @@ translate_opcode( unsigned op )
       return TGSI_OPCODE_DP3;
    case OPCODE_DP4:
       return TGSI_OPCODE_DP4;
-   case OPCODE_DPH:
-      return TGSI_OPCODE_DPH;
    case OPCODE_DST:
       return TGSI_OPCODE_DST;
    case OPCODE_EX2:
@@ -473,8 +491,6 @@ translate_opcode( unsigned op )
       return TGSI_OPCODE_POW;
    case OPCODE_RCP:
       return TGSI_OPCODE_RCP;
-   case OPCODE_SCS:
-      return TGSI_OPCODE_SCS;
    case OPCODE_SGE:
       return TGSI_OPCODE_SGE;
    case OPCODE_SIN:
@@ -487,8 +503,6 @@ translate_opcode( unsigned op )
       return TGSI_OPCODE_TXB;
    case OPCODE_TXP:
       return TGSI_OPCODE_TXP;
-   case OPCODE_XPD:
-      return TGSI_OPCODE_XPD;
    case OPCODE_END:
       return TGSI_OPCODE_END;
    default:
@@ -536,25 +550,34 @@ compile_instruction(
                      dst, num_dst, 
                      st_translate_texture_target( inst->TexSrcTarget,
                                                inst->TexShadow ),
+                     TGSI_RETURN_TYPE_FLOAT,
                      NULL, 0,
                      src, num_src );
       return;
 
    case OPCODE_SCS:
-      dst[0] = ureg_writemask(dst[0], TGSI_WRITEMASK_XY );
-      ureg_insn( ureg, 
-                 translate_opcode( inst->Opcode ), 
-                 dst, num_dst, 
-                 src, num_src );
+      ureg_COS(ureg, ureg_writemask(dst[0], TGSI_WRITEMASK_X),
+               ureg_scalar(src[0], TGSI_SWIZZLE_X));
+      ureg_SIN(ureg, ureg_writemask(dst[0], TGSI_WRITEMASK_Y),
+               ureg_scalar(src[0], TGSI_SWIZZLE_X));
       break;
 
-   case OPCODE_XPD:
-      dst[0] = ureg_writemask(dst[0], TGSI_WRITEMASK_XYZ );
-      ureg_insn( ureg, 
-                 translate_opcode( inst->Opcode ), 
-                 dst, num_dst, 
-                 src, num_src );
+   case OPCODE_XPD: {
+      struct ureg_dst tmp = ureg_DECL_temporary(ureg);
+
+      ureg_MUL(ureg, ureg_writemask(tmp, TGSI_WRITEMASK_XYZ),
+               ureg_swizzle(src[0], TGSI_SWIZZLE_Y, TGSI_SWIZZLE_Z,
+                            TGSI_SWIZZLE_X, 0),
+               ureg_swizzle(src[1], TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X,
+                            TGSI_SWIZZLE_Y, 0));
+      ureg_MAD(ureg, ureg_writemask(dst[0], TGSI_WRITEMASK_XYZ),
+               ureg_swizzle(src[0], TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X,
+                            TGSI_SWIZZLE_Y, 0),
+               ureg_negate(ureg_swizzle(src[1], TGSI_SWIZZLE_Y,
+                                        TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X, 0)),
+               ureg_src(tmp));
       break;
+   }
 
    case OPCODE_RSQ:
       ureg_RSQ( ureg, dst[0], ureg_abs(src[0]) );
@@ -568,11 +591,22 @@ compile_instruction(
       ureg_ADD(ureg, dst[0], src[0], ureg_negate(src[1]));
       break;
 
+   case OPCODE_DPH: {
+      struct ureg_dst temp = ureg_DECL_temporary(ureg);
+
+      /* DPH = DP4(src0, src1) where src0.w = 1. */
+      ureg_MOV(ureg, ureg_writemask(temp, TGSI_WRITEMASK_XYZ), src[0]);
+      ureg_MOV(ureg, ureg_writemask(temp, TGSI_WRITEMASK_W),
+               ureg_imm1f(ureg, 1));
+      ureg_DP4(ureg, dst[0], ureg_src(temp), src[1]);
+      break;
+   }
+
    default:
       ureg_insn( ureg, 
                  translate_opcode( inst->Opcode ), 
                  dst, num_dst, 
-                 src, num_src );
+                 src, num_src, 0);
       break;
    }
 }
@@ -799,12 +833,12 @@ st_translate_mesa_program(
    struct ureg_program *ureg,
    const struct gl_program *program,
    GLuint numInputs,
-   const GLuint inputMapping[],
+   const ubyte inputMapping[],
    const ubyte inputSemanticName[],
    const ubyte inputSemanticIndex[],
-   const GLuint interpMode[],
+   const ubyte interpMode[],
    GLuint numOutputs,
-   const GLuint outputMapping[],
+   const ubyte outputMapping[],
    const ubyte outputSemanticName[],
    const ubyte outputSemanticIndex[])
 {
@@ -917,42 +951,41 @@ st_translate_mesa_program(
 
    /* Declare misc input registers
     */
-   {
-      GLbitfield sysInputs = program->info.system_values_read;
+   GLbitfield sysInputs = program->info.system_values_read;
+   for (i = 0; sysInputs; i++) {
+      if (sysInputs & (1 << i)) {
+         unsigned semName = _mesa_sysval_to_semantic(i);
 
-      for (i = 0; sysInputs; i++) {
-         if (sysInputs & (1 << i)) {
-            unsigned semName = _mesa_sysval_to_semantic(i);
+         t->systemValues[i] = ureg_DECL_system_value(ureg, semName, 0);
 
-            t->systemValues[i] = ureg_DECL_system_value(ureg, semName, 0);
-
-            if (semName == TGSI_SEMANTIC_INSTANCEID ||
-                semName == TGSI_SEMANTIC_VERTEXID) {
-               /* From Gallium perspective, these system values are always
-                * integer, and require native integer support.  However, if
-                * native integer is supported on the vertex stage but not the
-                * pixel stage (e.g, i915g + draw), Mesa will generate IR that
-                * assumes these system values are floats. To resolve the
-                * inconsistency, we insert a U2F.
-                */
-               struct st_context *st = st_context(ctx);
-               struct pipe_screen *pscreen = st->pipe->screen;
-               assert(procType == PIPE_SHADER_VERTEX);
-               assert(pscreen->get_shader_param(pscreen, PIPE_SHADER_VERTEX, PIPE_SHADER_CAP_INTEGERS));
-               (void) pscreen;  /* silence non-debug build warnings */
-               if (!ctx->Const.NativeIntegers) {
-                  struct ureg_dst temp = ureg_DECL_local_temporary(t->ureg);
-                  ureg_U2F( t->ureg, ureg_writemask(temp, TGSI_WRITEMASK_X), t->systemValues[i]);
-                  t->systemValues[i] = ureg_scalar(ureg_src(temp), 0);
-               }
+         if (semName == TGSI_SEMANTIC_INSTANCEID ||
+             semName == TGSI_SEMANTIC_VERTEXID) {
+            /* From Gallium perspective, these system values are always
+             * integer, and require native integer support.  However, if
+             * native integer is supported on the vertex stage but not the
+             * pixel stage (e.g, i915g + draw), Mesa will generate IR that
+             * assumes these system values are floats. To resolve the
+             * inconsistency, we insert a U2F.
+             */
+            struct st_context *st = st_context(ctx);
+            struct pipe_screen *pscreen = st->pipe->screen;
+            assert(procType == PIPE_SHADER_VERTEX);
+            assert(pscreen->get_shader_param(pscreen, PIPE_SHADER_VERTEX,
+                   PIPE_SHADER_CAP_INTEGERS));
+            (void) pscreen;  /* silence non-debug build warnings */
+            if (!ctx->Const.NativeIntegers) {
+               struct ureg_dst temp = ureg_DECL_local_temporary(t->ureg);
+               ureg_U2F(t->ureg, ureg_writemask(temp, TGSI_WRITEMASK_X),
+                        t->systemValues[i]);
+               t->systemValues[i] = ureg_scalar(ureg_src(temp), 0);
             }
-
-            if (procType == PIPE_SHADER_FRAGMENT &&
-                semName == TGSI_SEMANTIC_POSITION)
-               emit_wpos(st_context(ctx), t, program, ureg);
-
-            sysInputs &= ~(1 << i);
          }
+
+         if (procType == PIPE_SHADER_FRAGMENT &&
+             semName == TGSI_SEMANTIC_POSITION)
+            emit_wpos(st_context(ctx), t, program, ureg);
+
+          sysInputs &= ~(1 << i);
       }
    }
 

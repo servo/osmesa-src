@@ -27,9 +27,6 @@
 #include "util/u_format_s3tc.h"
 #include "pipe/p_screen.h"
 
-#include "vl/vl_decoder.h"
-#include "vl/vl_video_buffer.h"
-
 #include "nouveau_vp3_video.h"
 
 #include "nvc0/nvc0_context.h"
@@ -90,11 +87,20 @@ nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
    bindings &= ~(PIPE_BIND_LINEAR |
                  PIPE_BIND_SHARED);
 
-   if (bindings & PIPE_BIND_SHADER_IMAGE && sample_count > 1 &&
-       nouveau_screen(pscreen)->class_3d >= GM107_3D_CLASS) {
-      /* MS images are currently unsupported on Maxwell because they have to
-       * be handled explicitly. */
-      return false;
+   if (bindings & PIPE_BIND_SHADER_IMAGE) {
+      if (sample_count > 1 &&
+          nouveau_screen(pscreen)->class_3d >= GM107_3D_CLASS) {
+         /* MS images are currently unsupported on Maxwell because they have to
+          * be handled explicitly. */
+         return false;
+      }
+
+      if (format == PIPE_FORMAT_B8G8R8A8_UNORM &&
+          nouveau_screen(pscreen)->class_3d < NVE4_3D_CLASS) {
+         /* This should work on Fermi, but for currently unknown reasons it
+          * does not and results in breaking reads from pbos. */
+         return false;
+      }
    }
 
    return (( nvc0_format_table[format].usage |
@@ -248,9 +254,10 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_INT64:
    case PIPE_CAP_TGSI_TEX_TXF_LZ:
    case PIPE_CAP_TGSI_CLOCK:
-      return 1;
    case PIPE_CAP_COMPUTE:
-      return (class_3d < GP100_3D_CLASS);
+   case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
+   case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
+      return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
@@ -258,6 +265,9 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_FS_FBFETCH:
       return class_3d >= NVE4_3D_CLASS; /* needs testing on fermi */
    case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
+   case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
+   case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
+   case PIPE_CAP_POST_DEPTH_COVERAGE:
       return class_3d >= GM200_3D_CLASS;
    case PIPE_CAP_TGSI_BALLOT:
       return class_3d >= NVE4_3D_CLASS;
@@ -270,7 +280,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-   case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_VERTEXID_NOBASE:
@@ -291,7 +300,13 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_INT64_DIVMOD:
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
-   case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
+   case PIPE_CAP_BINDLESS_TEXTURE:
+   case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
+   case PIPE_CAP_QUERY_SO_OVERFLOW:
+   case PIPE_CAP_MEMOBJ:
+   case PIPE_CAP_LOAD_CONSTBUF:
+   case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
+   case PIPE_CAP_TILE_RASTER_ORDER:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -387,9 +402,14 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
       return 1;
    case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
       return 1;
+   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
+      return 1;
    case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+   case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
    case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+   case PIPE_SHADER_CAP_INT64_ATOMICS:
+   case PIPE_SHADER_CAP_FP16:
       return 0;
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       return NVC0_MAX_BUFFERS;
@@ -686,9 +706,8 @@ nvc0_screen_init_compute(struct nvc0_screen *screen)
    case 0x100:
    case 0x110:
    case 0x120:
-      return nve4_screen_compute_setup(screen, screen->base.pushbuf);
    case 0x130:
-      return 0;
+      return nve4_screen_compute_setup(screen, screen->base.pushbuf);
    default:
       return -1;
    }
@@ -908,6 +927,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    case 0x130:
       switch (dev->chipset) {
       case 0x130:
+      case 0x13b:
          obj_class = GP100_3D_CLASS;
          break;
       default:

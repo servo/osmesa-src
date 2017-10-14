@@ -37,28 +37,34 @@
 #include "eglglobals.h"
 #include "egldisplay.h"
 #include "egldriver.h"
+#include "egllog.h"
+
+#ifdef HAVE_MINCORE
+#include <unistd.h>
+#include <sys/mman.h>
+#endif
 
 
 static mtx_t _eglGlobalMutex = _MTX_INITIALIZER_NP;
 
 struct _egl_global _eglGlobal =
 {
-   &_eglGlobalMutex,       /* Mutex */
-   NULL,                   /* DisplayList */
-   2,                      /* NumAtExitCalls */
-   {
+   .Mutex = &_eglGlobalMutex,
+   .DisplayList = NULL,
+   .NumAtExitCalls = 2,
+   .AtExitCalls = {
       /* default AtExitCalls, called in reverse order */
       _eglUnloadDrivers, /* always called last */
       _eglFiniDisplay
    },
 
-   /* ClientOnlyExtensionString */
+   .ClientOnlyExtensionString =
    "EGL_EXT_client_extensions"
    " EGL_EXT_platform_base"
    " EGL_KHR_client_get_all_proc_addresses"
    " EGL_KHR_debug",
 
-   /* PlatformExtensionString */
+   .PlatformExtensionString =
 #ifdef HAVE_WAYLAND_PLATFORM
    " EGL_EXT_platform_wayland"
 #endif
@@ -73,10 +79,10 @@ struct _egl_global _eglGlobal =
 #endif
    "",
 
-   NULL, /* ClientExtensionsString */
+   .ClientExtensionString = NULL,
 
-   NULL, /* debugCallback */
-   _EGL_DEBUG_BIT_CRITICAL | _EGL_DEBUG_BIT_ERROR, /* debugTypesEnabled */
+   .debugCallback = NULL,
+   .debugTypesEnabled = _EGL_DEBUG_BIT_CRITICAL | _EGL_DEBUG_BIT_ERROR,
 };
 
 
@@ -141,4 +147,40 @@ _eglGetClientExtensionString(void)
 
    mtx_unlock(_eglGlobal.Mutex);
    return ret;
+}
+
+EGLBoolean
+_eglPointerIsDereferencable(void *p)
+{
+#ifdef HAVE_MINCORE
+   uintptr_t addr = (uintptr_t) p;
+   unsigned char valid = 0;
+   const long page_size = getpagesize();
+
+   if (p == NULL)
+      return EGL_FALSE;
+
+   /* align addr to page_size */
+   addr &= ~(page_size - 1);
+
+   if (mincore((void *) addr, page_size, &valid) < 0) {
+      _eglLog(_EGL_DEBUG, "mincore failed: %m");
+      return EGL_FALSE;
+   }
+
+   /* mincore() returns 0 on success, and -1 on failure.  The last parameter
+    * is a vector of bytes with one entry for each page queried.  mincore
+    * returns page residency information in the first bit of each byte in the
+    * vector.
+    *
+    * Residency doesn't actually matter when determining whether a pointer is
+    * dereferenceable, so the output vector can be ignored.  What matters is
+    * whether mincore succeeds. See:
+    *
+    *   http://man7.org/linux/man-pages/man2/mincore.2.html
+    */
+   return EGL_TRUE;
+#else
+   return p != NULL;
+#endif
 }

@@ -35,17 +35,22 @@
 #include "main/errors.h"
 #include "main/shaderapi.h"
 #include "main/uniforms.h"
-#include "util/string_to_uint_map.h"
 
 #include "st_context.h"
 #include "st_program.h"
-#include "st_glsl_types.h"
 
 #include "compiler/nir/nir.h"
 #include "compiler/glsl_types.h"
 #include "compiler/glsl/glsl_to_nir.h"
 #include "compiler/glsl/ir.h"
+#include "compiler/glsl/string_to_uint_map.h"
 
+
+static int
+type_size(const struct glsl_type *type)
+{
+   return type->count_attribute_slots(false);
+}
 
 /* Depending on PIPE_CAP_TGSI_TEXCOORD (st->needs_texcoord_semantic) we
  * may need to fix up varying slots so the glsl->nir path is aligned
@@ -91,6 +96,9 @@ st_nir_assign_vs_in_locations(struct gl_program *prog, nir_shader *nir)
          input_to_index[attr] = ~0;
       }
    }
+
+   /* bit of a hack, mirroring st_translate_vertex_program */
+   input_to_index[VERT_ATTRIB_EDGEFLAG] = num_inputs;
 
    nir->num_inputs = 0;
    nir_foreach_variable_safe(var, &nir->inputs) {
@@ -202,7 +210,7 @@ st_nir_assign_uniform_locations(struct gl_program *prog,
 
       uniform->data.driver_location = loc;
 
-      max = MAX2(max, loc + st_glsl_type_size(uniform->type));
+      max = MAX2(max, loc + type_size(uniform->type));
    }
    *size = max;
 }
@@ -219,7 +227,7 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
                gl_shader_stage stage)
 {
    struct pipe_screen *pscreen = st->pipe->screen;
-   enum pipe_shader_type ptarget = st_shader_stage_to_ptarget(stage);
+   enum pipe_shader_type ptarget = pipe_shader_type_from_mesa(stage);
    const nir_shader_compiler_options *options;
    nir_shader *nir;
 
@@ -233,7 +241,6 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
       return prog->nir;
 
    nir = glsl_to_nir(shader_program, stage, options);
-   prog->nir = nir;
 
    NIR_PASS_V(nir, nir_lower_io_to_temporaries,
          nir_shader_get_entrypoint(nir),
@@ -242,6 +249,7 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_var_copies);
    NIR_PASS_V(nir, st_nir_lower_builtin);
+   NIR_PASS_V(nir, nir_lower_atomics, shader_program);
 
    /* fragment shaders may need : */
    if (stage == MESA_SHADER_FRAGMENT) {
@@ -276,6 +284,8 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
       nir_print_shader(nir, _mesa_get_log_file());
       _mesa_log("\n\n");
    }
+
+   prog->nir = nir;
 
    return nir;
 }
@@ -312,6 +322,8 @@ sort_varyings(struct exec_list *var_list)
 void
 st_finalize_nir(struct st_context *st, struct gl_program *prog, nir_shader *nir)
 {
+   struct pipe_screen *screen = st->pipe->screen;
+
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_var_copies);
    NIR_PASS_V(nir, nir_lower_io_types);
@@ -325,17 +337,19 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog, nir_shader *nir)
       sort_varyings(&nir->outputs);
       nir_assign_var_locations(&nir->outputs,
                                &nir->num_outputs,
-                               st_glsl_type_size);
+                               type_size);
       st_nir_fixup_varying_slots(st, &nir->outputs);
    } else if (nir->stage == MESA_SHADER_FRAGMENT) {
       sort_varyings(&nir->inputs);
       nir_assign_var_locations(&nir->inputs,
                                &nir->num_inputs,
-                               st_glsl_type_size);
+                               type_size);
       st_nir_fixup_varying_slots(st, &nir->inputs);
       nir_assign_var_locations(&nir->outputs,
                                &nir->num_outputs,
-                               st_glsl_type_size);
+                               type_size);
+   } else if (nir->stage == MESA_SHADER_COMPUTE) {
+       /* TODO? */
    } else {
       unreachable("invalid shader type for tgsi bypass\n");
    }
@@ -348,18 +362,26 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog, nir_shader *nir)
    case MESA_SHADER_FRAGMENT:
       shader_program = ((struct st_fragment_program *)prog)->shader_program;
       break;
+   case MESA_SHADER_COMPUTE:
+      shader_program = ((struct st_compute_program *)prog)->shader_program;
+      break;
    default:
       assert(!"should not be reached");
       return;
    }
 
+   NIR_PASS_V(nir, nir_lower_atomics_to_ssbo,
+         st->ctx->Const.Program[nir->stage].MaxAtomicBuffers);
+
    st_nir_assign_uniform_locations(prog, shader_program,
                                    &nir->uniforms, &nir->num_uniforms);
 
    NIR_PASS_V(nir, nir_lower_system_values);
-   NIR_PASS_V(nir, nir_lower_io, nir_var_all, st_glsl_type_size,
-              (nir_lower_io_options)0);
-   NIR_PASS_V(nir, nir_lower_samplers, shader_program);
+
+   if (screen->get_param(screen, PIPE_CAP_NIR_SAMPLERS_AS_DEREF))
+      NIR_PASS_V(nir, nir_lower_samplers_as_deref, shader_program);
+   else
+      NIR_PASS_V(nir, nir_lower_samplers, shader_program);
 }
 
 struct gl_program *
@@ -378,7 +400,7 @@ st_nir_get_mesa_program(struct gl_context *ctx,
    do_set_program_inouts(shader->ir, prog, shader->Stage);
 
    _mesa_copy_linked_program_data(shader_program, shader);
-   _mesa_generate_parameters_list_for_uniforms(shader_program, shader,
+   _mesa_generate_parameters_list_for_uniforms(ctx, shader_program, shader,
                                                prog->Parameters);
 
    /* Make a pass over the IR to add state references for any built-in
@@ -413,7 +435,6 @@ st_nir_get_mesa_program(struct gl_context *ctx,
       _mesa_log("\n\n");
    }
 
-   prog->ShadowSamplers = shader->shadow_samplers;
    prog->ExternalSamplersUsed = gl_external_samplers(prog);
    _mesa_update_shader_textures_used(shader_program, prog);
 
@@ -427,11 +448,11 @@ st_nir_get_mesa_program(struct gl_context *ctx,
     * prog->ParameterValues to get reallocated (e.g., anything that adds a
     * program constant) has to happen before creating this linkage.
     */
-   _mesa_associate_uniform_storage(ctx, shader_program, prog->Parameters,
-                                   true);
+   _mesa_associate_uniform_storage(ctx, shader_program, prog, true);
 
    struct st_vertex_program *stvp;
    struct st_fragment_program *stfp;
+   struct st_compute_program *stcp;
 
    switch (shader->Stage) {
    case MESA_SHADER_VERTEX:
@@ -441,6 +462,10 @@ st_nir_get_mesa_program(struct gl_context *ctx,
    case MESA_SHADER_FRAGMENT:
       stfp = (struct st_fragment_program *)prog;
       stfp->shader_program = shader_program;
+      break;
+   case MESA_SHADER_COMPUTE:
+      stcp = (struct st_compute_program *)prog;
+      stcp->shader_program = shader_program;
       break;
    default:
       assert(!"should not be reached");

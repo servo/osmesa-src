@@ -67,6 +67,7 @@ intel_update_max_level(struct intel_texture_object *intelObj,
 void
 intel_finalize_mipmap_tree(struct brw_context *brw, GLuint unit)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct gl_context *ctx = &brw->ctx;
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
@@ -111,7 +112,7 @@ intel_finalize_mipmap_tree(struct brw_context *brw, GLuint unit)
     *
     * FINISHME: Avoid doing this.
     */
-   assert(!tObj->Immutable || brw->gen < 6);
+   assert(!tObj->Immutable || devinfo->gen < 6);
 
    firstImage = intel_texture_image(tObj->Image[0][tObj->BaseLevel]);
 
@@ -136,8 +137,6 @@ intel_finalize_mipmap_tree(struct brw_context *brw, GLuint unit)
                  _mesa_get_format_name(firstImage->base.Base.TexFormat),
                  width, height, depth, validate_last_level + 1);
 
-      const uint32_t layout_flags = MIPTREE_LAYOUT_ACCELERATED_UPLOAD |
-                                    MIPTREE_LAYOUT_TILING_ANY;
       intelObj->mt = intel_miptree_create(brw,
                                           intelObj->base.Target,
 					  firstImage->base.Base.TexFormat,
@@ -146,8 +145,8 @@ intel_finalize_mipmap_tree(struct brw_context *brw, GLuint unit)
                                           width,
                                           height,
                                           depth,
-                                          0 /* num_samples */,
-                                          layout_flags);
+                                          1 /* num_samples */,
+                                          MIPTREE_CREATE_BUSY);
       if (!intelObj->mt)
          return;
    }

@@ -1,4 +1,6 @@
 LIBCOMPILER_FILES = \
+	blob.c \
+	blob.h \
 	builtin_type_macros.h \
 	glsl_types.cpp \
 	glsl_types.h \
@@ -17,8 +19,6 @@ LIBGLSL_FILES = \
 	glsl/ast_function.cpp \
 	glsl/ast_to_hir.cpp \
 	glsl/ast_type.cpp \
-	glsl/blob.c \
-	glsl/blob.h \
 	glsl/builtin_functions.cpp \
 	glsl/builtin_functions.h \
 	glsl/builtin_int64.h \
@@ -80,7 +80,6 @@ LIBGLSL_FILES = \
 	glsl/list.h \
 	glsl/loop_analysis.cpp \
 	glsl/loop_analysis.h \
-	glsl/loop_controls.cpp \
 	glsl/loop_unroll.cpp \
 	glsl/lower_blend_equation_advanced.cpp \
 	glsl/lower_buffer_access.cpp \
@@ -140,7 +139,9 @@ LIBGLSL_FILES = \
 	glsl/program.h \
 	glsl/propagate_invariance.cpp \
 	glsl/s_expression.cpp \
-	glsl/s_expression.h
+	glsl/s_expression.h \
+	glsl/string_to_uint_map.cpp \
+	glsl/string_to_uint_map.h
 
 LIBGLSL_SHADER_CACHE_FILES = \
 	glsl/shader_cache.cpp \
@@ -186,7 +187,6 @@ NIR_GENERATED_FILES = \
 NIR_FILES = \
 	nir/nir.c \
 	nir/nir.h \
-	nir/nir_array.h \
 	nir/nir_builder.h \
 	nir/nir_clone.c \
 	nir/nir_constant_expressions.h \
@@ -202,12 +202,15 @@ NIR_FILES = \
 	nir/nir_instr_set.h \
 	nir/nir_intrinsics.c \
 	nir/nir_intrinsics.h \
+	nir/nir_linking_helpers.c \
 	nir/nir_liveness.c \
 	nir/nir_loop_analyze.c \
 	nir/nir_loop_analyze.h \
 	nir/nir_lower_64bit_packing.c \
+	nir/nir_lower_alpha_test.c \
 	nir/nir_lower_alu_to_scalar.c \
 	nir/nir_lower_atomics.c \
+	nir/nir_lower_atomics_to_ssbo.c \
 	nir/nir_lower_bitmap.c \
 	nir/nir_lower_clamp_color_outputs.c \
 	nir/nir_lower_clip.c \
@@ -229,13 +232,16 @@ NIR_FILES = \
 	nir/nir_lower_passthrough_edgeflags.c \
 	nir/nir_lower_patch_vertices.c \
 	nir/nir_lower_phis_to_scalar.c \
+	nir/nir_lower_read_invocation_to_scalar.c \
 	nir/nir_lower_regs_to_ssa.c \
 	nir/nir_lower_returns.c \
 	nir/nir_lower_samplers.c \
+	nir/nir_lower_samplers_as_deref.c \
 	nir/nir_lower_system_values.c \
 	nir/nir_lower_tex.c \
 	nir/nir_lower_to_source_mods.c \
 	nir/nir_lower_two_sided_color.c \
+	nir/nir_lower_uniforms_to_ubo.c \
 	nir/nir_lower_vars_to_ssa.c \
 	nir/nir_lower_var_copies.c \
 	nir/nir_lower_vec_to_movs.c \
@@ -254,6 +260,7 @@ NIR_FILES = \
 	nir/nir_opt_gcm.c \
 	nir/nir_opt_global_to_local.c \
 	nir/nir_opt_if.c \
+	nir/nir_opt_intrinsics.c \
 	nir/nir_opt_loop_unroll.c \
 	nir/nir_opt_move_comparisons.c \
 	nir/nir_opt_peephole_select.c \
@@ -277,12 +284,14 @@ NIR_FILES = \
 	nir/nir_worklist.c \
 	nir/nir_worklist.h
 
+SPIRV_GENERATED_FILES = \
+	spirv/spirv_info.c
+
 SPIRV_FILES = \
 	spirv/GLSL.std.450.h \
 	spirv/nir_spirv.h \
 	spirv/spirv.h \
 	spirv/spirv_info.h \
-	spirv/spirv_info.c \
 	spirv/spirv_to_nir.c \
 	spirv/vtn_alu.c \
 	spirv/vtn_cfg.c \

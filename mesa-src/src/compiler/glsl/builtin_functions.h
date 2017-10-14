@@ -32,7 +32,8 @@ _mesa_glsl_find_builtin_function(_mesa_glsl_parse_state *state,
                                  const char *name, exec_list *actual_parameters);
 
 extern bool
-_mesa_glsl_has_builtin_function(const char *name);
+_mesa_glsl_has_builtin_function(_mesa_glsl_parse_state *state,
+                                const char *name);
 
 extern gl_shader *
 _mesa_glsl_get_builtin_function_shader(void);
@@ -62,6 +63,9 @@ umul64(void *mem_ctx, builtin_available_predicate avail);
 
 ir_function_signature *
 sign64(void *mem_ctx, builtin_available_predicate avail);
+
+ir_function_signature *
+udivmod64(void *mem_ctx, builtin_available_predicate avail);
 
 }
 

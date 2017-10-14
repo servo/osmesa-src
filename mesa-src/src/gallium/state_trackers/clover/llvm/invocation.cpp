@@ -89,7 +89,7 @@ namespace {
    create_context(std::string &r_log) {
       init_targets();
       std::unique_ptr<LLVMContext> ctx { new LLVMContext };
-      ctx->setDiagnosticHandler(diagnostic_handler, &r_log);
+      compat::set_diagnostic_handler(*ctx, diagnostic_handler, &r_log);
       return ctx;
    }
 
@@ -126,7 +126,7 @@ namespace {
       c->getDiagnosticOpts().ShowCarets = false;
 
       compat::set_lang_defaults(c->getInvocation(), c->getLangOpts(),
-                                clang::IK_OpenCL, ::llvm::Triple(target.triple),
+                                compat::ik_opencl, ::llvm::Triple(target.triple),
                                 c->getPreprocessorOpts(),
                                 clang::LangStandard::lang_opencl11);
 

@@ -377,7 +377,7 @@ static bool r600_decompress_subresource(struct pipe_context *ctx,
 			r600_blit_decompress_depth_in_place(rctx, rtex, false,
 						   level, level,
 						   first_layer, last_layer);
-			if (rtex->surface.flags & RADEON_SURF_SBUFFER) {
+			if (rtex->surface.has_stencil) {
 				r600_blit_decompress_depth_in_place(rctx, rtex, true,
 							   level, level,
 							   first_layer, last_layer);
@@ -443,8 +443,7 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 		 * array are clear to different value. To simplify code just
 		 * disable fast clear for texture array.
 		 */
-		/* Only use htile for first level */
-		if (rtex->htile_buffer && !level &&
+		if (r600_htile_enabled(rtex, level) &&
                    fb->zsbuf->u.tex.first_layer == 0 &&
                    fb->zsbuf->u.tex.last_layer == util_max_layer(&rtex->resource.b.b, level)) {
 			if (rtex->depth_clear_value != depth) {
@@ -647,7 +646,7 @@ void r600_resource_copy_region(struct pipe_context *ctx,
         src_heightFL = u_minify(src->height0, src_level);
 
 	util_blitter_default_dst_texture(&dst_templ, dst, dst_level, dstz);
-	util_blitter_default_src_texture(&src_templ, src, src_level);
+	util_blitter_default_src_texture(rctx->blitter, &src_templ, src, src_level);
 
 	if (util_format_is_compressed(src->format) ||
 	    util_format_is_compressed(dst->format)) {

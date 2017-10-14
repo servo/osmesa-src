@@ -35,6 +35,7 @@
 #include <stdint.h>
 
 #include "brw_eu_defines.h"
+#include "brw_reg_type.h"
 #include "common/gen_device_info.h"
 
 #ifdef __cplusplus
@@ -88,7 +89,7 @@ brw_inst_##name(const struct gen_device_info *devinfo,        \
    } else {                                                                  \
       high = hi4;  low = lo4;                                                \
    }                                                                         \
-   assert(((int) high) != -1 && ((int) low) != -1);                          \
+   assert(((int) high) != -1 && ((int) low) != -1);
 
 /* A general macro for cases where the field has moved to several different
  * bit locations across generations.  GCC appears to combine cases where the
@@ -135,7 +136,7 @@ F(src1_da16_subreg_nr, 100, 100)
 F(src1_da1_subreg_nr,  100,  96)
 F(src1_da16_swiz_y,     99,  98)
 F(src1_da16_swiz_x,     97,  96)
-F8(src1_reg_type,      /* 4+ */  46,  44, /* 8+ */  94,  91)
+F8(src1_reg_hw_type,   /* 4+ */  46,  44, /* 8+ */  94,  91)
 F8(src1_reg_file,      /* 4+ */  43,  42, /* 8+ */  90,  89)
 F(src0_vstride,         88,  85)
 F(src0_width,           84,  82)
@@ -160,9 +161,9 @@ F(dst_da_reg_nr,        60,  53)
 F(dst_da16_subreg_nr,   52,  52)
 F(dst_da1_subreg_nr,    52,  48)
 F(da16_writemask,       51,  48) /* Dst.ChanEn */
-F8(src0_reg_type,      /* 4+ */  41,  39, /* 8+ */  46,  43)
+F8(src0_reg_hw_type,   /* 4+ */  41,  39, /* 8+ */  46,  43)
 F8(src0_reg_file,      /* 4+ */  38,  37, /* 8+ */  42,  41)
-F8(dst_reg_type,       /* 4+ */  36,  34, /* 8+ */  40,  37)
+F8(dst_reg_hw_type,    /* 4+ */  36,  34, /* 8+ */  40,  37)
 F8(dst_reg_file,       /* 4+ */  33,  32, /* 8+ */  36,  35)
 F8(mask_control,       /* 4+ */   9,   9, /* 8+ */  34,  34)
 FF(flag_reg_nr,
@@ -569,6 +570,13 @@ brw_inst_imm_ud(const struct gen_device_info *devinfo, const brw_inst *insn)
    return brw_inst_bits(insn, 127, 96);
 }
 
+static inline uint64_t
+brw_inst_imm_uq(const struct gen_device_info *devinfo, const brw_inst *insn)
+{
+   assert(devinfo->gen >= 8);
+   return brw_inst_bits(insn, 127, 64);
+}
+
 static inline float
 brw_inst_imm_f(const struct gen_device_info *devinfo, const brw_inst *insn)
 {
@@ -644,6 +652,35 @@ brw_inst_set_imm_uq(const struct gen_device_info *devinfo,
 }
 
 /** @} */
+
+#define REG_TYPE(reg)                                                         \
+static inline void                                                            \
+brw_inst_set_##reg##_file_type(const struct gen_device_info *devinfo,         \
+                               brw_inst *inst, enum brw_reg_file file,        \
+                               enum brw_reg_type type)                        \
+{                                                                             \
+   assert(file <= BRW_IMMEDIATE_VALUE);                                       \
+   unsigned hw_type = brw_reg_type_to_hw_type(devinfo, file, type);           \
+   brw_inst_set_##reg##_reg_file(devinfo, inst, file);                        \
+   brw_inst_set_##reg##_reg_hw_type(devinfo, inst, hw_type);                  \
+}                                                                             \
+                                                                              \
+static inline enum brw_reg_type                                               \
+brw_inst_##reg##_type(const struct gen_device_info *devinfo,                  \
+                      const brw_inst *inst)                                   \
+{                                                                             \
+   unsigned file = __builtin_strcmp("dst", #reg) == 0 ?                       \
+                   BRW_GENERAL_REGISTER_FILE :                                \
+                   brw_inst_##reg##_reg_file(devinfo, inst);                  \
+   unsigned hw_type = brw_inst_##reg##_reg_hw_type(devinfo, inst);            \
+   return brw_hw_type_to_reg_type(devinfo, (enum brw_reg_file)file, hw_type); \
+}
+
+REG_TYPE(dst)
+REG_TYPE(src0)
+REG_TYPE(src1)
+#undef REG_TYPE
+
 
 /* The AddrImm fields are split into two discontiguous sections on Gen8+ */
 #define BRW_IA1_ADDR_IMM(reg, g4_high, g4_low, g8_nine, g8_high, g8_low) \

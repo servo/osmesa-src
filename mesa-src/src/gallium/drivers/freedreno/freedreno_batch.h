@@ -55,7 +55,7 @@ enum fd_render_stage {
 	FD_STAGE_ALL      = 0xff,
 };
 
-#define MAX_HW_SAMPLE_PROVIDERS 4
+#define MAX_HW_SAMPLE_PROVIDERS 5
 struct fd_hw_sample_provider;
 struct fd_hw_sample;
 
@@ -153,6 +153,9 @@ struct fd_batch {
 	struct fd_ringbuffer *binning;
 	/** tiling/gmem (IB0) cmdstream: */
 	struct fd_ringbuffer *gmem;
+
+	// TODO maybe more generically split out clear and clear_binning rings?
+	struct fd_ringbuffer *lrz_clear;
 
 	/**
 	 * hw query related state:

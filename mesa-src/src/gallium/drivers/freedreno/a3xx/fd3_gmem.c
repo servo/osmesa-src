@@ -149,6 +149,12 @@ use_hw_binning(struct fd_batch *batch)
 	if (gmem->minx || gmem->miny)
 		return false;
 
+	if ((gmem->maxpw * gmem->maxph) > 32)
+		return false;
+
+	if ((gmem->maxpw > 15) || (gmem->maxph > 15))
+		return false;
+
 	return fd_binning_enabled && ((gmem->nbins_x * gmem->nbins_y) > 2);
 }
 

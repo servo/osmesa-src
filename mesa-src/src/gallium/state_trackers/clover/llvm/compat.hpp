@@ -36,6 +36,7 @@
 
 #include "util/algorithm.hpp"
 
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Target/TargetMachine.h>
@@ -70,8 +71,10 @@ namespace clover {
 
 #if HAVE_LLVM >= 0x0500
          const auto lang_as_offset = 0;
+         const clang::InputKind ik_opencl = clang::InputKind::OpenCL;
 #else
          const auto lang_as_offset = clang::LangAS::Offset;
+         const clang::InputKind ik_opencl = clang::IK_OpenCL;
 #endif
 
          inline void
@@ -132,18 +135,18 @@ namespace clover {
 #endif
          }
 
-         inline std::unique_ptr<::llvm::Linker>
+         inline std::unique_ptr< ::llvm::Linker>
          create_linker(::llvm::Module &mod) {
 #if HAVE_LLVM >= 0x0308
-            return std::unique_ptr<::llvm::Linker>(new ::llvm::Linker(mod));
+            return std::unique_ptr< ::llvm::Linker>(new ::llvm::Linker(mod));
 #else
-            return std::unique_ptr<::llvm::Linker>(new ::llvm::Linker(&mod));
+            return std::unique_ptr< ::llvm::Linker>(new ::llvm::Linker(&mod));
 #endif
          }
 
          inline bool
          link_in_module(::llvm::Linker &linker,
-                        std::unique_ptr<::llvm::Module> mod) {
+                        std::unique_ptr< ::llvm::Module> mod) {
 #if HAVE_LLVM >= 0x0308
             return linker.linkInModule(std::move(mod));
 #else
@@ -172,6 +175,12 @@ namespace clover {
 #endif
          }
 
+#if HAVE_LLVM >= 0x0600
+         const auto default_code_model = ::llvm::None;
+#else
+         const auto default_code_model = ::llvm::CodeModel::Default;
+#endif
+
 #if HAVE_LLVM >= 0x0309
          const auto default_reloc_model = ::llvm::None;
 #else
@@ -190,6 +199,16 @@ namespace clover {
                f(mod.getError().message());
 #endif
          }
+
+        template<typename T> void
+        set_diagnostic_handler(::llvm::LLVMContext &ctx,
+                               T *diagnostic_handler, void *data) {
+#if HAVE_LLVM >= 0x0600
+           ctx.setDiagnosticHandlerCallBack(diagnostic_handler, data);
+#else
+           ctx.setDiagnosticHandler(diagnostic_handler, data);
+#endif
+        }
       }
    }
 }

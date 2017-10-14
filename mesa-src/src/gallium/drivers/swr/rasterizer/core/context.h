@@ -39,7 +39,7 @@
 #include "core/arena.h"
 #include "core/fifo.hpp"
 #include "core/knobs.h"
-#include "common/simdintrin.h"
+#include "common/intrin.h"
 #include "core/threads.h"
 #include "ringbuffer.h"
 #include "archrast/archrast.h"
@@ -62,7 +62,6 @@ struct TRI_FLAGS
     uint32_t coverageMask : (SIMD_TILE_X_DIM * SIMD_TILE_Y_DIM);
     uint32_t reserved : 32 - 1 - 1 - (SIMD_TILE_X_DIM * SIMD_TILE_Y_DIM);
     float pointSize;
-    uint32_t primID;
     uint32_t renderTargetArrayIndex;
     uint32_t viewportIndex;
 };
@@ -215,12 +214,12 @@ struct PA_STATE;
 
 // function signature for pipeline stages that execute after primitive assembly
 typedef void(*PFN_PROCESS_PRIMS)(DRAW_CONTEXT *pDC, PA_STATE& pa, uint32_t workerId, simdvector prims[], 
-    uint32_t primMask, simdscalari primID, simdscalari viewportIdx);
+    uint32_t primMask, simdscalari const &primID);
 
 #if ENABLE_AVX512_SIMD16
 // function signature for pipeline stages that execute after primitive assembly
-typedef void(SIMDAPI *PFN_PROCESS_PRIMS_SIMD16)(DRAW_CONTEXT *pDC, PA_STATE& pa, uint32_t workerId, simd16vector prims[],
-    uint32_t primMask, simd16scalari primID, simd16scalari viewportIdx);
+typedef void(SIMDCALL *PFN_PROCESS_PRIMS_SIMD16)(DRAW_CONTEXT *pDC, PA_STATE& pa, uint32_t workerId, simd16vector prims[],
+    uint32_t primMask, simd16scalari const &primID);
 
 #endif
 OSALIGNLINE(struct) API_STATE
@@ -245,6 +244,8 @@ OSALIGNLINE(struct) API_STATE
     PFN_CS_FUNC             pfnCsFunc;
     uint32_t                totalThreadsInGroup;
     uint32_t                totalSpillFillSize;
+    uint32_t                scratchSpaceSize;
+    uint32_t                scratchSpaceNumInstances;
 
     // FE - Frontend State
     SWR_FRONTEND_STATE      frontendState;
@@ -342,11 +343,11 @@ struct BarycentricCoeffs
 // pipeline function pointer types
 typedef void(*PFN_BACKEND_FUNC)(DRAW_CONTEXT*, uint32_t, uint32_t, uint32_t, SWR_TRIANGLE_DESC&, RenderOutputBuffers&);
 typedef void(*PFN_OUTPUT_MERGER)(SWR_PS_CONTEXT &, uint8_t* (&)[SWR_NUM_RENDERTARGETS], uint32_t, const SWR_BLEND_STATE*,
-                                 const PFN_BLEND_JIT_FUNC (&)[SWR_NUM_RENDERTARGETS], simdscalar&, simdscalar);
+                                 const PFN_BLEND_JIT_FUNC (&)[SWR_NUM_RENDERTARGETS], simdscalar&, simdscalar const &);
 typedef void(*PFN_CALC_PIXEL_BARYCENTRICS)(const BarycentricCoeffs&, SWR_PS_CONTEXT &);
 typedef void(*PFN_CALC_SAMPLE_BARYCENTRICS)(const BarycentricCoeffs&, SWR_PS_CONTEXT&);
 typedef void(*PFN_CALC_CENTROID_BARYCENTRICS)(const BarycentricCoeffs&, SWR_PS_CONTEXT &, const uint64_t *const, const uint32_t,
-                                              const simdscalar, const simdscalar);
+                                              simdscalar const &, simdscalar const &);
 
 struct BACKEND_FUNCS
 {
@@ -408,16 +409,14 @@ struct DRAW_CONTEXT
     bool            dependent;      // Backend work is dependent on all previous BE
     bool            isCompute;      // Is this DC a compute context?
     bool            cleanupState;   // True if this is the last draw using an entry in the state ring.
-    volatile bool   doneFE;         // Is FE work done for this draw?
 
     FE_WORK         FeWork;
 
+    volatile OSALIGNLINE(bool)       doneFE;         // Is FE work done for this draw?
     volatile OSALIGNLINE(uint32_t)   FeLock;
-    volatile int32_t    threadsDone;
+    volatile OSALIGNLINE(uint32_t)   threadsDone;
 
     SYNC_DESC       retireCallback; // Call this func when this DC is retired.
-
-
 };
 
 static_assert((sizeof(DRAW_CONTEXT) & 63) == 0, "Invalid size for DRAW_CONTEXT");
@@ -504,9 +503,9 @@ struct SWR_CONTEXT
     // Scratch space for workers.
     uint8_t** ppScratch;
 
-    volatile int32_t  drawsOutstandingFE;
+    volatile OSALIGNLINE(uint32_t)  drawsOutstandingFE;
 
-    CachingAllocator cachingArenaAllocator;
+    OSALIGNLINE(CachingAllocator) cachingArenaAllocator;
     uint32_t frameCount;
 
     uint32_t lastFrameChecked;

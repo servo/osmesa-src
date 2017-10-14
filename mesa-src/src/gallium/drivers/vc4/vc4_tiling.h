@@ -27,6 +27,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "util/macros.h"
+#include "util/u_cpu_detect.h"
 
 /** Return the width in pixels of a 64-byte microtile. */
 static inline uint32_t
@@ -83,23 +84,20 @@ void vc4_store_tiled_image(void *dst, uint32_t dst_stride,
                            uint8_t tiling_format, int cpp,
                            const struct pipe_box *box);
 
-/* If we're building for ARMv7 (Pi 2+), assume it has NEON.  For Raspbian we
- * should extend this to have some runtime detection of being built for ARMv6
- * on a Pi 2+.
- */
-#if defined(__ARM_ARCH) && __ARM_ARCH == 7
-#define NEON_SUFFIX(x) x ## _neon
-#else
-#define NEON_SUFFIX(x) x ## _base
-#endif
-
 static inline void
 vc4_load_lt_image(void *dst, uint32_t dst_stride,
                   void *src, uint32_t src_stride,
                   int cpp, const struct pipe_box *box)
 {
-        NEON_SUFFIX(vc4_load_lt_image)(dst, dst_stride, src, src_stride,
+#ifdef USE_ARM_ASM
+        if (util_cpu_caps.has_neon) {
+                vc4_load_lt_image_neon(dst, dst_stride, src, src_stride,
                                        cpp, box);
+                return;
+        }
+#endif
+        vc4_load_lt_image_base(dst, dst_stride, src, src_stride,
+                               cpp, box);
 }
 
 static inline void
@@ -107,10 +105,16 @@ vc4_store_lt_image(void *dst, uint32_t dst_stride,
                    void *src, uint32_t src_stride,
                    int cpp, const struct pipe_box *box)
 {
-        NEON_SUFFIX(vc4_store_lt_image)(dst, dst_stride, src, src_stride,
+#ifdef USE_ARM_ASM
+        if (util_cpu_caps.has_neon) {
+                vc4_store_lt_image_neon(dst, dst_stride, src, src_stride,
                                         cpp, box);
-}
+                return;
+        }
+#endif
 
-#undef NEON_SUFFIX
+        vc4_store_lt_image_base(dst, dst_stride, src, src_stride,
+                                cpp, box);
+}
 
 #endif /* VC4_TILING_H */

@@ -37,35 +37,6 @@
 
 #include "util/ralloc.h"
 
-/**
- * Converts a BRW_REGISTER_TYPE_* enum to a short string (F, UD, and so on).
- *
- * This is different than reg_encoding from brw_disasm.c in that it operates
- * on the abstract enum values, rather than the generation-specific encoding.
- */
-const char *
-brw_reg_type_letters(unsigned type)
-{
-   const char *names[] = {
-      [BRW_REGISTER_TYPE_UD] = "UD",
-      [BRW_REGISTER_TYPE_D]  = "D",
-      [BRW_REGISTER_TYPE_UW] = "UW",
-      [BRW_REGISTER_TYPE_W]  = "W",
-      [BRW_REGISTER_TYPE_F]  = "F",
-      [BRW_REGISTER_TYPE_UB] = "UB",
-      [BRW_REGISTER_TYPE_B]  = "B",
-      [BRW_REGISTER_TYPE_UV] = "UV",
-      [BRW_REGISTER_TYPE_V]  = "V",
-      [BRW_REGISTER_TYPE_VF] = "VF",
-      [BRW_REGISTER_TYPE_DF] = "DF",
-      [BRW_REGISTER_TYPE_HF] = "HF",
-      [BRW_REGISTER_TYPE_UQ] = "UQ",
-      [BRW_REGISTER_TYPE_Q]  = "Q",
-   };
-   assert(type <= BRW_REGISTER_TYPE_Q);
-   return names[type];
-}
-
 /* Returns a conditional modifier that negates the condition. */
 enum brw_conditional_mod
 brw_negate_cmod(uint32_t cmod)
@@ -366,12 +337,12 @@ const unsigned *brw_get_program( struct brw_codegen *p,
 
 void
 brw_disassemble(const struct gen_device_info *devinfo,
-                void *assembly, int start, int end, FILE *out)
+                const void *assembly, int start, int end, FILE *out)
 {
    bool dump_hex = (INTEL_DEBUG & DEBUG_HEX) != 0;
 
    for (int offset = start; offset < end;) {
-      brw_inst *insn = assembly + offset;
+      const brw_inst *insn = assembly + offset;
       brw_inst uncompacted;
       bool compacted = brw_inst_cmpt_control(devinfo, insn);
       if (0)
@@ -412,6 +383,7 @@ enum gen {
    GEN75 = (1 << 5),
    GEN8  = (1 << 6),
    GEN9  = (1 << 7),
+   GEN10  = (1 << 8),
    GEN_ALL = ~0
 };
 
@@ -688,6 +660,7 @@ gen_from_devinfo(const struct gen_device_info *devinfo)
    case 7: return devinfo->is_haswell ? GEN75 : GEN7;
    case 8: return GEN8;
    case 9: return GEN9;
+   case 10: return GEN10;
    default:
       unreachable("not reached");
    }

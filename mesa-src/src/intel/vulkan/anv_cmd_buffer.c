@@ -120,11 +120,13 @@ anv_cmd_state_reset(struct anv_cmd_buffer *cmd_buffer)
    cmd_buffer->batch.status = VK_SUCCESS;
 
    memset(&state->descriptors, 0, sizeof(state->descriptors));
+   for (uint32_t i = 0; i < ARRAY_SIZE(state->push_descriptors); i++) {
+      vk_free(&cmd_buffer->pool->alloc, state->push_descriptors[i]);
+      state->push_descriptors[i] = NULL;
+   }
    for (uint32_t i = 0; i < MESA_SHADER_STAGES; i++) {
-      if (state->push_constants[i] != NULL) {
-         vk_free(&cmd_buffer->pool->alloc, state->push_constants[i]);
-         state->push_constants[i] = NULL;
-      }
+      vk_free(&cmd_buffer->pool->alloc, state->push_constants[i]);
+      state->push_constants[i] = NULL;
    }
    memset(state->binding_tables, 0, sizeof(state->binding_tables));
    memset(state->samplers, 0, sizeof(state->samplers));
@@ -148,10 +150,8 @@ anv_cmd_state_reset(struct anv_cmd_buffer *cmd_buffer)
    state->pma_fix_enabled = false;
    state->hiz_enabled = false;
 
-   if (state->attachments != NULL) {
-      vk_free(&cmd_buffer->pool->alloc, state->attachments);
-      state->attachments = NULL;
-   }
+   vk_free(&cmd_buffer->pool->alloc, state->attachments);
+   state->attachments = NULL;
 
    state->gen7.index_buffer = NULL;
 }
@@ -212,12 +212,12 @@ static VkResult anv_create_cmd_buffer(
       goto fail;
 
    anv_state_stream_init(&cmd_buffer->surface_state_stream,
-                         &device->surface_state_block_pool);
+                         &device->surface_state_pool, 4096);
    anv_state_stream_init(&cmd_buffer->dynamic_state_stream,
-                         &device->dynamic_state_block_pool);
+                         &device->dynamic_state_pool, 16384);
 
-   memset(&cmd_buffer->state.push_descriptor, 0,
-          sizeof(cmd_buffer->state.push_descriptor));
+   memset(cmd_buffer->state.push_descriptors, 0,
+          sizeof(cmd_buffer->state.push_descriptors));
 
    if (pool) {
       list_addtail(&cmd_buffer->pool_link, &pool->cmd_buffers);
@@ -276,7 +276,8 @@ anv_cmd_buffer_destroy(struct anv_cmd_buffer *cmd_buffer)
    anv_state_stream_finish(&cmd_buffer->surface_state_stream);
    anv_state_stream_finish(&cmd_buffer->dynamic_state_stream);
 
-   vk_free(&cmd_buffer->pool->alloc, cmd_buffer->state.attachments);
+   anv_cmd_state_reset(cmd_buffer);
+
    vk_free(&cmd_buffer->pool->alloc, cmd_buffer);
 }
 
@@ -306,11 +307,11 @@ anv_cmd_buffer_reset(struct anv_cmd_buffer *cmd_buffer)
 
    anv_state_stream_finish(&cmd_buffer->surface_state_stream);
    anv_state_stream_init(&cmd_buffer->surface_state_stream,
-                         &cmd_buffer->device->surface_state_block_pool);
+                         &cmd_buffer->device->surface_state_pool, 4096);
 
    anv_state_stream_finish(&cmd_buffer->dynamic_state_stream);
    anv_state_stream_init(&cmd_buffer->dynamic_state_stream,
-                         &cmd_buffer->device->dynamic_state_block_pool);
+                         &cmd_buffer->device->dynamic_state_pool, 16384);
    return VK_SUCCESS;
 }
 
@@ -335,6 +336,8 @@ anv_cmd_buffer_emit_state_base_address(struct anv_cmd_buffer *cmd_buffer)
       return gen8_cmd_buffer_emit_state_base_address(cmd_buffer);
    case 9:
       return gen9_cmd_buffer_emit_state_base_address(cmd_buffer);
+   case 10:
+      return gen10_cmd_buffer_emit_state_base_address(cmd_buffer);
    default:
       unreachable("unsupported gen\n");
    }
@@ -564,7 +567,7 @@ void anv_CmdBindVertexBuffers(
    /* We have to defer setting up vertex buffer since we need the buffer
     * stride from the pipeline. */
 
-   assert(firstBinding + bindingCount < MAX_VBS);
+   assert(firstBinding + bindingCount <= MAX_VBS);
    for (uint32_t i = 0; i < bindingCount; i++) {
       vb[firstBinding + i].buffer = anv_buffer_from_handle(pBuffers[i]);
       vb[firstBinding + i].offset = pOffsets[i];
@@ -626,6 +629,26 @@ anv_cmd_buffer_merge_dynamic(struct anv_cmd_buffer *cmd_buffer,
    return state;
 }
 
+static uint32_t
+anv_push_constant_value(struct anv_push_constants *data, uint32_t param)
+{
+   if (BRW_PARAM_IS_BUILTIN(param)) {
+      switch (param) {
+      case BRW_PARAM_BUILTIN_ZERO:
+         return 0;
+      default:
+         unreachable("Invalid param builtin");
+      }
+   } else {
+      uint32_t offset = ANV_PARAM_PUSH_OFFSET(param);
+      assert(offset % sizeof(uint32_t) == 0);
+      if (offset < data->size)
+         return *(uint32_t *)((uint8_t *)data + offset);
+      else
+         return 0;
+   }
+}
+
 struct anv_state
 anv_cmd_buffer_push_constants(struct anv_cmd_buffer *cmd_buffer,
                               gl_shader_stage stage)
@@ -650,10 +673,8 @@ anv_cmd_buffer_push_constants(struct anv_cmd_buffer *cmd_buffer,
 
    /* Walk through the param array and fill the buffer with data */
    uint32_t *u32_map = state.map;
-   for (unsigned i = 0; i < prog_data->nr_params; i++) {
-      uint32_t offset = (uintptr_t)prog_data->param[i];
-      u32_map[i] = *(uint32_t *)((uint8_t *)data + offset);
-   }
+   for (unsigned i = 0; i < prog_data->nr_params; i++)
+      u32_map[i] = anv_push_constant_value(data, prog_data->param[i]);
 
    anv_state_flush(cmd_buffer->device, state);
 
@@ -686,14 +707,11 @@ anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer)
    uint32_t *u32_map = state.map;
 
    if (cs_prog_data->push.cross_thread.size > 0) {
-      assert(cs_prog_data->thread_local_id_index < 0 ||
-             cs_prog_data->thread_local_id_index >=
-                cs_prog_data->push.cross_thread.dwords);
       for (unsigned i = 0;
            i < cs_prog_data->push.cross_thread.dwords;
            i++) {
-         uint32_t offset = (uintptr_t)prog_data->param[i];
-         u32_map[i] = *(uint32_t *)((uint8_t *)data + offset);
+         assert(prog_data->param[i] != BRW_PARAM_BUILTIN_THREAD_LOCAL_ID);
+         u32_map[i] = anv_push_constant_value(data, prog_data->param[i]);
       }
    }
 
@@ -704,11 +722,11 @@ anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer)
                  cs_prog_data->push.cross_thread.regs);
          unsigned src = cs_prog_data->push.cross_thread.dwords;
          for ( ; src < prog_data->nr_params; src++, dst++) {
-            if (src != cs_prog_data->thread_local_id_index) {
-               uint32_t offset = (uintptr_t)prog_data->param[src];
-               u32_map[dst] = *(uint32_t *)((uint8_t *)data + offset);
-            } else {
+            if (prog_data->param[src] == BRW_PARAM_BUILTIN_THREAD_LOCAL_ID) {
                u32_map[dst] = t * cs_prog_data->simd_size;
+            } else {
+               u32_map[dst] =
+                  anv_push_constant_value(data, prog_data->param[src]);
             }
          }
       }
@@ -832,6 +850,26 @@ anv_cmd_buffer_get_depth_stencil_view(const struct anv_cmd_buffer *cmd_buffer)
    return iview;
 }
 
+static VkResult
+anv_cmd_buffer_ensure_push_descriptor_set(struct anv_cmd_buffer *cmd_buffer,
+                                          uint32_t set)
+{
+   struct anv_push_descriptor_set **push_set =
+      &cmd_buffer->state.push_descriptors[set];
+
+   if (*push_set == NULL) {
+      *push_set = vk_alloc(&cmd_buffer->pool->alloc,
+                           sizeof(struct anv_push_descriptor_set), 8,
+                           VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+      if (*push_set == NULL) {
+         anv_batch_set_error(&cmd_buffer->batch, VK_ERROR_OUT_OF_HOST_MEMORY);
+         return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+      }
+   }
+
+   return VK_SUCCESS;
+}
+
 void anv_CmdPushDescriptorSetKHR(
     VkCommandBuffer commandBuffer,
     VkPipelineBindPoint pipelineBindPoint,
@@ -849,12 +887,17 @@ void anv_CmdPushDescriptorSetKHR(
 
    const struct anv_descriptor_set_layout *set_layout =
       layout->set[_set].layout;
-   struct anv_descriptor_set *set = &cmd_buffer->state.push_descriptor.set;
+
+   if (anv_cmd_buffer_ensure_push_descriptor_set(cmd_buffer, _set) != VK_SUCCESS)
+      return;
+   struct anv_push_descriptor_set *push_set =
+      cmd_buffer->state.push_descriptors[_set];
+   struct anv_descriptor_set *set = &push_set->set;
 
    set->layout = set_layout;
    set->size = anv_descriptor_set_layout_size(set_layout);
    set->buffer_count = set_layout->buffer_count;
-   set->buffer_views = cmd_buffer->state.push_descriptor.buffer_views;
+   set->buffer_views = push_set->buffer_views;
 
    /* Go through the user supplied descriptors. */
    for (uint32_t i = 0; i < descriptorWriteCount; i++) {
@@ -935,12 +978,17 @@ void anv_CmdPushDescriptorSetWithTemplateKHR(
 
    const struct anv_descriptor_set_layout *set_layout =
       layout->set[_set].layout;
-   struct anv_descriptor_set *set = &cmd_buffer->state.push_descriptor.set;
+
+   if (anv_cmd_buffer_ensure_push_descriptor_set(cmd_buffer, _set) != VK_SUCCESS)
+      return;
+   struct anv_push_descriptor_set *push_set =
+      cmd_buffer->state.push_descriptors[_set];
+   struct anv_descriptor_set *set = &push_set->set;
 
    set->layout = set_layout;
    set->size = anv_descriptor_set_layout_size(set_layout);
    set->buffer_count = set_layout->buffer_count;
-   set->buffer_views = cmd_buffer->state.push_descriptor.buffer_views;
+   set->buffer_views = push_set->buffer_views;
 
    anv_descriptor_set_write_template(set,
                                      cmd_buffer->device,

@@ -61,15 +61,17 @@ __sync_sub_and_fetch_8(uint64_t *ptr, uint64_t val)
 }
 
 WEAK uint64_t
-__atomic_fetch_add_8(uint64_t *ptr, uint64_t val, int memorder)
+__sync_val_compare_and_swap_8(uint64_t *ptr, uint64_t oldval, uint64_t newval)
 {
-   return __sync_add_and_fetch(ptr, val);
-}
+   uint64_t r;
 
-WEAK uint64_t
-__atomic_fetch_sub_8(uint64_t *ptr, uint64_t val, int memorder)
-{
-   return __sync_sub_and_fetch(ptr, val);
+   pthread_mutex_lock(&sync_mutex);
+   r = *ptr;
+   if (*ptr == oldval)
+      *ptr = newval;
+   pthread_mutex_unlock(&sync_mutex);
+
+   return r;
 }
 
 #endif

@@ -16,18 +16,13 @@ libradeon_la_SOURCES = \
 if HAVE_GALLIUM_LLVM
 
 AM_CFLAGS += \
-	$(LLVM_CFLAGS) \
-	$(LIBELF_CFLAGS)
+	$(LLVM_CFLAGS)
 
 libradeon_la_LIBADD = \
 	$(CLOCK_LIB) \
-	$(LLVM_LIBS) \
-	$(LIBELF_LIBS)
+	$(LLVM_LIBS)
 
 libradeon_la_LDFLAGS = \
 	$(LLVM_LDFLAGS)
 
 endif
-
-EXTRA_DIST = \
-	LLVM_REVISION.txt

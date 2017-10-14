@@ -54,9 +54,9 @@ glsl_compute_version_string(void *mem_ctx, bool is_es, unsigned version)
 
 
 static const unsigned known_desktop_glsl_versions[] =
-   { 110, 120, 130, 140, 150, 330, 400, 410, 420, 430, 440, 450 };
+   { 110, 120, 130, 140, 150, 330, 400, 410, 420, 430, 440, 450, 460 };
 static const unsigned known_desktop_gl_versions[] =
-   {  20,  21,  30,  31,  32,  33,  40,  41,  42,  43,  44,  45 };
+   {  20,  21,  30,  31,  32,  33,  40,  41,  42,  43,  44,  45, 46 };
 
 
 _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
@@ -305,8 +305,16 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
           sizeof(this->atomic_counter_offsets));
    this->allow_extension_directive_midshader =
       ctx->Const.AllowGLSLExtensionDirectiveMidShader;
+   this->allow_builtin_variable_redeclaration =
+      ctx->Const.AllowGLSLBuiltinVariableRedeclaration;
 
    this->cs_input_local_size_variable_specified = false;
+
+   /* ARB_bindless_texture */
+   this->bindless_sampler_specified = false;
+   this->bindless_image_specified = false;
+   this->bound_sampler_specified = false;
+   this->bound_image_specified = false;
 }
 
 /**
@@ -607,6 +615,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_ES3_1_compatibility),
    EXT(ARB_ES3_2_compatibility),
    EXT(ARB_arrays_of_arrays),
+   EXT(ARB_bindless_texture),
    EXT(ARB_compute_shader),
    EXT(ARB_compute_variable_group_size),
    EXT(ARB_conservative_depth),
@@ -1070,7 +1079,7 @@ _mesa_ast_process_interface_block(YYLTYPE *locp,
    }
 }
 
-void
+static void
 _mesa_ast_type_qualifier_print(const struct ast_type_qualifier *q)
 {
    if (q->is_subroutine_decl())
@@ -1667,20 +1676,19 @@ ast_struct_specifier::ast_struct_specifier(void *lin_ctx, const char *identifier
 					   ast_declarator_list *declarator_list)
 {
    if (identifier == NULL) {
-      static mtx_t mutex = _MTX_INITIALIZER_NP;
-      static unsigned anon_count = 1;
-      unsigned count;
-
-      mtx_lock(&mutex);
-      count = anon_count++;
-      mtx_unlock(&mutex);
-
-      identifier = linear_asprintf(lin_ctx, "#anon_struct_%04x", count);
+      /* All anonymous structs have the same name. This simplifies matching of
+       * globals whose type is an unnamed struct.
+       *
+       * It also avoids a memory leak when the same shader is compiled over and
+       * over again.
+       */
+      identifier = "#anon_struct";
    }
    name = identifier;
    this->declarations.push_degenerate_list_at_head(&declarator_list->link);
    is_declaration = true;
    layout = NULL;
+   type = NULL;
 }
 
 void ast_subroutine_list::print(void) const
@@ -1848,13 +1856,17 @@ set_shader_inout_layout(struct gl_shader *shader,
       /* Nothing to do. */
       break;
    }
+
+   shader->bindless_sampler = state->bindless_sampler_specified;
+   shader->bindless_image = state->bindless_image_specified;
+   shader->bound_sampler = state->bound_sampler_specified;
+   shader->bound_image = state->bound_image_specified;
 }
 
 extern "C" {
 
 static void
-assign_subroutine_indexes(struct gl_shader *sh,
-			  struct _mesa_glsl_parse_state *state)
+assign_subroutine_indexes(struct _mesa_glsl_parse_state *state)
 {
    int j, k;
    int index = 0;
@@ -2092,7 +2104,7 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
    shader->IsES = state->es_shader;
 
    if (!state->error && !shader->ir->is_empty()) {
-      assign_subroutine_indexes(shader, state);
+      assign_subroutine_indexes(state);
       lower_subroutine(shader->ir, state);
 
       if (!ctx->Cache || force_recompile)
@@ -2204,8 +2216,13 @@ do_common_optimization(exec_list *ir, bool linked,
    if (options->MaxUnrollIterations) {
       loop_state *ls = analyze_loop_variables(ir);
       if (ls->loop_found) {
-         OPT(set_loop_controls, ir, ls);
-         OPT(unroll_loops, ir, ls, options);
+         bool loop_progress = unroll_loops(ir, ls, options);
+         while (loop_progress) {
+            loop_progress = false;
+            loop_progress |= do_constant_propagation(ir);
+            loop_progress |= do_if_simplification(ir);
+         }
+         progress |= loop_progress;
       }
       delete ls;
    }

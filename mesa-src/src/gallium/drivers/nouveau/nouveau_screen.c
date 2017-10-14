@@ -158,7 +158,7 @@ nouveau_disk_cache_create(struct nouveau_screen *screen)
       if (res != -1) {
          screen->disk_shader_cache =
             disk_cache_create(nouveau_screen_get_name(&screen->base),
-                              timestamp_str);
+                              timestamp_str, 0);
          free(timestamp_str);
       }
    }
@@ -241,8 +241,6 @@ nouveau_screen_init(struct nouveau_screen *screen, struct nouveau_device *dev)
    pscreen->fence_finish = nouveau_screen_fence_finish;
 
    nouveau_disk_cache_create(screen);
-
-   util_format_s3tc_init();
 
    screen->lowmem_bindings = PIPE_BIND_GLOBAL; /* gallium limit */
    screen->vidmem_bindings =

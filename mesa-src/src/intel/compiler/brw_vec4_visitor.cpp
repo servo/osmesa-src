@@ -1245,7 +1245,7 @@ vec4_visitor::emit_psiz_and_flags(dst_reg reg)
       emit(MOV(retype(reg, BRW_REGISTER_TYPE_UD), brw_imm_ud(0u)));
    } else {
       emit(MOV(retype(reg, BRW_REGISTER_TYPE_D), brw_imm_d(0)));
-      if (prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) {
+      if (output_reg[VARYING_SLOT_PSIZ][0].file != BAD_FILE) {
          dst_reg reg_w = reg;
          reg_w.writemask = WRITEMASK_W;
          src_reg reg_as_src = src_reg(output_reg[VARYING_SLOT_PSIZ][0]);
@@ -1253,14 +1253,14 @@ vec4_visitor::emit_psiz_and_flags(dst_reg reg)
          reg_as_src.swizzle = brw_swizzle_for_size(1);
          emit(MOV(reg_w, reg_as_src));
       }
-      if (prog_data->vue_map.slots_valid & VARYING_BIT_LAYER) {
+      if (output_reg[VARYING_SLOT_LAYER][0].file != BAD_FILE) {
          dst_reg reg_y = reg;
          reg_y.writemask = WRITEMASK_Y;
          reg_y.type = BRW_REGISTER_TYPE_D;
          output_reg[VARYING_SLOT_LAYER][0].type = reg_y.type;
          emit(MOV(reg_y, src_reg(output_reg[VARYING_SLOT_LAYER][0])));
       }
-      if (prog_data->vue_map.slots_valid & VARYING_BIT_VIEWPORT) {
+      if (output_reg[VARYING_SLOT_VIEWPORT][0].file != BAD_FILE) {
          dst_reg reg_z = reg;
          reg_z.writemask = WRITEMASK_Z;
          reg_z.type = BRW_REGISTER_TYPE_D;
@@ -1315,7 +1315,7 @@ vec4_visitor::emit_urb_slot(dst_reg reg, int varying)
       if (output_reg[VARYING_SLOT_POS][0].file != BAD_FILE)
          emit(MOV(reg, src_reg(output_reg[VARYING_SLOT_POS][0])));
       break;
-   case VARYING_SLOT_EDGE:
+   case VARYING_SLOT_EDGE: {
       /* This is present when doing unfilled polygons.  We're supposed to copy
        * the edge flag from the user-provided vertex array
        * (glEdgeFlagPointer), or otherwise we'll copy from the current value
@@ -1323,9 +1323,12 @@ vec4_visitor::emit_urb_slot(dst_reg reg, int varying)
        * determine which edges should be drawn as wireframe.
        */
       current_annotation = "edge flag";
-      emit(MOV(reg, src_reg(dst_reg(ATTR, VERT_ATTRIB_EDGEFLAG,
+      int edge_attr = _mesa_bitcount_64(nir->info.inputs_read &
+                                        BITFIELD64_MASK(VERT_ATTRIB_EDGEFLAG));
+      emit(MOV(reg, src_reg(dst_reg(ATTR, edge_attr,
                                     glsl_type::float_type, WRITEMASK_XYZW))));
       break;
+   }
    case BRW_VARYING_SLOT_PAD:
       /* No need to write to this slot */
       break;
@@ -1774,10 +1777,15 @@ vec4_visitor::move_uniform_array_access_to_pull_constants()
    /* The vulkan dirver doesn't support pull constants other than UBOs so
     * everything has to be pushed regardless.
     */
-   if (stage_prog_data->pull_param == NULL) {
+   if (!compiler->supports_pull_constants) {
       split_uniform_registers();
       return;
    }
+
+   /* Allocate the pull_params array */
+   assert(stage_prog_data->nr_pull_params == 0);
+   stage_prog_data->pull_param = ralloc_array(mem_ctx, uint32_t,
+                                              this->uniforms * 4);
 
    int pull_constant_loc[this->uniforms];
    memset(pull_constant_loc, -1, sizeof(pull_constant_loc));

@@ -49,6 +49,7 @@
 #include "main/syncobj.h"
 #include "main/barrier.h"
 #include "main/transformfeedback.h"
+#include "main/externalobjects.h"
 
 #include "program/program.h"
 #include "tnl/tnl.h"
@@ -166,6 +167,9 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
 
    _mesa_init_sync_object_functions(driver);
 
+   /* memory objects */
+   _mesa_init_memory_object_functions(driver);
+
    driver->NewFramebuffer = _mesa_new_framebuffer;
    driver->NewRenderbuffer = _swrast_new_soft_renderbuffer;
    driver->MapRenderbuffer = _swrast_map_soft_renderbuffer;
@@ -250,7 +254,7 @@ _mesa_init_driver_state(struct gl_context *ctx)
    ctx->Driver.Enable(ctx, GL_LINE_SMOOTH, ctx->Line.SmoothFlag);
    ctx->Driver.Enable(ctx, GL_POLYGON_STIPPLE, ctx->Polygon.StippleFlag);
    ctx->Driver.Enable(ctx, GL_SCISSOR_TEST, ctx->Scissor.EnableFlags);
-   ctx->Driver.Enable(ctx, GL_STENCIL_TEST, ctx->Stencil._Enabled);
+   ctx->Driver.Enable(ctx, GL_STENCIL_TEST, ctx->Stencil.Enabled);
    ctx->Driver.Enable(ctx, GL_TEXTURE_1D, GL_FALSE);
    ctx->Driver.Enable(ctx, GL_TEXTURE_2D, GL_FALSE);
    ctx->Driver.Enable(ctx, GL_TEXTURE_RECTANGLE_NV, GL_FALSE);

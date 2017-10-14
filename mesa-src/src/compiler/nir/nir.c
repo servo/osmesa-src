@@ -44,7 +44,8 @@ nir_shader_create(void *mem_ctx,
 
    shader->options = options;
 
-   shader->info = si ? si : rzalloc(shader, shader_info);
+   if (si)
+      shader->info = *si;
 
    exec_list_make_empty(&shader->functions);
    exec_list_make_empty(&shader->registers);
@@ -1508,6 +1509,19 @@ nir_instr_rewrite_dest(nir_instr *instr, nir_dest *dest, nir_dest new_dest)
       src_add_all_uses(dest->reg.indirect, instr, NULL);
 }
 
+void
+nir_instr_rewrite_deref(nir_instr *instr, nir_deref_var **deref,
+                        nir_deref_var *new_deref)
+{
+   if (*deref)
+      visit_deref_src(*deref, remove_use_cb, NULL);
+
+   *deref = new_deref;
+
+   if (*deref)
+      visit_deref_src(*deref, add_use_cb, instr);
+}
+
 /* note: does *not* take ownership of 'name' */
 void
 nir_ssa_def_init(nir_instr *instr, nir_ssa_def *def,
@@ -1877,6 +1891,8 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_base_vertex;
    case SYSTEM_VALUE_INVOCATION_ID:
       return nir_intrinsic_load_invocation_id;
+   case SYSTEM_VALUE_FRAG_COORD:
+      return nir_intrinsic_load_frag_coord;
    case SYSTEM_VALUE_FRONT_FACE:
       return nir_intrinsic_load_front_face;
    case SYSTEM_VALUE_SAMPLE_ID:
@@ -1905,6 +1921,22 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_patch_vertices_in;
    case SYSTEM_VALUE_HELPER_INVOCATION:
       return nir_intrinsic_load_helper_invocation;
+   case SYSTEM_VALUE_VIEW_INDEX:
+      return nir_intrinsic_load_view_index;
+   case SYSTEM_VALUE_SUBGROUP_SIZE:
+      return nir_intrinsic_load_subgroup_size;
+   case SYSTEM_VALUE_SUBGROUP_INVOCATION:
+      return nir_intrinsic_load_subgroup_invocation;
+   case SYSTEM_VALUE_SUBGROUP_EQ_MASK:
+      return nir_intrinsic_load_subgroup_eq_mask;
+   case SYSTEM_VALUE_SUBGROUP_GE_MASK:
+      return nir_intrinsic_load_subgroup_ge_mask;
+   case SYSTEM_VALUE_SUBGROUP_GT_MASK:
+      return nir_intrinsic_load_subgroup_gt_mask;
+   case SYSTEM_VALUE_SUBGROUP_LE_MASK:
+      return nir_intrinsic_load_subgroup_le_mask;
+   case SYSTEM_VALUE_SUBGROUP_LT_MASK:
+      return nir_intrinsic_load_subgroup_lt_mask;
    default:
       unreachable("system value does not directly correspond to intrinsic");
    }
@@ -1928,6 +1960,8 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_BASE_VERTEX;
    case nir_intrinsic_load_invocation_id:
       return SYSTEM_VALUE_INVOCATION_ID;
+   case nir_intrinsic_load_frag_coord:
+      return SYSTEM_VALUE_FRAG_COORD;
    case nir_intrinsic_load_front_face:
       return SYSTEM_VALUE_FRONT_FACE;
    case nir_intrinsic_load_sample_id:
@@ -1956,6 +1990,22 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_VERTICES_IN;
    case nir_intrinsic_load_helper_invocation:
       return SYSTEM_VALUE_HELPER_INVOCATION;
+   case nir_intrinsic_load_view_index:
+      return SYSTEM_VALUE_VIEW_INDEX;
+   case nir_intrinsic_load_subgroup_size:
+      return SYSTEM_VALUE_SUBGROUP_SIZE;
+   case nir_intrinsic_load_subgroup_invocation:
+      return SYSTEM_VALUE_SUBGROUP_INVOCATION;
+   case nir_intrinsic_load_subgroup_eq_mask:
+      return SYSTEM_VALUE_SUBGROUP_EQ_MASK;
+   case nir_intrinsic_load_subgroup_ge_mask:
+      return SYSTEM_VALUE_SUBGROUP_GE_MASK;
+   case nir_intrinsic_load_subgroup_gt_mask:
+      return SYSTEM_VALUE_SUBGROUP_GT_MASK;
+   case nir_intrinsic_load_subgroup_le_mask:
+      return SYSTEM_VALUE_SUBGROUP_LE_MASK;
+   case nir_intrinsic_load_subgroup_lt_mask:
+      return SYSTEM_VALUE_SUBGROUP_LT_MASK;
    default:
       unreachable("intrinsic doesn't produce a system value");
    }

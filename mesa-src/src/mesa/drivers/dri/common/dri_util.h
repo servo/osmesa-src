@@ -56,7 +56,7 @@
 #include <GL/gl.h>
 #include <GL/internal/dri_interface.h>
 #include "main/mtypes.h"
-#include "xmlconfig.h"
+#include "util/xmlconfig.h"
 #include <stdbool.h>
 
 /**
@@ -292,5 +292,7 @@ extern void
 driContextSetFlags(struct gl_context *ctx, uint32_t flags);
 
 extern const __DRIimageDriverExtension driImageDriverExtension;
+
+extern const __DRInoErrorExtension dri2NoErrorExtension;
 
 #endif /* _DRI_UTIL_H_ */

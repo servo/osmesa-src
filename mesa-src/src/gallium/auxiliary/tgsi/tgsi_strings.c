@@ -57,6 +57,7 @@ static const char *tgsi_file_names[] =
    "SVIEW",
    "BUFFER",
    "MEMORY",
+   "CONSTBUF",
 };
 
 const char *tgsi_semantic_names[TGSI_SEMANTIC_COUNT] =
@@ -151,6 +152,7 @@ const char *tgsi_property_names[TGSI_PROPERTY_COUNT] =
    "NUM_CLIPDIST_ENABLED",
    "NUM_CULLDIST_ENABLED",
    "FS_EARLY_DEPTH_STENCIL",
+   "FS_POST_DEPTH_COVERAGE",
    "NEXT_SHADER",
    "CS_FIXED_BLOCK_WIDTH",
    "CS_FIXED_BLOCK_HEIGHT",

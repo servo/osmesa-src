@@ -727,7 +727,9 @@ ConstantFolding::expr(Instruction *i,
       // Leave PFETCH alone... we just folded its 2 args into 1.
       break;
    default:
-      i->op = i->saturate ? OP_SAT : OP_MOV; /* SAT handled by unary() */
+      i->op = i->saturate ? OP_SAT : OP_MOV;
+      if (i->saturate)
+         unary(i, *i->getSrc(0)->asImm());
       break;
    }
    i->subOp = 0;
@@ -938,8 +940,9 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       bld.setPosition(i, false);
 
       uint8_t size = i->getDef(0)->reg.size;
-      uint32_t mask = (1ULL << size) - 1;
-      assert(size <= 32);
+      uint8_t bitsize = size * 8;
+      uint32_t mask = (1ULL << bitsize) - 1;
+      assert(bitsize <= 32);
 
       uint64_t val = imm0.reg.data.u64;
       for (int8_t d = 0; i->defExists(d); ++d) {
@@ -947,7 +950,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          assert(def->reg.size == size);
 
          newi = bld.mkMov(def, bld.mkImm((uint32_t)(val & mask)), TYPE_U32);
-         val >>= size;
+         val >>= bitsize;
       }
       delete_Instruction(prog, i);
       break;
@@ -1508,6 +1511,17 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
    default:
       return;
    }
+
+   // This can get left behind some of the optimizations which simplify
+   // saturatable values.
+   if (newi->op == OP_MOV && newi->saturate) {
+      ImmediateValue tmp;
+      newi->saturate = 0;
+      newi->op = OP_SAT;
+      if (newi->src(0).getImmediate(tmp))
+         unary(newi, tmp);
+   }
+
    if (newi->op != op)
       foldCount++;
 }
@@ -1676,7 +1690,8 @@ AlgebraicOpt::handleADD(Instruction *add)
       return false;
 
    bool changed = false;
-   if (!changed && prog->getTarget()->isOpSupported(OP_MAD, add->dType))
+   // we can't optimize to MAD if the add is precise
+   if (!add->precise && prog->getTarget()->isOpSupported(OP_MAD, add->dType))
       changed = tryADDToMADOrSAD(add, OP_MAD);
    if (!changed && prog->getTarget()->isOpSupported(OP_SAD, add->dType))
       changed = tryADDToMADOrSAD(add, OP_SAD);
@@ -1712,7 +1727,7 @@ AlgebraicOpt::tryADDToMADOrSAD(Instruction *add, operation toOp)
       return false;
 
    if (src->getInsn()->saturate || src->getInsn()->postFactor ||
-       src->getInsn()->dnz)
+       src->getInsn()->dnz || src->getInsn()->precise)
       return false;
 
    if (toOp == OP_SAD) {
@@ -2485,6 +2500,10 @@ MemoryOpt::combineLd(Record *rec, Instruction *ld)
 
    assert(sizeRc + sizeLd <= 16 && offRc != offLd);
 
+   // lock any stores that overlap with the load being merged into the
+   // existing record.
+   lockStores(ld);
+
    for (j = 0; sizeRc; sizeRc -= rec->insn->getDef(j)->reg.size, ++j);
 
    if (offLd < offRc) {
@@ -2540,6 +2559,10 @@ MemoryOpt::combineSt(Record *rec, Instruction *st)
    // for compute indirect stores are not guaranteed to be aligned
    if (prog->getType() == Program::TYPE_COMPUTE && rec->rel[0])
       return false;
+
+   // remove any existing load/store records for the store being merged into
+   // the existing record.
+   purgeRecords(st, DATA_FILE_COUNT);
 
    st->takeExtraSources(0, extra); // save predicate and indirect address
 
@@ -2640,7 +2663,7 @@ MemoryOpt::findRecord(const Instruction *insn, bool load, bool& isAdj) const
    Record *it = load ? loads[sym->reg.file] : stores[sym->reg.file];
 
    for (; it; it = it->next) {
-      if (it->locked && insn->op != OP_LOAD)
+      if (it->locked && insn->op != OP_LOAD && insn->op != OP_VFETCH)
          continue;
       if ((it->offset >> 4) != (sym->reg.data.offset >> 4) ||
           it->rel[0] != insn->getIndirect(0, 0) ||
@@ -2778,11 +2801,15 @@ MemoryOpt::Record::overlaps(const Instruction *ldst) const
    Record that;
    that.set(ldst);
 
-   if (this->fileIndex != that.fileIndex)
+   // This assumes that images/buffers can't overlap. They can.
+   // TODO: Plumb the restrict logic through, and only skip when it's a
+   // restrict situation, or there can implicitly be no writes.
+   if (this->fileIndex != that.fileIndex && this->rel[1] == that.rel[1])
       return false;
 
    if (this->rel[0] || that.rel[0])
       return this->base == that.base;
+
    return
       (this->offset < that.offset + that.size) &&
       (this->offset + this->size > that.offset);

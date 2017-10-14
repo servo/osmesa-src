@@ -29,6 +29,7 @@
 
 #include "hw/common.xml.h"
 
+#include "etnaviv_blend.h"
 #include "etnaviv_clear_blit.h"
 #include "etnaviv_context.h"
 #include "etnaviv_format.h"
@@ -40,20 +41,6 @@
 #include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-
-static void
-etna_set_blend_color(struct pipe_context *pctx, const struct pipe_blend_color *bc)
-{
-   struct etna_context *ctx = etna_context(pctx);
-   struct compiled_blend_color *cs = &ctx->blend_color;
-
-   cs->PE_ALPHA_BLEND_COLOR =
-      VIVS_PE_ALPHA_BLEND_COLOR_R(etna_cfloat_to_uint8(bc->color[0])) |
-      VIVS_PE_ALPHA_BLEND_COLOR_G(etna_cfloat_to_uint8(bc->color[1])) |
-      VIVS_PE_ALPHA_BLEND_COLOR_B(etna_cfloat_to_uint8(bc->color[2])) |
-      VIVS_PE_ALPHA_BLEND_COLOR_A(etna_cfloat_to_uint8(bc->color[3]));
-   ctx->dirty |= ETNA_DIRTY_BLEND_COLOR;
-}
 
 static void
 etna_set_stencil_ref(struct pipe_context *pctx, const struct pipe_stencil_ref *sr)
@@ -428,11 +415,11 @@ etna_set_vertex_buffers(struct pipe_context *pctx, unsigned start_slot,
       struct compiled_set_vertex_buffer *cs = &so->cvb[idx];
       struct pipe_vertex_buffer *vbi = &so->vb[idx];
 
-      assert(!vbi->user_buffer); /* XXX support user_buffer using
-                                    etna_usermem_map */
+      assert(!vbi->is_user_buffer); /* XXX support user_buffer using
+                                       etna_usermem_map */
 
-      if (vbi->buffer) { /* GPU buffer */
-         cs->FE_VERTEX_STREAM_BASE_ADDR.bo = etna_resource(vbi->buffer)->bo;
+      if (vbi->buffer.resource) { /* GPU buffer */
+         cs->FE_VERTEX_STREAM_BASE_ADDR.bo = etna_resource(vbi->buffer.resource)->bo;
          cs->FE_VERTEX_STREAM_BASE_ADDR.offset = vbi->buffer_offset;
          cs->FE_VERTEX_STREAM_BASE_ADDR.flags = ETNA_RELOC_READ;
          cs->FE_VERTEX_STREAM_CONTROL =
@@ -444,34 +431,6 @@ etna_set_vertex_buffers(struct pipe_context *pctx, unsigned start_slot,
    }
 
    ctx->dirty |= ETNA_DIRTY_VERTEX_BUFFERS;
-}
-
-static void
-etna_set_index_buffer(struct pipe_context *pctx, const struct pipe_index_buffer *ib)
-{
-   struct etna_context *ctx = etna_context(pctx);
-   uint32_t ctrl;
-
-   if (ib) {
-      pipe_resource_reference(&ctx->index_buffer.ib.buffer, ib->buffer);
-      memcpy(&ctx->index_buffer.ib, ib, sizeof(ctx->index_buffer.ib));
-      ctrl = translate_index_size(ctx->index_buffer.ib.index_size);
-   } else {
-      pipe_resource_reference(&ctx->index_buffer.ib.buffer, NULL);
-      ctrl = 0;
-   }
-
-   if (ctx->index_buffer.ib.buffer && ctrl != ETNA_NO_MATCH) {
-      ctx->index_buffer.FE_INDEX_STREAM_BASE_ADDR.bo = etna_resource(ctx->index_buffer.ib.buffer)->bo;
-      ctx->index_buffer.FE_INDEX_STREAM_BASE_ADDR.offset = ctx->index_buffer.ib.offset;
-      ctx->index_buffer.FE_INDEX_STREAM_BASE_ADDR.flags = ETNA_RELOC_READ;
-      ctx->index_buffer.FE_INDEX_STREAM_CONTROL = ctrl;
-   } else {
-      ctx->index_buffer.FE_INDEX_STREAM_BASE_ADDR.bo = NULL;
-      ctx->index_buffer.FE_INDEX_STREAM_CONTROL = 0;
-   }
-
-   ctx->dirty |= ETNA_DIRTY_INDEX_BUFFER;
 }
 
 static void
@@ -624,6 +583,12 @@ static const struct etna_state_updater etna_state_updates[] = {
    },
    {
       etna_shader_link, ETNA_DIRTY_SHADER,
+   },
+   {
+      etna_update_blend, ETNA_DIRTY_BLEND | ETNA_DIRTY_FRAMEBUFFER
+   },
+   {
+      etna_update_blend_color, ETNA_DIRTY_BLEND_COLOR | ETNA_DIRTY_FRAMEBUFFER,
    }
 };
 
@@ -652,7 +617,6 @@ etna_state_init(struct pipe_context *pctx)
    pctx->set_viewport_states = etna_set_viewport_states;
 
    pctx->set_vertex_buffers = etna_set_vertex_buffers;
-   pctx->set_index_buffer = etna_set_index_buffer;
 
    pctx->bind_blend_state = etna_blend_state_bind;
    pctx->delete_blend_state = etna_blend_state_delete;

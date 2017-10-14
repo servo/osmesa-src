@@ -33,46 +33,6 @@ vec4_vs_visitor::emit_prolog()
 }
 
 
-dst_reg *
-vec4_vs_visitor::make_reg_for_system_value(int location)
-{
-   /* VertexID is stored by the VF as the last vertex element, but
-    * we don't represent it with a flag in inputs_read, so we call
-    * it VERT_ATTRIB_MAX, which setup_attributes() picks up on.
-    */
-   dst_reg *reg = new(mem_ctx) dst_reg(ATTR, VERT_ATTRIB_MAX);
-
-   switch (location) {
-   case SYSTEM_VALUE_BASE_VERTEX:
-      reg->writemask = WRITEMASK_X;
-      vs_prog_data->uses_basevertex = true;
-      break;
-   case SYSTEM_VALUE_BASE_INSTANCE:
-      reg->writemask = WRITEMASK_Y;
-      vs_prog_data->uses_baseinstance = true;
-      break;
-   case SYSTEM_VALUE_VERTEX_ID:
-   case SYSTEM_VALUE_VERTEX_ID_ZERO_BASE:
-      reg->writemask = WRITEMASK_Z;
-      vs_prog_data->uses_vertexid = true;
-      break;
-   case SYSTEM_VALUE_INSTANCE_ID:
-      reg->writemask = WRITEMASK_W;
-      vs_prog_data->uses_instanceid = true;
-      break;
-   case SYSTEM_VALUE_DRAW_ID:
-      reg = new(mem_ctx) dst_reg(ATTR, VERT_ATTRIB_MAX + 1);
-      reg->writemask = WRITEMASK_X;
-      vs_prog_data->uses_drawid = true;
-      break;
-   default:
-      unreachable("not reached");
-   }
-
-   return reg;
-}
-
-
 void
 vec4_vs_visitor::emit_urb_write_header(int mrf)
 {
@@ -159,12 +119,19 @@ vec4_vs_visitor::emit_clip_distances(dst_reg reg, int offset)
 void
 vec4_vs_visitor::setup_uniform_clipplane_values()
 {
+   if (key->nr_userclip_plane_consts == 0)
+      return;
+
+   assert(stage_prog_data->nr_params == (unsigned)this->uniforms * 4);
+   brw_stage_prog_data_add_params(stage_prog_data,
+                                  key->nr_userclip_plane_consts * 4);
+
    for (int i = 0; i < key->nr_userclip_plane_consts; ++i) {
       this->userplane[i] = dst_reg(UNIFORM, this->uniforms);
       this->userplane[i].type = BRW_REGISTER_TYPE_F;
       for (int j = 0; j < 4; ++j) {
          stage_prog_data->param[this->uniforms * 4 + j] =
-            (gl_constant_value *) &clip_planes[i][j];
+            BRW_PARAM_BUILTIN_CLIP_PLANE(i, j);
       }
       ++this->uniforms;
    }
@@ -204,7 +171,6 @@ vec4_vs_visitor::vec4_vs_visitor(const struct brw_compiler *compiler,
                                  const struct brw_vs_prog_key *key,
                                  struct brw_vs_prog_data *vs_prog_data,
                                  const nir_shader *shader,
-                                 gl_clip_plane *clip_planes,
                                  void *mem_ctx,
                                  int shader_time_index,
                                  bool use_legacy_snorm_formula)
@@ -212,7 +178,6 @@ vec4_vs_visitor::vec4_vs_visitor(const struct brw_compiler *compiler,
                   mem_ctx, false /* no_spills */, shader_time_index),
      key(key),
      vs_prog_data(vs_prog_data),
-     clip_planes(clip_planes),
      use_legacy_snorm_formula(use_legacy_snorm_formula)
 {
 }

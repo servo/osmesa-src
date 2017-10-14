@@ -28,6 +28,7 @@
 #include "common/gen_device_info.h"
 #include "main/mtypes.h"
 #include "main/macros.h"
+#include "util/ralloc.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,7 +37,6 @@ extern "C" {
 struct ra_regs;
 struct nir_shader;
 struct brw_program;
-union gl_constant_value;
 
 struct brw_compiler {
    const struct gen_device_info *devinfo;
@@ -100,6 +100,18 @@ struct brw_compiler {
     * This can negatively impact performance.
     */
    bool precise_trig;
+
+   /**
+    * Is 3DSTATE_CONSTANT_*'s Constant Buffer 0 relative to Dynamic State
+    * Base Address?  (If not, it's a normal GPU address.)
+    */
+   bool constant_buffer_0_is_relative;
+
+   /**
+    * Whether or not the driver supports pull constants.  If not, the compiler
+    * will attempt to push everything.
+    */
+   bool supports_pull_constants;
 };
 
 
@@ -168,6 +180,7 @@ struct brw_sampler_prog_key_data {
    uint32_t y_u_v_image_mask;
    uint32_t y_uv_image_mask;
    uint32_t yx_xuxv_image_mask;
+   uint32_t xy_uxvx_image_mask;
 };
 
 /**
@@ -181,6 +194,15 @@ struct brw_sampler_prog_key_data {
 #define BRW_ATTRIB_WA_SIGN          32  /* interpret as signed in shader */
 #define BRW_ATTRIB_WA_SCALE         64  /* interpret as scaled in shader */
 
+/**
+ * OpenGL attribute slots fall in [0, VERT_ATTRIB_MAX - 1] with the range
+ * [VERT_ATTRIB_GENERIC0, VERT_ATTRIB_MAX - 1] reserved for up to 16 user
+ * input vertex attributes. In Vulkan, we expose up to 28 user vertex input
+ * attributes that are mapped to slots also starting at VERT_ATTRIB_GENERIC0.
+ */
+#define MAX_GL_VERT_ATTRIB     VERT_ATTRIB_MAX
+#define MAX_VK_VERT_ATTRIB     (VERT_ATTRIB_GENERIC0 + 28)
+
 /** The program key for Vertex Shaders. */
 struct brw_vs_prog_key {
    unsigned program_string_id;
@@ -189,8 +211,15 @@ struct brw_vs_prog_key {
     * Per-attribute workaround flags
     *
     * For each attribute, a combination of BRW_ATTRIB_WA_*.
+    *
+    * For OpenGL, where we expose a maximum of 16 user input atttributes
+    * we only need up to VERT_ATTRIB_MAX slots, however, in Vulkan
+    * slots preceding VERT_ATTRIB_GENERIC0 are unused and we can
+    * expose up to 28 user input vertex attributes that are mapped to slots
+    * starting at VERT_ATTRIB_GENERIC0, so this array needs to be large
+    * enough to hold this many slots.
     */
-   uint8_t gl_attrib_wa_flags[VERT_ATTRIB_MAX];
+   uint8_t gl_attrib_wa_flags[MAX2(MAX_GL_VERT_ATTRIB, MAX_VK_VERT_ATTRIB)];
 
    bool copy_edgeflag:1;
 
@@ -258,6 +287,68 @@ struct brw_gs_prog_key
    unsigned program_string_id;
 
    struct brw_sampler_prog_key_data tex;
+};
+
+enum brw_sf_primitive {
+   BRW_SF_PRIM_POINTS = 0,
+   BRW_SF_PRIM_LINES = 1,
+   BRW_SF_PRIM_TRIANGLES = 2,
+   BRW_SF_PRIM_UNFILLED_TRIS = 3,
+};
+
+struct brw_sf_prog_key {
+   uint64_t attrs;
+   bool contains_flat_varying;
+   unsigned char interp_mode[65]; /* BRW_VARYING_SLOT_COUNT */
+   uint8_t point_sprite_coord_replace;
+   enum brw_sf_primitive primitive:2;
+   bool do_twoside_color:1;
+   bool frontface_ccw:1;
+   bool do_point_sprite:1;
+   bool do_point_coord:1;
+   bool sprite_origin_lower_left:1;
+   bool userclip_active:1;
+};
+
+enum brw_clip_mode {
+   BRW_CLIP_MODE_NORMAL             = 0,
+   BRW_CLIP_MODE_CLIP_ALL           = 1,
+   BRW_CLIP_MODE_CLIP_NON_REJECTED  = 2,
+   BRW_CLIP_MODE_REJECT_ALL         = 3,
+   BRW_CLIP_MODE_ACCEPT_ALL         = 4,
+   BRW_CLIP_MODE_KERNEL_CLIP        = 5,
+};
+
+enum brw_clip_fill_mode {
+   BRW_CLIP_FILL_MODE_LINE = 0,
+   BRW_CLIP_FILL_MODE_POINT = 1,
+   BRW_CLIP_FILL_MODE_FILL = 2,
+   BRW_CLIP_FILL_MODE_CULL = 3,
+};
+
+/* Note that if unfilled primitives are being emitted, we have to fix
+ * up polygon offset and flatshading at this point:
+ */
+struct brw_clip_prog_key {
+   uint64_t attrs;
+   bool contains_flat_varying;
+   bool contains_noperspective_varying;
+   unsigned char interp_mode[65]; /* BRW_VARYING_SLOT_COUNT */
+   unsigned primitive:4;
+   unsigned nr_userclip:4;
+   bool pv_first:1;
+   bool do_unfilled:1;
+   enum brw_clip_fill_mode fill_cw:2;  /* includes cull information */
+   enum brw_clip_fill_mode fill_ccw:2; /* includes cull information */
+   bool offset_cw:1;
+   bool offset_ccw:1;
+   bool copy_bfc_cw:1;
+   bool copy_bfc_ccw:1;
+   enum brw_clip_mode clip_mode:3;
+
+   float offset_factor;
+   float offset_units;
+   float offset_clamp;
 };
 
 /* A big lookup table is used to figure out which and how many
@@ -399,6 +490,75 @@ struct brw_image_param {
  */
 #define BRW_SHADER_TIME_STRIDE 64
 
+struct brw_ubo_range
+{
+   uint16_t block;
+   uint8_t start;
+   uint8_t length;
+};
+
+/* We reserve the first 2^16 values for builtins */
+#define BRW_PARAM_IS_BUILTIN(param) (((param) & 0xffff0000) == 0)
+
+enum brw_param_builtin {
+   BRW_PARAM_BUILTIN_ZERO,
+
+   BRW_PARAM_BUILTIN_CLIP_PLANE_0_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_0_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_0_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_0_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_1_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_1_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_1_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_1_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_2_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_2_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_2_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_2_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_3_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_3_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_3_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_3_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_4_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_4_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_4_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_4_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_5_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_5_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_5_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_5_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_6_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_6_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_6_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_6_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_7_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_7_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_7_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_7_W,
+
+   BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_X,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_Y,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_Z,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_W,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_X,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_Y,
+
+   BRW_PARAM_BUILTIN_THREAD_LOCAL_ID,
+};
+
+#define BRW_PARAM_BUILTIN_CLIP_PLANE(idx, comp) \
+   (BRW_PARAM_BUILTIN_CLIP_PLANE_0_X + ((idx) << 2) + (comp))
+
+#define BRW_PARAM_BUILTIN_IS_CLIP_PLANE(param)  \
+   ((param) >= BRW_PARAM_BUILTIN_CLIP_PLANE_0_X && \
+    (param) <= BRW_PARAM_BUILTIN_CLIP_PLANE_7_W)
+
+#define BRW_PARAM_BUILTIN_CLIP_PLANE_IDX(param) \
+   (((param) - BRW_PARAM_BUILTIN_CLIP_PLANE_0_X) >> 2)
+
+#define BRW_PARAM_BUILTIN_CLIP_PLANE_COMP(param) \
+   (((param) - BRW_PARAM_BUILTIN_CLIP_PLANE_0_X) & 0x3)
+
 struct brw_stage_prog_data {
    struct {
       /** size of our binding table. */
@@ -419,9 +579,10 @@ struct brw_stage_prog_data {
       /** @} */
    } binding_table;
 
+   struct brw_ubo_range ubo_ranges[4];
+
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
-   unsigned nr_image_params;
 
    unsigned curb_read_length;
    unsigned total_scratch;
@@ -435,15 +596,27 @@ struct brw_stage_prog_data {
 
    bool use_alt_mode; /**< Use ALT floating point mode?  Otherwise, IEEE. */
 
-   /* Pointers to tracked values (only valid once
-    * _mesa_load_state_parameters has been called at runtime).
+   /* 32-bit identifiers for all push/pull parameters.  These can be anything
+    * the driver wishes them to be; the core of the back-end compiler simply
+    * re-arranges them.  The one restriction is that the bottom 2^16 values
+    * are reserved for builtins defined in the brw_param_builtin enum defined
+    * above.
     */
-   const union gl_constant_value **param;
-   const union gl_constant_value **pull_param;
-
-   /** Image metadata passed to the shader as uniforms. */
-   struct brw_image_param *image_param;
+   uint32_t *param;
+   uint32_t *pull_param;
 };
+
+static inline uint32_t *
+brw_stage_prog_data_add_params(struct brw_stage_prog_data *prog_data,
+                               unsigned nr_new_params)
+{
+   unsigned old_nr_params = prog_data->nr_params;
+   prog_data->nr_params += nr_new_params;
+   prog_data->param = reralloc(ralloc_parent(prog_data->param),
+                               prog_data->param, uint32_t,
+                               prog_data->nr_params);
+   return prog_data->param + old_nr_params;
+}
 
 static inline void
 brw_mark_surface_used(struct brw_stage_prog_data *prog_data,
@@ -457,6 +630,27 @@ brw_mark_surface_used(struct brw_stage_prog_data *prog_data,
    prog_data->binding_table.size_bytes =
       MAX2(prog_data->binding_table.size_bytes, (surf_index + 1) * 4);
 }
+
+enum brw_barycentric_mode {
+   BRW_BARYCENTRIC_PERSPECTIVE_PIXEL       = 0,
+   BRW_BARYCENTRIC_PERSPECTIVE_CENTROID    = 1,
+   BRW_BARYCENTRIC_PERSPECTIVE_SAMPLE      = 2,
+   BRW_BARYCENTRIC_NONPERSPECTIVE_PIXEL    = 3,
+   BRW_BARYCENTRIC_NONPERSPECTIVE_CENTROID = 4,
+   BRW_BARYCENTRIC_NONPERSPECTIVE_SAMPLE   = 5,
+   BRW_BARYCENTRIC_MODE_COUNT              = 6
+};
+#define BRW_BARYCENTRIC_NONPERSPECTIVE_BITS \
+   ((1 << BRW_BARYCENTRIC_NONPERSPECTIVE_PIXEL) | \
+    (1 << BRW_BARYCENTRIC_NONPERSPECTIVE_CENTROID) | \
+    (1 << BRW_BARYCENTRIC_NONPERSPECTIVE_SAMPLE))
+
+enum brw_pixel_shader_computed_depth_mode {
+   BRW_PSCDEPTH_OFF   = 0, /* PS does not compute depth */
+   BRW_PSCDEPTH_ON    = 1, /* PS computes depth; no guarantee about value */
+   BRW_PSCDEPTH_ON_GE = 2, /* PS guarantees output depth >= source depth */
+   BRW_PSCDEPTH_ON_LE = 3, /* PS guarantees output depth <= source depth */
+};
 
 /* Data about a particular attempt to compile a program.  Note that
  * there can be many of these, each in a different GL state
@@ -499,6 +693,7 @@ struct brw_wm_prog_data {
    bool uses_src_depth;
    bool uses_src_w;
    bool uses_sample_mask;
+   bool has_render_target_reads;
    bool has_side_effects;
    bool pulls_bary;
 
@@ -545,7 +740,6 @@ struct brw_cs_prog_data {
    unsigned threads;
    bool uses_barrier;
    bool uses_num_work_groups;
-   int thread_local_id_index;
 
    struct {
       struct brw_push_const_block cross_thread;
@@ -850,6 +1044,26 @@ struct brw_gs_prog_data
    unsigned char transform_feedback_swizzles[64 /* BRW_MAX_SOL_BINDINGS */];
 };
 
+struct brw_sf_prog_data {
+   uint32_t urb_read_length;
+   uint32_t total_grf;
+
+   /* Each vertex may have upto 12 attributes, 4 components each,
+    * except WPOS which requires only 2.  (11*4 + 2) == 44 ==> 11
+    * rows.
+    *
+    * Actually we use 4 for each, so call it 12 rows.
+    */
+   unsigned urb_entry_size;
+};
+
+struct brw_clip_prog_data {
+   uint32_t curb_read_length;	/* user planes? */
+   uint32_t clip_mode;
+   uint32_t urb_read_length;
+   uint32_t total_grf;
+};
+
 #define DEFINE_PROG_DATA_DOWNCAST(stage)                       \
 static inline struct brw_##stage##_prog_data *                 \
 brw_##stage##_prog_data(struct brw_stage_prog_data *prog_data) \
@@ -884,7 +1098,6 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
                const struct brw_vs_prog_key *key,
                struct brw_vs_prog_data *prog_data,
                const struct nir_shader *shader,
-               gl_clip_plane *clip_planes,
                bool use_legacy_snorm_formula,
                int shader_time_index,
                unsigned *final_assembly_size,
@@ -938,6 +1151,38 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
                int shader_time_index,
                unsigned *final_assembly_size,
                char **error_str);
+
+/**
+ * Compile a strips and fans shader.
+ *
+ * This is a fixed-function shader determined entirely by the shader key and
+ * a VUE map.
+ *
+ * Returns the final assembly and the program's size.
+ */
+const unsigned *
+brw_compile_sf(const struct brw_compiler *compiler,
+               void *mem_ctx,
+               const struct brw_sf_prog_key *key,
+               struct brw_sf_prog_data *prog_data,
+               struct brw_vue_map *vue_map,
+               unsigned *final_assembly_size);
+
+/**
+ * Compile a clipper shader.
+ *
+ * This is a fixed-function shader determined entirely by the shader key and
+ * a VUE map.
+ *
+ * Returns the final assembly and the program's size.
+ */
+const unsigned *
+brw_compile_clip(const struct brw_compiler *compiler,
+                 void *mem_ctx,
+                 const struct brw_clip_prog_key *key,
+                 struct brw_clip_prog_data *prog_data,
+                 struct brw_vue_map *vue_map,
+                 unsigned *final_assembly_size);
 
 /**
  * Compile a fragment shader.
@@ -1021,7 +1266,7 @@ brw_stage_has_packed_dispatch(const struct gen_device_info *devinfo,
     * to do a full test run with brw_fs_test_dispatch_packing() hooked up to
     * the NIR front-end before changing this assertion.
     */
-   assert(devinfo->gen <= 9);
+   assert(devinfo->gen <= 10);
 
    switch (stage) {
    case MESA_SHADER_FRAGMENT: {
@@ -1052,6 +1297,35 @@ brw_stage_has_packed_dispatch(const struct gen_device_info *devinfo,
        */
       return true;
    }
+}
+
+/**
+ * Computes the first varying slot in the URB produced by the previous stage
+ * that is used in the next stage. We do this by testing the varying slots in
+ * the previous stage's vue map against the inputs read in the next stage.
+ *
+ * Note that:
+ *
+ * - Each URB offset contains two varying slots and we can only skip a
+ *   full offset if both slots are unused, so the value we return here is always
+ *   rounded down to the closest multiple of two.
+ *
+ * - gl_Layer and gl_ViewportIndex don't have their own varying slots, they are
+ *   part of the vue header, so if these are read we can't skip anything.
+ */
+static inline int
+brw_compute_first_urb_slot_required(uint64_t inputs_read,
+                                    const struct brw_vue_map *prev_stage_vue_map)
+{
+   if ((inputs_read & (VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT)) == 0) {
+      for (int i = 0; i < prev_stage_vue_map->num_slots; i++) {
+         int varying = prev_stage_vue_map->slot_to_varying[i];
+         if (varying > 0 && (inputs_read & BITFIELD64_BIT(varying)) != 0)
+            return ROUND_DOWN_TO(i, 2);
+      }
+   }
+
+   return 0;
 }
 
 #ifdef __cplusplus

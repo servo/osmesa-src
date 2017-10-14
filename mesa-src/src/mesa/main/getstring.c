@@ -65,6 +65,8 @@ shading_language_version(struct gl_context *ctx)
          return (const GLubyte *) "4.40";
       case 450:
          return (const GLubyte *) "4.50";
+      case 460:
+         return (const GLubyte *) "4.60";
       default:
          _mesa_problem(ctx,
                        "Invalid GLSL version in shading_language_version()");
@@ -303,6 +305,17 @@ _mesa_GetError( void )
    GET_CURRENT_CONTEXT(ctx);
    GLenum e = ctx->ErrorValue;
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
+
+   /* From Issue (3) of the KHR_no_error spec:
+    *
+    *    "Should glGetError() always return NO_ERROR or have undefined
+    *    results?
+    *
+    *    RESOLVED: It should for all errors except OUT_OF_MEMORY."
+    */
+   if (_mesa_is_no_error_enabled(ctx) && e != GL_OUT_OF_MEMORY) {
+      e = GL_NO_ERROR;
+   }
 
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glGetError <-- %s\n", _mesa_enum_to_string(e));

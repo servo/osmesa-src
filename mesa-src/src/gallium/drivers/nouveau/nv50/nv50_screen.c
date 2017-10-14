@@ -200,6 +200,8 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
    case PIPE_CAP_TGSI_TEX_TXF_LZ:
    case PIPE_CAP_TGSI_CLOCK:
+   case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
+   case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
       return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
       return 1; /* class_3d >= NVA0_3D_CLASS; */
@@ -268,6 +270,14 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
    case PIPE_CAP_TGSI_BALLOT:
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
+   case PIPE_CAP_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_BINDLESS_TEXTURE:
+   case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
+   case PIPE_CAP_QUERY_SO_OVERFLOW:
+   case PIPE_CAP_MEMOBJ:
+   case PIPE_CAP_LOAD_CONSTBUF:
+   case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
+   case PIPE_CAP_TILE_RASTER_ORDER:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -337,9 +347,13 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen,
       return 1;
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
       return 1;
+   case PIPE_SHADER_CAP_INT64_ATOMICS:
+   case PIPE_SHADER_CAP_FP16:
    case PIPE_SHADER_CAP_SUBROUTINES:
       return 0; /* please inline, or provide function declarations */
    case PIPE_SHADER_CAP_INTEGERS:
+      return 1;
+   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       return 1;
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
       /* The chip could handle more sampler views than samplers */
@@ -351,6 +365,7 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen,
       return 32;
    case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+   case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:

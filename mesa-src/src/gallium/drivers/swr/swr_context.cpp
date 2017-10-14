@@ -152,12 +152,12 @@ swr_transfer_map(struct pipe_context *pipe,
          for (int y = box->y; y < box->y + box->height; y++) {
             if (spr->base.format == PIPE_FORMAT_Z24_UNORM_S8_UINT) {
                for (int x = box->x; x < box->x + box->width; x++)
-                  spr->swr.pBaseAddress[zbase + 4 * x + 3] =
-                     spr->secondary.pBaseAddress[sbase + x];
+                  ((uint8_t*)(spr->swr.xpBaseAddress))[zbase + 4 * x + 3] =
+                     ((uint8_t*)(spr->secondary.xpBaseAddress))[sbase + x];
             } else if (spr->base.format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) {
                for (int x = box->x; x < box->x + box->width; x++)
-                  spr->swr.pBaseAddress[zbase + 8 * x + 4] =
-                     spr->secondary.pBaseAddress[sbase + x];
+                  ((uint8_t*)(spr->swr.xpBaseAddress))[zbase + 8 * x + 4] =
+                     ((uint8_t*)(spr->secondary.xpBaseAddress))[sbase + x];
             }
             zbase += spr->swr.pitch;
             sbase += spr->secondary.pitch;
@@ -171,7 +171,7 @@ swr_transfer_map(struct pipe_context *pipe,
 
    *transfer = pt;
 
-   return spr->swr.pBaseAddress + offset + spr->mip_offsets[level];
+   return (void*)(spr->swr.xpBaseAddress + offset + spr->mip_offsets[level]);
 }
 
 static void
@@ -199,12 +199,12 @@ swr_transfer_flush_region(struct pipe_context *pipe,
       for (int y = box.y; y < box.y + box.height; y++) {
          if (spr->base.format == PIPE_FORMAT_Z24_UNORM_S8_UINT) {
             for (int x = box.x; x < box.x + box.width; x++)
-               spr->secondary.pBaseAddress[sbase + x] =
-                  spr->swr.pBaseAddress[zbase + 4 * x + 3];
+               ((uint8_t*)(spr->secondary.xpBaseAddress))[sbase + x] =
+                  ((uint8_t*)(spr->swr.xpBaseAddress))[zbase + 4 * x + 3];
          } else if (spr->base.format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) {
             for (int x = box.x; x < box.x + box.width; x++)
-               spr->secondary.pBaseAddress[sbase + x] =
-                  spr->swr.pBaseAddress[zbase + 8 * x + 4];
+               ((uint8_t*)(spr->secondary.xpBaseAddress))[sbase + x] =
+                  ((uint8_t*)(spr->swr.xpBaseAddress))[zbase + 8 * x + 4];
          }
          zbase += spr->swr.pitch;
          sbase += spr->secondary.pitch;
@@ -267,65 +267,6 @@ swr_resource_copy(struct pipe_context *pipe,
 }
 
 
-/* XXX: This resolve is incomplete and suboptimal. It will be removed once the
- * pipelined resolve blit works. */
-void
-swr_do_msaa_resolve(struct pipe_resource *src_resource,
-                    struct pipe_resource *dst_resource)
-{
-   /* This is a pretty dumb inline resolve.  It only supports 8-bit formats
-    * (ex RGBA8/BGRA8) - which are most common display formats anyway.
-    */
-
-   /* quick check for 8-bit and number of components */
-   uint8_t bits_per_component =
-      util_format_get_component_bits(src_resource->format,
-            UTIL_FORMAT_COLORSPACE_RGB, 0);
-
-   /* Unsupported resolve format */
-   assert(src_resource->format == dst_resource->format);
-   assert(bits_per_component == 8);
-   if ((src_resource->format != dst_resource->format) ||
-       (bits_per_component != 8)) {
-      return;
-   }
-
-   uint8_t src_num_comps = util_format_get_nr_components(src_resource->format);
-
-   SWR_SURFACE_STATE *src_surface = &swr_resource(src_resource)->swr;
-   SWR_SURFACE_STATE *dst_surface = &swr_resource(dst_resource)->swr;
-
-   uint32_t *src, *dst, offset;
-   uint32_t num_samples = src_surface->numSamples;
-   float recip_num_samples = 1.0f / num_samples;
-   for (uint32_t y = 0; y < src_surface->height; y++) {
-      for (uint32_t x = 0; x < src_surface->width; x++) {
-         float r = 0.0f;
-         float g = 0.0f;
-         float b = 0.0f;
-         float a = 0.0f;
-         for (uint32_t sampleNum = 0;  sampleNum < num_samples; sampleNum++) {
-            offset = ComputeSurfaceOffset<false>(x, y, 0, 0, sampleNum, 0, src_surface);
-            src = (uint32_t *) src_surface->pBaseAddress + offset/src_num_comps;
-            const uint32_t sample = *src;
-            r += (float)((sample >> 24) & 0xff) / 255.0f * recip_num_samples;
-            g += (float)((sample >> 16) & 0xff) / 255.0f * recip_num_samples;
-            b += (float)((sample >>  8) & 0xff) / 255.0f * recip_num_samples;
-            a += (float)((sample      ) & 0xff) / 255.0f * recip_num_samples;
-         }
-         uint32_t result = 0;
-         result  = ((uint8_t)(r * 255.0f) & 0xff) << 24;
-         result |= ((uint8_t)(g * 255.0f) & 0xff) << 16;
-         result |= ((uint8_t)(b * 255.0f) & 0xff) <<  8;
-         result |= ((uint8_t)(a * 255.0f) & 0xff);
-         offset = ComputeSurfaceOffset<false>(x, y, 0, 0, 0, 0, src_surface);
-         dst = (uint32_t *) dst_surface->pBaseAddress + offset/src_num_comps;
-         *dst = result;
-      }
-   }
-}
-
-
 static void
 swr_blit(struct pipe_context *pipe, const struct pipe_blit_info *blit_info)
 {
@@ -342,28 +283,14 @@ swr_blit(struct pipe_context *pipe, const struct pipe_blit_info *blit_info)
       debug_printf("swr_blit: color resolve : %d -> %d\n",
             info.src.resource->nr_samples, info.dst.resource->nr_samples);
 
-      /* Because the resolve is being done inline (not pipelined),
-       * resources need to be stored out of hottiles and the pipeline empty.
-       *
-       * Resources are marked unused following fence finish because all
-       * pipeline operations are complete.  Validation of the blit will mark
-       * them are read/write again.
-       */
+      /* Resolve is done as part of the surface store. */
       swr_store_dirty_resource(pipe, info.src.resource, SWR_TILE_RESOLVED);
-      swr_store_dirty_resource(pipe, info.dst.resource, SWR_TILE_RESOLVED);
-      swr_fence_finish(pipe->screen, NULL, swr_screen(pipe->screen)->flush_fence, 0);
-      swr_resource_unused(info.src.resource);
-      swr_resource_unused(info.dst.resource);
 
       struct pipe_resource *src_resource = info.src.resource;
       struct pipe_resource *resolve_target =
          swr_resource(src_resource)->resolve_target;
 
-      /* Inline resolve samples into resolve target resource, then continue
-       * the blit. */
-      swr_do_msaa_resolve(src_resource, resolve_target);
-
-      /* The resolve target becomes the new source for the blit.  */
+      /* The resolve target becomes the new source for the blit. */
       info.src.resource = resolve_target;
    }
 
@@ -384,8 +311,8 @@ swr_blit(struct pipe_context *pipe, const struct pipe_blit_info *blit_info)
    }
 
    if (ctx->active_queries) {
-      SwrEnableStatsFE(ctx->swrContext, FALSE);
-      SwrEnableStatsBE(ctx->swrContext, FALSE);
+      ctx->api.pfnSwrEnableStatsFE(ctx->swrContext, FALSE);
+      ctx->api.pfnSwrEnableStatsBE(ctx->swrContext, FALSE);
    }
 
    util_blitter_save_vertex_buffer_slot(ctx->blitter, ctx->vertex_buffer);
@@ -422,8 +349,8 @@ swr_blit(struct pipe_context *pipe, const struct pipe_blit_info *blit_info)
    util_blitter_blit(ctx->blitter, &info);
 
    if (ctx->active_queries) {
-      SwrEnableStatsFE(ctx->swrContext, TRUE);
-      SwrEnableStatsBE(ctx->swrContext, TRUE);
+      ctx->api.pfnSwrEnableStatsFE(ctx->swrContext, TRUE);
+      ctx->api.pfnSwrEnableStatsBE(ctx->swrContext, TRUE);
    }
 }
 
@@ -438,10 +365,20 @@ swr_destroy(struct pipe_context *pipe)
       util_blitter_destroy(ctx->blitter);
 
    for (unsigned i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
-      pipe_surface_reference(&ctx->framebuffer.cbufs[i], NULL);
+      if (ctx->framebuffer.cbufs[i]) {
+         struct swr_resource *res = swr_resource(ctx->framebuffer.cbufs[i]->texture);
+         /* NULL curr_pipe, so we don't have a reference to a deleted pipe */
+         res->curr_pipe = NULL;
+         pipe_surface_reference(&ctx->framebuffer.cbufs[i], NULL);
+      }
    }
 
-   pipe_surface_reference(&ctx->framebuffer.zsbuf, NULL);
+   if (ctx->framebuffer.zsbuf) {
+      struct swr_resource *res = swr_resource(ctx->framebuffer.zsbuf->texture);
+      /* NULL curr_pipe, so we don't have a reference to a deleted pipe */
+      res->curr_pipe = NULL;
+      pipe_surface_reference(&ctx->framebuffer.zsbuf, NULL);
+   }
 
    for (unsigned i = 0; i < ARRAY_SIZE(ctx->sampler_views[0]); i++) {
       pipe_sampler_view_reference(&ctx->sampler_views[PIPE_SHADER_FRAGMENT][i], NULL);
@@ -456,10 +393,10 @@ swr_destroy(struct pipe_context *pipe)
 
    /* Idle core after destroying buffer resources, but before deleting
     * context.  Destroying resources has potentially called StoreTiles.*/
-   SwrWaitForIdle(ctx->swrContext);
+   ctx->api.pfnSwrWaitForIdle(ctx->swrContext);
 
    if (ctx->swrContext)
-      SwrDestroyContext(ctx->swrContext);
+      ctx->api.pfnSwrDestroyContext(ctx->swrContext);
 
    delete ctx->blendJIT;
 
@@ -495,7 +432,7 @@ swr_UpdateStats(HANDLE hPrivateContext, const SWR_STATS *pStats)
    if (!pDC)
       return;
 
-   struct swr_query_result *pqr = (struct swr_query_result *)pDC->pStats;
+   struct swr_query_result *pqr = pDC->pStats;
 
    SWR_STATS *pSwrStats = &pqr->core;
 
@@ -512,7 +449,7 @@ swr_UpdateStatsFE(HANDLE hPrivateContext, const SWR_STATS_FE *pStats)
    if (!pDC)
       return;
 
-   struct swr_query_result *pqr = (struct swr_query_result *)pDC->pStats;
+   struct swr_query_result *pqr = pDC->pStats;
 
    SWR_STATS_FE *pSwrStats = &pqr->coreFE;
    p_atomic_add(&pSwrStats->IaVertices, pStats->IaVertices);
@@ -540,6 +477,9 @@ swr_create_context(struct pipe_screen *p_screen, void *priv, unsigned flags)
       AlignedMalloc(sizeof(struct swr_context), KNOB_SIMD_BYTES);
    memset(ctx, 0, sizeof(struct swr_context));
 
+   swr_screen(p_screen)->pfnSwrGetInterface(ctx->api);
+   ctx->swrDC.pAPI = &ctx->api;
+
    ctx->blendJIT =
       new std::unordered_map<BLEND_COMPILE_STATE, PFN_BLEND_JIT_FUNC>;
 
@@ -551,12 +491,9 @@ swr_create_context(struct pipe_screen *p_screen, void *priv, unsigned flags)
    createInfo.pfnClearTile = swr_StoreHotTileClear;
    createInfo.pfnUpdateStats = swr_UpdateStats;
    createInfo.pfnUpdateStatsFE = swr_UpdateStatsFE;
-   ctx->swrContext = SwrCreateContext(&createInfo);
+   ctx->swrContext = ctx->api.pfnSwrCreateContext(&createInfo);
 
-   /* Init Load/Store/ClearTiles Tables */
-   swr_InitMemoryModule();
-
-   InitBackendFuncTables();
+   ctx->api.pfnSwrInit();
 
    if (ctx->swrContext == NULL)
       goto fail;

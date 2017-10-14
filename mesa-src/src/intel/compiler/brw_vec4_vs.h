@@ -36,13 +36,11 @@ public:
                    const struct brw_vs_prog_key *key,
                    struct brw_vs_prog_data *vs_prog_data,
                    const nir_shader *shader,
-                   gl_clip_plane *clip_planes,
                    void *mem_ctx,
                    int shader_time_index,
                    bool use_legacy_snorm_formula);
 
 protected:
-   virtual dst_reg *make_reg_for_system_value(int location);
    virtual void setup_payload();
    virtual void emit_prolog();
    virtual void emit_thread_end();
@@ -57,8 +55,6 @@ private:
 
    const struct brw_vs_prog_key *const key;
    struct brw_vs_prog_data * const vs_prog_data;
-
-   gl_clip_plane *clip_planes;
 
    bool use_legacy_snorm_formula;
 };

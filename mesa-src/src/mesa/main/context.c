@@ -123,6 +123,7 @@
 #include "shared.h"
 #include "shaderobj.h"
 #include "shaderimage.h"
+#include "util/debug.h"
 #include "util/disk_cache.h"
 #include "util/strtod.h"
 #include "stencil.h"
@@ -133,10 +134,12 @@
 #include "varray.h"
 #include "version.h"
 #include "viewport.h"
+#include "texturebindless.h"
 #include "program/program.h"
 #include "math/m_matrix.h"
 #include "main/dispatch.h" /* for _gloffset_COUNT */
 #include "macros.h"
+#include "git_sha1.h"
 
 #ifdef USE_SPARC_ASM
 #include "sparc/sparc.h"
@@ -397,10 +400,13 @@ one_time_init( struct gl_context *ctx )
 
       atexit(one_time_fini);
 
-#if defined(DEBUG) && defined(__DATE__) && defined(__TIME__)
+#if defined(DEBUG)
       if (MESA_VERBOSE != 0) {
-         _mesa_debug(ctx, "Mesa %s DEBUG build %s %s\n",
-                     PACKAGE_VERSION, __DATE__, __TIME__);
+         _mesa_debug(ctx, "Mesa " PACKAGE_VERSION " DEBUG build"
+#ifdef MESA_GIT_SHA1
+                     " (" MESA_GIT_SHA1 ")"
+#endif
+                     "\n");
       }
 #endif
    }
@@ -855,13 +861,14 @@ init_attrib_groups(struct gl_context *ctx)
    _mesa_init_transform_feedback( ctx );
    _mesa_init_varray( ctx );
    _mesa_init_viewport( ctx );
+   _mesa_init_resident_handles( ctx );
 
    if (!_mesa_init_texture( ctx ))
       return GL_FALSE;
 
-   _mesa_init_texture_s3tc( ctx );
-
    /* Miscellaneous */
+   ctx->TileRasterOrderIncreasingX = GL_TRUE;
+   ctx->TileRasterOrderIncreasingY = GL_TRUE;
    ctx->NewState = _NEW_ALL;
    ctx->NewDriverState = ~0;
    ctx->ErrorValue = GL_NO_ERROR;
@@ -1208,6 +1215,16 @@ _mesa_initialize_context(struct gl_context *ctx,
    if (!init_attrib_groups( ctx ))
       goto fail;
 
+   /* KHR_no_error is likely to crash, overflow memory, etc if an application
+    * has errors so don't enable it for setuid processes.
+    */
+   if (env_var_as_boolean("MESA_NO_ERROR", false)) {
+#if !defined(_WIN32)
+      if (geteuid() == getuid())
+#endif
+         ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_NO_ERROR_BIT_KHR;
+   }
+
    /* setup the API dispatch tables with all nop functions */
    ctx->OutsideBeginEnd = _mesa_alloc_dispatch_table();
    if (!ctx->OutsideBeginEnd)
@@ -1312,6 +1329,8 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_reference_program(ctx, &ctx->FragmentProgram._Current, NULL);
    _mesa_reference_program(ctx, &ctx->FragmentProgram._TexEnvProgram, NULL);
 
+   _mesa_reference_program(ctx, &ctx->ComputeProgram._Current, NULL);
+
    _mesa_reference_vao(ctx, &ctx->Array.VAO, NULL);
    _mesa_reference_vao(ctx, &ctx->Array.DefaultVAO, NULL);
 
@@ -1329,6 +1348,7 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_free_transform_feedback(ctx);
    _mesa_free_performance_monitors(ctx);
    _mesa_free_performance_queries(ctx);
+   _mesa_free_resident_handles(ctx);
 
    _mesa_reference_buffer_object(ctx, &ctx->Pack.BufferObj, NULL);
    _mesa_reference_buffer_object(ctx, &ctx->Unpack.BufferObj, NULL);
@@ -1526,8 +1546,8 @@ check_compatible(const struct gl_context *ctx,
  * Check if the viewport/scissor size has not yet been initialized.
  * Initialize the size if the given width and height are non-zero.
  */
-void
-_mesa_check_init_viewport(struct gl_context *ctx, GLuint width, GLuint height)
+static void
+check_init_viewport(struct gl_context *ctx, GLuint width, GLuint height)
 {
    if (!ctx->ViewportInitialized && width > 0 && height > 0) {
       unsigned i;
@@ -1594,6 +1614,23 @@ handle_first_current(struct gl_context *ctx)
       }
    }
 
+   /* Determine if generic vertex attribute 0 aliases the conventional
+    * glVertex position.
+    */
+   {
+      const bool is_forward_compatible_context =
+         ctx->Const.ContextFlags & GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT;
+
+      /* In OpenGL 3.1 attribute 0 becomes non-magic, just like in OpenGL ES
+       * 2.0.  Note that we cannot just check for API_OPENGL_COMPAT here because
+       * that will erroneously allow this usage in a 3.0 forward-compatible
+       * context too.
+       */
+      ctx->_AttribZeroAliasesVertex = (ctx->API == API_OPENGLES
+                                       || (ctx->API == API_OPENGL_COMPAT
+                                           && !is_forward_compatible_context));
+   }
+
    /* We can use this to help debug user's problems.  Tell them to set
     * the MESA_INFO env variable before running their app.  Then the
     * first time each context is made current we'll print some useful
@@ -1650,21 +1687,28 @@ _mesa_make_current( struct gl_context *newCtx,
        /* make sure this context is valid for flushing */
        curCtx != newCtx &&
        curCtx->Const.ContextReleaseBehavior ==
-       GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH)
+       GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH) {
       _mesa_flush(curCtx);
+   }
 
    /* We used to call _glapi_check_multithread() here.  Now do it in drivers */
-   _glapi_set_context((void *) newCtx);
-   assert(_mesa_get_current_context() == newCtx);
 
    if (!newCtx) {
       _glapi_set_dispatch(NULL);  /* none current */
+      /* We need old ctx to correctly release Draw/ReadBuffer
+       * and avoid a surface leak in st_renderbuffer_delete.
+       * Therefore, first drop buffers then set new ctx to NULL.
+       */
       if (curCtx) {
          _mesa_reference_framebuffer(&curCtx->WinSysDrawBuffer, NULL);
          _mesa_reference_framebuffer(&curCtx->WinSysReadBuffer, NULL);
       }
+      _glapi_set_context(NULL);
+      assert(_mesa_get_current_context() == NULL);
    }
    else {
+      _glapi_set_context((void *) newCtx);
+      assert(_mesa_get_current_context() == newCtx);
       _glapi_set_dispatch(newCtx->CurrentClientDispatch);
 
       if (drawBuffer && readBuffer) {
@@ -1704,8 +1748,7 @@ _mesa_make_current( struct gl_context *newCtx,
           */
          newCtx->NewState |= _NEW_BUFFERS;
 
-         _mesa_check_init_viewport(newCtx,
-                                   drawBuffer->Width, drawBuffer->Height);
+         check_init_viewport(newCtx, drawBuffer->Width, drawBuffer->Height);
       }
 
       if (newCtx->FirstTimeCurrent) {
@@ -1815,20 +1858,6 @@ _mesa_record_error(struct gl_context *ctx, GLenum error)
 
 
 /**
- * Flush commands and wait for completion.
- */
-void
-_mesa_finish(struct gl_context *ctx)
-{
-   FLUSH_VERTICES( ctx, 0 );
-   FLUSH_CURRENT( ctx, 0 );
-   if (ctx->Driver.Finish) {
-      ctx->Driver.Finish(ctx);
-   }
-}
-
-
-/**
  * Flush commands.
  */
 void
@@ -1844,7 +1873,7 @@ _mesa_flush(struct gl_context *ctx)
 
 
 /**
- * Execute glFinish().
+ * Flush commands and wait for completion.
  *
  * Calls the #ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH macro and the
  * dd_function_table::Finish driver callback, if not NULL.
@@ -1854,7 +1883,13 @@ _mesa_Finish(void)
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
-   _mesa_finish(ctx);
+
+   FLUSH_VERTICES(ctx, 0);
+   FLUSH_CURRENT(ctx, 0);
+
+   if (ctx->Driver.Finish) {
+      ctx->Driver.Finish(ctx);
+   }
 }
 
 

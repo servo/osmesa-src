@@ -34,7 +34,6 @@
 #include "util/u_format_s3tc.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-#include "util/u_mm.h"
 
 #include "pipe/p_screen.h"
 
@@ -251,10 +250,6 @@ uint32_t r300_translate_texformat(enum pipe_format format,
 
     /* S3TC formats. */
     if (desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
-        if (!util_format_s3tc_enabled) {
-            return ~0; /* Unsupported. */
-        }
-
         switch (format) {
             case PIPE_FORMAT_DXT1_RGB:
             case PIPE_FORMAT_DXT1_RGBA:
@@ -1119,7 +1114,7 @@ r300_texture_create_object(struct r300_screen *rscreen,
     /* Create the backing buffer if needed. */
     if (!tex->buf) {
         tex->buf = rws->buffer_create(rws, tex->tex.size_in_bytes, 2048,
-                                      tex->domain, RADEON_FLAG_HANDLE);
+                                      tex->domain, RADEON_FLAG_NO_SUBALLOC);
 
         if (!tex->buf) {
             goto fail;

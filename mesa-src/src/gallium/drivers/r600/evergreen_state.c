@@ -1371,7 +1371,7 @@ static void evergreen_init_depth_surface(struct r600_context *rctx,
 	surf->db_depth_slice = S_02805C_SLICE_TILE_MAX(levelinfo->nblk_x *
 						       levelinfo->nblk_y / 64 - 1);
 
-	if (rtex->surface.flags & RADEON_SURF_SBUFFER) {
+	if (rtex->surface.has_stencil) {
 		uint64_t stencil_offset;
 		unsigned stile_split = rtex->surface.u.legacy.stencil_tile_split;
 
@@ -1392,9 +1392,8 @@ static void evergreen_init_depth_surface(struct r600_context *rctx,
 					S_028044_FORMAT(V_028044_STENCIL_8);
 	}
 
-	/* use htile only for first level */
-	if (rtex->htile_buffer && !level) {
-		uint64_t va = rtex->htile_buffer->gpu_address;
+	if (r600_htile_enabled(rtex, level)) {
+		uint64_t va = rtex->resource.gpu_address + rtex->htile_offset;
 		surf->db_htile_data_base = va >> 8;
 		surf->db_htile_surface = S_028ABC_HTILE_WIDTH(1) |
 					 S_028ABC_HTILE_HEIGHT(1) |
@@ -1550,6 +1549,7 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	r600_mark_atom_dirty(rctx, &rctx->framebuffer.atom);
 
 	r600_set_sample_locations_constant_buffer(rctx);
+	rctx->framebuffer.do_update_surf_dirtiness = true;
 }
 
 static void evergreen_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
@@ -1650,7 +1650,7 @@ static void evergreen_emit_msaa_state(struct r600_context *rctx, int nr_samples,
 				     S_028C00_EXPAND_LINE_WIDTH(1)); /* R_028C00_PA_SC_LINE_CNTL */
 		radeon_emit(cs, S_028C04_MSAA_NUM_SAMPLES(util_logbase2(nr_samples)) |
 				     S_028C04_MAX_SAMPLE_DIST(max_dist)); /* R_028C04_PA_SC_AA_CONFIG */
-		radeon_set_context_reg(cs, EG_R_028A4C_PA_SC_MODE_CNTL_1,
+		radeon_set_context_reg(cs, R_028A4C_PA_SC_MODE_CNTL_1,
 				       EG_S_028A4C_PS_ITER_SAMPLE(ps_iter_samples > 1) |
 				       EG_S_028A4C_FORCE_EOV_CNTDWN_ENABLE(1) |
 				       EG_S_028A4C_FORCE_EOV_REZ_ENABLE(1));
@@ -1658,7 +1658,7 @@ static void evergreen_emit_msaa_state(struct r600_context *rctx, int nr_samples,
 		radeon_set_context_reg_seq(cs, R_028C00_PA_SC_LINE_CNTL, 2);
 		radeon_emit(cs, S_028C00_LAST_PIXEL(1)); /* R_028C00_PA_SC_LINE_CNTL */
 		radeon_emit(cs, 0); /* R_028C04_PA_SC_AA_CONFIG */
-		radeon_set_context_reg(cs, EG_R_028A4C_PA_SC_MODE_CNTL_1,
+		radeon_set_context_reg(cs, R_028A4C_PA_SC_MODE_CNTL_1,
 				       EG_S_028A4C_FORCE_EOV_CNTDWN_ENABLE(1) |
 				       EG_S_028A4C_FORCE_EOV_REZ_ENABLE(1));
 	}
@@ -1875,7 +1875,7 @@ static void evergreen_emit_db_state(struct r600_context *rctx, struct r600_atom 
 		radeon_set_context_reg(cs, R_028ABC_DB_HTILE_SURFACE, a->rsurf->db_htile_surface);
 		radeon_set_context_reg(cs, R_028AC8_DB_PRELOAD_CONTROL, a->rsurf->db_preload_control);
 		radeon_set_context_reg(cs, R_028014_DB_HTILE_DATA_BASE, a->rsurf->db_htile_data_base);
-		reloc_idx = radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, rtex->htile_buffer,
+		reloc_idx = radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, &rtex->resource,
 						  RADEON_USAGE_READWRITE, RADEON_PRIO_HTILE);
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, reloc_idx);
@@ -1952,7 +1952,7 @@ static void evergreen_emit_vertex_buffers(struct r600_context *rctx,
 		unsigned buffer_index = u_bit_scan(&dirty_mask);
 
 		vb = &state->vb[buffer_index];
-		rbuffer = (struct r600_resource*)vb->buffer;
+		rbuffer = (struct r600_resource*)vb->buffer.resource;
 		assert(rbuffer);
 
 		va = rbuffer->gpu_address + vb->buffer_offset;
@@ -2296,6 +2296,9 @@ static void evergreen_emit_vertex_fetch_shader(struct r600_context *rctx, struct
 	struct radeon_winsys_cs *cs = rctx->b.gfx.cs;
 	struct r600_cso_state *state = (struct r600_cso_state*)a;
 	struct r600_fetch_shader *shader = (struct r600_fetch_shader*)state->cso;
+
+	if (!shader)
+		return;
 
 	radeon_set_context_reg(cs, R_0288A4_SQ_PGM_START_FS,
 			       (shader->buffer->gpu_address + shader->offset) >> 8);
@@ -4071,4 +4074,33 @@ bool evergreen_adjust_gprs(struct r600_context *rctx)
 		rctx->b.flags |= R600_CONTEXT_WAIT_3D_IDLE;
 	}
 	return true;
+}
+
+#define AC_ENCODE_TRACE_POINT(id)       (0xcafe0000 | ((id) & 0xffff))
+
+void eg_trace_emit(struct r600_context *rctx)
+{
+	struct radeon_winsys_cs *cs = rctx->b.gfx.cs;
+	unsigned reloc;
+
+	if (rctx->b.chip_class < EVERGREEN)
+		return;
+
+	/* This must be done after r600_need_cs_space. */
+	reloc = radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx,
+					  (struct r600_resource*)rctx->trace_buf, RADEON_USAGE_WRITE,
+					  RADEON_PRIO_CP_DMA);
+
+	rctx->trace_id++;
+	radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, rctx->trace_buf,
+			      RADEON_USAGE_READWRITE, RADEON_PRIO_TRACE);
+	radeon_emit(cs, PKT3(PKT3_MEM_WRITE, 3, 0));
+	radeon_emit(cs, rctx->trace_buf->gpu_address);
+	radeon_emit(cs, rctx->trace_buf->gpu_address >> 32 | MEM_WRITE_32_BITS | MEM_WRITE_CONFIRM);
+	radeon_emit(cs, rctx->trace_id);
+	radeon_emit(cs, 0);
+	radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
+	radeon_emit(cs, reloc);
+	radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
+	radeon_emit(cs, AC_ENCODE_TRACE_POINT(rctx->trace_id));
 }

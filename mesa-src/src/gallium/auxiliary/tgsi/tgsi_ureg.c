@@ -180,8 +180,7 @@ struct ureg_program
    unsigned array_temps[UREG_MAX_ARRAY_TEMPS];
    unsigned nr_array_temps;
 
-   struct const_decl const_decls;
-   struct const_decl const_decls2D[PIPE_MAX_CONSTANT_BUFFERS];
+   struct const_decl const_decls[PIPE_MAX_CONSTANT_BUFFERS];
 
    unsigned properties[TGSI_PROPERTY_COUNT];
 
@@ -507,7 +506,7 @@ ureg_DECL_constant2D(struct ureg_program *ureg,
                      unsigned last,
                      unsigned index2D)
 {
-   struct const_decl *decl = &ureg->const_decls2D[index2D];
+   struct const_decl *decl = &ureg->const_decls[index2D];
 
    assert(index2D < PIPE_MAX_CONSTANT_BUFFERS);
 
@@ -529,7 +528,7 @@ struct ureg_src
 ureg_DECL_constant(struct ureg_program *ureg,
                    unsigned index)
 {
-   struct const_decl *decl = &ureg->const_decls;
+   struct const_decl *decl = &ureg->const_decls[0];
    unsigned minconst = index, maxconst = index;
    unsigned i;
 
@@ -579,7 +578,9 @@ out:
    assert(i < decl->nr_constant_ranges);
    assert(decl->constant_range[i].first <= index);
    assert(decl->constant_range[i].last >= index);
-   return ureg_src_register(TGSI_FILE_CONSTANT, index);
+
+   struct ureg_src src = ureg_src_register(TGSI_FILE_CONSTANT, index);
+   return ureg_src_dimension(src, 0);
 }
 
 static struct ureg_dst alloc_temporary( struct ureg_program *ureg,
@@ -1140,8 +1141,6 @@ ureg_emit_dst( struct ureg_program *ureg,
    unsigned n = 0;
 
    assert(dst.File != TGSI_FILE_NULL);
-   assert(dst.File != TGSI_FILE_CONSTANT);
-   assert(dst.File != TGSI_FILE_INPUT);
    assert(dst.File != TGSI_FILE_SAMPLER);
    assert(dst.File != TGSI_FILE_SAMPLER_VIEW);
    assert(dst.File != TGSI_FILE_IMMEDIATE);
@@ -1213,6 +1212,7 @@ struct ureg_emit_insn_result
 ureg_emit_insn(struct ureg_program *ureg,
                unsigned opcode,
                boolean saturate,
+               unsigned precise,
                unsigned num_dst,
                unsigned num_src)
 {
@@ -1226,6 +1226,7 @@ ureg_emit_insn(struct ureg_program *ureg,
    out[0].insn = tgsi_default_instruction();
    out[0].insn.Opcode = opcode;
    out[0].insn.Saturate = saturate;
+   out[0].insn.Precise = precise;
    out[0].insn.NumDstRegs = num_dst;
    out[0].insn.NumSrcRegs = num_src;
 
@@ -1289,7 +1290,7 @@ ureg_fixup_label(struct ureg_program *ureg,
 void
 ureg_emit_texture(struct ureg_program *ureg,
                   unsigned extended_token,
-                  unsigned target, unsigned num_offsets)
+                  unsigned target, unsigned return_type, unsigned num_offsets)
 {
    union tgsi_any_token *out, *insn;
 
@@ -1301,6 +1302,7 @@ ureg_emit_texture(struct ureg_program *ureg,
    out[0].value = 0;
    out[0].insn_texture.Texture = target;
    out[0].insn_texture.NumOffsets = num_offsets;
+   out[0].insn_texture.ReturnType = return_type;
 }
 
 void
@@ -1353,7 +1355,8 @@ ureg_insn(struct ureg_program *ureg,
           const struct ureg_dst *dst,
           unsigned nr_dst,
           const struct ureg_src *src,
-          unsigned nr_src )
+          unsigned nr_src,
+          unsigned precise )
 {
    struct ureg_emit_insn_result insn;
    unsigned i;
@@ -1368,6 +1371,7 @@ ureg_insn(struct ureg_program *ureg,
    insn = ureg_emit_insn(ureg,
                          opcode,
                          saturate,
+                         precise,
                          nr_dst,
                          nr_src);
 
@@ -1386,6 +1390,7 @@ ureg_tex_insn(struct ureg_program *ureg,
               const struct ureg_dst *dst,
               unsigned nr_dst,
               unsigned target,
+              unsigned return_type,
               const struct tgsi_texture_offset *texoffsets,
               unsigned nr_offset,
               const struct ureg_src *src,
@@ -1404,10 +1409,12 @@ ureg_tex_insn(struct ureg_program *ureg,
    insn = ureg_emit_insn(ureg,
                          opcode,
                          saturate,
+                         0,
                          nr_dst,
                          nr_src);
 
-   ureg_emit_texture( ureg, insn.extended_token, target, nr_offset );
+   ureg_emit_texture( ureg, insn.extended_token, target, return_type,
+                      nr_offset );
 
    for (i = 0; i < nr_offset; i++)
       ureg_emit_texture_offset( ureg, &texoffsets[i]);
@@ -1439,6 +1446,7 @@ ureg_memory_insn(struct ureg_program *ureg,
    insn = ureg_emit_insn(ureg,
                          opcode,
                          FALSE,
+                         0,
                          nr_dst,
                          nr_src);
 
@@ -1884,17 +1892,8 @@ static void emit_decls( struct ureg_program *ureg )
          emit_decl_memory(ureg, i);
    }
 
-   if (ureg->const_decls.nr_constant_ranges) {
-      for (i = 0; i < ureg->const_decls.nr_constant_ranges; i++) {
-         emit_decl_range(ureg,
-                         TGSI_FILE_CONSTANT,
-                         ureg->const_decls.constant_range[i].first,
-                         ureg->const_decls.constant_range[i].last - ureg->const_decls.constant_range[i].first + 1);
-      }
-   }
-
    for (i = 0; i < PIPE_MAX_CONSTANT_BUFFERS; i++) {
-      struct const_decl *decl = &ureg->const_decls2D[i];
+      struct const_decl *decl = &ureg->const_decls[i];
 
       if (decl->nr_constant_ranges) {
          uint j;

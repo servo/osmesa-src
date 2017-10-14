@@ -28,6 +28,7 @@
 
 #include "common/gen_l3_config.h"
 #include "common/gen_sample_positions.h"
+#include "vk_util.h"
 #include "vk_format_info.h"
 
 static uint32_t
@@ -137,7 +138,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = desc->binding,
          .Valid = true,
-         .SourceElementFormat = format,
+         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) format,
          .EdgeFlagEnable = false,
          .SourceElementOffset = desc->offset,
          .Component0Control = vertex_element_comp_control(format, 0),
@@ -155,9 +156,12 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VF_INSTANCING), vfi) {
          vfi.InstancingEnable = pipeline->instancing_enable[desc->binding];
          vfi.VertexElementIndex = slot;
-         /* Vulkan so far doesn't have an instance divisor, so
-          * this is always 1 (ignored if not instancing). */
-         vfi.InstanceDataStepRate = 1;
+         /* Our implementation of VK_KHX_multiview uses instancing to draw
+          * the different views.  If the client asks for instancing, we
+          * need to use the Instance Data Step Rate to ensure that we
+          * repeat the client's per-instance data once for each view.
+          */
+         vfi.InstanceDataStepRate = anv_subpass_view_count(pipeline->subpass);
       }
 #endif
    }
@@ -180,7 +184,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = ANV_SVGS_VB_INDEX,
          .Valid = true,
-         .SourceElementFormat = ISL_FORMAT_R32G32_UINT,
+         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32_UINT,
          .Component0Control = base_ctrl,
          .Component1Control = base_ctrl,
 #if GEN_GEN >= 8
@@ -210,7 +214,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = ANV_DRAWID_VB_INDEX,
          .Valid = true,
-         .SourceElementFormat = ISL_FORMAT_R32_UINT,
+         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32_UINT,
          .Component0Control = VFCOMP_STORE_SRC,
          .Component1Control = VFCOMP_STORE_0,
          .Component2Control = VFCOMP_STORE_0,
@@ -278,7 +282,7 @@ genX(emit_urb_setup)(struct anv_device *device, struct anv_batch *batch,
    }
 }
 
-static inline void
+static void
 emit_urb_setup(struct anv_pipeline *pipeline)
 {
    unsigned entry_size[4];
@@ -549,6 +553,7 @@ emit_ms_state(struct anv_pipeline *pipeline,
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_MULTISAMPLE), ms) {
       ms.NumberofMultisamples       = log2_samples;
 
+      ms.PixelLocation              = CENTER;
 #if GEN_GEN >= 8
       /* The PRM says that this bit is valid only for DX9:
        *
@@ -556,9 +561,7 @@ emit_ms_state(struct anv_pipeline *pipeline,
        *    should not have any effect by setting or not setting this bit.
        */
       ms.PixelPositionOffsetEnable  = false;
-      ms.PixelLocation              = CENTER;
 #else
-      ms.PixelLocation              = PIXLOC_CENTER;
 
       switch (samples) {
       case 1:
@@ -862,27 +865,13 @@ emit_cb_state(struct anv_pipeline *pipeline,
 {
    struct anv_device *device = pipeline->device;
 
-   const uint32_t num_dwords = GENX(BLEND_STATE_length);
-   pipeline->blend_state =
-      anv_state_pool_alloc(&device->dynamic_state_pool, num_dwords * 4, 64);
 
    struct GENX(BLEND_STATE) blend_state = {
 #if GEN_GEN >= 8
       .AlphaToCoverageEnable = ms_info && ms_info->alphaToCoverageEnable,
       .AlphaToOneEnable = ms_info && ms_info->alphaToOneEnable,
-#else
-      /* Make sure it gets zeroed */
-      .Entry = { { 0, }, },
 #endif
    };
-
-   /* Default everything to disabled */
-   for (uint32_t i = 0; i < 8; i++) {
-      blend_state.Entry[i].WriteDisableAlpha = true;
-      blend_state.Entry[i].WriteDisableRed = true;
-      blend_state.Entry[i].WriteDisableGreen = true;
-      blend_state.Entry[i].WriteDisableBlue = true;
-   }
 
    uint32_t surface_count = 0;
    struct anv_pipeline_bind_map *map;
@@ -891,7 +880,17 @@ emit_cb_state(struct anv_pipeline *pipeline,
       surface_count = map->surface_count;
    }
 
+   const uint32_t num_dwords = GENX(BLEND_STATE_length) +
+      GENX(BLEND_STATE_ENTRY_length) * surface_count;
+   pipeline->blend_state =
+      anv_state_pool_alloc(&device->dynamic_state_pool, num_dwords * 4, 64);
+
    bool has_writeable_rt = false;
+   uint32_t *state_pos = pipeline->blend_state.map;
+   state_pos += GENX(BLEND_STATE_length);
+#if GEN_GEN >= 8
+   struct GENX(BLEND_STATE_ENTRY) bs0 = { 0 };
+#endif
    for (unsigned i = 0; i < surface_count; i++) {
       struct anv_pipeline_binding *binding = &map->surface_to_descriptor[i];
 
@@ -902,14 +901,24 @@ emit_cb_state(struct anv_pipeline *pipeline,
       /* We can have at most 8 attachments */
       assert(i < 8);
 
-      if (info == NULL || binding->index >= info->attachmentCount)
+      if (info == NULL || binding->index >= info->attachmentCount) {
+         /* Default everything to disabled */
+         struct GENX(BLEND_STATE_ENTRY) entry = {
+            .WriteDisableAlpha = true,
+            .WriteDisableRed = true,
+            .WriteDisableGreen = true,
+            .WriteDisableBlue = true,
+         };
+         GENX(BLEND_STATE_ENTRY_pack)(NULL, state_pos, &entry);
+         state_pos += GENX(BLEND_STATE_ENTRY_length);
          continue;
+      }
 
       assert(binding->binding == 0);
       const VkPipelineColorBlendAttachmentState *a =
          &info->pAttachments[binding->index];
 
-      blend_state.Entry[i] = (struct GENX(BLEND_STATE_ENTRY)) {
+      struct GENX(BLEND_STATE_ENTRY) entry = {
 #if GEN_GEN < 8
          .AlphaToCoverageEnable = ms_info && ms_info->alphaToCoverageEnable,
          .AlphaToOneEnable = ms_info && ms_info->alphaToOneEnable,
@@ -938,7 +947,7 @@ emit_cb_state(struct anv_pipeline *pipeline,
 #if GEN_GEN >= 8
          blend_state.IndependentAlphaBlendEnable = true;
 #else
-         blend_state.Entry[i].IndependentAlphaBlendEnable = true;
+         entry.IndependentAlphaBlendEnable = true;
 #endif
       }
 
@@ -953,26 +962,31 @@ emit_cb_state(struct anv_pipeline *pipeline,
        */
       if (a->colorBlendOp == VK_BLEND_OP_MIN ||
           a->colorBlendOp == VK_BLEND_OP_MAX) {
-         blend_state.Entry[i].SourceBlendFactor = BLENDFACTOR_ONE;
-         blend_state.Entry[i].DestinationBlendFactor = BLENDFACTOR_ONE;
+         entry.SourceBlendFactor = BLENDFACTOR_ONE;
+         entry.DestinationBlendFactor = BLENDFACTOR_ONE;
       }
       if (a->alphaBlendOp == VK_BLEND_OP_MIN ||
           a->alphaBlendOp == VK_BLEND_OP_MAX) {
-         blend_state.Entry[i].SourceAlphaBlendFactor = BLENDFACTOR_ONE;
-         blend_state.Entry[i].DestinationAlphaBlendFactor = BLENDFACTOR_ONE;
+         entry.SourceAlphaBlendFactor = BLENDFACTOR_ONE;
+         entry.DestinationAlphaBlendFactor = BLENDFACTOR_ONE;
       }
+      GENX(BLEND_STATE_ENTRY_pack)(NULL, state_pos, &entry);
+      state_pos += GENX(BLEND_STATE_ENTRY_length);
+#if GEN_GEN >= 8
+      if (i == 0)
+         bs0 = entry;
+#endif
    }
 
 #if GEN_GEN >= 8
-   struct GENX(BLEND_STATE_ENTRY) *bs0 = &blend_state.Entry[0];
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_PS_BLEND), blend) {
       blend.AlphaToCoverageEnable         = blend_state.AlphaToCoverageEnable;
       blend.HasWriteableRT                = has_writeable_rt;
-      blend.ColorBufferBlendEnable        = bs0->ColorBufferBlendEnable;
-      blend.SourceAlphaBlendFactor        = bs0->SourceAlphaBlendFactor;
-      blend.DestinationAlphaBlendFactor   = bs0->DestinationAlphaBlendFactor;
-      blend.SourceBlendFactor             = bs0->SourceBlendFactor;
-      blend.DestinationBlendFactor        = bs0->DestinationBlendFactor;
+      blend.ColorBufferBlendEnable        = bs0.ColorBufferBlendEnable;
+      blend.SourceAlphaBlendFactor        = bs0.SourceAlphaBlendFactor;
+      blend.DestinationAlphaBlendFactor   = bs0.DestinationAlphaBlendFactor;
+      blend.SourceBlendFactor             = bs0.SourceBlendFactor;
+      blend.DestinationBlendFactor        = bs0.DestinationBlendFactor;
       blend.AlphaTestEnable               = false;
       blend.IndependentAlphaBlendEnable   =
          blend_state.IndependentAlphaBlendEnable;
@@ -1049,7 +1063,8 @@ emit_3dstate_clip(struct anv_pipeline *pipeline,
       }
 #else
       clip.NonPerspectiveBarycentricEnable = wm_prog_data ?
-         (wm_prog_data->barycentric_interp_modes & 0x38) != 0 : 0;
+         (wm_prog_data->barycentric_interp_modes &
+          BRW_BARYCENTRIC_NONPERSPECTIVE_BITS) != 0 : 0;
 #endif
    }
 }
@@ -1063,19 +1078,19 @@ emit_3dstate_streamout(struct anv_pipeline *pipeline,
    }
 }
 
-static inline uint32_t
+static uint32_t
 get_sampler_count(const struct anv_shader_bin *bin)
 {
    return DIV_ROUND_UP(bin->bind_map.sampler_count, 4);
 }
 
-static inline uint32_t
+static uint32_t
 get_binding_table_entry_count(const struct anv_shader_bin *bin)
 {
    return DIV_ROUND_UP(bin->bind_map.surface_count, 32);
 }
 
-static inline struct anv_address
+static struct anv_address
 get_scratch_address(struct anv_pipeline *pipeline,
                     gl_shader_stage stage,
                     const struct anv_shader_bin *bin)
@@ -1088,20 +1103,20 @@ get_scratch_address(struct anv_pipeline *pipeline,
    };
 }
 
-static inline uint32_t
+static uint32_t
 get_scratch_space(const struct anv_shader_bin *bin)
 {
    return ffs(bin->prog_data->total_scratch / 2048);
 }
 
-static inline uint32_t
+static uint32_t
 get_urb_output_offset()
 {
    /* Skip the VUE header and position slots */
    return 1;
 }
 
-static inline uint32_t
+UNUSED static uint32_t
 get_urb_output_length(const struct anv_shader_bin *bin)
 {
    const struct brw_vue_prog_data *prog_data =
@@ -1121,7 +1136,7 @@ emit_3dstate_vs(struct anv_pipeline *pipeline)
    assert(anv_pipeline_has_stage(pipeline, MESA_SHADER_VERTEX));
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VS), vs) {
-      vs.FunctionEnable       = true;
+      vs.Enable               = true;
       vs.StatisticsEnable     = true;
       vs.KernelStartPointer   = vs_bin->kernel.offset;
 #if GEN_GEN >= 8
@@ -1162,7 +1177,8 @@ emit_3dstate_vs(struct anv_pipeline *pipeline)
 }
 
 static void
-emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline)
+emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline,
+                      const VkPipelineTessellationStateCreateInfo *tess_info)
 {
    if (!anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL)) {
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_HS), hs);
@@ -1181,7 +1197,7 @@ emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline)
    const struct brw_tes_prog_data *tes_prog_data = get_tes_prog_data(pipeline);
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_HS), hs) {
-      hs.FunctionEnable = true;
+      hs.Enable = true;
       hs.StatisticsEnable = true;
       hs.KernelStartPointer = tcs_bin->kernel.offset;
 
@@ -1201,9 +1217,29 @@ emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline)
          get_scratch_address(pipeline, MESA_SHADER_TESS_CTRL, tcs_bin);
    }
 
+   const VkPipelineTessellationDomainOriginStateCreateInfoKHR *domain_origin_state =
+      tess_info ? vk_find_struct_const(tess_info, PIPELINE_TESSELLATION_DOMAIN_ORIGIN_STATE_CREATE_INFO_KHR) : NULL;
+
+   VkTessellationDomainOriginKHR uv_origin =
+      domain_origin_state ? domain_origin_state->domainOrigin :
+                            VK_TESSELLATION_DOMAIN_ORIGIN_UPPER_LEFT_KHR;
+
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_TE), te) {
       te.Partitioning = tes_prog_data->partitioning;
-      te.OutputTopology = tes_prog_data->output_topology;
+
+      if (uv_origin == VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT_KHR) {
+         te.OutputTopology = tes_prog_data->output_topology;
+      } else {
+         /* When the origin is upper-left, we have to flip the winding order */
+         if (tes_prog_data->output_topology == OUTPUT_TRI_CCW) {
+            te.OutputTopology = OUTPUT_TRI_CW;
+         } else if (tes_prog_data->output_topology == OUTPUT_TRI_CW) {
+            te.OutputTopology = OUTPUT_TRI_CCW;
+         } else {
+            te.OutputTopology = tes_prog_data->output_topology;
+         }
+      }
+
       te.TEDomain = tes_prog_data->domain;
       te.TEEnable = true;
       te.MaximumTessellationFactorOdd = 63.0;
@@ -1211,7 +1247,7 @@ emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline)
    }
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_DS), ds) {
-      ds.FunctionEnable = true;
+      ds.Enable = true;
       ds.StatisticsEnable = true;
       ds.KernelStartPointer = tes_bin->kernel.offset;
 
@@ -1264,7 +1300,7 @@ emit_3dstate_gs(struct anv_pipeline *pipeline)
    const struct brw_gs_prog_data *gs_prog_data = get_gs_prog_data(pipeline);
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_GS), gs) {
-      gs.FunctionEnable          = true;
+      gs.Enable                  = true;
       gs.StatisticsEnable        = true;
       gs.KernelStartPointer      = gs_bin->kernel.offset;
       gs.DispatchMode            = gs_prog_data->base.dispatch_mode;
@@ -1289,11 +1325,7 @@ emit_3dstate_gs(struct anv_pipeline *pipeline)
       gs.ControlDataFormat       = gs_prog_data->control_data_format;
       gs.ControlDataHeaderSize   = gs_prog_data->control_data_header_size_hwords;
       gs.InstanceControl         = MAX2(gs_prog_data->invocations, 1) - 1;
-#if GEN_GEN >= 8 || GEN_IS_HASWELL
       gs.ReorderMode             = TRAILING;
-#else
-      gs.ReorderEnable           = true;
-#endif
 
 #if GEN_GEN >= 8
       gs.ExpectedVertexCount     = gs_prog_data->vertices_in;
@@ -1323,7 +1355,7 @@ emit_3dstate_gs(struct anv_pipeline *pipeline)
    }
 }
 
-static inline bool
+static bool
 has_color_buffer_write_enabled(const struct anv_pipeline *pipeline)
 {
    const struct anv_shader_bin *shader_bin =
@@ -1336,7 +1368,7 @@ has_color_buffer_write_enabled(const struct anv_pipeline *pipeline)
       if (bind_map->surface_to_descriptor[i].set !=
           ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS)
          continue;
-      if (bind_map->surface_to_descriptor[i].index != UINT8_MAX)
+      if (bind_map->surface_to_descriptor[i].index != UINT32_MAX)
          return true;
    }
 
@@ -1408,7 +1440,7 @@ emit_3dstate_wm(struct anv_pipeline *pipeline, struct anv_subpass *subpass,
    }
 }
 
-static inline bool
+UNUSED static bool
 is_dual_src_blend_factor(VkBlendFactor factor)
 {
    return factor == VK_BLEND_FACTOR_SRC1_COLOR ||
@@ -1690,12 +1722,12 @@ genX(graphics_pipeline_create)(
     * whole fixed function pipeline" means to emit a PIPE_CONTROL with the "CS
     * Stall" bit set.
     */
-   if (!brw->is_haswell && !brw->is_baytrail)
+   if (!device->info.is_haswell && !device->info.is_baytrail)
       gen7_emit_vs_workaround_flush(brw);
 #endif
 
    emit_3dstate_vs(pipeline);
-   emit_3dstate_hs_te_ds(pipeline);
+   emit_3dstate_hs_te_ds(pipeline, pCreateInfo->pTessellationState);
    emit_3dstate_gs(pipeline);
    emit_3dstate_sbe(pipeline);
    emit_3dstate_wm(pipeline, subpass, pCreateInfo->pMultisampleState);

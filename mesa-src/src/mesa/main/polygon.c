@@ -50,27 +50,44 @@
  * change, flushes the vertices and notifies the driver via
  * the dd_function_table::CullFace callback.
  */
-void GLAPIENTRY
-_mesa_CullFace( GLenum mode )
+static ALWAYS_INLINE void
+cull_face(struct gl_context *ctx, GLenum mode, bool no_error)
 {
-   GET_CURRENT_CONTEXT(ctx);
-
-   if (MESA_VERBOSE&VERBOSE_API)
-      _mesa_debug(ctx, "glCullFace %s\n", _mesa_enum_to_string(mode));
-
-   if (mode!=GL_FRONT && mode!=GL_BACK && mode!=GL_FRONT_AND_BACK) {
-      _mesa_error( ctx, GL_INVALID_ENUM, "glCullFace" );
-      return;
-   }
-
    if (ctx->Polygon.CullFaceMode == mode)
       return;
 
-   FLUSH_VERTICES(ctx, _NEW_POLYGON);
+   if (!no_error &&
+       mode != GL_FRONT && mode != GL_BACK && mode != GL_FRONT_AND_BACK) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glCullFace");
+      return;
+   }
+
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewPolygonState ? 0 : _NEW_POLYGON);
+   ctx->NewDriverState |= ctx->DriverFlags.NewPolygonState;
    ctx->Polygon.CullFaceMode = mode;
 
    if (ctx->Driver.CullFace)
-      ctx->Driver.CullFace( ctx, mode );
+      ctx->Driver.CullFace(ctx, mode);
+}
+
+
+void GLAPIENTRY
+_mesa_CullFace_no_error(GLenum mode)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   cull_face(ctx, mode, true);
+}
+
+
+void GLAPIENTRY
+_mesa_CullFace(GLenum mode)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx, "glCullFace %s\n", _mesa_enum_to_string(mode));
+
+   cull_face(ctx, mode, false);
 }
 
 
@@ -85,27 +102,43 @@ _mesa_CullFace( GLenum mode )
  * flushes the vertices and notifies the driver via
  * the dd_function_table::FrontFace callback.
  */
-void GLAPIENTRY
-_mesa_FrontFace( GLenum mode )
+static ALWAYS_INLINE void
+front_face(struct gl_context *ctx, GLenum mode, bool no_error)
 {
-   GET_CURRENT_CONTEXT(ctx);
-
-   if (MESA_VERBOSE&VERBOSE_API)
-      _mesa_debug(ctx, "glFrontFace %s\n", _mesa_enum_to_string(mode));
-
    if (ctx->Polygon.FrontFace == mode)
       return;
 
-   if (mode!=GL_CW && mode!=GL_CCW) {
-      _mesa_error( ctx, GL_INVALID_ENUM, "glFrontFace" );
+   if (!no_error && mode != GL_CW && mode != GL_CCW) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glFrontFace");
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_POLYGON);
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewPolygonState ? 0 : _NEW_POLYGON);
+   ctx->NewDriverState |= ctx->DriverFlags.NewPolygonState;
    ctx->Polygon.FrontFace = mode;
 
    if (ctx->Driver.FrontFace)
-      ctx->Driver.FrontFace( ctx, mode );
+      ctx->Driver.FrontFace(ctx, mode);
+}
+
+
+void GLAPIENTRY
+_mesa_FrontFace_no_error(GLenum mode)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   front_face(ctx, mode, true);
+}
+
+
+void GLAPIENTRY
+_mesa_FrontFace(GLenum mode)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx, "glFrontFace %s\n", _mesa_enum_to_string(mode));
+
+   front_face(ctx, mode, false);
 }
 
 
@@ -121,65 +154,85 @@ _mesa_FrontFace( GLenum mode )
  * gl_polygon_attrib::BackMode. On change flushes the vertices and notifies the
  * driver via the dd_function_table::PolygonMode callback.
  */
-void GLAPIENTRY
-_mesa_PolygonMode( GLenum face, GLenum mode )
+static ALWAYS_INLINE void
+polygon_mode(struct gl_context *ctx, GLenum face, GLenum mode, bool no_error)
 {
-   GET_CURRENT_CONTEXT(ctx);
-
-   if (MESA_VERBOSE&VERBOSE_API)
+   if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glPolygonMode %s %s\n",
                   _mesa_enum_to_string(face),
                   _mesa_enum_to_string(mode));
 
-   switch (mode) {
-   case GL_POINT:
-   case GL_LINE:
-   case GL_FILL:
-      break;
-   case GL_FILL_RECTANGLE_NV:
-      if (ctx->Extensions.NV_fill_rectangle)
+   if (!no_error) {
+      switch (mode) {
+      case GL_POINT:
+      case GL_LINE:
+      case GL_FILL:
          break;
-      /* fall-through */
-   default:
-      _mesa_error(ctx, GL_INVALID_ENUM, "glPolygonMode(mode)");
-      return;
+      case GL_FILL_RECTANGLE_NV:
+         if (ctx->Extensions.NV_fill_rectangle)
+            break;
+         /* fall-through */
+      default:
+         _mesa_error(ctx, GL_INVALID_ENUM, "glPolygonMode(mode)");
+         return;
+      }
    }
 
    switch (face) {
    case GL_FRONT:
-      if (ctx->API == API_OPENGL_CORE) {
+      if (!no_error && ctx->API == API_OPENGL_CORE) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glPolygonMode(face)" );
          return;
       }
       if (ctx->Polygon.FrontMode == mode)
          return;
-      FLUSH_VERTICES(ctx, _NEW_POLYGON);
+      FLUSH_VERTICES(ctx, ctx->DriverFlags.NewPolygonState ? 0 : _NEW_POLYGON);
+      ctx->NewDriverState |= ctx->DriverFlags.NewPolygonState;
       ctx->Polygon.FrontMode = mode;
       break;
    case GL_FRONT_AND_BACK:
       if (ctx->Polygon.FrontMode == mode && ctx->Polygon.BackMode == mode)
          return;
-      FLUSH_VERTICES(ctx, _NEW_POLYGON);
+      FLUSH_VERTICES(ctx, ctx->DriverFlags.NewPolygonState ? 0 : _NEW_POLYGON);
+      ctx->NewDriverState |= ctx->DriverFlags.NewPolygonState;
       ctx->Polygon.FrontMode = mode;
       ctx->Polygon.BackMode = mode;
       break;
    case GL_BACK:
-      if (ctx->API == API_OPENGL_CORE) {
+      if (!no_error && ctx->API == API_OPENGL_CORE) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glPolygonMode(face)" );
          return;
       }
       if (ctx->Polygon.BackMode == mode)
          return;
-      FLUSH_VERTICES(ctx, _NEW_POLYGON);
+      FLUSH_VERTICES(ctx, ctx->DriverFlags.NewPolygonState ? 0 : _NEW_POLYGON);
+      ctx->NewDriverState |= ctx->DriverFlags.NewPolygonState;
       ctx->Polygon.BackMode = mode;
       break;
    default:
-      _mesa_error( ctx, GL_INVALID_ENUM, "glPolygonMode(face)" );
+      if (!no_error)
+         _mesa_error( ctx, GL_INVALID_ENUM, "glPolygonMode(face)" );
       return;
    }
 
    if (ctx->Driver.PolygonMode)
       ctx->Driver.PolygonMode(ctx, face, mode);
+}
+
+
+void GLAPIENTRY
+_mesa_PolygonMode_no_error(GLenum face, GLenum mode)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   polygon_mode(ctx, face, mode, true);
+}
+
+
+void GLAPIENTRY
+_mesa_PolygonMode(GLenum face, GLenum mode)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   polygon_mode(ctx, face, mode, false);
 }
 
 
@@ -194,7 +247,9 @@ _mesa_PolygonStipple(const GLubyte *pattern)
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glPolygonStipple\n");
 
-   FLUSH_VERTICES(ctx, _NEW_POLYGONSTIPPLE);
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewPolygonStipple ? 0 :
+                                                      _NEW_POLYGONSTIPPLE);
+   ctx->NewDriverState |= ctx->DriverFlags.NewPolygonStipple;
 
    pattern = _mesa_map_validate_pbo_source(ctx, 2,
                                            &ctx->Unpack, 32, 32, 1,
@@ -252,7 +307,8 @@ _mesa_polygon_offset_clamp(struct gl_context *ctx,
        ctx->Polygon.OffsetClamp == clamp)
       return;
 
-   FLUSH_VERTICES(ctx, _NEW_POLYGON);
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewPolygonState ? 0 : _NEW_POLYGON);
+   ctx->NewDriverState |= ctx->DriverFlags.NewPolygonState;
    ctx->Polygon.OffsetFactor = factor;
    ctx->Polygon.OffsetUnits = units;
    ctx->Polygon.OffsetClamp = clamp;
@@ -272,7 +328,6 @@ _mesa_PolygonOffset( GLfloat factor, GLfloat units )
    _mesa_polygon_offset_clamp(ctx, factor, units, 0.0);
 }
 
-
 void GLAPIENTRY
 _mesa_PolygonOffsetEXT( GLfloat factor, GLfloat bias )
 {
@@ -286,19 +341,17 @@ _mesa_PolygonOffsetClampEXT( GLfloat factor, GLfloat units, GLfloat clamp )
 {
    GET_CURRENT_CONTEXT(ctx);
 
-   if (!ctx->Extensions.EXT_polygon_offset_clamp) {
+   if (!ctx->Extensions.ARB_polygon_offset_clamp) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "unsupported function (glPolygonOffsetClampEXT) called");
+                  "unsupported function (%s) called", "glPolygonOffsetClamp");
       return;
    }
 
    if (MESA_VERBOSE&VERBOSE_API)
-      _mesa_debug(ctx, "glPolygonOffsetClampEXT %f %f %f\n", factor, units, clamp);
+      _mesa_debug(ctx, "glPolygonOffsetClamp %f %f %f\n", factor, units, clamp);
 
    _mesa_polygon_offset_clamp(ctx, factor, units, clamp);
 }
-
-
 
 /**********************************************************************/
 /** \name Initialization */
@@ -318,7 +371,6 @@ void _mesa_init_polygon( struct gl_context * ctx )
    ctx->Polygon.CullFlag = GL_FALSE;
    ctx->Polygon.CullFaceMode = GL_BACK;
    ctx->Polygon.FrontFace = GL_CCW;
-   ctx->Polygon._FrontBit = 0;
    ctx->Polygon.FrontMode = GL_FILL;
    ctx->Polygon.BackMode = GL_FILL;
    ctx->Polygon.SmoothFlag = GL_FALSE;

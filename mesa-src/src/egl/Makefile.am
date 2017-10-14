@@ -21,8 +21,13 @@
 
 include Makefile.sources
 
+MKDIR_GEN = $(AM_V_at)$(MKDIR_P) $(@D)
+
+BUILT_SOURCES =
+
 AM_CFLAGS = \
 	-I$(top_srcdir)/include \
+	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/egl/main \
 	-I$(top_srcdir)/src/gbm/main \
 	-I$(top_srcdir)/src \
@@ -41,13 +46,14 @@ libEGL_common_la_SOURCES = \
 	$(LIBEGL_C_FILES)
 
 libEGL_common_la_LIBADD = \
+	$(top_builddir)/src/mapi/shared-glapi/libglapi.la \
+	$(top_builddir)/src/util/libmesautil.la \
 	$(EGL_LIB_DEPS)
 
 dri2_backend_FILES =
 dri3_backend_FILES =
 
 if HAVE_PLATFORM_X11
-AM_CFLAGS += -DHAVE_X11_PLATFORM
 AM_CFLAGS += $(XCB_DRI2_CFLAGS)
 libEGL_common_la_LIBADD += $(XCB_DRI2_LIBS)
 dri2_backend_FILES += drivers/dri2/platform_x11.c
@@ -61,28 +67,42 @@ libEGL_common_la_LIBADD += $(top_builddir)/src/loader/libloader_dri3_helper.la
 endif
 endif
 
+WL_DMABUF_XML = $(WAYLAND_PROTOCOLS_DATADIR)/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml
+
+drivers/dri2/linux-dmabuf-unstable-v1-protocol.c: $(WL_DMABUF_XML)
+	$(MKDIR_GEN)
+	$(AM_V_GEN)$(WAYLAND_SCANNER) code < $< > $@
+
+drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h: $(WL_DMABUF_XML)
+	$(MKDIR_GEN)
+	$(AM_V_GEN)$(WAYLAND_SCANNER) client-header < $< > $@
+
 if HAVE_PLATFORM_WAYLAND
-AM_CFLAGS += -DHAVE_WAYLAND_PLATFORM
-AM_CFLAGS += $(WAYLAND_CFLAGS)
-libEGL_common_la_LIBADD += $(WAYLAND_LIBS)
+drivers/dri2/linux-dmabuf-unstable-v1-protocol.lo: drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h
+drivers/dri2/egl_dri2.lo: drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h
+
+AM_CFLAGS += $(WAYLAND_CLIENT_CFLAGS)
+libEGL_common_la_LIBADD += $(WAYLAND_CLIENT_LIBS)
 libEGL_common_la_LIBADD += $(LIBDRM_LIBS)
+AM_CFLAGS += $(WAYLAND_SERVER_CFLAGS)
 libEGL_common_la_LIBADD += $(top_builddir)/src/egl/wayland/wayland-drm/libwayland-drm.la
-dri2_backend_FILES += drivers/dri2/platform_wayland.c
+libEGL_common_la_LIBADD += $(WAYLAND_SERVER_LIBS)
+dri2_backend_FILES += \
+	drivers/dri2/platform_wayland.c	\
+	drivers/dri2/linux-dmabuf-unstable-v1-protocol.c \
+	drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h
 endif
 
-if HAVE_EGL_PLATFORM_DRM
-AM_CFLAGS += -DHAVE_DRM_PLATFORM
+if HAVE_PLATFORM_DRM
 libEGL_common_la_LIBADD += $(top_builddir)/src/gbm/libgbm.la
 dri2_backend_FILES += drivers/dri2/platform_drm.c
 endif
 
-if HAVE_EGL_PLATFORM_SURFACELESS
-AM_CFLAGS += -DHAVE_SURFACELESS_PLATFORM
+if HAVE_PLATFORM_SURFACELESS
 dri2_backend_FILES += drivers/dri2/platform_surfaceless.c
 endif
 
-if HAVE_EGL_PLATFORM_ANDROID
-AM_CFLAGS += -DHAVE_ANDROID_PLATFORM
+if HAVE_PLATFORM_ANDROID
 AM_CFLAGS += $(ANDROID_CFLAGS)
 libEGL_common_la_LIBADD += $(ANDROID_LIBS)
 dri2_backend_FILES += drivers/dri2/platform_android.c
@@ -90,6 +110,7 @@ endif
 
 AM_CFLAGS += \
 	-I$(top_srcdir)/src/loader \
+	-I$(top_builddir)/src/egl/drivers/dri2 \
 	-I$(top_srcdir)/src/egl/drivers/dri2 \
 	-I$(top_srcdir)/src/gbm/backends/dri \
 	-I$(top_srcdir)/src/egl/wayland/wayland-egl \
@@ -103,8 +124,12 @@ libEGL_common_la_SOURCES += \
 	$(dri2_backend_FILES) \
 	$(dri3_backend_FILES)
 
-libEGL_common_la_LIBADD += $(top_builddir)/src/loader/libloader.la
-libEGL_common_la_LIBADD += $(DLOPEN_LIBS) $(LIBDRM_LIBS) $(CLOCK_LIB)
+libEGL_common_la_LIBADD += \
+	$(top_builddir)/src/loader/libloader.la \
+	$(top_builddir)/src/util/libxmlconfig.la \
+	$(DLOPEN_LIBS) \
+	$(LIBDRM_LIBS) \
+	$(CLOCK_LIB)
 
 GLVND_GEN_DEPS = generate/gen_egl_dispatch.py \
 	generate/egl.xml generate/eglFunctionList.py generate/genCommon.py \
@@ -123,7 +148,7 @@ g_egldispatchstubs.h: $(GLVND_GEN_DEPS)
 		$(top_srcdir)/src/egl/generate/egl.xml \
 		$(top_srcdir)/src/egl/generate/egl_other.xml > $@
 
-BUILT_SOURCES = g_egldispatchstubs.c g_egldispatchstubs.h
+BUILT_SOURCES += g_egldispatchstubs.c g_egldispatchstubs.h
 CLEANFILES = $(BUILT_SOURCES)
 
 if USE_LIBGLVND
@@ -138,7 +163,8 @@ libEGL_mesa_la_SOURCES = \
 	main/eglglvnd.c \
 	main/egldispatchstubs.h \
 	main/egldispatchstubs.c \
-	g_egldispatchstubs.c
+	g_egldispatchstubs.c \
+	g_egldispatchstubs.h
 libEGL_mesa_la_LIBADD = libEGL_common.la
 libEGL_mesa_la_LDFLAGS = \
 	-no-undefined \
@@ -166,9 +192,6 @@ include $(top_srcdir)/install-lib-links.mk
 pkgconfigdir = $(libdir)/pkgconfig
 
 pkgconfig_DATA = main/egl.pc
-
-khrdir = $(includedir)/KHR
-khr_HEADERS = $(top_srcdir)/include/KHR/khrplatform.h
 
 egldir = $(includedir)/EGL
 egl_HEADERS = \

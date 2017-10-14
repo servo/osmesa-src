@@ -49,6 +49,13 @@ glsl_without_array(const glsl_type *type)
 }
 
 const glsl_type *
+glsl_get_array_instance(const glsl_type *type,
+                        unsigned array_size)
+{
+   return glsl_type::get_array_instance(type, array_size);
+}
+
+const glsl_type *
 glsl_get_struct_field(const glsl_type *type, unsigned index)
 {
    return type->fields.structure[index].type;
@@ -337,6 +344,17 @@ glsl_struct_type(const glsl_struct_field *fields,
                  unsigned num_fields, const char *name)
 {
    return glsl_type::get_record_instance(fields, num_fields, name);
+}
+
+const glsl_type *
+glsl_interface_type(const glsl_struct_field *fields,
+                    unsigned num_fields,
+                    enum glsl_interface_packing packing,
+                    bool row_major,
+                    const char *block_name)
+{
+   return glsl_type::get_interface_instance(fields, num_fields, packing,
+                                            row_major, block_name);
 }
 
 const struct glsl_type *

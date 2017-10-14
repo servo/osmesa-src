@@ -2295,17 +2295,17 @@ ADDR_E_RETURNCODE ADDR_API AddrComputeDccInfo(
 
 /**
 ****************************************************************************************************
-*   ADDR_GET_MAX_ALINGMENTS_OUTPUT
+*   ADDR_GET_MAX_ALIGNMENTS_OUTPUT
 *
 *   @brief
 *       Output structure of AddrGetMaxAlignments
 ****************************************************************************************************
 */
-typedef struct _ADDR_GET_MAX_ALINGMENTS_OUTPUT
+typedef struct _ADDR_GET_MAX_ALIGNMENTS_OUTPUT
 {
     UINT_32 size;                   ///< Size of this structure in bytes
     UINT_64 baseAlign;              ///< Maximum base alignment in bytes
-} ADDR_GET_MAX_ALINGMENTS_OUTPUT;
+} ADDR_GET_MAX_ALIGNMENTS_OUTPUT;
 
 /**
 ****************************************************************************************************
@@ -2317,7 +2317,7 @@ typedef struct _ADDR_GET_MAX_ALINGMENTS_OUTPUT
 */
 ADDR_E_RETURNCODE ADDR_API AddrGetMaxAlignments(
     ADDR_HANDLE                     hLib,
-    ADDR_GET_MAX_ALINGMENTS_OUTPUT* pOut);
+    ADDR_GET_MAX_ALIGNMENTS_OUTPUT* pOut);
 
 
 
@@ -3652,6 +3652,20 @@ ADDR_E_RETURNCODE ADDR_API Addr2GetPreferredSurfaceSetting(
     ADDR_HANDLE                                   hLib,
     const ADDR2_GET_PREFERRED_SURF_SETTING_INPUT* pIn,
     ADDR2_GET_PREFERRED_SURF_SETTING_OUTPUT*      pOut);
+
+/**
+****************************************************************************************************
+*   Addr2IsValidDisplaySwizzleMode
+*
+*   @brief
+*       Return whether the swizzle mode is supported by DCE / DCN.
+****************************************************************************************************
+*/
+ADDR_E_RETURNCODE ADDR_API Addr2IsValidDisplaySwizzleMode(
+    ADDR_HANDLE     hLib,
+    AddrSwizzleMode swizzleMode,
+    UINT_32         bpp,
+    bool            *result);
 
 #if defined(__cplusplus)
 }

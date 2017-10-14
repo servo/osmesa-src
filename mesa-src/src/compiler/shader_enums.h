@@ -39,6 +39,7 @@ extern "C" {
  */
 typedef enum
 {
+   MESA_SHADER_NONE = -1,
    MESA_SHADER_VERTEX = 0,
    MESA_SHADER_TESS_CTRL = 1,
    MESA_SHADER_TESS_EVAL = 2,
@@ -217,6 +218,7 @@ typedef enum
    VARYING_SLOT_TESS_LEVEL_INNER, /* Only appears as TCS output. */
    VARYING_SLOT_BOUNDING_BOX0, /* Only appears as TCS output. */
    VARYING_SLOT_BOUNDING_BOX1, /* Only appears as TCS output. */
+   VARYING_SLOT_VIEW_INDEX,
    VARYING_SLOT_VAR0, /* First generic varying slot */
    /* the remaining are simply for the benefit of gl_varying_slot_name()
     * and not to be construed as an upper bound:
@@ -535,6 +537,9 @@ typedef enum
    SYSTEM_VALUE_LOCAL_GROUP_SIZE,
    /*@}*/
 
+   /** Required for VK_KHX_multiview */
+   SYSTEM_VALUE_VIEW_INDEX,
+
    /**
     * Driver internal vertex-count, used (for example) for drivers to
     * calculate stride for stream-out outputs.  Not externally visible.
@@ -560,6 +565,13 @@ enum glsl_interp_mode
    INTERP_MODE_FLAT,
    INTERP_MODE_NOPERSPECTIVE,
    INTERP_MODE_COUNT /**< Number of interpolation qualifiers */
+};
+
+enum glsl_interface_packing {
+   GLSL_INTERFACE_PACKING_STD140,
+   GLSL_INTERFACE_PACKING_SHARED,
+   GLSL_INTERFACE_PACKING_PACKED,
+   GLSL_INTERFACE_PACKING_STD430
 };
 
 const char *glsl_interp_mode_name(enum glsl_interp_mode qual);
@@ -656,6 +668,23 @@ enum gl_tess_spacing
    TESS_SPACING_EQUAL,
    TESS_SPACING_FRACTIONAL_ODD,
    TESS_SPACING_FRACTIONAL_EVEN,
+};
+
+/**
+ * A compare function enum for use in compiler lowering passes.  This is in
+ * the same order as GL's compare functions (shifted down by GL_NEVER), and is
+ * exactly the same as gallium's PIPE_FUNC_*.
+ */
+enum compare_func
+{
+   COMPARE_FUNC_NEVER,
+   COMPARE_FUNC_LESS,
+   COMPARE_FUNC_EQUAL,
+   COMPARE_FUNC_LEQUAL,
+   COMPARE_FUNC_GREATER,
+   COMPARE_FUNC_NOTEQUAL,
+   COMPARE_FUNC_GEQUAL,
+   COMPARE_FUNC_ALWAYS,
 };
 
 #ifdef __cplusplus

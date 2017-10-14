@@ -29,22 +29,26 @@
 #include "llvm-c/TargetMachine.h"
 #include "amd_family.h"
 #include "../vulkan/radv_descriptor_set.h"
-
-#include "shader_enums.h"
+#include "ac_shader_info.h"
+#include "compiler/shader_enums.h"
 struct ac_shader_binary;
 struct ac_shader_config;
 struct nir_shader;
 struct radv_pipeline_layout;
 
+struct ac_llvm_context;
+struct ac_shader_abi;
 
 struct ac_vs_variant_key {
 	uint32_t instance_rate_inputs;
 	uint32_t as_es:1;
 	uint32_t as_ls:1;
+	uint32_t export_prim_id:1;
 };
 
 struct ac_tes_variant_key {
 	uint32_t as_es:1;
+	uint32_t export_prim_id:1;
 };
 
 struct ac_tcs_variant_key {
@@ -55,18 +59,23 @@ struct ac_tcs_variant_key {
 struct ac_fs_variant_key {
 	uint32_t col_format;
 	uint32_t is_int8;
+	uint32_t is_int10;
+	uint32_t multisample : 1;
 };
 
-union ac_shader_variant_key {
-	struct ac_vs_variant_key vs;
-	struct ac_fs_variant_key fs;
-	struct ac_tes_variant_key tes;
-	struct ac_tcs_variant_key tcs;
+struct ac_shader_variant_key {
+	union {
+		struct ac_vs_variant_key vs;
+		struct ac_fs_variant_key fs;
+		struct ac_tes_variant_key tes;
+		struct ac_tcs_variant_key tcs;
+	};
+	bool has_multiview_view_index;
 };
 
 struct ac_nir_compiler_options {
 	struct radv_pipeline_layout *layout;
-	union ac_shader_variant_key key;
+	struct ac_shader_variant_key key;
 	bool unsafe_math;
 	bool supports_spill;
 	enum radeon_family family;
@@ -83,7 +92,9 @@ struct ac_userdata_info {
 enum ac_ud_index {
 	AC_UD_SCRATCH_RING_OFFSETS = 0,
 	AC_UD_PUSH_CONSTANTS = 1,
-	AC_UD_SHADER_START = 2,
+	AC_UD_INDIRECT_DESCRIPTOR_SETS = 2,
+	AC_UD_VIEW_INDEX = 3,
+	AC_UD_SHADER_START = 4,
 	AC_UD_VS_VERTEX_BUFFERS = AC_UD_SHADER_START,
 	AC_UD_VS_BASE_VERTEX_START_INSTANCE,
 	AC_UD_VS_LS_TCS_IN_LAYOUT,
@@ -120,15 +131,15 @@ struct ac_userdata_locations {
 };
 
 struct ac_vs_output_info {
+	uint8_t	vs_output_param_offset[VARYING_SLOT_MAX];
 	uint8_t clip_dist_mask;
 	uint8_t cull_dist_mask;
+	uint8_t param_exports;
 	bool writes_pointsize;
 	bool writes_layer;
 	bool writes_viewport_index;
-	uint32_t prim_id_output;
-	uint32_t layer_output;
+	bool export_prim_id;
 	uint32_t export_mask;
-	unsigned param_exports;
 	unsigned pos_exports;
 };
 
@@ -138,10 +149,11 @@ struct ac_es_output_info {
 
 struct ac_shader_variant_info {
 	struct ac_userdata_locations user_sgprs_locs;
+	struct ac_shader_info info;
 	unsigned num_user_sgprs;
 	unsigned num_input_sgprs;
 	unsigned num_input_vgprs;
-
+	bool need_indirect_descriptor_sets;
 	union {
 		struct {
 			struct ac_vs_output_info outinfo;
@@ -163,10 +175,8 @@ struct ac_shader_variant_info {
 			bool writes_sample_mask;
 			bool early_fragment_test;
 			bool writes_memory;
-			bool force_persample;
 			bool prim_id_input;
 			bool layer_input;
-			bool uses_sample_positions;
 		} fs;
 		struct {
 			unsigned block_size[3];
@@ -178,6 +188,7 @@ struct ac_shader_variant_info {
 			unsigned invocations;
 			unsigned gsvs_vertex_size;
 			unsigned max_gsvs_emit_size;
+			bool uses_prim_id;
 		} gs;
 		struct {
 			bool uses_prim_id;
@@ -216,5 +227,9 @@ void ac_create_gs_copy_shader(LLVMTargetMachineRef tm,
 			      struct ac_shader_variant_info *shader_info,
 			      const struct ac_nir_compiler_options *options,
 			      bool dump_shader);
+
+struct nir_to_llvm_context;
+void ac_nir_translate(struct ac_llvm_context *ac, struct ac_shader_abi *abi,
+		      struct nir_shader *nir, struct nir_to_llvm_context *nctx);
 
 #endif /* AC_NIR_TO_LLVM_H */

@@ -57,7 +57,7 @@ static const struct debug_control debug_control[] = {
    { "vert",        DEBUG_VERTS },
    { "dri",         DEBUG_DRI },
    { "sf",          DEBUG_SF },
-   { "stats",       DEBUG_STATS },
+   { "submit",      DEBUG_SUBMIT },
    { "wm",          DEBUG_WM },
    { "urb",         DEBUG_URB },
    { "vs",          DEBUG_VS },
@@ -69,7 +69,6 @@ static const struct debug_control debug_control[] = {
    { "optimizer",   DEBUG_OPTIMIZER },
    { "ann",         DEBUG_ANNOTATION },
    { "no8",         DEBUG_NO8 },
-   { "vec4",        DEBUG_VEC4VS },
    { "spill_fs",    DEBUG_SPILL_FS },
    { "spill_vec4",  DEBUG_SPILL_VEC4 },
    { "cs",          DEBUG_CS },
@@ -84,6 +83,7 @@ static const struct debug_control debug_control[] = {
    { "norbc",       DEBUG_NO_RBC },
    { "nohiz",       DEBUG_NO_HIZ },
    { "color",       DEBUG_COLOR },
+   { "reemit",      DEBUG_REEMIT },
    { NULL,    0 }
 };
 

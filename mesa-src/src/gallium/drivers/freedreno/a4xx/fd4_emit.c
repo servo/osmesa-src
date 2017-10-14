@@ -403,7 +403,7 @@ fd4_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 			struct pipe_vertex_element *elem = &vtx->vtx->pipe[i];
 			const struct pipe_vertex_buffer *vb =
 					&vtx->vertexbuf.vb[elem->vertex_buffer_index];
-			struct fd_resource *rsc = fd_resource(vb->buffer);
+			struct fd_resource *rsc = fd_resource(vb->buffer.resource);
 			enum pipe_format pfmt = elem->src_format;
 			enum a4xx_vtx_fmt fmt = fd4_pipe2vtx(pfmt);
 			bool switchnext = (i != last) ||
@@ -499,7 +499,7 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 {
 	const struct ir3_shader_variant *vp = fd4_emit_get_vp(emit);
 	const struct ir3_shader_variant *fp = fd4_emit_get_fp(emit);
-	uint32_t dirty = emit->dirty;
+	const enum fd_dirty_3d_state dirty = emit->dirty;
 
 	emit_marker(ring, 5);
 
@@ -600,7 +600,7 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			fd4_rasterizer_stateobj(ctx->rasterizer);
 		uint32_t val = rast->pc_prim_vtx_cntl;
 
-		if (info->indexed && info->primitive_restart)
+		if (info->index_size && info->primitive_restart)
 			val |= A4XX_PC_PRIM_VTX_CNTL_PRIMITIVE_RESTART;
 
 		val |= COND(vp->writes_psize, A4XX_PC_PRIM_VTX_CNTL_PSIZE);
@@ -677,9 +677,9 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	}
 
 	if (emit->prog == &ctx->prog) { /* evil hack to deal sanely with clear path */
-		ir3_emit_consts(vp, ring, ctx, emit->info, dirty);
+		ir3_emit_vs_consts(vp, ring, ctx, emit->info);
 		if (!emit->key.binning_pass)
-			ir3_emit_consts(fp, ring, ctx, emit->info, dirty);
+			ir3_emit_fs_consts(fp, ring, ctx);
 	}
 
 	if ((dirty & FD_DIRTY_BLEND)) {
@@ -740,21 +740,11 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, A4XX_RB_BLEND_ALPHA_F32(bcolor->color[3]));
 	}
 
-	if (dirty & FD_DIRTY_VERTTEX) {
-		if (vp->has_samp)
-			emit_textures(ctx, ring, SB4_VS_TEX, &ctx->verttex, vp);
-		else
-			dirty &= ~FD_DIRTY_VERTTEX;
-	}
+	if (ctx->dirty_shader[PIPE_SHADER_VERTEX] & FD_DIRTY_SHADER_TEX)
+		emit_textures(ctx, ring, SB4_VS_TEX, &ctx->tex[PIPE_SHADER_VERTEX], vp);
 
-	if (dirty & FD_DIRTY_FRAGTEX) {
-		if (fp->has_samp)
-			emit_textures(ctx, ring, SB4_FS_TEX, &ctx->fragtex, fp);
-		else
-			dirty &= ~FD_DIRTY_FRAGTEX;
-	}
-
-	ctx->dirty &= ~dirty;
+	if (ctx->dirty_shader[PIPE_SHADER_FRAGMENT] & FD_DIRTY_SHADER_TEX)
+		emit_textures(ctx, ring, SB4_FS_TEX, &ctx->tex[PIPE_SHADER_FRAGMENT], fp);
 }
 
 /* emit setup at begin of new cmdstream buffer (don't rely on previous

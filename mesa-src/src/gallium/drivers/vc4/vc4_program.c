@@ -33,16 +33,22 @@
 #include "tgsi/tgsi_parse.h"
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_builder.h"
+#include "compiler/nir_types.h"
 #include "nir/tgsi_to_nir.h"
 #include "vc4_context.h"
 #include "vc4_qpu.h"
 #include "vc4_qir.h"
-#include "mesa/state_tracker/st_glsl_types.h"
 
 static struct qreg
 ntq_get_src(struct vc4_compile *c, nir_src src, int i);
 static void
 ntq_emit_cf_list(struct vc4_compile *c, struct exec_list *list);
+
+static int
+type_size(const struct glsl_type *type)
+{
+   return glsl_count_attribute_slots(type, false);
+}
 
 static void
 resize_qreg_array(struct vc4_compile *c,
@@ -1347,7 +1353,7 @@ emit_frag_end(struct vc4_compile *c)
         }
 
         uint32_t discard_cond = QPU_COND_ALWAYS;
-        if (c->s->info->fs.uses_discard) {
+        if (c->s->info.fs.uses_discard) {
                 qir_SF(c, c->discard);
                 discard_cond = QPU_COND_ZS;
         }
@@ -1653,7 +1659,7 @@ static void
 ntq_setup_uniforms(struct vc4_compile *c)
 {
         nir_foreach_variable(var, &c->s->uniforms) {
-                uint32_t vec4_count = st_glsl_type_size(var->type);
+                uint32_t vec4_count = type_size(var->type);
                 unsigned vec4_size = 4 * sizeof(float);
 
                 declare_uniform_range(c, var->data.driver_location * vec4_size,
@@ -1708,8 +1714,7 @@ ntq_emit_ssa_undef(struct vc4_compile *c, nir_ssa_undef_instr *instr)
 static void
 ntq_emit_color_read(struct vc4_compile *c, nir_intrinsic_instr *instr)
 {
-        nir_const_value *const_offset = nir_src_as_const_value(instr->src[0]);
-        assert(const_offset->u32[0] == 0);
+        assert(nir_src_as_const_value(instr->src[0])->u32[0] == 0);
 
         /* Reads of the per-sample color need to be done in
          * order.
@@ -2158,7 +2163,7 @@ ntq_emit_impl(struct vc4_compile *c, nir_function_impl *impl)
 static void
 nir_to_qir(struct vc4_compile *c)
 {
-        if (c->stage == QSTAGE_FRAG && c->s->info->fs.uses_discard)
+        if (c->stage == QSTAGE_FRAG && c->s->info.fs.uses_discard)
                 c->discard = qir_MOV(c, qir_uniform_ui(c, 0));
 
         ntq_setup_inputs(c);
@@ -2245,8 +2250,15 @@ vc4_shader_ntq(struct vc4_context *vc4, enum qstage stage,
 
         c->s = nir_shader_clone(c, key->shader_state->base.ir.nir);
 
-        if (stage == QSTAGE_FRAG)
+        if (stage == QSTAGE_FRAG) {
+                if (c->fs_key->alpha_test_func != COMPARE_FUNC_ALWAYS) {
+                        NIR_PASS_V(c->s, nir_lower_alpha_test,
+                                   c->fs_key->alpha_test_func,
+                                   c->fs_key->sample_alpha_to_one &&
+                                   c->fs_key->msaa);
+                }
                 NIR_PASS_V(c->s, vc4_nir_lower_blend, c);
+        }
 
         struct nir_lower_tex_options tex_options = {
                 /* We would need to implement txs, but we don't want the
@@ -2422,6 +2434,9 @@ vc4_shader_state_create(struct pipe_context *pctx,
                  * creation.
                  */
                 s = cso->ir.nir;
+
+                NIR_PASS_V(s, nir_lower_io, nir_var_all, type_size,
+                           (nir_lower_io_options)0);
         } else {
                 assert(cso->type == PIPE_SHADER_IR_TGSI);
 
@@ -2583,7 +2598,7 @@ vc4_get_compiled_shader(struct vc4_context *vc4, enum qstage stage,
 
                 /* Note: the temporary clone in c->s has been freed. */
                 nir_shader *orig_shader = key->shader_state->base.ir.nir;
-                if (orig_shader->info->outputs_written & (1 << FRAG_RESULT_DEPTH))
+                if (orig_shader->info.outputs_written & (1 << FRAG_RESULT_DEPTH))
                         shader->disable_early_z = true;
         } else {
                 shader->num_inputs = c->num_inputs;
@@ -2740,10 +2755,10 @@ vc4_update_compiled_fs(struct vc4_context *vc4, uint8_t prim_mode)
         key->stencil_full_writemasks = vc4->zsa->stencil_uniforms[2] != 0;
         key->depth_enabled = (vc4->zsa->base.depth.enabled ||
                               key->stencil_enabled);
-        if (vc4->zsa->base.alpha.enabled) {
-                key->alpha_test = true;
+        if (vc4->zsa->base.alpha.enabled)
                 key->alpha_test_func = vc4->zsa->base.alpha.func;
-        }
+        else
+                key->alpha_test_func = COMPARE_FUNC_ALWAYS;
 
         if (key->is_points) {
                 key->point_sprite_mask =
@@ -2763,11 +2778,11 @@ vc4_update_compiled_fs(struct vc4_context *vc4, uint8_t prim_mode)
         vc4->dirty |= VC4_DIRTY_COMPILED_FS;
 
         if (vc4->rasterizer->base.flatshade &&
-            old_fs && vc4->prog.fs->color_inputs != old_fs->color_inputs) {
+            (!old_fs || vc4->prog.fs->color_inputs != old_fs->color_inputs)) {
                 vc4->dirty |= VC4_DIRTY_FLAT_SHADE_FLAGS;
         }
 
-        if (old_fs && vc4->prog.fs->fs_inputs != old_fs->fs_inputs)
+        if (!old_fs || vc4->prog.fs->fs_inputs != old_fs->fs_inputs)
                 vc4->dirty |= VC4_DIRTY_FS_INPUTS;
 }
 
@@ -2877,6 +2892,7 @@ fs_inputs_compare(const void *key1, const void *key2)
 
 static void
 delete_from_cache_if_matches(struct hash_table *ht,
+                             struct vc4_compiled_shader **last_compile,
                              struct hash_entry *entry,
                              struct vc4_uncompiled_shader *so)
 {
@@ -2886,6 +2902,10 @@ delete_from_cache_if_matches(struct hash_table *ht,
                 struct vc4_compiled_shader *shader = entry->data;
                 _mesa_hash_table_remove(ht, entry);
                 vc4_bo_unreference(&shader->bo);
+
+                if (shader == *last_compile)
+                        *last_compile = NULL;
+
                 ralloc_free(shader);
         }
 }
@@ -2897,10 +2917,14 @@ vc4_shader_state_delete(struct pipe_context *pctx, void *hwcso)
         struct vc4_uncompiled_shader *so = hwcso;
 
         struct hash_entry *entry;
-        hash_table_foreach(vc4->fs_cache, entry)
-                delete_from_cache_if_matches(vc4->fs_cache, entry, so);
-        hash_table_foreach(vc4->vs_cache, entry)
-                delete_from_cache_if_matches(vc4->vs_cache, entry, so);
+        hash_table_foreach(vc4->fs_cache, entry) {
+                delete_from_cache_if_matches(vc4->fs_cache, &vc4->prog.fs,
+                                             entry, so);
+        }
+        hash_table_foreach(vc4->vs_cache, entry) {
+                delete_from_cache_if_matches(vc4->vs_cache, &vc4->prog.vs,
+                                             entry, so);
+        }
 
         ralloc_free(so->base.ir.nir);
         free(so);

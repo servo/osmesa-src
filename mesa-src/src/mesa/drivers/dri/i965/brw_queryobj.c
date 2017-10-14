@@ -47,7 +47,7 @@ brw_timebase_scale(struct brw_context *brw, uint64_t gpu_timestamp)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   return (double)gpu_timestamp * devinfo->timebase_scale;
+   return (1000000000ull * gpu_timestamp) / devinfo->timestamp_frequency;
 }
 
 /* As best we know currently, the Gen HW timestamps are 36bits across
@@ -84,7 +84,9 @@ brw_raw_timestamp_delta(struct brw_context *brw, uint64_t time0, uint64_t time1)
 void
 brw_write_timestamp(struct brw_context *brw, struct brw_bo *query_bo, int idx)
 {
-   if (brw->gen == 6) {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   if (devinfo->gen == 6) {
       /* Emit Sandybridge workaround flush: */
       brw_emit_pipe_control_flush(brw,
                                   PIPE_CONTROL_CS_STALL |
@@ -93,11 +95,11 @@ brw_write_timestamp(struct brw_context *brw, struct brw_bo *query_bo, int idx)
 
    uint32_t flags = PIPE_CONTROL_WRITE_TIMESTAMP;
 
-   if (brw->gen == 9 && brw->gt == 4)
+   if (devinfo->gen == 9 && devinfo->gt == 4)
       flags |= PIPE_CONTROL_CS_STALL;
 
    brw_emit_pipe_control_write(brw, flags,
-                               query_bo, idx * sizeof(uint64_t), 0, 0);
+                               query_bo, idx * sizeof(uint64_t), 0);
 }
 
 /**
@@ -106,14 +108,22 @@ brw_write_timestamp(struct brw_context *brw, struct brw_bo *query_bo, int idx)
 void
 brw_write_depth_count(struct brw_context *brw, struct brw_bo *query_bo, int idx)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    uint32_t flags = PIPE_CONTROL_WRITE_DEPTH_COUNT | PIPE_CONTROL_DEPTH_STALL;
 
-   if (brw->gen == 9 && brw->gt == 4)
+   if (devinfo->gen == 9 && devinfo->gt == 4)
       flags |= PIPE_CONTROL_CS_STALL;
 
+   if (devinfo->gen >= 10) {
+      /* "Driver must program PIPE_CONTROL with only Depth Stall Enable bit set
+       * prior to programming a PIPE_CONTROL with Write PS Depth Count Post sync
+       * operation."
+       */
+      brw_emit_pipe_control_flush(brw, PIPE_CONTROL_DEPTH_STALL);
+   }
+
    brw_emit_pipe_control_write(brw, flags,
-                               query_bo, idx * sizeof(uint64_t),
-                               0, 0);
+                               query_bo, idx * sizeof(uint64_t), 0);
 }
 
 /**
@@ -124,11 +134,12 @@ brw_queryobj_get_results(struct gl_context *ctx,
 			 struct brw_query_object *query)
 {
    struct brw_context *brw = brw_context(ctx);
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
    int i;
    uint64_t *results;
 
-   assert(brw->gen < 6);
+   assert(devinfo->gen < 6);
 
    if (query->bo == NULL)
       return;
@@ -146,8 +157,7 @@ brw_queryobj_get_results(struct gl_context *ctx,
       }
    }
 
-   brw_bo_map(brw, query->bo, false);
-   results = query->bo->virtual;
+   results = brw_bo_map(brw, query->bo, MAP_READ);
    switch (query->Base.Target) {
    case GL_TIME_ELAPSED_EXT:
       /* The query BO contains the starting and ending timestamps.
@@ -251,8 +261,9 @@ brw_begin_query(struct gl_context *ctx, struct gl_query_object *q)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_query_object *query = (struct brw_query_object *)q;
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   assert(brw->gen < 6);
+   assert(devinfo->gen < 6);
 
    switch (query->Base.Target) {
    case GL_TIME_ELAPSED_EXT:
@@ -322,8 +333,9 @@ brw_end_query(struct gl_context *ctx, struct gl_query_object *q)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_query_object *query = (struct brw_query_object *)q;
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   assert(brw->gen < 6);
+   assert(devinfo->gen < 6);
 
    switch (query->Base.Target) {
    case GL_TIME_ELAPSED_EXT:
@@ -375,8 +387,9 @@ brw_end_query(struct gl_context *ctx, struct gl_query_object *q)
 static void brw_wait_query(struct gl_context *ctx, struct gl_query_object *q)
 {
    struct brw_query_object *query = (struct brw_query_object *)q;
+   const struct gen_device_info *devinfo = &brw_context(ctx)->screen->devinfo;
 
-   assert(brw_context(ctx)->gen < 6);
+   assert(devinfo->gen < 6);
 
    brw_queryobj_get_results(ctx, query);
    query->Base.Ready = true;
@@ -392,8 +405,9 @@ static void brw_check_query(struct gl_context *ctx, struct gl_query_object *q)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_query_object *query = (struct brw_query_object *)q;
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   assert(brw->gen < 6);
+   assert(devinfo->gen < 6);
 
    /* From the GL_ARB_occlusion_query spec:
     *
@@ -421,8 +435,9 @@ static void
 ensure_bo_has_space(struct gl_context *ctx, struct brw_query_object *query)
 {
    struct brw_context *brw = brw_context(ctx);
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   assert(brw->gen < 6);
+   assert(devinfo->gen < 6);
 
    if (!query->bo || query->last_index * 2 + 1 >= 4096 / sizeof(uint64_t)) {
 

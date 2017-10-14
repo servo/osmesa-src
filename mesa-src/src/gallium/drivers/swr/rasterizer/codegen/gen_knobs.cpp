@@ -1,19 +1,24 @@
 /******************************************************************************
+* Copyright (C) 2015-2017 Intel Corporation.   All Rights Reserved.
 *
-* Copyright 2015-2017
-* Intel Corporation
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
 *
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
+* The above copyright notice and this permission notice (including the next
+* paragraph) shall be included in all copies or substantial portions of the
+* Software.
 *
-* http ://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+* IN THE SOFTWARE.
 *
 * @file gen_knobs.cpp
 *
@@ -33,6 +38,61 @@
 #include <common/os.h>
 #include <sstream>
 #include <iomanip>
+#include <regex>
+#include <core/utils.h>
+
+//========================================================
+// Implementation
+//========================================================
+void KnobBase::autoExpandEnvironmentVariables(std::string &text)
+{
+#if (__GNUC__) && (GCC_VERSION < 409000)
+    // <regex> isn't implemented prior to gcc-4.9.0
+    // unix style variable replacement
+    size_t start;
+    while ((start = text.find("${")) != std::string::npos) {
+        size_t end = text.find("}");
+        if (end == std::string::npos)
+            break;
+        const std::string var = GetEnv(text.substr(start + 2, end - start - 2));
+        text.replace(start, end - start + 1, var);
+    }
+    // win32 style variable replacement
+    while ((start = text.find("%")) != std::string::npos) {
+        size_t end = text.find("%", start + 1);
+        if (end == std::string::npos)
+            break;
+        const std::string var = GetEnv(text.substr(start + 1, end - start - 1));
+        text.replace(start, end - start + 1, var);
+    }
+#else
+    {
+        // unix style variable replacement
+        static std::regex env("\\$\\{([^}]+)\\}");
+        std::smatch match;
+        while (std::regex_search(text, match, env))
+        {
+            const std::string var = GetEnv(match[1].str());
+            // certain combinations of gcc/libstd++ have problems with this
+            // text.replace(match[0].first, match[0].second, var);
+            text.replace(match.prefix().length(), match[0].length(), var);
+        }
+    }
+    {
+        // win32 style variable replacement
+        static std::regex env("\\%([^}]+)\\%");
+        std::smatch match;
+        while (std::regex_search(text, match, env))
+        {
+            const std::string var = GetEnv(match[1].str());
+            // certain combinations of gcc/libstd++ have problems with this
+            // text.replace(match[0].first, match[0].second, var);
+            text.replace(match.prefix().length(), match[0].length(), var);
+        }
+    }
+#endif
+}
+
 
 //========================================================
 // Static Data Members
@@ -60,6 +120,8 @@ GlobalKnobs::GlobalKnobs()
     InitKnob(MAX_PRIMS_PER_DRAW);
     InitKnob(MAX_TESS_PRIMS_PER_DRAW);
     InitKnob(DEBUG_OUTPUT_DIR);
+    InitKnob(JIT_ENABLE_CACHE);
+    InitKnob(JIT_CACHE_DIR);
     InitKnob(TOSS_DRAW);
     InitKnob(TOSS_QUEUE_FE);
     InitKnob(TOSS_FETCH);
@@ -122,6 +184,10 @@ std::string GlobalKnobs::ToString(const char* optPerLinePrefix)
     str << std::dec << KNOB_MAX_TESS_PRIMS_PER_DRAW << "\n";
     str << optPerLinePrefix << "KNOB_DEBUG_OUTPUT_DIR:           ";
     str << KNOB_DEBUG_OUTPUT_DIR << "\n";
+    str << optPerLinePrefix << "KNOB_JIT_ENABLE_CACHE:           ";
+    str << (KNOB_JIT_ENABLE_CACHE ? "+\n" : "-\n");
+    str << optPerLinePrefix << "KNOB_JIT_CACHE_DIR:              ";
+    str << KNOB_JIT_CACHE_DIR << "\n";
     str << optPerLinePrefix << "KNOB_TOSS_DRAW:                  ";
     str << (KNOB_TOSS_DRAW ? "+\n" : "-\n");
     str << optPerLinePrefix << "KNOB_TOSS_QUEUE_FE:              ";
@@ -142,5 +208,4 @@ std::string GlobalKnobs::ToString(const char* optPerLinePrefix)
 
     return str.str();
 }
-
 

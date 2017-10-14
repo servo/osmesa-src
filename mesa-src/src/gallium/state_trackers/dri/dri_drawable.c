@@ -38,6 +38,8 @@
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
 
+static uint32_t drifb_ID = 0;
+
 static void
 swap_fences_unref(struct dri_drawable *draw);
 
@@ -121,6 +123,23 @@ dri_st_framebuffer_flush_front(struct st_context_iface *stctx,
 }
 
 /**
+ * The state tracker framebuffer interface flush_swapbuffers callback
+ */
+static boolean
+dri_st_framebuffer_flush_swapbuffers(struct st_context_iface *stctx,
+                                     struct st_framebuffer_iface *stfbi)
+{
+   struct dri_context *ctx = (struct dri_context *)stctx->st_manager_private;
+   struct dri_drawable *drawable =
+      (struct dri_drawable *) stfbi->st_manager_private;
+
+   if (drawable->flush_swapbuffers)
+      drawable->flush_swapbuffers(ctx, drawable);
+
+   return TRUE;
+}
+
+/**
  * This is called when we need to set up GL rendering to a new X window.
  */
 boolean
@@ -144,6 +163,7 @@ dri_create_buffer(__DRIscreen * sPriv,
    drawable->base.visual = &drawable->stvis;
    drawable->base.flush_front = dri_st_framebuffer_flush_front;
    drawable->base.validate = dri_st_framebuffer_validate;
+   drawable->base.flush_swapbuffers = dri_st_framebuffer_flush_swapbuffers;
    drawable->base.st_manager_private = (void *) drawable;
 
    drawable->screen = screen;
@@ -155,6 +175,8 @@ dri_create_buffer(__DRIscreen * sPriv,
 
    dPriv->driverPrivate = (void *)drawable;
    p_atomic_set(&drawable->base.stamp, 1);
+   drawable->base.ID = p_atomic_inc_return(&drifb_ID);
+   drawable->base.state_manager = &screen->base;
 
    return GL_TRUE;
 fail:
@@ -166,6 +188,8 @@ void
 dri_destroy_buffer(__DRIdrawable * dPriv)
 {
    struct dri_drawable *drawable = dri_drawable(dPriv);
+   struct dri_screen *screen = drawable->screen;
+   struct st_api *stapi = screen->st_api;
    int i;
 
    pipe_surface_reference(&drawable->drisw_surface, NULL);
@@ -176,6 +200,9 @@ dri_destroy_buffer(__DRIdrawable * dPriv)
       pipe_resource_reference(&drawable->msaa_textures[i], NULL);
 
    swap_fences_unref(drawable);
+
+   /* Notify the st manager that this drawable is no longer valid */
+   stapi->destroy_drawable(stapi, &drawable->base);
 
    FREE(drawable);
 }

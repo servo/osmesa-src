@@ -747,7 +747,7 @@ ADDR_E_RETURNCODE CiLib::HwlComputeSurfaceInfo(
 
                 SiLib::HwlComputeSurfaceInfo(&localIn, pOut);
 
-                ADDR_ASSERT((MinDepth2DThinIndex <= pOut->tileIndex) && (MaxDepth2DThinIndex >= pOut->tileIndex));
+                ADDR_ASSERT(((MinDepth2DThinIndex <= pOut->tileIndex) && (MaxDepth2DThinIndex >= pOut->tileIndex)) || pOut->tileIndex == Depth1DThinIndex);
 
                 depthStencil2DTileConfigMatch = DepthStencilTileCfgMatch(pIn, pOut);
             }
@@ -2177,7 +2177,7 @@ VOID CiLib::HwlPadDimensions(
 ****************************************************************************************************
 */
 ADDR_E_RETURNCODE CiLib::HwlGetMaxAlignments(
-    ADDR_GET_MAX_ALINGMENTS_OUTPUT* pOut    ///< [out] output structure
+    ADDR_GET_MAX_ALIGNMENTS_OUTPUT* pOut    ///< [out] output structure
     ) const
 {
     const UINT_32 pipes = HwlGetPipes(&m_tileTable[0].info);

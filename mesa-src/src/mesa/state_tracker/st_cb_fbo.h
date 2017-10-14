@@ -48,7 +48,12 @@ struct st_renderbuffer
 {
    struct gl_renderbuffer Base;
    struct pipe_resource *texture;
-   struct pipe_surface *surface; /* temporary view into texture */
+   /* This points to either "surface_linear" or "surface_srgb".
+    * It doesn't hold the pipe_surface reference. The other two do.
+    */
+   struct pipe_surface *surface;
+   struct pipe_surface *surface_linear;
+   struct pipe_surface *surface_srgb;
    GLboolean defined;        /**< defined contents? */
 
    struct pipe_transfer *transfer; /**< only used when mapping the resource */
@@ -74,6 +79,11 @@ st_renderbuffer(struct gl_renderbuffer *rb)
    return (struct st_renderbuffer *) rb;
 }
 
+static inline struct pipe_resource *
+st_get_renderbuffer_resource(struct gl_renderbuffer *rb)
+{
+   return st_renderbuffer(rb)->texture;
+}
 
 /**
  * Cast wrapper to convert a struct gl_framebuffer to an st_framebuffer.
@@ -85,7 +95,8 @@ static inline struct st_framebuffer *
 st_ws_framebuffer(struct gl_framebuffer *fb)
 {
    /* FBO cannot be casted.  See st_new_framebuffer */
-   if (fb && _mesa_is_winsys_fbo(fb))
+   if (fb && _mesa_is_winsys_fbo(fb) &&
+       fb != _mesa_get_incomplete_framebuffer())
       return (struct st_framebuffer *) fb;
    return NULL;
 }

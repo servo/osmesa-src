@@ -1,14 +1,9 @@
 language: rust
-matrix:
-  include:
-    - os: linux
-      addons:
-        apt:
-          sources:
-            - ubuntu-toolchain-r-test
-            - llvm-toolchain-precise-3.9
-          packages:
-            - clang-3.9
+before_install:
+  - sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+  - sudo add-apt-repository ppa:llvm-toolchain-precise-3.9 -y
+  - sudo apt-get update -q
+  - sudo apt-get install clang-3.9 -y
 rust:
   - nightly
   - beta

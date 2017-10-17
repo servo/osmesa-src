@@ -2622,6 +2622,8 @@ void radv_CmdExecuteCommands(
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, primary, commandBuffer);
 
+	assert(commandBufferCount > 0);
+
 	/* Emit pending flushes on primary prior to executing secondary */
 	si_emit_cache_flush(primary);
 
@@ -2650,18 +2652,46 @@ void radv_CmdExecuteCommands(
 		}
 		primary->device->ws->cs_execute_secondary(primary->cs, secondary->cs);
 
-		primary->state.emitted_pipeline = secondary->state.emitted_pipeline;
-		primary->state.emitted_compute_pipeline = secondary->state.emitted_compute_pipeline;
-		primary->state.last_primitive_reset_en = secondary->state.last_primitive_reset_en;
-		primary->state.last_primitive_reset_index = secondary->state.last_primitive_reset_index;
+
+		/* When the secondary command buffer is compute only we don't
+		 * need to re-emit the current graphics pipeline.
+		 */
+		if (secondary->state.emitted_pipeline) {
+			primary->state.emitted_pipeline =
+				secondary->state.emitted_pipeline;
+		}
+
+		/* When the secondary command buffer is graphics only we don't
+		 * need to re-emit the current compute pipeline.
+		 */
+		if (secondary->state.emitted_compute_pipeline) {
+			primary->state.emitted_compute_pipeline =
+				secondary->state.emitted_compute_pipeline;
+		}
+
+		/* Only re-emit the draw packets when needed. */
+		if (secondary->state.last_primitive_reset_en != -1) {
+			primary->state.last_primitive_reset_en =
+				secondary->state.last_primitive_reset_en;
+		}
+
+		if (secondary->state.last_primitive_reset_index) {
+			primary->state.last_primitive_reset_index =
+				secondary->state.last_primitive_reset_index;
+		}
+
+		if (secondary->state.last_ia_multi_vgt_param) {
+			primary->state.last_ia_multi_vgt_param =
+				secondary->state.last_ia_multi_vgt_param;
+		}
 	}
 
-	/* if we execute secondary we need to mark some stuff to reset dirty */
-	if (commandBufferCount) {
-		primary->state.dirty |= RADV_CMD_DIRTY_PIPELINE;
-		primary->state.dirty |= RADV_CMD_DIRTY_DYNAMIC_ALL;
-		radv_mark_descriptor_sets_dirty(primary);
-	}
+	/* After executing commands from secondary buffers we have to dirty
+	 * some states.
+	 */
+	primary->state.dirty |= RADV_CMD_DIRTY_PIPELINE;
+	primary->state.dirty |= RADV_CMD_DIRTY_DYNAMIC_ALL;
+	radv_mark_descriptor_sets_dirty(primary);
 }
 
 VkResult radv_CreateCommandPool(

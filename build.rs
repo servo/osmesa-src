@@ -38,7 +38,6 @@ fn main() {
                 .arg("--disable-gles1")
                 .arg("--disable-gles2")
                 .arg("--disable-glx")
-                .arg("--disable-llvm-shared-libs")
                 .arg("--with-platforms=")
                 .arg("--enable-gallium-osmesa")
                 .arg("--with-gallium-drivers=swrast"));

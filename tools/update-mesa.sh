@@ -20,8 +20,8 @@ pushd mesa-tmp
    --disable-gles1               \
    --disable-gles2               \
    --disable-glx                 \
-   --disable-llvm-shared-libs    \
    --enable-gallium-osmesa       \
+   --with-platforms=             \
    --with-gallium-drivers=swrast
 
 make -j8 dist

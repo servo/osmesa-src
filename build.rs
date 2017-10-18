@@ -43,7 +43,7 @@ fn main() {
                 .arg("--with-gallium-drivers=swrast"));
 
     run(Command::new("make")
-                .arg(format!("-j{}", env::var("NUM_JOBS").unwrap()))
+                .env("MAKEFLAGS", env::var("CARGO_MAKEFLAGS").unwrap_or_default())
                 .env("PYTHONPATH", src.join("Mako-1.0.7.zip"))
                 .current_dir(&dst));
 }

@@ -1,6 +1,6 @@
 [package]
 name = "osmesa-src"
-version = "17.3.0-devel"
+version = "17.3.1-devel"
 authors = ["mesa3d maintainers"]
 build = "build.rs"
 repository = "https://github.com/servo/osmesa-src/"

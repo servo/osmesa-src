@@ -57,7 +57,7 @@
 #define SWR_MAX_TEXTURE_ARRAY_LAYERS 512 /* 8K x 512 / 8K x 8K x 512 */
 
 /* Default max client_copy_limit */
-#define SWR_CLIENT_COPY_LIMIT 32768
+#define SWR_CLIENT_COPY_LIMIT 8192
 
 /* Flag indicates creation of alternate surface, to prevent recursive loop
  * in resource creation when msaa_force_enable is set. */
@@ -344,6 +344,8 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_LOAD_CONSTBUF:
    case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
    case PIPE_CAP_TILE_RASTER_ORDER:
+   case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
+   case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:

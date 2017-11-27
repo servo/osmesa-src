@@ -429,7 +429,6 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_GetPerfMonitorGroupsAMD(exec, _mesa_GetPerfMonitorGroupsAMD);
       SET_GetQueryIndexediv(exec, _mesa_GetQueryIndexediv);
       SET_GetQueryObjecti64v(exec, _mesa_GetQueryObjecti64v);
-      SET_GetQueryObjectiv(exec, _mesa_GetQueryObjectiv);
       SET_GetQueryObjectui64v(exec, _mesa_GetQueryObjectui64v);
       SET_GetTexImage(exec, _mesa_GetTexImage);
       SET_GetTextureSubImage(exec, _mesa_GetTextureSubImage);
@@ -526,15 +525,11 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_VertexAttribLFormat(exec, _mesa_VertexAttribLFormat);
    }
    if (_mesa_is_desktop_gl(ctx) || (ctx->API == API_OPENGLES2 && ctx->Version >= 30)) {
-      SET_BeginQuery(exec, _mesa_BeginQuery);
       SET_BindBufferBase(exec, _mesa_BindBufferBase);
       SET_ColorMaski(exec, _mesa_ColorMaski);
-      SET_DeleteQueries(exec, _mesa_DeleteQueries);
       SET_DeleteTransformFeedbacks(exec, _mesa_DeleteTransformFeedbacks);
       SET_Disablei(exec, _mesa_Disablei);
       SET_Enablei(exec, _mesa_Enablei);
-      SET_EndQuery(exec, _mesa_EndQuery);
-      SET_GenQueries(exec, _mesa_GenQueries);
       SET_GenTransformFeedbacks(exec, _mesa_GenTransformFeedbacks);
       SET_GetActiveUniformBlockName(exec, _mesa_GetActiveUniformBlockName);
       SET_GetActiveUniformBlockiv(exec, _mesa_GetActiveUniformBlockiv);
@@ -547,8 +542,6 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_GetIntegeri_v(exec, _mesa_GetIntegeri_v);
       SET_GetInternalformati64v(exec, _mesa_GetInternalformati64v);
       SET_GetInternalformativ(exec, _mesa_GetInternalformativ);
-      SET_GetQueryObjectuiv(exec, _mesa_GetQueryObjectuiv);
-      SET_GetQueryiv(exec, _mesa_GetQueryiv);
       SET_GetSamplerParameterIiv(exec, _mesa_GetSamplerParameterIiv);
       SET_GetSamplerParameterIuiv(exec, _mesa_GetSamplerParameterIuiv);
       SET_GetSamplerParameterfv(exec, _mesa_GetSamplerParameterfv);
@@ -564,7 +557,6 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_GetVertexAttribIiv(exec, _mesa_GetVertexAttribIiv);
       SET_GetVertexAttribIuiv(exec, _mesa_GetVertexAttribIuiv);
       SET_IsEnabledi(exec, _mesa_IsEnabledi);
-      SET_IsQuery(exec, _mesa_IsQuery);
       SET_IsSampler(exec, _mesa_IsSampler);
       SET_IsSync(exec, _mesa_IsSync);
       SET_IsTransformFeedback(exec, _mesa_IsTransformFeedback);
@@ -709,6 +701,7 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
    }
    if (_mesa_is_desktop_gl(ctx) || ctx->API == API_OPENGLES2) {
       SET_BeginPerfQueryINTEL(exec, _mesa_BeginPerfQueryINTEL);
+      SET_BeginQuery(exec, _mesa_BeginQuery);
       SET_BlendBarrier(exec, _mesa_BlendBarrier);
       SET_BlendColor(exec, _mesa_BlendColor);
       SET_CompileShader(exec, _mesa_CompileShader);
@@ -718,8 +711,11 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_DeletePerfQueryINTEL(exec, _mesa_DeletePerfQueryINTEL);
       SET_DeleteProgram(exec, _mesa_DeleteProgram);
       SET_DeleteProgramPipelines(exec, _mesa_DeleteProgramPipelines);
+      SET_DeleteQueries(exec, _mesa_DeleteQueries);
       SET_DeleteShader(exec, _mesa_DeleteShader);
       SET_EndPerfQueryINTEL(exec, _mesa_EndPerfQueryINTEL);
+      SET_EndQuery(exec, _mesa_EndQuery);
+      SET_GenQueries(exec, _mesa_GenQueries);
       SET_GetActiveAttrib(exec, _mesa_GetActiveAttrib);
       SET_GetActiveUniform(exec, _mesa_GetActiveUniform);
       SET_GetAttachedShaders(exec, _mesa_GetAttachedShaders);
@@ -736,6 +732,9 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_GetProgramPipelineInfoLog(exec, _mesa_GetProgramPipelineInfoLog);
       SET_GetProgramPipelineiv(exec, _mesa_GetProgramPipelineiv);
       SET_GetProgramiv(exec, _mesa_GetProgramiv);
+      SET_GetQueryObjectiv(exec, _mesa_GetQueryObjectiv);
+      SET_GetQueryObjectuiv(exec, _mesa_GetQueryObjectuiv);
+      SET_GetQueryiv(exec, _mesa_GetQueryiv);
       SET_GetShaderInfoLog(exec, _mesa_GetShaderInfoLog);
       SET_GetShaderPrecisionFormat(exec, _mesa_GetShaderPrecisionFormat);
       SET_GetShaderSource(exec, _mesa_GetShaderSource);
@@ -750,6 +749,7 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_GetnUniformuivARB(exec, _mesa_GetnUniformuivARB);
       SET_IsProgram(exec, _mesa_IsProgram);
       SET_IsProgramPipeline(exec, _mesa_IsProgramPipeline);
+      SET_IsQuery(exec, _mesa_IsQuery);
       SET_IsShader(exec, _mesa_IsShader);
       SET_IsVertexArray(exec, _mesa_IsVertexArray);
       SET_ProgramBinary(exec, _mesa_ProgramBinary);
@@ -1540,6 +1540,8 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
    }
    if (ctx->API == API_OPENGL_COMPAT || ctx->API == API_OPENGL_CORE || (ctx->API == API_OPENGLES2 && ctx->Version >= 31)) {
       SET_FramebufferParameteri(exec, _mesa_FramebufferParameteri);
+      SET_TexBuffer(exec, _mesa_TexBuffer);
+      SET_TexBufferRange(exec, _mesa_TexBufferRange);
    }
    if (ctx->API == API_OPENGL_CORE) {
       SET_CheckNamedFramebufferStatus(exec, _mesa_CheckNamedFramebufferStatus);
@@ -1667,10 +1669,6 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_VertexAttribL3dv(exec, _mesa_VertexAttribL3dv);
       SET_VertexAttribL4d(exec, _mesa_VertexAttribL4d);
       SET_VertexAttribL4dv(exec, _mesa_VertexAttribL4dv);
-   }
-   if (ctx->API == API_OPENGL_CORE || (ctx->API == API_OPENGLES2 && ctx->Version >= 31)) {
-      SET_TexBuffer(exec, _mesa_TexBuffer);
-      SET_TexBufferRange(exec, _mesa_TexBufferRange);
    }
 
 }

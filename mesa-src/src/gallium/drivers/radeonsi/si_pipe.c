@@ -145,21 +145,28 @@ static void si_emit_string_marker(struct pipe_context *ctx,
 static LLVMTargetMachineRef
 si_create_llvm_target_machine(struct si_screen *sscreen)
 {
-	const char *triple = "amdgcn--";
-	char features[256];
+	enum ac_target_machine_options tm_options =
+		(sscreen->b.debug_flags & DBG(SI_SCHED) ? AC_TM_SISCHED : 0) |
+		(sscreen->b.chip_class >= GFX9 ? AC_TM_FORCE_ENABLE_XNACK : 0) |
+		(sscreen->b.chip_class < GFX9 ? AC_TM_FORCE_DISABLE_XNACK : 0) |
+		(!sscreen->llvm_has_working_vgpr_indexing ? AC_TM_PROMOTE_ALLOCA_TO_SCRATCH : 0);
 
-	snprintf(features, sizeof(features),
-		 "+DumpCode,+vgpr-spilling,-fp32-denormals,+fp64-denormals%s%s%s",
-		 sscreen->b.chip_class >= GFX9 ? ",+xnack" : ",-xnack",
-		 sscreen->llvm_has_working_vgpr_indexing ? "" : ",-promote-alloca",
-		 sscreen->b.debug_flags & DBG(SI_SCHED) ? ",+si-scheduler" : "");
+	return ac_create_target_machine(sscreen->b.family, tm_options);
+}
 
-	return LLVMCreateTargetMachine(ac_get_llvm_target(triple), triple,
-				       si_get_llvm_processor_name(sscreen->b.family),
-				       features,
-				       LLVMCodeGenLevelDefault,
-				       LLVMRelocDefault,
-				       LLVMCodeModelDefault);
+static void si_set_debug_callback(struct pipe_context *ctx,
+				  const struct pipe_debug_callback *cb)
+{
+	struct si_context *sctx = (struct si_context *)ctx;
+	struct si_screen *screen = sctx->screen;
+
+	util_queue_finish(&screen->shader_compiler_queue);
+	util_queue_finish(&screen->shader_compiler_queue_low_priority);
+
+	if (cb)
+		sctx->debug = *cb;
+	else
+		memset(&sctx->debug, 0, sizeof(sctx->debug));
 }
 
 static void si_set_log_context(struct pipe_context *ctx,
@@ -190,6 +197,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->b.b.priv = NULL;
 	sctx->b.b.destroy = si_destroy_context;
 	sctx->b.b.emit_string_marker = si_emit_string_marker;
+	sctx->b.b.set_debug_callback = si_set_debug_callback;
 	sctx->b.b.set_log_context = si_set_log_context;
 	sctx->b.set_atom_dirty = (void *)si_set_atom_dirty;
 	sctx->screen = sscreen; /* Easy accessing of screen/winsys. */
@@ -240,6 +248,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 		goto fail;
 
 	si_init_all_descriptors(sctx);
+	si_init_fence_functions(sctx);
 	si_init_state_functions(sctx);
 	si_init_shader_functions(sctx);
 	si_init_viewport_functions(sctx);
@@ -372,15 +381,8 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen,
 	if (!(flags & PIPE_CONTEXT_PREFER_THREADED))
 		return ctx;
 
-	/* Clover (compute-only) is unsupported.
-	 *
-	 * Since the threaded context creates shader states from the non-driver
-	 * thread, asynchronous compilation is required for create_{shader}_-
-	 * state not to use pipe_context. Debug contexts (ddebug) disable
-	 * asynchronous compilation, so don't use the threaded context with
-	 * those.
-	 */
-	if (flags & (PIPE_CONTEXT_COMPUTE_ONLY | PIPE_CONTEXT_DEBUG))
+	/* Clover (compute-only) is unsupported. */
+	if (flags & PIPE_CONTEXT_COMPUTE_ONLY)
 		return ctx;
 
 	/* When shaders are logged to stderr, asynchronous compilation is
@@ -388,8 +390,11 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen,
 	if (sscreen->b.debug_flags & DBG_ALL_SHADERS)
 		return ctx;
 
+	/* Use asynchronous flushes only on amdgpu, since the radeon
+	 * implementation for fence_server_sync is incomplete. */
 	return threaded_context_create(ctx, &sscreen->b.pool_transfers,
 				       si_replace_buffer_storage,
+				       sscreen->b.info.drm_major >= 3 ? si_create_fence : NULL,
 				       &((struct si_context*)ctx)->b.tc);
 }
 
@@ -507,6 +512,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
 	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
 	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
+	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
 		return 1;
 
 	case PIPE_CAP_TGSI_VOTE:
@@ -589,6 +595,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
 	case PIPE_CAP_POST_DEPTH_COVERAGE:
 	case PIPE_CAP_TILE_RASTER_ORDER:
+	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
 		return 0;
 
 	case PIPE_CAP_NATIVE_FENCE_FD:
@@ -785,6 +792,8 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	/* Unsupported boolean features. */
 	case PIPE_SHADER_CAP_SUBROUTINES:
 	case PIPE_SHADER_CAP_SUPPORTED_IRS:
+	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
+	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
 		return 0;
 	}
 	return 0;
@@ -864,6 +873,10 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 
 static bool si_init_gs_info(struct si_screen *sscreen)
 {
+	/* gs_table_depth is not used by GFX9 */
+	if (sscreen->b.chip_class >= GFX9)
+		return true;
+
 	switch (sscreen->b.family) {
 	case CHIP_OLAND:
 	case CHIP_HAINAN:
@@ -885,8 +898,6 @@ static bool si_init_gs_info(struct si_screen *sscreen)
 	case CHIP_POLARIS10:
 	case CHIP_POLARIS11:
 	case CHIP_POLARIS12:
-	case CHIP_VEGA10:
-	case CHIP_RAVEN:
 		sscreen->gs_table_depth = 32;
 		return true;
 	default:
@@ -903,7 +914,7 @@ static void si_handle_env_var_force_family(struct si_screen *sscreen)
 		return;
 
 	for (i = CHIP_TAHITI; i < CHIP_LAST; i++) {
-		if (!strcmp(family, si_get_llvm_processor_name(i))) {
+		if (!strcmp(family, ac_get_llvm_processor_name(i))) {
 			/* Override family and chip_class. */
 			sscreen->b.family = sscreen->b.info.family = i;
 
@@ -989,6 +1000,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	sscreen->b.b.get_driver_uuid = radeonsi_get_driver_uuid;
 	sscreen->b.b.resource_create = si_resource_create_common;
 
+	si_init_screen_fence_functions(sscreen);
 	si_init_screen_state_functions(sscreen);
 
 	/* Set these flags in debug_flags early, so that the shader cache takes
@@ -1072,12 +1084,14 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		driQueryOptionb(config->options, "radeonsi_assume_no_z_fights");
 	sscreen->commutative_blend_add =
 		driQueryOptionb(config->options, "radeonsi_commutative_blend_add");
-	sscreen->clear_db_meta_before_clear =
-		driQueryOptionb(config->options, "radeonsi_clear_db_meta_before_clear");
+	sscreen->clear_db_cache_before_clear =
+		driQueryOptionb(config->options, "radeonsi_clear_db_cache_before_clear");
 	sscreen->has_msaa_sample_loc_bug = (sscreen->b.family >= CHIP_POLARIS10 &&
 					    sscreen->b.family <= CHIP_POLARIS12) ||
 					   sscreen->b.family == CHIP_VEGA10 ||
 					   sscreen->b.family == CHIP_RAVEN;
+	sscreen->has_ls_vgpr_init_bug = sscreen->b.family == CHIP_VEGA10 ||
+					sscreen->b.family == CHIP_RAVEN;
 
 	if (sscreen->b.debug_flags & DBG(DPBB)) {
 		sscreen->dpbb_allowed = true;
@@ -1099,9 +1113,6 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	 * on GFX9.
 	 */
 	sscreen->llvm_has_working_vgpr_indexing = sscreen->b.chip_class <= VI;
-
-	sscreen->b.has_cp_dma = true;
-	sscreen->b.has_streamout = true;
 
 	/* Some chips have RB+ registers, but don't support RB+. Those must
 	 * always disable it.

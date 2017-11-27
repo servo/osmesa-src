@@ -74,7 +74,7 @@
 
 #include "brw_eu.h"
 #include "brw_shader.h"
-#include "intel_asm_annotation.h"
+#include "brw_disasm_info.h"
 #include "common/gen_debug.h"
 
 static const uint32_t g45_control_index_table[32] = {
@@ -911,6 +911,8 @@ brw_try_compact_3src_instruction(const struct gen_device_info *devinfo,
 
 #define compact(field) \
    brw_compact_inst_set_3src_##field(devinfo, dst, brw_inst_3src_##field(devinfo, src))
+#define compact_a16(field) \
+   brw_compact_inst_set_3src_##field(devinfo, dst, brw_inst_3src_a16_##field(devinfo, src))
 
    compact(opcode);
 
@@ -921,20 +923,21 @@ brw_try_compact_3src_instruction(const struct gen_device_info *devinfo,
       return false;
 
    compact(dst_reg_nr);
-   compact(src0_rep_ctrl);
+   compact_a16(src0_rep_ctrl);
    brw_compact_inst_set_3src_cmpt_control(devinfo, dst, true);
    compact(debug_control);
    compact(saturate);
-   compact(src1_rep_ctrl);
-   compact(src2_rep_ctrl);
+   compact_a16(src1_rep_ctrl);
+   compact_a16(src2_rep_ctrl);
    compact(src0_reg_nr);
    compact(src1_reg_nr);
    compact(src2_reg_nr);
-   compact(src0_subreg_nr);
-   compact(src1_subreg_nr);
-   compact(src2_subreg_nr);
+   compact_a16(src0_subreg_nr);
+   compact_a16(src1_subreg_nr);
+   compact_a16(src2_subreg_nr);
 
 #undef compact
+#undef compact_a16
 
    return true;
 }
@@ -1257,6 +1260,8 @@ brw_uncompact_3src_instruction(const struct gen_device_info *devinfo,
 
 #define uncompact(field) \
    brw_inst_set_3src_##field(devinfo, dst, brw_compact_inst_3src_##field(devinfo, src))
+#define uncompact_a16(field) \
+   brw_inst_set_3src_a16_##field(devinfo, dst, brw_compact_inst_3src_##field(devinfo, src))
 
    uncompact(opcode);
 
@@ -1264,20 +1269,21 @@ brw_uncompact_3src_instruction(const struct gen_device_info *devinfo,
    set_uncompacted_3src_source_index(devinfo, dst, src);
 
    uncompact(dst_reg_nr);
-   uncompact(src0_rep_ctrl);
+   uncompact_a16(src0_rep_ctrl);
    brw_inst_set_3src_cmpt_control(devinfo, dst, false);
    uncompact(debug_control);
    uncompact(saturate);
-   uncompact(src1_rep_ctrl);
-   uncompact(src2_rep_ctrl);
+   uncompact_a16(src1_rep_ctrl);
+   uncompact_a16(src2_rep_ctrl);
    uncompact(src0_reg_nr);
    uncompact(src1_reg_nr);
    uncompact(src2_reg_nr);
-   uncompact(src0_subreg_nr);
-   uncompact(src1_subreg_nr);
-   uncompact(src2_subreg_nr);
+   uncompact_a16(src0_subreg_nr);
+   uncompact_a16(src1_subreg_nr);
+   uncompact_a16(src2_subreg_nr);
 
 #undef uncompact
+#undef uncompact_a16
 }
 
 void
@@ -1480,7 +1486,7 @@ brw_init_compaction_tables(const struct gen_device_info *devinfo)
 
 void
 brw_compact_instructions(struct brw_codegen *p, int start_offset,
-                         int num_annotations, struct annotation *annotation)
+                         struct disasm_info *disasm)
 {
    if (unlikely(INTEL_DEBUG & DEBUG_NO_COMPACTION))
       return;
@@ -1495,7 +1501,7 @@ brw_compact_instructions(struct brw_codegen *p, int start_offset,
    /* For an instruction at byte offset 8*i after compaction, this was its IP
     * (in 16-byte units) before compaction.
     */
-   int old_ip[(p->next_insn_offset - start_offset) / sizeof(brw_compact_inst)];
+   int old_ip[(p->next_insn_offset - start_offset) / sizeof(brw_compact_inst) + 1];
 
    if (devinfo->gen == 4 && !devinfo->is_g4x)
       return;
@@ -1549,6 +1555,12 @@ brw_compact_instructions(struct brw_codegen *p, int start_offset,
          offset += sizeof(brw_inst);
       }
    }
+
+   /* Add an entry for the ending offset of the program. This greatly
+    * simplifies the linked list walk at the end of the function.
+    */
+   old_ip[offset / sizeof(brw_compact_inst)] =
+      (p->next_insn_offset - start_offset) / sizeof(brw_inst);
 
    /* Fix up control flow offsets. */
    p->next_insn_offset = start_offset + offset;
@@ -1645,21 +1657,21 @@ brw_compact_instructions(struct brw_codegen *p, int start_offset,
    }
    p->nr_insn = p->next_insn_offset / sizeof(brw_inst);
 
-   /* Update the instruction offsets for each annotation. */
-   if (annotation) {
-      for (int offset = 0, i = 0; i < num_annotations; i++) {
+   /* Update the instruction offsets for each group. */
+   if (disasm) {
+      int offset = 0;
+
+      foreach_list_typed(struct inst_group, group, link, &disasm->group_list) {
          while (start_offset + old_ip[offset / sizeof(brw_compact_inst)] *
-                sizeof(brw_inst) != annotation[i].offset) {
+                sizeof(brw_inst) != group->offset) {
             assert(start_offset + old_ip[offset / sizeof(brw_compact_inst)] *
-                   sizeof(brw_inst) < annotation[i].offset);
+                   sizeof(brw_inst) < group->offset);
             offset = next_offset(devinfo, store, offset);
          }
 
-         annotation[i].offset = start_offset + offset;
+         group->offset = start_offset + offset;
 
          offset = next_offset(devinfo, store, offset);
       }
-
-      annotation[num_annotations].offset = p->next_insn_offset;
    }
 }

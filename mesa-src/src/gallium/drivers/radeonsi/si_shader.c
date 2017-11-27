@@ -19,11 +19,6 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *	Tom Stellard <thomas.stellard@amd.com>
- *	Michel Dänzer <michel.daenzer@amd.com>
- *      Christian König <christian.koenig@amd.com>
  */
 
 #include "gallivm/lp_bld_const.h"
@@ -561,7 +556,7 @@ void si_llvm_load_input_vs(
 
 	t_offset = LLVMConstInt(ctx->i32, input_index, 0);
 
-	t_list = ac_build_indexed_load_const(&ctx->ac, t_list_ptr, t_offset);
+	t_list = ac_build_load_to_sgpr(&ctx->ac, t_list_ptr, t_offset);
 
 	vertex_index = LLVMGetParam(ctx->main_fn,
 				    ctx->param_vertex_index0 +
@@ -764,8 +759,7 @@ static LLVMValueRef get_primitive_id(struct si_shader_context *ctx,
 		return LLVMGetParam(ctx->main_fn,
 				    ctx->param_tes_patch_id);
 	case PIPE_SHADER_GEOMETRY:
-		return LLVMGetParam(ctx->main_fn,
-				    ctx->param_gs_prim_id);
+		return ctx->abi.gs_prim_id;
 	default:
 		assert(0);
 		return ctx->i32_0;
@@ -1096,17 +1090,19 @@ static LLVMValueRef lds_load(struct lp_build_tgsi_context *bld_base,
 					      TGSI_NUM_CHANNELS);
 	}
 
+	/* Split 64-bit loads. */
+	if (tgsi_type_is_64bit(type)) {
+		LLVMValueRef lo, hi;
+
+		lo = lds_load(bld_base, TGSI_TYPE_UNSIGNED, swizzle, dw_addr);
+		hi = lds_load(bld_base, TGSI_TYPE_UNSIGNED, swizzle + 1, dw_addr);
+		return si_llvm_emit_fetch_64bit(bld_base, type, lo, hi);
+	}
+
 	dw_addr = lp_build_add(&bld_base->uint_bld, dw_addr,
 			    LLVMConstInt(ctx->i32, swizzle, 0));
 
-	value = ac_build_indexed_load(&ctx->ac, ctx->lds, dw_addr, false);
-	if (tgsi_type_is_64bit(type)) {
-		LLVMValueRef value2;
-		dw_addr = lp_build_add(&bld_base->uint_bld, dw_addr,
-				       ctx->i32_1);
-		value2 = ac_build_indexed_load(&ctx->ac, ctx->lds, dw_addr, false);
-		return si_llvm_emit_fetch_64bit(bld_base, type, value, value2);
-	}
+	value = ac_lds_load(&ctx->ac, dw_addr);
 
 	return bitcast(bld_base, type, value);
 }
@@ -1127,9 +1123,7 @@ static void lds_store(struct lp_build_tgsi_context *bld_base,
 	dw_addr = lp_build_add(&bld_base->uint_bld, dw_addr,
 			    LLVMConstInt(ctx->i32, dw_offset_imm, 0));
 
-	value = ac_to_integer(&ctx->ac, value);
-	ac_build_indexed_store(&ctx->ac, ctx->lds,
-			       dw_addr, value);
+	ac_lds_store(&ctx->ac, dw_addr, value);
 }
 
 static LLVMValueRef desc_from_addr_base64k(struct si_shader_context *ctx,
@@ -1368,16 +1362,9 @@ static LLVMValueRef fetch_input_gs(
 
 	/* Get the vertex offset parameter on GFX6. */
 	unsigned vtx_offset_param = reg->Dimension.Index;
-	if (vtx_offset_param < 2) {
-		vtx_offset_param += ctx->param_gs_vtx0_offset;
-	} else {
-		assert(vtx_offset_param < 6);
-		vtx_offset_param += ctx->param_gs_vtx2_offset - 2;
-	}
-	vtx_offset = lp_build_mul_imm(uint,
-				      LLVMGetParam(ctx->main_fn,
-						   vtx_offset_param),
-				      4);
+	LLVMValueRef gs_vtx_offset = ctx->gs_vtx_offset[vtx_offset_param];
+
+	vtx_offset = lp_build_mul_imm(uint, gs_vtx_offset, 4);
 
 	soffset = LLVMConstInt(ctx->i32, (param * 4 + swizzle) * 256, 0);
 
@@ -1617,7 +1604,7 @@ static LLVMValueRef load_sample_position(struct si_shader_context *ctx, LLVMValu
 	struct lp_build_context *uint_bld = &ctx->bld_base.uint_bld;
 	LLVMValueRef desc = LLVMGetParam(ctx->main_fn, ctx->param_rw_buffers);
 	LLVMValueRef buf_index = LLVMConstInt(ctx->i32, SI_PS_CONST_SAMPLE_POSITIONS, 0);
-	LLVMValueRef resource = ac_build_indexed_load_const(&ctx->ac, desc, buf_index);
+	LLVMValueRef resource = ac_build_load_to_sgpr(&ctx->ac, desc, buf_index);
 
 	/* offset = sample_id * 8  (8 = 2 floats containing samplepos.xy) */
 	LLVMValueRef offset0 = lp_build_mul_imm(uint_bld, sample_id, 8);
@@ -1688,8 +1675,7 @@ void si_load_system_value(struct si_shader_context *ctx,
 		if (ctx->type == PIPE_SHADER_TESS_CTRL)
 			value = unpack_param(ctx, ctx->param_tcs_rel_ids, 8, 5);
 		else if (ctx->type == PIPE_SHADER_GEOMETRY)
-			value = LLVMGetParam(ctx->main_fn,
-					     ctx->param_gs_instance_id);
+			value = ctx->abi.gs_invocation_id;
 		else
 			assert(!"INVOCATIONID not implemented");
 		break;
@@ -1792,7 +1778,7 @@ void si_load_system_value(struct si_shader_context *ctx,
 
 		slot = LLVMConstInt(ctx->i32, SI_HS_CONST_DEFAULT_TESS_LEVELS, 0);
 		buf = LLVMGetParam(ctx->main_fn, ctx->param_rw_buffers);
-		buf = ac_build_indexed_load_const(&ctx->ac, buf, slot);
+		buf = ac_build_load_to_sgpr(&ctx->ac, buf, slot);
 		offset = decl->Semantic.Name == TGSI_SEMANTIC_DEFAULT_TESSINNER_SI ? 4 : 0;
 
 		for (i = 0; i < 4; i++)
@@ -1919,7 +1905,7 @@ void si_declare_compute_memory(struct si_shader_context *ctx,
 
 	assert(decl->Declaration.MemType == TGSI_MEMORY_TYPE_SHARED);
 	assert(decl->Range.First == decl->Range.Last);
-	assert(!ctx->shared_memory);
+	assert(!ctx->ac.lds);
 
 	var = LLVMAddGlobalInAddressSpace(ctx->ac.module,
 	                                  LLVMArrayType(ctx->i8, sel->local_size),
@@ -1927,7 +1913,7 @@ void si_declare_compute_memory(struct si_shader_context *ctx,
 	                                  LOCAL_ADDR_SPACE);
 	LLVMSetAlignment(var, 4);
 
-	ctx->shared_memory = LLVMBuildBitCast(ctx->ac.builder, var, i8p, "");
+	ctx->ac.lds = LLVMBuildBitCast(ctx->ac.builder, var, i8p, "");
 }
 
 static LLVMValueRef load_const_buffer_desc(struct si_shader_context *ctx, int i)
@@ -1935,8 +1921,8 @@ static LLVMValueRef load_const_buffer_desc(struct si_shader_context *ctx, int i)
 	LLVMValueRef list_ptr = LLVMGetParam(ctx->main_fn,
 					     ctx->param_const_and_shader_buffers);
 
-	return ac_build_indexed_load_const(&ctx->ac, list_ptr,
-			LLVMConstInt(ctx->i32, si_get_constbuf_slot(i), 0));
+	return ac_build_load_to_sgpr(&ctx->ac, list_ptr,
+				     LLVMConstInt(ctx->i32, si_get_constbuf_slot(i), 0));
 }
 
 static LLVMValueRef load_ubo(struct ac_shader_abi *abi, LLVMValueRef index)
@@ -1948,7 +1934,7 @@ static LLVMValueRef load_ubo(struct ac_shader_abi *abi, LLVMValueRef index)
 	index = LLVMBuildAdd(ctx->ac.builder, index,
 			     LLVMConstInt(ctx->i32, SI_NUM_SHADER_BUFFERS, 0), "");
 
-	return ac_build_indexed_load_const(&ctx->ac, ptr, index);
+	return ac_build_load_to_sgpr(&ctx->ac, ptr, index);
 }
 
 static LLVMValueRef
@@ -1963,7 +1949,7 @@ load_ssbo(struct ac_shader_abi *abi, LLVMValueRef index, bool write)
 			     LLVMConstInt(ctx->i32, SI_NUM_SHADER_BUFFERS - 1, 0),
 			     index, "");
 
-	return ac_build_indexed_load_const(&ctx->ac, rsrc_ptr, index);
+	return ac_build_load_to_sgpr(&ctx->ac, rsrc_ptr, index);
 }
 
 static LLVMValueRef fetch_constant(
@@ -1973,11 +1959,11 @@ static LLVMValueRef fetch_constant(
 	unsigned swizzle)
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
+	struct si_shader_selector *sel = ctx->shader->selector;
 	const struct tgsi_ind_register *ireg = &reg->Indirect;
 	unsigned buf, idx;
 
 	LLVMValueRef addr, bufp;
-	LLVMValueRef result;
 
 	if (swizzle == LP_CHAN_ALL) {
 		unsigned chan;
@@ -1988,9 +1974,76 @@ static LLVMValueRef fetch_constant(
 		return lp_build_gather_values(&ctx->gallivm, values, 4);
 	}
 
+	/* Split 64-bit loads. */
+	if (tgsi_type_is_64bit(type)) {
+		LLVMValueRef lo, hi;
+
+		lo = fetch_constant(bld_base, reg, TGSI_TYPE_UNSIGNED, swizzle);
+		hi = fetch_constant(bld_base, reg, TGSI_TYPE_UNSIGNED, swizzle + 1);
+		return si_llvm_emit_fetch_64bit(bld_base, type, lo, hi);
+	}
+
+	idx = reg->Register.Index * 4 + swizzle;
+	if (reg->Register.Indirect) {
+		addr = si_get_indirect_index(ctx, ireg, 16, idx * 4);
+	} else {
+		addr = LLVMConstInt(ctx->i32, idx * 4, 0);
+	}
+
+	/* Fast path when user data SGPRs point to constant buffer 0 directly. */
+	if (sel->info.const_buffers_declared == 1 &&
+	    sel->info.shader_buffers_declared == 0) {
+		LLVMValueRef ptr =
+			LLVMGetParam(ctx->main_fn, ctx->param_const_and_shader_buffers);
+
+		/* This enables use of s_load_dword and flat_load_dword for const buffer 0
+		 * loads, and up to x4 load opcode merging. However, it leads to horrible
+		 * code reducing SIMD wave occupancy from 8 to 2 in many cases.
+		 *
+		 * Using s_buffer_load_dword (x1) seems to be the best option right now.
+		 *
+		 * LLVM 5.0 on SI doesn't insert a required s_nop between SALU setting
+		 * a descriptor and s_buffer_load_dword using it, so we can't expand
+		 * the pointer into a full descriptor like below. We have to use
+		 * s_load_dword instead. The only case when LLVM 5.0 would select
+		 * s_buffer_load_dword (that we have to prevent) is when we use use
+		 * a literal offset where we don't need bounds checking.
+		 */
+		if (ctx->screen->b.chip_class == SI &&
+                    HAVE_LLVM < 0x0600 &&
+                    !reg->Register.Indirect) {
+			addr = LLVMBuildLShr(ctx->ac.builder, addr, LLVMConstInt(ctx->i32, 2, 0), "");
+			LLVMValueRef result = ac_build_load_invariant(&ctx->ac, ptr, addr);
+			return bitcast(bld_base, type, result);
+		}
+
+		/* Do the bounds checking with a descriptor, because
+		 * doing computation and manual bounds checking of 64-bit
+		 * addresses generates horrible VALU code with very high
+		 * VGPR usage and very low SIMD occupancy.
+		 */
+		ptr = LLVMBuildPtrToInt(ctx->ac.builder, ptr, ctx->i64, "");
+		ptr = LLVMBuildBitCast(ctx->ac.builder, ptr, ctx->v2i32, "");
+
+		LLVMValueRef desc_elems[] = {
+			LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_0, ""),
+			LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_1, ""),
+			LLVMConstInt(ctx->i32, (sel->info.const_file_max[0] + 1) * 16, 0),
+			LLVMConstInt(ctx->i32,
+				S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) |
+				S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
+				S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) |
+				S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W) |
+				S_008F0C_NUM_FORMAT(V_008F0C_BUF_NUM_FORMAT_FLOAT) |
+				S_008F0C_DATA_FORMAT(V_008F0C_BUF_DATA_FORMAT_32), 0)
+		};
+		LLVMValueRef desc = ac_build_gather_values(&ctx->ac, desc_elems, 4);
+		LLVMValueRef result = buffer_load_const(ctx, desc, addr);
+		return bitcast(bld_base, type, result);
+	}
+
 	assert(reg->Register.Dimension);
 	buf = reg->Dimension.Index;
-	idx = reg->Register.Index * 4 + swizzle;
 
 	if (reg->Dimension.Indirect) {
 		LLVMValueRef ptr = LLVMGetParam(ctx->main_fn, ctx->param_const_and_shader_buffers);
@@ -2000,31 +2053,11 @@ static LLVMValueRef fetch_constant(
 						      ctx->num_const_buffers);
 		index = LLVMBuildAdd(ctx->ac.builder, index,
 				     LLVMConstInt(ctx->i32, SI_NUM_SHADER_BUFFERS, 0), "");
-		bufp = ac_build_indexed_load_const(&ctx->ac, ptr, index);
+		bufp = ac_build_load_to_sgpr(&ctx->ac, ptr, index);
 	} else
 		bufp = load_const_buffer_desc(ctx, buf);
 
-	if (reg->Register.Indirect) {
-		addr = si_get_indirect_index(ctx, ireg, 16, idx * 4);
-	} else {
-		addr = LLVMConstInt(ctx->i32, idx * 4, 0);
-	}
-
-	result = buffer_load_const(ctx, bufp, addr);
-
-	if (!tgsi_type_is_64bit(type))
-		result = bitcast(bld_base, type, result);
-	else {
-		LLVMValueRef addr2, result2;
-
-		addr2 = lp_build_add(&bld_base->uint_bld, addr,
-				     LLVMConstInt(ctx->i32, 4, 0));
-		result2 = buffer_load_const(ctx, bufp, addr2);
-
-		result = si_llvm_emit_fetch_64bit(bld_base, type,
-						  result, result2);
-	}
-	return result;
+	return bitcast(bld_base, type, buffer_load_const(ctx, bufp, addr));
 }
 
 /* Upper 16 bits must be zero. */
@@ -2232,22 +2265,24 @@ static void si_alpha_test(struct lp_build_tgsi_context *bld_base,
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 
 	if (ctx->shader->key.part.ps.epilog.alpha_func != PIPE_FUNC_NEVER) {
+		static LLVMRealPredicate cond_map[PIPE_FUNC_ALWAYS + 1] = {
+			[PIPE_FUNC_LESS] = LLVMRealOLT,
+			[PIPE_FUNC_EQUAL] = LLVMRealOEQ,
+			[PIPE_FUNC_LEQUAL] = LLVMRealOLE,
+			[PIPE_FUNC_GREATER] = LLVMRealOGT,
+			[PIPE_FUNC_NOTEQUAL] = LLVMRealONE,
+			[PIPE_FUNC_GEQUAL] = LLVMRealOGE,
+		};
+		LLVMRealPredicate cond = cond_map[ctx->shader->key.part.ps.epilog.alpha_func];
+		assert(cond);
+
 		LLVMValueRef alpha_ref = LLVMGetParam(ctx->main_fn,
 				SI_PARAM_ALPHA_REF);
-
 		LLVMValueRef alpha_pass =
-			lp_build_cmp(&bld_base->base,
-				     ctx->shader->key.part.ps.epilog.alpha_func,
-				     alpha, alpha_ref);
-		LLVMValueRef arg =
-			lp_build_select(&bld_base->base,
-					alpha_pass,
-					LLVMConstReal(ctx->f32, 1.0f),
-					LLVMConstReal(ctx->f32, -1.0f));
-
-		ac_build_kill(&ctx->ac, arg);
+			LLVMBuildFCmp(ctx->ac.builder, cond, alpha, alpha_ref, "");
+		ac_build_kill_if_false(&ctx->ac, alpha_pass);
 	} else {
-		ac_build_kill(&ctx->ac, NULL);
+		ac_build_kill_if_false(&ctx->ac, LLVMConstInt(ctx->i1, 0, 0));
 	}
 }
 
@@ -2289,7 +2324,7 @@ static void si_llvm_emit_clipvertex(struct lp_build_tgsi_context *bld_base,
 	LLVMValueRef ptr = LLVMGetParam(ctx->main_fn, ctx->param_rw_buffers);
 	LLVMValueRef constbuf_index = LLVMConstInt(ctx->i32,
 						   SI_VS_CONST_CLIP_PLANES, 0);
-	LLVMValueRef const_resource = ac_build_indexed_load_const(&ctx->ac, ptr, constbuf_index);
+	LLVMValueRef const_resource = ac_build_load_to_sgpr(&ctx->ac, ptr, constbuf_index);
 
 	for (reg_index = 0; reg_index < 2; reg_index ++) {
 		struct ac_export_args *args = &pos[2 + reg_index];
@@ -2446,7 +2481,7 @@ static void si_llvm_emit_streamout(struct si_shader_context *ctx,
 			LLVMValueRef offset = LLVMConstInt(ctx->i32,
 							   SI_VS_STREAMOUT_BUF0 + i, 0);
 
-			so_buffers[i] = ac_build_indexed_load_const(&ctx->ac, buf_ptr, offset);
+			so_buffers[i] = ac_build_load_to_sgpr(&ctx->ac, buf_ptr, offset);
 
 			LLVMValueRef so_offset = LLVMGetParam(ctx->main_fn,
 							      ctx->param_streamout_offset[i]);
@@ -3031,11 +3066,13 @@ static void si_set_ls_return_value_for_tcs(struct si_shader_context *ctx)
 {
 	LLVMValueRef ret = ctx->return_value;
 
-	ret = si_insert_input_ptr_as_2xi32(ctx, ret, ctx->param_rw_buffers, 0);
 	ret = si_insert_input_ret(ctx, ret, ctx->param_tcs_offchip_offset, 2);
 	ret = si_insert_input_ret(ctx, ret, ctx->param_merged_wave_info, 3);
 	ret = si_insert_input_ret(ctx, ret, ctx->param_tcs_factor_offset, 4);
 	ret = si_insert_input_ret(ctx, ret, ctx->param_merged_scratch_offset, 5);
+
+	ret = si_insert_input_ptr_as_2xi32(ctx, ret, ctx->param_rw_buffers,
+					   8 + SI_SGPR_RW_BUFFERS);
 	ret = si_insert_input_ptr_as_2xi32(ctx, ret,
 		ctx->param_bindless_samplers_and_images,
 		8 + SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES);
@@ -3072,11 +3109,12 @@ static void si_set_es_return_value_for_gs(struct si_shader_context *ctx)
 {
 	LLVMValueRef ret = ctx->return_value;
 
-	ret = si_insert_input_ptr_as_2xi32(ctx, ret, ctx->param_rw_buffers, 0);
 	ret = si_insert_input_ret(ctx, ret, ctx->param_gs2vs_offset, 2);
 	ret = si_insert_input_ret(ctx, ret, ctx->param_merged_wave_info, 3);
-
 	ret = si_insert_input_ret(ctx, ret, ctx->param_merged_scratch_offset, 5);
+
+	ret = si_insert_input_ptr_as_2xi32(ctx, ret, ctx->param_rw_buffers,
+					   8 + SI_SGPR_RW_BUFFERS);
 	ret = si_insert_input_ptr_as_2xi32(ctx, ret,
 		ctx->param_bindless_samplers_and_images,
 		8 + SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES);
@@ -3138,6 +3176,9 @@ static void si_llvm_emit_ls_epilogue(struct lp_build_tgsi_context *bld_base)
 					LLVMConstInt(ctx->i32, param * 4, 0), "");
 
 		for (chan = 0; chan < 4; chan++) {
+			if (!(info->output_usagemask[i] & (1 << chan)))
+				continue;
+
 			lds_store(bld_base, chan, dw_addr,
 				  LLVMBuildLoad(ctx->ac.builder, out_ptr[chan], ""));
 		}
@@ -3530,7 +3571,7 @@ static void si_llvm_return_fs_outputs(struct ac_shader_abi *abi,
 	LLVMValueRef ret;
 
 	if (ctx->postponed_kill)
-		ac_build_kill(&ctx->ac, LLVMBuildLoad(builder, ctx->postponed_kill, ""));
+		ac_build_kill_if_false(&ctx->ac, LLVMBuildLoad(builder, ctx->postponed_kill, ""));
 
 	/* Read the output values. */
 	for (i = 0; i < info->num_outputs; i++) {
@@ -4000,25 +4041,21 @@ static unsigned si_llvm_get_stream(struct lp_build_tgsi_context *bld_base,
 }
 
 /* Emit one vertex from the geometry shader */
-static void si_llvm_emit_vertex(
-	const struct lp_build_tgsi_action *action,
-	struct lp_build_tgsi_context *bld_base,
-	struct lp_build_emit_data *emit_data)
+static void si_llvm_emit_vertex(struct ac_shader_abi *abi,
+				unsigned stream,
+				LLVMValueRef *addrs)
 {
-	struct si_shader_context *ctx = si_shader_context(bld_base);
-	struct lp_build_context *uint = &bld_base->uint_bld;
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+	struct tgsi_shader_info *info = &ctx->shader->selector->info;
+	struct lp_build_context *uint = &ctx->bld_base.uint_bld;
 	struct si_shader *shader = ctx->shader;
-	struct tgsi_shader_info *info = &shader->selector->info;
 	struct lp_build_if_state if_state;
 	LLVMValueRef soffset = LLVMGetParam(ctx->main_fn,
 					    ctx->param_gs2vs_offset);
 	LLVMValueRef gs_next_vertex;
-	LLVMValueRef can_emit, kill;
+	LLVMValueRef can_emit;
 	unsigned chan, offset;
 	int i;
-	unsigned stream;
-
-	stream = si_llvm_get_stream(bld_base, emit_data);
 
 	/* Write vertex attribute values to GSVS ring */
 	gs_next_vertex = LLVMBuildLoad(ctx->ac.builder,
@@ -4039,25 +4076,19 @@ static void si_llvm_emit_vertex(
 
 	bool use_kill = !info->writes_memory;
 	if (use_kill) {
-		kill = lp_build_select(&bld_base->base, can_emit,
-				       LLVMConstReal(ctx->f32, 1.0f),
-				       LLVMConstReal(ctx->f32, -1.0f));
-
-		ac_build_kill(&ctx->ac, kill);
+		ac_build_kill_if_false(&ctx->ac, can_emit);
 	} else {
 		lp_build_if(&if_state, &ctx->gallivm, can_emit);
 	}
 
 	offset = 0;
 	for (i = 0; i < info->num_outputs; i++) {
-		LLVMValueRef *out_ptr = ctx->outputs[i];
-
 		for (chan = 0; chan < 4; chan++) {
 			if (!(info->output_usagemask[i] & (1 << chan)) ||
 			    ((info->output_streams[i] >> (2 * chan)) & 3) != stream)
 				continue;
 
-			LLVMValueRef out_val = LLVMBuildLoad(ctx->ac.builder, out_ptr[chan], "");
+			LLVMValueRef out_val = LLVMBuildLoad(ctx->ac.builder, addrs[4 * i + chan], "");
 			LLVMValueRef voffset =
 				LLVMConstInt(ctx->i32, offset *
 					     shader->selector->gs_max_out_vertices, 0);
@@ -4086,6 +4117,18 @@ static void si_llvm_emit_vertex(
 			 si_get_gs_wave_id(ctx));
 	if (!use_kill)
 		lp_build_endif(&if_state);
+}
+
+/* Emit one vertex from the geometry shader */
+static void si_tgsi_emit_vertex(
+	const struct lp_build_tgsi_action *action,
+	struct lp_build_tgsi_context *bld_base,
+	struct lp_build_emit_data *emit_data)
+{
+	struct si_shader_context *ctx = si_shader_context(bld_base);
+	unsigned stream = si_llvm_get_stream(bld_base, emit_data);
+
+	si_llvm_emit_vertex(&ctx->abi, stream, ctx->outputs[0]);
 }
 
 /* Cut one primitive from the geometry shader */
@@ -4213,14 +4256,6 @@ static void declare_streamout_params(struct si_shader_context *ctx,
 	}
 }
 
-static void declare_lds_as_pointer(struct si_shader_context *ctx)
-{
-	unsigned lds_size = ctx->screen->b.chip_class >= CIK ? 65536 : 32768;
-	ctx->lds = LLVMBuildIntToPtr(ctx->ac.builder, ctx->i32_0,
-		LLVMPointerType(LLVMArrayType(ctx->i32, lds_size / 4), LOCAL_ADDR_SPACE),
-		"lds");
-}
-
 static unsigned si_get_max_workgroup_size(const struct si_shader *shader)
 {
 	switch (shader->selector->type) {
@@ -4258,10 +4293,18 @@ static void declare_per_stage_desc_pointers(struct si_shader_context *ctx,
 					    struct si_function_info *fninfo,
 					    bool assign_params)
 {
+	LLVMTypeRef const_shader_buf_type;
+
+	if (ctx->shader->selector->info.const_buffers_declared == 1 &&
+	    ctx->shader->selector->info.shader_buffers_declared == 0)
+		const_shader_buf_type = ctx->f32;
+	else
+		const_shader_buf_type = ctx->v4i32;
+
 	unsigned const_and_shader_buffers =
 		add_arg(fninfo, ARG_SGPR,
-			si_const_array(ctx->v4i32,
-				       SI_NUM_SHADER_BUFFERS + SI_NUM_CONST_BUFFERS));
+			si_const_array(const_shader_buf_type, 0));
+
 	unsigned samplers_and_images =
 		add_arg(fninfo, ARG_SGPR,
 			si_const_array(ctx->v8i32,
@@ -4437,8 +4480,8 @@ static void create_function(struct si_shader_context *ctx)
 
 	case SI_SHADER_MERGED_VERTEX_TESSCTRL:
 		/* Merged stages have 8 system SGPRs at the beginning. */
-		ctx->param_rw_buffers = /* SPI_SHADER_USER_DATA_ADDR_LO_HS */
-			add_arg(&fninfo, ARG_SGPR, si_const_array(ctx->v4i32, SI_NUM_RW_BUFFERS));
+		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* SPI_SHADER_USER_DATA_ADDR_LO_HS */
+		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* SPI_SHADER_USER_DATA_ADDR_HI_HS */
 		ctx->param_tcs_offchip_offset = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_merged_wave_info = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_tcs_factor_offset = add_arg(&fninfo, ARG_SGPR, ctx->i32);
@@ -4446,12 +4489,7 @@ static void create_function(struct si_shader_context *ctx)
 		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
 		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
 
-		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
-		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
-
-		ctx->param_bindless_samplers_and_images =
-			add_arg(&fninfo, ARG_SGPR, si_const_array(ctx->v8i32, 0));
-
+		declare_global_desc_pointers(ctx, &fninfo);
 		declare_per_stage_desc_pointers(ctx, &fninfo,
 						ctx->type == PIPE_SHADER_VERTEX);
 		declare_vs_specific_input_sgprs(ctx, &fninfo);
@@ -4495,8 +4533,8 @@ static void create_function(struct si_shader_context *ctx)
 
 	case SI_SHADER_MERGED_VERTEX_OR_TESSEVAL_GEOMETRY:
 		/* Merged stages have 8 system SGPRs at the beginning. */
-		ctx->param_rw_buffers = /* SPI_SHADER_USER_DATA_ADDR_LO_GS */
-			add_arg(&fninfo, ARG_SGPR, si_const_array(ctx->v4i32, SI_NUM_RW_BUFFERS));
+		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused (SPI_SHADER_USER_DATA_ADDR_LO_GS) */
+		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused (SPI_SHADER_USER_DATA_ADDR_HI_GS) */
 		ctx->param_gs2vs_offset = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_merged_wave_info = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_tcs_offchip_offset = add_arg(&fninfo, ARG_SGPR, ctx->i32);
@@ -4504,12 +4542,7 @@ static void create_function(struct si_shader_context *ctx)
 		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused (SPI_SHADER_PGM_LO/HI_GS << 8) */
 		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused (SPI_SHADER_PGM_LO/HI_GS >> 24) */
 
-		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
-		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
-
-		ctx->param_bindless_samplers_and_images =
-			add_arg(&fninfo, ARG_SGPR, si_const_array(ctx->v8i32, 0));
-
+		declare_global_desc_pointers(ctx, &fninfo);
 		declare_per_stage_desc_pointers(ctx, &fninfo,
 						(ctx->type == PIPE_SHADER_VERTEX ||
 						 ctx->type == PIPE_SHADER_TESS_EVAL));
@@ -4532,8 +4565,8 @@ static void create_function(struct si_shader_context *ctx)
 		/* VGPRs (first GS, then VS/TES) */
 		ctx->param_gs_vtx01_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
 		ctx->param_gs_vtx23_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_prim_id = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_instance_id = add_arg(&fninfo, ARG_VGPR, ctx->i32);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->abi.gs_prim_id);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->abi.gs_invocation_id);
 		ctx->param_gs_vtx45_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
 
 		if (ctx->type == PIPE_SHADER_VERTEX) {
@@ -4581,14 +4614,14 @@ static void create_function(struct si_shader_context *ctx)
 		ctx->param_gs_wave_id = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 
 		/* VGPRs */
-		ctx->param_gs_vtx0_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx1_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_prim_id = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx2_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx3_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx4_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx5_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_instance_id = add_arg(&fninfo, ARG_VGPR, ctx->i32);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[0]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[1]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->abi.gs_prim_id);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[2]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[3]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[4]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[5]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->abi.gs_invocation_id);
 		break;
 
 	case PIPE_SHADER_FRAGMENT:
@@ -4713,7 +4746,7 @@ static void create_function(struct si_shader_context *ctx)
 	    (ctx->screen->b.chip_class >= GFX9 &&
 	     (shader->key.as_es ||
 	      ctx->type == PIPE_SHADER_GEOMETRY)))
-		declare_lds_as_pointer(ctx);
+		ac_declare_lds_as_pointer(&ctx->ac);
 }
 
 /**
@@ -4735,20 +4768,20 @@ static void preload_ring_buffers(struct si_shader_context *ctx)
 		LLVMValueRef offset = LLVMConstInt(ctx->i32, ring, 0);
 
 		ctx->esgs_ring =
-			ac_build_indexed_load_const(&ctx->ac, buf_ptr, offset);
+			ac_build_load_to_sgpr(&ctx->ac, buf_ptr, offset);
 	}
 
 	if (ctx->shader->is_gs_copy_shader) {
 		LLVMValueRef offset = LLVMConstInt(ctx->i32, SI_RING_GSVS, 0);
 
 		ctx->gsvs_ring[0] =
-			ac_build_indexed_load_const(&ctx->ac, buf_ptr, offset);
+			ac_build_load_to_sgpr(&ctx->ac, buf_ptr, offset);
 	} else if (ctx->type == PIPE_SHADER_GEOMETRY) {
 		const struct si_shader_selector *sel = ctx->shader->selector;
 		LLVMValueRef offset = LLVMConstInt(ctx->i32, SI_RING_GSVS, 0);
 		LLVMValueRef base_ring;
 
-		base_ring = ac_build_indexed_load_const(&ctx->ac, buf_ptr, offset);
+		base_ring = ac_build_load_to_sgpr(&ctx->ac, buf_ptr, offset);
 
 		/* The conceptual layout of the GSVS ring is
 		 *   v0c0 .. vLv0 v0c1 .. vLc1 ..
@@ -4831,7 +4864,7 @@ static void si_llvm_emit_polygon_stipple(struct si_shader_context *ctx,
 
 	/* Load the buffer descriptor. */
 	slot = LLVMConstInt(ctx->i32, SI_PS_CONST_POLY_STIPPLE, 0);
-	desc = ac_build_indexed_load_const(&ctx->ac, param_rw_buffers, slot);
+	desc = ac_build_load_to_sgpr(&ctx->ac, param_rw_buffers, slot);
 
 	/* The stipple pattern is 32x32, each row has 32 bits. */
 	offset = LLVMBuildMul(builder, address[1],
@@ -4840,11 +4873,7 @@ static void si_llvm_emit_polygon_stipple(struct si_shader_context *ctx,
 	row = ac_to_integer(&ctx->ac, row);
 	bit = LLVMBuildLShr(builder, row, address[0], "");
 	bit = LLVMBuildTrunc(builder, bit, ctx->i1, "");
-
-	/* The intrinsic kills the thread if arg < 0. */
-	bit = LLVMBuildSelect(builder, bit, LLVMConstReal(ctx->f32, 0),
-			      LLVMConstReal(ctx->f32, -1), "");
-	ac_build_kill(&ctx->ac, bit);
+	ac_build_kill_if_false(&ctx->ac, bit);
 }
 
 void si_shader_binary_read_config(struct ac_shader_binary *binary,
@@ -5368,6 +5397,9 @@ si_generate_gs_copy_shader(struct si_screen *sscreen,
 		return NULL;
 	}
 
+	/* We can leave the fence as permanently signaled because the GS copy
+	 * shader only becomes visible globally after it has been compiled. */
+	util_queue_fence_init(&shader->ready);
 
 	shader->selector = gs_selector;
 	shader->is_gs_copy_shader = true;
@@ -5621,7 +5653,7 @@ static void si_init_shader_ctx(struct si_shader_context *ctx,
 	bld_base->op_actions[TGSI_OPCODE_READ_INVOC].fetch_args = read_invoc_fetch_args;
 	bld_base->op_actions[TGSI_OPCODE_READ_INVOC].emit = read_lane_emit;
 
-	bld_base->op_actions[TGSI_OPCODE_EMIT].emit = si_llvm_emit_vertex;
+	bld_base->op_actions[TGSI_OPCODE_EMIT].emit = si_tgsi_emit_vertex;
 	bld_base->op_actions[TGSI_OPCODE_ENDPRIM].emit = si_llvm_emit_primitive;
 	bld_base->op_actions[TGSI_OPCODE_BARRIER].emit = si_llvm_emit_barrier;
 }
@@ -5735,6 +5767,7 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		break;
 	case PIPE_SHADER_GEOMETRY:
 		bld_base->emit_fetch_funcs[TGSI_FILE_INPUT] = fetch_input_gs;
+		ctx->abi.emit_vertex = si_llvm_emit_vertex;
 		bld_base->emit_epilogue = si_llvm_emit_gs_epilogue;
 		break;
 	case PIPE_SHADER_FRAGMENT:
@@ -5811,10 +5844,11 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		}
 	}
 
-	if (ctx->type == PIPE_SHADER_FRAGMENT && sel->info.uses_kill &&
-	    ctx->screen->b.debug_flags & DBG(FS_CORRECT_DERIVS_AFTER_KILL)) {
-		/* This is initialized to 0.0 = not kill. */
-		ctx->postponed_kill = lp_build_alloca(&ctx->gallivm, ctx->f32, "");
+	if (sel->force_correct_derivs_after_kill) {
+		ctx->postponed_kill = lp_build_alloca_undef(&ctx->gallivm, ctx->i1, "");
+		/* true = don't kill. */
+		LLVMBuildStore(ctx->ac.builder, LLVMConstInt(ctx->i1, 1, 0),
+			       ctx->postponed_kill);
 	}
 
 	if (sel->tokens) {
@@ -5854,11 +5888,13 @@ static void si_get_vs_prolog_key(const struct tgsi_shader_info *info,
 	key->vs_prolog.num_input_sgprs = num_input_sgprs;
 	key->vs_prolog.last_input = MAX2(1, info->num_inputs) - 1;
 	key->vs_prolog.as_ls = shader_out->key.as_ls;
+	key->vs_prolog.as_es = shader_out->key.as_es;
 
 	if (shader_out->selector->type == PIPE_SHADER_TESS_CTRL) {
 		key->vs_prolog.as_ls = 1;
 		key->vs_prolog.num_merged_next_stage_vgprs = 2;
 	} else if (shader_out->selector->type == PIPE_SHADER_GEOMETRY) {
+		key->vs_prolog.as_es = 1;
 		key->vs_prolog.num_merged_next_stage_vgprs = 5;
 	}
 
@@ -6513,7 +6549,7 @@ int si_compile_tgsi_shader(struct si_screen *sscreen,
 				union si_shader_part_key vs_prolog_key;
 				si_get_vs_prolog_key(&es->info,
 						     shader->info.num_input_sgprs,
-						     &shader->key.part.tcs.ls_prolog,
+						     &shader->key.part.gs.vs_prolog,
 						     shader, &vs_prolog_key);
 				vs_prolog_key.vs_prolog.is_monolithic = true;
 				si_build_vs_prolog_function(&ctx, &vs_prolog_key);
@@ -6739,6 +6775,8 @@ si_get_shader_part(struct si_screen *sscreen,
 
 	switch (type) {
 	case PIPE_SHADER_VERTEX:
+		shader.key.as_ls = key->vs_prolog.as_ls;
+		shader.key.as_es = key->vs_prolog.as_es;
 		break;
 	case PIPE_SHADER_TESS_CTRL:
 		assert(!prolog);
@@ -6781,10 +6819,15 @@ out:
 static LLVMValueRef si_prolog_get_rw_buffers(struct si_shader_context *ctx)
 {
 	LLVMValueRef ptr[2], list;
+	bool is_merged_shader =
+		ctx->screen->b.chip_class >= GFX9 &&
+		(ctx->type == PIPE_SHADER_TESS_CTRL ||
+		 ctx->type == PIPE_SHADER_GEOMETRY ||
+		 ctx->shader->key.as_ls || ctx->shader->key.as_es);
 
 	/* Get the pointer to rw buffers. */
-	ptr[0] = LLVMGetParam(ctx->main_fn, SI_SGPR_RW_BUFFERS);
-	ptr[1] = LLVMGetParam(ctx->main_fn, SI_SGPR_RW_BUFFERS_HI);
+	ptr[0] = LLVMGetParam(ctx->main_fn, (is_merged_shader ? 8 : 0) + SI_SGPR_RW_BUFFERS);
+	ptr[1] = LLVMGetParam(ctx->main_fn, (is_merged_shader ? 8 : 0) + SI_SGPR_RW_BUFFERS_HI);
 	list = lp_build_gather_values(&ctx->gallivm, ptr, 2);
 	list = LLVMBuildBitCast(ctx->ac.builder, list, ctx->i64, "");
 	list = LLVMBuildIntToPtr(ctx->ac.builder, list,
@@ -6854,8 +6897,7 @@ static void si_build_vs_prolog_function(struct si_shader_context *ctx,
 			si_init_exec_from_input(ctx, 3, 0);
 
 		if (key->vs_prolog.as_ls &&
-		    (ctx->screen->b.family == CHIP_VEGA10 ||
-		     ctx->screen->b.family == CHIP_RAVEN)) {
+		    ctx->screen->has_ls_vgpr_init_bug) {
 			/* If there are no HS threads, SPI loads the LS VGPRs
 			 * starting at VGPR 0. Shift them back to where they
 			 * belong.
@@ -6900,7 +6942,7 @@ static void si_build_vs_prolog_function(struct si_shader_context *ctx,
 		LLVMValueRef buf_index =
 			LLVMConstInt(ctx->i32, SI_VS_CONST_INSTANCE_DIVISORS, 0);
 		instance_divisor_constbuf =
-			ac_build_indexed_load_const(&ctx->ac, list, buf_index);
+			ac_build_load_to_sgpr(&ctx->ac, list, buf_index);
 	}
 
 	for (i = 0; i <= key->vs_prolog.last_input; i++) {
@@ -7040,7 +7082,7 @@ static void si_build_tcs_epilog_function(struct si_shader_context *ctx,
 	/* Create the function. */
 	si_create_function(ctx, "tcs_epilog", NULL, 0, &fninfo,
 			   ctx->screen->b.chip_class >= CIK ? 128 : 64);
-	declare_lds_as_pointer(ctx);
+	ac_declare_lds_as_pointer(&ctx->ac);
 	func = ctx->main_fn;
 
 	LLVMValueRef invoc0_tess_factors[6];

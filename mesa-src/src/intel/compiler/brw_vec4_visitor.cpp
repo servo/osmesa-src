@@ -46,6 +46,7 @@ vec4_instruction::vec4_instruction(enum opcode opcode, const dst_reg &dst,
    this->predicate_inverse = false;
    this->target = 0;
    this->shadow_compare = false;
+   this->eot = false;
    this->ir = NULL;
    this->urb_write_flags = BRW_URB_WRITE_NO_FLAGS;
    this->header_size = 0;
@@ -915,18 +916,6 @@ vec4_visitor::emit_texture(ir_texture_opcode op,
                            src_reg surface_reg,
                            src_reg sampler_reg)
 {
-   /* The sampler can only meaningfully compute LOD for fragment shader
-    * messages. For all other stages, we change the opcode to TXL and hardcode
-    * the LOD to 0.
-    *
-    * textureQueryLevels() is implemented in terms of TXS so we need to pass a
-    * valid LOD argument.
-    */
-   if (op == ir_tex || op == ir_query_levels) {
-      assert(lod.file == BAD_FILE);
-      lod = brw_imm_f(0.0f);
-   }
-
    enum opcode opcode;
    switch (op) {
    case ir_tex: opcode = SHADER_OPCODE_TXL; break;
@@ -1892,10 +1881,6 @@ vec4_visitor::vec4_visitor(const struct brw_compiler *compiler,
    this->max_grf = devinfo->gen >= 7 ? GEN7_MRF_HACK_START : BRW_MAX_GRF;
 
    this->uniforms = 0;
-}
-
-vec4_visitor::~vec4_visitor()
-{
 }
 
 

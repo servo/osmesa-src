@@ -37,6 +37,7 @@
 #include "fd5_emit.h"
 #include "fd5_blend.h"
 #include "fd5_context.h"
+#include "fd5_image.h"
 #include "fd5_program.h"
 #include "fd5_rasterizer.h"
 #include "fd5_texture.h"
@@ -343,6 +344,8 @@ emit_textures(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			OUT_RING(ring, view->texconst3);
 			if (view->base.texture) {
 				struct fd_resource *rsc = fd_resource(view->base.texture);
+				if (view->base.format == PIPE_FORMAT_X32_S8X24_UINT)
+					rsc = rsc->stencil;
 				OUT_RELOC(ring, rsc->bo, view->offset,
 						(uint64_t)view->texconst5 << 32, 0);
 			} else {
@@ -379,14 +382,8 @@ emit_ssbos(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			CP_LOAD_STATE4_1_EXT_SRC_ADDR(0));
 	OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
 	for (unsigned i = 0; i < count; i++) {
-		struct pipe_shader_buffer *buf = &so->sb[i];
-		if (buf->buffer) {
-			struct fd_resource *rsc = fd_resource(buf->buffer);
-			OUT_RELOCW(ring, rsc->bo, 0, 0, 0);
-		} else {
-			OUT_RING(ring, 0x00000000);
-			OUT_RING(ring, 0x00000000);
-		}
+		OUT_RING(ring, 0x00000000);
+		OUT_RING(ring, 0x00000000);
 		OUT_RING(ring, 0x00000000);
 		OUT_RING(ring, 0x00000000);
 	}
@@ -401,10 +398,13 @@ emit_ssbos(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
 	for (unsigned i = 0; i < count; i++) {
 		struct pipe_shader_buffer *buf = &so->sb[i];
+		unsigned sz = buf->buffer_size;
 
-		// TODO maybe offset encoded somewhere here??
-		OUT_RING(ring, (buf->buffer_size << 16));
-		OUT_RING(ring, 0x00000000);
+		/* width is in dwords, overflows into height: */
+		sz /= 4;
+
+		OUT_RING(ring, A5XX_SSBO_1_0_WIDTH(sz));
+		OUT_RING(ring, A5XX_SSBO_1_1_HEIGHT(sz >> 16));
 	}
 
 	OUT_PKT7(ring, CP_LOAD_STATE4, 3 + (2 * count));
@@ -419,7 +419,7 @@ emit_ssbos(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		struct pipe_shader_buffer *buf = &so->sb[i];
 		if (buf->buffer) {
 			struct fd_resource *rsc = fd_resource(buf->buffer);
-			OUT_RELOCW(ring, rsc->bo, 0, 0, 0);
+			OUT_RELOCW(ring, rsc->bo, buf->buffer_offset, 0, 0);
 		} else {
 			OUT_RING(ring, 0x00000000);
 			OUT_RING(ring, 0x00000000);
@@ -767,9 +767,11 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	if (ctx->dirty_shader[PIPE_SHADER_FRAGMENT] & FD_DIRTY_SHADER_TEX) {
 		needs_border |= emit_textures(ctx, ring, SB4_FS_TEX,
 				&ctx->tex[PIPE_SHADER_FRAGMENT]);
-		OUT_PKT4(ring, REG_A5XX_TPL1_FS_TEX_COUNT, 1);
-		OUT_RING(ring, ctx->tex[PIPE_SHADER_FRAGMENT].num_textures);
 	}
+
+	OUT_PKT4(ring, REG_A5XX_TPL1_FS_TEX_COUNT, 1);
+	OUT_RING(ring, ctx->shaderimg[PIPE_SHADER_FRAGMENT].enabled_mask ?
+			~0 : ctx->tex[PIPE_SHADER_FRAGMENT].num_textures);
 
 	OUT_PKT4(ring, REG_A5XX_TPL1_CS_TEX_COUNT, 1);
 	OUT_RING(ring, 0);
@@ -779,6 +781,9 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	if (ctx->dirty_shader[PIPE_SHADER_FRAGMENT] & FD_DIRTY_SHADER_SSBO)
 		emit_ssbos(ctx, ring, SB4_SSBO, &ctx->shaderbuf[PIPE_SHADER_FRAGMENT]);
+
+	if (ctx->dirty_shader[PIPE_SHADER_FRAGMENT] & FD_DIRTY_SHADER_IMAGE)
+		fd5_emit_images(ctx, ring, PIPE_SHADER_FRAGMENT);
 }
 
 void
@@ -809,13 +814,17 @@ fd5_emit_cs_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 		OUT_PKT4(ring, REG_A5XX_TPL1_FS_TEX_COUNT, 1);
 		OUT_RING(ring, 0);
-
-		OUT_PKT4(ring, REG_A5XX_TPL1_CS_TEX_COUNT, 1);
-		OUT_RING(ring, ctx->tex[PIPE_SHADER_COMPUTE].num_textures);
 	}
+
+	OUT_PKT4(ring, REG_A5XX_TPL1_CS_TEX_COUNT, 1);
+	OUT_RING(ring, ctx->shaderimg[PIPE_SHADER_COMPUTE].enabled_mask ?
+			~0 : ctx->tex[PIPE_SHADER_COMPUTE].num_textures);
 
 	if (dirty & FD_DIRTY_SHADER_SSBO)
 		emit_ssbos(ctx, ring, SB4_CS_SSBO, &ctx->shaderbuf[PIPE_SHADER_COMPUTE]);
+
+	if (dirty & FD_DIRTY_SHADER_IMAGE)
+		fd5_emit_images(ctx, ring, PIPE_SHADER_COMPUTE);
 }
 
 /* emit setup at begin of new cmdstream buffer (don't rely on previous

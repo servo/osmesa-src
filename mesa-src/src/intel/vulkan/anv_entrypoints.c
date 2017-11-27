@@ -223,6 +223,9 @@ static const char strings[] =
     "vkGetImageSparseMemoryRequirements2KHR\0"
     "vkCreateSamplerYcbcrConversionKHR\0"
     "vkDestroySamplerYcbcrConversionKHR\0"
+    "vkGetSwapchainGrallocUsageANDROID\0"
+    "vkAcquireImageANDROID\0"
+    "vkQueueSignalReleaseImageANDROID\0"
     "vkCreateDmaBufImageINTEL\0"
 ;
 
@@ -414,7 +417,10 @@ static const struct anv_entrypoint entrypoints[] = {
     [184] = { 4428, 0x3df40f5e }, /* vkGetImageSparseMemoryRequirements2KHR */
     [185] = { 4467, 0x7482104f }, /* vkCreateSamplerYcbcrConversionKHR */
     [186] = { 4501, 0xaaa623a3 }, /* vkDestroySamplerYcbcrConversionKHR */
-    [187] = { 4536, 0x6392dfa7 }, /* vkCreateDmaBufImageINTEL */
+    [187] = { 4536, 0x4979c9a3 }, /* vkGetSwapchainGrallocUsageANDROID */
+    [188] = { 4570, 0x6bf780dd }, /* vkAcquireImageANDROID */
+    [189] = { 4592, 0xa0313eef }, /* vkQueueSignalReleaseImageANDROID */
+    [190] = { 4625, 0x6392dfa7 }, /* vkCreateDmaBufImageINTEL */
 };
 
 /* Weak aliases for all potential implementations. These will resolve to
@@ -621,6 +627,15 @@ static const struct anv_entrypoint entrypoints[] = {
     void anv_GetImageSparseMemoryRequirements2KHR(VkDevice device, const VkImageSparseMemoryRequirementsInfo2KHR* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2KHR* pSparseMemoryRequirements) __attribute__ ((weak));
     VkResult anv_CreateSamplerYcbcrConversionKHR(VkDevice device, const VkSamplerYcbcrConversionCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversionKHR* pYcbcrConversion) __attribute__ ((weak));
     void anv_DestroySamplerYcbcrConversionKHR(VkDevice device, VkSamplerYcbcrConversionKHR ycbcrConversion, const VkAllocationCallbacks* pAllocator) __attribute__ ((weak));
+#ifdef ANDROID
+    VkResult anv_GetSwapchainGrallocUsageANDROID(VkDevice device, VkFormat format, VkImageUsageFlags imageUsage, int* grallocUsage) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult anv_AcquireImageANDROID(VkDevice device, VkImage image, int nativeFenceFd, VkSemaphore semaphore, VkFence fence) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult anv_QueueSignalReleaseImageANDROID(VkQueue queue, uint32_t waitSemaphoreCount, const VkSemaphore* pWaitSemaphores, VkImage image, int* pNativeFenceFd) __attribute__ ((weak));
+#endif // ANDROID
     VkResult anv_CreateDmaBufImageINTEL(VkDevice device, const VkDmaBufImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator,VkDeviceMemory* pMem,VkImage* pImage) __attribute__ ((weak));
 
   const struct anv_dispatch_table anv_layer = {
@@ -823,6 +838,15 @@ static const struct anv_entrypoint entrypoints[] = {
     .GetImageSparseMemoryRequirements2KHR = anv_GetImageSparseMemoryRequirements2KHR,
     .CreateSamplerYcbcrConversionKHR = anv_CreateSamplerYcbcrConversionKHR,
     .DestroySamplerYcbcrConversionKHR = anv_DestroySamplerYcbcrConversionKHR,
+#ifdef ANDROID
+    .GetSwapchainGrallocUsageANDROID = anv_GetSwapchainGrallocUsageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .AcquireImageANDROID = anv_AcquireImageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .QueueSignalReleaseImageANDROID = anv_QueueSignalReleaseImageANDROID,
+#endif // ANDROID
     .CreateDmaBufImageINTEL = anv_CreateDmaBufImageINTEL,
   };
     VkResult gen7_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkInstance* pInstance) __attribute__ ((weak));
@@ -1024,6 +1048,15 @@ static const struct anv_entrypoint entrypoints[] = {
     void gen7_GetImageSparseMemoryRequirements2KHR(VkDevice device, const VkImageSparseMemoryRequirementsInfo2KHR* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2KHR* pSparseMemoryRequirements) __attribute__ ((weak));
     VkResult gen7_CreateSamplerYcbcrConversionKHR(VkDevice device, const VkSamplerYcbcrConversionCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversionKHR* pYcbcrConversion) __attribute__ ((weak));
     void gen7_DestroySamplerYcbcrConversionKHR(VkDevice device, VkSamplerYcbcrConversionKHR ycbcrConversion, const VkAllocationCallbacks* pAllocator) __attribute__ ((weak));
+#ifdef ANDROID
+    VkResult gen7_GetSwapchainGrallocUsageANDROID(VkDevice device, VkFormat format, VkImageUsageFlags imageUsage, int* grallocUsage) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen7_AcquireImageANDROID(VkDevice device, VkImage image, int nativeFenceFd, VkSemaphore semaphore, VkFence fence) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen7_QueueSignalReleaseImageANDROID(VkQueue queue, uint32_t waitSemaphoreCount, const VkSemaphore* pWaitSemaphores, VkImage image, int* pNativeFenceFd) __attribute__ ((weak));
+#endif // ANDROID
     VkResult gen7_CreateDmaBufImageINTEL(VkDevice device, const VkDmaBufImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator,VkDeviceMemory* pMem,VkImage* pImage) __attribute__ ((weak));
 
   const struct anv_dispatch_table gen7_layer = {
@@ -1226,6 +1259,15 @@ static const struct anv_entrypoint entrypoints[] = {
     .GetImageSparseMemoryRequirements2KHR = gen7_GetImageSparseMemoryRequirements2KHR,
     .CreateSamplerYcbcrConversionKHR = gen7_CreateSamplerYcbcrConversionKHR,
     .DestroySamplerYcbcrConversionKHR = gen7_DestroySamplerYcbcrConversionKHR,
+#ifdef ANDROID
+    .GetSwapchainGrallocUsageANDROID = gen7_GetSwapchainGrallocUsageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .AcquireImageANDROID = gen7_AcquireImageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .QueueSignalReleaseImageANDROID = gen7_QueueSignalReleaseImageANDROID,
+#endif // ANDROID
     .CreateDmaBufImageINTEL = gen7_CreateDmaBufImageINTEL,
   };
     VkResult gen75_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkInstance* pInstance) __attribute__ ((weak));
@@ -1427,6 +1469,15 @@ static const struct anv_entrypoint entrypoints[] = {
     void gen75_GetImageSparseMemoryRequirements2KHR(VkDevice device, const VkImageSparseMemoryRequirementsInfo2KHR* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2KHR* pSparseMemoryRequirements) __attribute__ ((weak));
     VkResult gen75_CreateSamplerYcbcrConversionKHR(VkDevice device, const VkSamplerYcbcrConversionCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversionKHR* pYcbcrConversion) __attribute__ ((weak));
     void gen75_DestroySamplerYcbcrConversionKHR(VkDevice device, VkSamplerYcbcrConversionKHR ycbcrConversion, const VkAllocationCallbacks* pAllocator) __attribute__ ((weak));
+#ifdef ANDROID
+    VkResult gen75_GetSwapchainGrallocUsageANDROID(VkDevice device, VkFormat format, VkImageUsageFlags imageUsage, int* grallocUsage) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen75_AcquireImageANDROID(VkDevice device, VkImage image, int nativeFenceFd, VkSemaphore semaphore, VkFence fence) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen75_QueueSignalReleaseImageANDROID(VkQueue queue, uint32_t waitSemaphoreCount, const VkSemaphore* pWaitSemaphores, VkImage image, int* pNativeFenceFd) __attribute__ ((weak));
+#endif // ANDROID
     VkResult gen75_CreateDmaBufImageINTEL(VkDevice device, const VkDmaBufImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator,VkDeviceMemory* pMem,VkImage* pImage) __attribute__ ((weak));
 
   const struct anv_dispatch_table gen75_layer = {
@@ -1629,6 +1680,15 @@ static const struct anv_entrypoint entrypoints[] = {
     .GetImageSparseMemoryRequirements2KHR = gen75_GetImageSparseMemoryRequirements2KHR,
     .CreateSamplerYcbcrConversionKHR = gen75_CreateSamplerYcbcrConversionKHR,
     .DestroySamplerYcbcrConversionKHR = gen75_DestroySamplerYcbcrConversionKHR,
+#ifdef ANDROID
+    .GetSwapchainGrallocUsageANDROID = gen75_GetSwapchainGrallocUsageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .AcquireImageANDROID = gen75_AcquireImageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .QueueSignalReleaseImageANDROID = gen75_QueueSignalReleaseImageANDROID,
+#endif // ANDROID
     .CreateDmaBufImageINTEL = gen75_CreateDmaBufImageINTEL,
   };
     VkResult gen8_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkInstance* pInstance) __attribute__ ((weak));
@@ -1830,6 +1890,15 @@ static const struct anv_entrypoint entrypoints[] = {
     void gen8_GetImageSparseMemoryRequirements2KHR(VkDevice device, const VkImageSparseMemoryRequirementsInfo2KHR* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2KHR* pSparseMemoryRequirements) __attribute__ ((weak));
     VkResult gen8_CreateSamplerYcbcrConversionKHR(VkDevice device, const VkSamplerYcbcrConversionCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversionKHR* pYcbcrConversion) __attribute__ ((weak));
     void gen8_DestroySamplerYcbcrConversionKHR(VkDevice device, VkSamplerYcbcrConversionKHR ycbcrConversion, const VkAllocationCallbacks* pAllocator) __attribute__ ((weak));
+#ifdef ANDROID
+    VkResult gen8_GetSwapchainGrallocUsageANDROID(VkDevice device, VkFormat format, VkImageUsageFlags imageUsage, int* grallocUsage) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen8_AcquireImageANDROID(VkDevice device, VkImage image, int nativeFenceFd, VkSemaphore semaphore, VkFence fence) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen8_QueueSignalReleaseImageANDROID(VkQueue queue, uint32_t waitSemaphoreCount, const VkSemaphore* pWaitSemaphores, VkImage image, int* pNativeFenceFd) __attribute__ ((weak));
+#endif // ANDROID
     VkResult gen8_CreateDmaBufImageINTEL(VkDevice device, const VkDmaBufImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator,VkDeviceMemory* pMem,VkImage* pImage) __attribute__ ((weak));
 
   const struct anv_dispatch_table gen8_layer = {
@@ -2032,6 +2101,15 @@ static const struct anv_entrypoint entrypoints[] = {
     .GetImageSparseMemoryRequirements2KHR = gen8_GetImageSparseMemoryRequirements2KHR,
     .CreateSamplerYcbcrConversionKHR = gen8_CreateSamplerYcbcrConversionKHR,
     .DestroySamplerYcbcrConversionKHR = gen8_DestroySamplerYcbcrConversionKHR,
+#ifdef ANDROID
+    .GetSwapchainGrallocUsageANDROID = gen8_GetSwapchainGrallocUsageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .AcquireImageANDROID = gen8_AcquireImageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .QueueSignalReleaseImageANDROID = gen8_QueueSignalReleaseImageANDROID,
+#endif // ANDROID
     .CreateDmaBufImageINTEL = gen8_CreateDmaBufImageINTEL,
   };
     VkResult gen9_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkInstance* pInstance) __attribute__ ((weak));
@@ -2233,6 +2311,15 @@ static const struct anv_entrypoint entrypoints[] = {
     void gen9_GetImageSparseMemoryRequirements2KHR(VkDevice device, const VkImageSparseMemoryRequirementsInfo2KHR* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2KHR* pSparseMemoryRequirements) __attribute__ ((weak));
     VkResult gen9_CreateSamplerYcbcrConversionKHR(VkDevice device, const VkSamplerYcbcrConversionCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversionKHR* pYcbcrConversion) __attribute__ ((weak));
     void gen9_DestroySamplerYcbcrConversionKHR(VkDevice device, VkSamplerYcbcrConversionKHR ycbcrConversion, const VkAllocationCallbacks* pAllocator) __attribute__ ((weak));
+#ifdef ANDROID
+    VkResult gen9_GetSwapchainGrallocUsageANDROID(VkDevice device, VkFormat format, VkImageUsageFlags imageUsage, int* grallocUsage) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen9_AcquireImageANDROID(VkDevice device, VkImage image, int nativeFenceFd, VkSemaphore semaphore, VkFence fence) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen9_QueueSignalReleaseImageANDROID(VkQueue queue, uint32_t waitSemaphoreCount, const VkSemaphore* pWaitSemaphores, VkImage image, int* pNativeFenceFd) __attribute__ ((weak));
+#endif // ANDROID
     VkResult gen9_CreateDmaBufImageINTEL(VkDevice device, const VkDmaBufImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator,VkDeviceMemory* pMem,VkImage* pImage) __attribute__ ((weak));
 
   const struct anv_dispatch_table gen9_layer = {
@@ -2435,6 +2522,15 @@ static const struct anv_entrypoint entrypoints[] = {
     .GetImageSparseMemoryRequirements2KHR = gen9_GetImageSparseMemoryRequirements2KHR,
     .CreateSamplerYcbcrConversionKHR = gen9_CreateSamplerYcbcrConversionKHR,
     .DestroySamplerYcbcrConversionKHR = gen9_DestroySamplerYcbcrConversionKHR,
+#ifdef ANDROID
+    .GetSwapchainGrallocUsageANDROID = gen9_GetSwapchainGrallocUsageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .AcquireImageANDROID = gen9_AcquireImageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .QueueSignalReleaseImageANDROID = gen9_QueueSignalReleaseImageANDROID,
+#endif // ANDROID
     .CreateDmaBufImageINTEL = gen9_CreateDmaBufImageINTEL,
   };
     VkResult gen10_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkInstance* pInstance) __attribute__ ((weak));
@@ -2636,6 +2732,15 @@ static const struct anv_entrypoint entrypoints[] = {
     void gen10_GetImageSparseMemoryRequirements2KHR(VkDevice device, const VkImageSparseMemoryRequirementsInfo2KHR* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2KHR* pSparseMemoryRequirements) __attribute__ ((weak));
     VkResult gen10_CreateSamplerYcbcrConversionKHR(VkDevice device, const VkSamplerYcbcrConversionCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversionKHR* pYcbcrConversion) __attribute__ ((weak));
     void gen10_DestroySamplerYcbcrConversionKHR(VkDevice device, VkSamplerYcbcrConversionKHR ycbcrConversion, const VkAllocationCallbacks* pAllocator) __attribute__ ((weak));
+#ifdef ANDROID
+    VkResult gen10_GetSwapchainGrallocUsageANDROID(VkDevice device, VkFormat format, VkImageUsageFlags imageUsage, int* grallocUsage) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen10_AcquireImageANDROID(VkDevice device, VkImage image, int nativeFenceFd, VkSemaphore semaphore, VkFence fence) __attribute__ ((weak));
+#endif // ANDROID
+#ifdef ANDROID
+    VkResult gen10_QueueSignalReleaseImageANDROID(VkQueue queue, uint32_t waitSemaphoreCount, const VkSemaphore* pWaitSemaphores, VkImage image, int* pNativeFenceFd) __attribute__ ((weak));
+#endif // ANDROID
     VkResult gen10_CreateDmaBufImageINTEL(VkDevice device, const VkDmaBufImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator,VkDeviceMemory* pMem,VkImage* pImage) __attribute__ ((weak));
 
   const struct anv_dispatch_table gen10_layer = {
@@ -2838,6 +2943,15 @@ static const struct anv_entrypoint entrypoints[] = {
     .GetImageSparseMemoryRequirements2KHR = gen10_GetImageSparseMemoryRequirements2KHR,
     .CreateSamplerYcbcrConversionKHR = gen10_CreateSamplerYcbcrConversionKHR,
     .DestroySamplerYcbcrConversionKHR = gen10_DestroySamplerYcbcrConversionKHR,
+#ifdef ANDROID
+    .GetSwapchainGrallocUsageANDROID = gen10_GetSwapchainGrallocUsageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .AcquireImageANDROID = gen10_AcquireImageANDROID,
+#endif // ANDROID
+#ifdef ANDROID
+    .QueueSignalReleaseImageANDROID = gen10_QueueSignalReleaseImageANDROID,
+#endif // ANDROID
     .CreateDmaBufImageINTEL = gen10_CreateDmaBufImageINTEL,
   };
 
@@ -2879,8 +2993,8 @@ anv_resolve_entrypoint(const struct gen_device_info *devinfo, uint32_t index)
  * size 256 entries
  * collisions entries:
  *     0     119
- *     1     35
- *     2     12
+ *     1     37
+ *     2     13
  *     3     7
  *     4     4
  *     5     1
@@ -2894,8 +3008,8 @@ anv_resolve_entrypoint(const struct gen_device_info *devinfo, uint32_t index)
 static const uint16_t map[] = {
       0x0044,
       none,
-      none,
-      none,
+      0x00bd,
+      0x00bc,
       0x00a7,
       0x002b,
       0x0040,
@@ -2936,7 +3050,7 @@ static const uint16_t map[] = {
       none,
       0x001c,
       0x002f,
-      0x00bb,
+      0x00be,
       none,
       0x0077,
       0x0018,
@@ -3074,7 +3188,7 @@ static const uint16_t map[] = {
       0x0031,
       0x00a3,
       0x001b,
-      none,
+      0x00bb,
       0x0073,
       0x005f,
       0x0032,

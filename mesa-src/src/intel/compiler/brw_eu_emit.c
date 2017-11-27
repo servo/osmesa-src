@@ -141,22 +141,26 @@ brw_set_dest(struct brw_codegen *p, brw_inst *inst, struct brw_reg dest)
 
    /* Generators should set a default exec_size of either 8 (SIMD4x2 or SIMD8)
     * or 16 (SIMD16), as that's normally correct.  However, when dealing with
-    * small registers, we automatically reduce it to match the register size.
-    *
-    * In platforms that support fp64 we can emit instructions with a width of
-    * 4 that need two SIMD8 registers and an exec_size of 8 or 16. In these
-    * cases we need to make sure that these instructions have their exec sizes
-    * set properly when they are emitted and we can't rely on this code to fix
-    * it.
+    * small registers, it can be useful for us to automatically reduce it to
+    * match the register size.
     */
-   bool fix_exec_size;
-   if (devinfo->gen >= 6)
-      fix_exec_size = dest.width < BRW_EXECUTE_4;
-   else
-      fix_exec_size = dest.width < BRW_EXECUTE_8;
+   if (p->automatic_exec_sizes) {
+      /*
+       * In platforms that support fp64 we can emit instructions with a width
+       * of 4 that need two SIMD8 registers and an exec_size of 8 or 16. In
+       * these cases we need to make sure that these instructions have their
+       * exec sizes set properly when they are emitted and we can't rely on
+       * this code to fix it.
+       */
+      bool fix_exec_size;
+      if (devinfo->gen >= 6)
+         fix_exec_size = dest.width < BRW_EXECUTE_4;
+      else
+         fix_exec_size = dest.width < BRW_EXECUTE_8;
 
-   if (fix_exec_size)
-      brw_inst_set_exec_size(devinfo, inst, dest.width);
+      if (fix_exec_size)
+         brw_inst_set_exec_size(devinfo, inst, dest.width);
+   }
 }
 
 void
@@ -678,83 +682,170 @@ brw_alu3(struct brw_codegen *p, unsigned opcode, struct brw_reg dest,
 
    gen7_convert_mrf_to_grf(p, &dest);
 
-   assert(brw_inst_access_mode(devinfo, inst) == BRW_ALIGN_16);
-
-   assert(dest.file == BRW_GENERAL_REGISTER_FILE ||
-	  dest.file == BRW_MESSAGE_REGISTER_FILE);
    assert(dest.nr < 128);
-   assert(dest.address_mode == BRW_ADDRESS_DIRECT);
-   assert(dest.type == BRW_REGISTER_TYPE_F  ||
-          dest.type == BRW_REGISTER_TYPE_DF ||
-          dest.type == BRW_REGISTER_TYPE_D  ||
-          dest.type == BRW_REGISTER_TYPE_UD);
-   if (devinfo->gen == 6) {
-      brw_inst_set_3src_dst_reg_file(devinfo, inst,
-                                     dest.file == BRW_MESSAGE_REGISTER_FILE);
-   }
-   brw_inst_set_3src_dst_reg_nr(devinfo, inst, dest.nr);
-   brw_inst_set_3src_dst_subreg_nr(devinfo, inst, dest.subnr / 16);
-   brw_inst_set_3src_dst_writemask(devinfo, inst, dest.writemask);
-
-   assert(src0.file == BRW_GENERAL_REGISTER_FILE);
-   assert(src0.address_mode == BRW_ADDRESS_DIRECT);
    assert(src0.nr < 128);
-   brw_inst_set_3src_src0_swizzle(devinfo, inst, src0.swizzle);
-   brw_inst_set_3src_src0_subreg_nr(devinfo, inst, get_3src_subreg_nr(src0));
-   brw_inst_set_3src_src0_reg_nr(devinfo, inst, src0.nr);
-   brw_inst_set_3src_src0_abs(devinfo, inst, src0.abs);
-   brw_inst_set_3src_src0_negate(devinfo, inst, src0.negate);
-   brw_inst_set_3src_src0_rep_ctrl(devinfo, inst,
-                                   src0.vstride == BRW_VERTICAL_STRIDE_0);
-
-   assert(src1.file == BRW_GENERAL_REGISTER_FILE);
-   assert(src1.address_mode == BRW_ADDRESS_DIRECT);
    assert(src1.nr < 128);
-   brw_inst_set_3src_src1_swizzle(devinfo, inst, src1.swizzle);
-   brw_inst_set_3src_src1_subreg_nr(devinfo, inst, get_3src_subreg_nr(src1));
-   brw_inst_set_3src_src1_reg_nr(devinfo, inst, src1.nr);
-   brw_inst_set_3src_src1_abs(devinfo, inst, src1.abs);
-   brw_inst_set_3src_src1_negate(devinfo, inst, src1.negate);
-   brw_inst_set_3src_src1_rep_ctrl(devinfo, inst,
-                                   src1.vstride == BRW_VERTICAL_STRIDE_0);
-
-   assert(src2.file == BRW_GENERAL_REGISTER_FILE);
-   assert(src2.address_mode == BRW_ADDRESS_DIRECT);
    assert(src2.nr < 128);
-   brw_inst_set_3src_src2_swizzle(devinfo, inst, src2.swizzle);
-   brw_inst_set_3src_src2_subreg_nr(devinfo, inst, get_3src_subreg_nr(src2));
-   brw_inst_set_3src_src2_reg_nr(devinfo, inst, src2.nr);
-   brw_inst_set_3src_src2_abs(devinfo, inst, src2.abs);
-   brw_inst_set_3src_src2_negate(devinfo, inst, src2.negate);
-   brw_inst_set_3src_src2_rep_ctrl(devinfo, inst,
-                                   src2.vstride == BRW_VERTICAL_STRIDE_0);
+   assert(dest.address_mode == BRW_ADDRESS_DIRECT);
+   assert(src0.address_mode == BRW_ADDRESS_DIRECT);
+   assert(src1.address_mode == BRW_ADDRESS_DIRECT);
+   assert(src2.address_mode == BRW_ADDRESS_DIRECT);
 
-   if (devinfo->gen >= 7) {
-      /* Set both the source and destination types based on dest.type,
-       * ignoring the source register types.  The MAD and LRP emitters ensure
-       * that all four types are float.  The BFE and BFI2 emitters, however,
-       * may send us mixed D and UD types and want us to ignore that and use
-       * the destination type.
-       */
-      switch (dest.type) {
-      case BRW_REGISTER_TYPE_F:
-         brw_inst_set_3src_src_type(devinfo, inst, BRW_3SRC_TYPE_F);
-         brw_inst_set_3src_dst_type(devinfo, inst, BRW_3SRC_TYPE_F);
-         break;
-      case BRW_REGISTER_TYPE_DF:
-         brw_inst_set_3src_src_type(devinfo, inst, BRW_3SRC_TYPE_DF);
-         brw_inst_set_3src_dst_type(devinfo, inst, BRW_3SRC_TYPE_DF);
-         break;
-      case BRW_REGISTER_TYPE_D:
-         brw_inst_set_3src_src_type(devinfo, inst, BRW_3SRC_TYPE_D);
-         brw_inst_set_3src_dst_type(devinfo, inst, BRW_3SRC_TYPE_D);
-         break;
-      case BRW_REGISTER_TYPE_UD:
-         brw_inst_set_3src_src_type(devinfo, inst, BRW_3SRC_TYPE_UD);
-         brw_inst_set_3src_dst_type(devinfo, inst, BRW_3SRC_TYPE_UD);
-         break;
-      default:
-         unreachable("not reached");
+   if (brw_inst_access_mode(devinfo, inst) == BRW_ALIGN_1) {
+      assert(dest.file == BRW_GENERAL_REGISTER_FILE ||
+             dest.file == BRW_ARCHITECTURE_REGISTER_FILE);
+
+      if (dest.file == BRW_ARCHITECTURE_REGISTER_FILE) {
+         brw_inst_set_3src_a1_dst_reg_file(devinfo, inst,
+                                           BRW_ALIGN1_3SRC_ACCUMULATOR);
+         brw_inst_set_3src_dst_reg_nr(devinfo, inst, BRW_ARF_ACCUMULATOR);
+      } else {
+         brw_inst_set_3src_a1_dst_reg_file(devinfo, inst,
+                                           BRW_ALIGN1_3SRC_GENERAL_REGISTER_FILE);
+         brw_inst_set_3src_dst_reg_nr(devinfo, inst, dest.nr);
+      }
+      brw_inst_set_3src_a1_dst_subreg_nr(devinfo, inst, dest.subnr / 8);
+
+      brw_inst_set_3src_a1_dst_hstride(devinfo, inst, BRW_ALIGN1_3SRC_DST_HORIZONTAL_STRIDE_1);
+
+      if (brw_reg_type_is_floating_point(dest.type)) {
+         brw_inst_set_3src_a1_exec_type(devinfo, inst,
+                                        BRW_ALIGN1_3SRC_EXEC_TYPE_FLOAT);
+      } else {
+         brw_inst_set_3src_a1_exec_type(devinfo, inst,
+                                        BRW_ALIGN1_3SRC_EXEC_TYPE_INT);
+      }
+
+      brw_inst_set_3src_a1_dst_type(devinfo, inst, dest.type);
+      brw_inst_set_3src_a1_src0_type(devinfo, inst, src0.type);
+      brw_inst_set_3src_a1_src1_type(devinfo, inst, src1.type);
+      brw_inst_set_3src_a1_src2_type(devinfo, inst, src2.type);
+
+      assert((src0.vstride == BRW_VERTICAL_STRIDE_0 &&
+              src0.hstride == BRW_HORIZONTAL_STRIDE_0) ||
+             (src0.vstride == BRW_VERTICAL_STRIDE_8 &&
+              src0.hstride == BRW_HORIZONTAL_STRIDE_1));
+      assert((src1.vstride == BRW_VERTICAL_STRIDE_0 &&
+              src1.hstride == BRW_HORIZONTAL_STRIDE_0) ||
+             (src1.vstride == BRW_VERTICAL_STRIDE_8 &&
+              src1.hstride == BRW_HORIZONTAL_STRIDE_1));
+      assert((src2.vstride == BRW_VERTICAL_STRIDE_0 &&
+              src2.hstride == BRW_HORIZONTAL_STRIDE_0) ||
+             (src2.vstride == BRW_VERTICAL_STRIDE_8 &&
+              src2.hstride == BRW_HORIZONTAL_STRIDE_1));
+
+      brw_inst_set_3src_a1_src0_vstride(devinfo, inst,
+                                        src0.vstride == BRW_VERTICAL_STRIDE_0 ?
+                                        BRW_ALIGN1_3SRC_VERTICAL_STRIDE_0 :
+                                        BRW_ALIGN1_3SRC_VERTICAL_STRIDE_8);
+      brw_inst_set_3src_a1_src1_vstride(devinfo, inst,
+                                        src1.vstride == BRW_VERTICAL_STRIDE_0 ?
+                                        BRW_ALIGN1_3SRC_VERTICAL_STRIDE_0 :
+                                        BRW_ALIGN1_3SRC_VERTICAL_STRIDE_8);
+      /* no vstride on src2 */
+
+      brw_inst_set_3src_a1_src0_hstride(devinfo, inst,
+                                        src0.hstride == BRW_HORIZONTAL_STRIDE_0 ?
+                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0 :
+                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_1);
+      brw_inst_set_3src_a1_src1_hstride(devinfo, inst,
+                                        src1.hstride == BRW_HORIZONTAL_STRIDE_0 ?
+                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0 :
+                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_1);
+      brw_inst_set_3src_a1_src2_hstride(devinfo, inst,
+                                        src2.hstride == BRW_HORIZONTAL_STRIDE_0 ?
+                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0 :
+                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_1);
+
+      brw_inst_set_3src_a1_src0_subreg_nr(devinfo, inst, src0.subnr);
+      brw_inst_set_3src_src0_reg_nr(devinfo, inst, src0.nr);
+      brw_inst_set_3src_src0_abs(devinfo, inst, src0.abs);
+      brw_inst_set_3src_src0_negate(devinfo, inst, src0.negate);
+
+      brw_inst_set_3src_a1_src1_subreg_nr(devinfo, inst, src1.subnr);
+      if (src1.file == BRW_ARCHITECTURE_REGISTER_FILE) {
+         brw_inst_set_3src_src1_reg_nr(devinfo, inst, BRW_ARF_ACCUMULATOR);
+      } else {
+         brw_inst_set_3src_src1_reg_nr(devinfo, inst, src1.nr);
+      }
+      brw_inst_set_3src_src1_abs(devinfo, inst, src1.abs);
+      brw_inst_set_3src_src1_negate(devinfo, inst, src1.negate);
+
+      brw_inst_set_3src_a1_src2_subreg_nr(devinfo, inst, src2.subnr);
+      brw_inst_set_3src_src2_reg_nr(devinfo, inst, src2.nr);
+      brw_inst_set_3src_src2_abs(devinfo, inst, src2.abs);
+      brw_inst_set_3src_src2_negate(devinfo, inst, src2.negate);
+
+      assert(src0.file == BRW_GENERAL_REGISTER_FILE ||
+             src0.file == BRW_IMMEDIATE_VALUE);
+      assert(src1.file == BRW_GENERAL_REGISTER_FILE ||
+             src1.file == BRW_ARCHITECTURE_REGISTER_FILE);
+      assert(src2.file == BRW_GENERAL_REGISTER_FILE ||
+             src2.file == BRW_IMMEDIATE_VALUE);
+
+      brw_inst_set_3src_a1_src0_reg_file(devinfo, inst,
+                                         src0.file == BRW_GENERAL_REGISTER_FILE ?
+                                         BRW_ALIGN1_3SRC_GENERAL_REGISTER_FILE :
+                                         BRW_ALIGN1_3SRC_IMMEDIATE_VALUE);
+      brw_inst_set_3src_a1_src1_reg_file(devinfo, inst,
+                                         src1.file == BRW_GENERAL_REGISTER_FILE ?
+                                         BRW_ALIGN1_3SRC_GENERAL_REGISTER_FILE :
+                                         BRW_ALIGN1_3SRC_ACCUMULATOR);
+      brw_inst_set_3src_a1_src2_reg_file(devinfo, inst,
+                                         src2.file == BRW_GENERAL_REGISTER_FILE ?
+                                         BRW_ALIGN1_3SRC_GENERAL_REGISTER_FILE :
+                                         BRW_ALIGN1_3SRC_IMMEDIATE_VALUE);
+   } else {
+      assert(dest.file == BRW_GENERAL_REGISTER_FILE ||
+             dest.file == BRW_MESSAGE_REGISTER_FILE);
+      assert(dest.type == BRW_REGISTER_TYPE_F  ||
+             dest.type == BRW_REGISTER_TYPE_DF ||
+             dest.type == BRW_REGISTER_TYPE_D  ||
+             dest.type == BRW_REGISTER_TYPE_UD);
+      if (devinfo->gen == 6) {
+         brw_inst_set_3src_a16_dst_reg_file(devinfo, inst,
+                                            dest.file == BRW_MESSAGE_REGISTER_FILE);
+      }
+      brw_inst_set_3src_dst_reg_nr(devinfo, inst, dest.nr);
+      brw_inst_set_3src_a16_dst_subreg_nr(devinfo, inst, dest.subnr / 16);
+      brw_inst_set_3src_a16_dst_writemask(devinfo, inst, dest.writemask);
+
+      assert(src0.file == BRW_GENERAL_REGISTER_FILE);
+      brw_inst_set_3src_a16_src0_swizzle(devinfo, inst, src0.swizzle);
+      brw_inst_set_3src_a16_src0_subreg_nr(devinfo, inst, get_3src_subreg_nr(src0));
+      brw_inst_set_3src_src0_reg_nr(devinfo, inst, src0.nr);
+      brw_inst_set_3src_src0_abs(devinfo, inst, src0.abs);
+      brw_inst_set_3src_src0_negate(devinfo, inst, src0.negate);
+      brw_inst_set_3src_a16_src0_rep_ctrl(devinfo, inst,
+                                          src0.vstride == BRW_VERTICAL_STRIDE_0);
+
+      assert(src1.file == BRW_GENERAL_REGISTER_FILE);
+      brw_inst_set_3src_a16_src1_swizzle(devinfo, inst, src1.swizzle);
+      brw_inst_set_3src_a16_src1_subreg_nr(devinfo, inst, get_3src_subreg_nr(src1));
+      brw_inst_set_3src_src1_reg_nr(devinfo, inst, src1.nr);
+      brw_inst_set_3src_src1_abs(devinfo, inst, src1.abs);
+      brw_inst_set_3src_src1_negate(devinfo, inst, src1.negate);
+      brw_inst_set_3src_a16_src1_rep_ctrl(devinfo, inst,
+                                          src1.vstride == BRW_VERTICAL_STRIDE_0);
+
+      assert(src2.file == BRW_GENERAL_REGISTER_FILE);
+      brw_inst_set_3src_a16_src2_swizzle(devinfo, inst, src2.swizzle);
+      brw_inst_set_3src_a16_src2_subreg_nr(devinfo, inst, get_3src_subreg_nr(src2));
+      brw_inst_set_3src_src2_reg_nr(devinfo, inst, src2.nr);
+      brw_inst_set_3src_src2_abs(devinfo, inst, src2.abs);
+      brw_inst_set_3src_src2_negate(devinfo, inst, src2.negate);
+      brw_inst_set_3src_a16_src2_rep_ctrl(devinfo, inst,
+                                          src2.vstride == BRW_VERTICAL_STRIDE_0);
+
+      if (devinfo->gen >= 7) {
+         /* Set both the source and destination types based on dest.type,
+          * ignoring the source register types.  The MAD and LRP emitters ensure
+          * that all four types are float.  The BFE and BFI2 emitters, however,
+          * may send us mixed D and UD types and want us to ignore that and use
+          * the destination type.
+          */
+         brw_inst_set_3src_a16_src_type(devinfo, inst, dest.type);
+         brw_inst_set_3src_a16_dst_type(devinfo, inst, dest.type);
       }
    }
 
@@ -1103,7 +1194,7 @@ brw_JMPI(struct brw_codegen *p, struct brw_reg index,
    struct brw_reg ip = brw_ip_reg();
    brw_inst *inst = brw_alu2(p, BRW_OPCODE_JMPI, ip, ip, index);
 
-   brw_inst_set_exec_size(devinfo, inst, BRW_EXECUTE_2);
+   brw_inst_set_exec_size(devinfo, inst, BRW_EXECUTE_1);
    brw_inst_set_qtr_control(devinfo, inst, BRW_COMPRESSION_NONE);
    brw_inst_set_mask_control(devinfo, inst, BRW_MASK_DISABLE);
    brw_inst_set_pred_control(devinfo, inst, predicate_control);
@@ -1892,6 +1983,7 @@ void brw_oword_block_write_scratch(struct brw_codegen *p,
       brw_MOV(p, mrf, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
 
       /* set message header global offset field (reg 0, element 2) */
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_MOV(p,
 	      retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE,
 				  mrf.nr,
@@ -2011,6 +2103,7 @@ brw_oword_block_read_scratch(struct brw_codegen *p,
       brw_MOV(p, mrf, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
 
       /* set message header global offset field (reg 0, element 2) */
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_MOV(p, get_element_ud(mrf, 2), brw_imm_ud(offset));
 
       brw_pop_insn_state(p);
@@ -2109,6 +2202,7 @@ void brw_oword_block_read(struct brw_codegen *p,
    brw_MOV(p, mrf, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
 
    /* set message header global offset field (reg 0, element 2) */
+   brw_set_default_exec_size(p, BRW_EXECUTE_1);
    brw_MOV(p,
 	   retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE,
 			       mrf.nr,
@@ -2357,6 +2451,7 @@ void brw_urb_WRITE(struct brw_codegen *p,
       brw_push_insn_state(p);
       brw_set_default_access_mode(p, BRW_ALIGN_1);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_OR(p, retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE, msg_reg_nr, 5),
 		       BRW_REGISTER_TYPE_UD),
 	        retype(brw_vec1_grf(0, 5), BRW_REGISTER_TYPE_UD),
@@ -2416,6 +2511,7 @@ brw_send_indirect_message(struct brw_codegen *p,
       brw_push_insn_state(p);
       brw_set_default_access_mode(p, BRW_ALIGN_1);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 
       /* Load the indirect descriptor to an address register using OR so the
@@ -2460,6 +2556,7 @@ brw_send_indirect_surface_message(struct brw_codegen *p,
       brw_push_insn_state(p);
       brw_set_default_access_mode(p, BRW_ALIGN_1);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 
       /* Mask out invalid bits from the surface index to avoid hangs e.g. when
@@ -3187,6 +3284,7 @@ brw_find_live_channel(struct brw_codegen *p, struct brw_reg dst,
          struct brw_reg exec_mask =
             retype(brw_mask_reg(0), BRW_REGISTER_TYPE_UD);
 
+         brw_set_default_exec_size(p, BRW_EXECUTE_1);
          if (mask.file != BRW_IMMEDIATE_VALUE || mask.ud != 0xffffffff) {
             /* Unfortunately, ce0 does not take into account the thread
              * dispatch mask, which may be a problem in cases where it's not
@@ -3208,6 +3306,7 @@ brw_find_live_channel(struct brw_codegen *p, struct brw_reg dst,
       } else {
          const struct brw_reg flag = brw_flag_reg(1, 0);
 
+         brw_set_default_exec_size(p, BRW_EXECUTE_1);
          brw_MOV(p, retype(flag, BRW_REGISTER_TYPE_UD), brw_imm_ud(0));
 
          /* Run enough instructions returning zero with execution masking and
@@ -3233,6 +3332,7 @@ brw_find_live_channel(struct brw_codegen *p, struct brw_reg dst,
           * instructions.
           */
          const enum brw_reg_type type = brw_int_type(exec_size / 8, false);
+         brw_set_default_exec_size(p, BRW_EXECUTE_1);
          brw_FBL(p, vec1(dst), byte_offset(retype(flag, type), qtr_control));
       }
    } else {
@@ -3286,6 +3386,8 @@ brw_broadcast(struct brw_codegen *p,
 
    assert(src.file == BRW_GENERAL_REGISTER_FILE &&
           src.address_mode == BRW_ADDRESS_DIRECT);
+   assert(!src.abs && !src.negate);
+   assert(src.type == dst.type);
 
    if ((src.vstride == 0 && (src.hstride == 0 || !align1)) ||
        idx.file == BRW_IMMEDIATE_VALUE) {
@@ -3298,10 +3400,24 @@ brw_broadcast(struct brw_codegen *p,
               (align1 ? stride(suboffset(src, i), 0, 1, 0) :
                stride(suboffset(src, 4 * i), 0, 4, 1)));
    } else {
+      /* From the Haswell PRM section "Register Region Restrictions":
+       *
+       *    "The lower bits of the AddressImmediate must not overflow to
+       *    change the register address.  The lower 5 bits of Address
+       *    Immediate when added to lower 5 bits of address register gives
+       *    the sub-register offset. The upper bits of Address Immediate
+       *    when added to upper bits of address register gives the register
+       *    address. Any overflow from sub-register offset is dropped."
+       *
+       * Fortunately, for broadcast, we never have a sub-register offset so
+       * this isn't an issue.
+       */
+      assert(src.subnr == 0);
+
       if (align1) {
          const struct brw_reg addr =
             retype(brw_address_reg(0), BRW_REGISTER_TYPE_UD);
-         const unsigned offset = src.nr * REG_SIZE + src.subnr;
+         unsigned offset = src.nr * REG_SIZE + src.subnr;
          /* Limit in bytes of the signed indirect addressing immediate. */
          const unsigned limit = 512;
 
@@ -3319,15 +3435,38 @@ brw_broadcast(struct brw_codegen *p,
           * addressing immediate, account for the difference if the source
           * register is above this limit.
           */
-         if (offset >= limit)
+         if (offset >= limit) {
             brw_ADD(p, addr, addr, brw_imm_ud(offset - offset % limit));
+            offset = offset % limit;
+         }
 
          brw_pop_insn_state(p);
 
          /* Use indirect addressing to fetch the specified component. */
-         brw_MOV(p, dst,
-                 retype(brw_vec1_indirect(addr.subnr, offset % limit),
-                        src.type));
+         if (type_sz(src.type) > 4 &&
+             (devinfo->is_cherryview || gen_device_info_is_9lp(devinfo))) {
+            /* From the Cherryview PRM Vol 7. "Register Region Restrictions":
+             *
+             *    "When source or destination datatype is 64b or operation is
+             *    integer DWord multiply, indirect addressing must not be
+             *    used."
+             *
+             * To work around both of this issue, we do two integer MOVs
+             * insead of one 64-bit MOV.  Because no double value should ever
+             * cross a register boundary, it's safe to use the immediate
+             * offset in the indirect here to handle adding 4 bytes to the
+             * offset and avoid the extra ADD to the register file.
+             */
+            brw_MOV(p, subscript(dst, BRW_REGISTER_TYPE_D, 0),
+                       retype(brw_vec1_indirect(addr.subnr, offset),
+                              BRW_REGISTER_TYPE_D));
+            brw_MOV(p, subscript(dst, BRW_REGISTER_TYPE_D, 1),
+                       retype(brw_vec1_indirect(addr.subnr, offset + 4),
+                              BRW_REGISTER_TYPE_D));
+         } else {
+            brw_MOV(p, dst,
+                    retype(brw_vec1_indirect(addr.subnr, offset), src.type));
+         }
       } else {
          /* In SIMD4x2 mode the index can be either zero or one, replicate it
           * to all bits of a flag register,

@@ -48,14 +48,15 @@
 /* XXX this should go away, needed for 'struct winsys_handle' */
 #include "state_tracker/drm_driver.h"
 
+/**
+ * Go through the entire state and see if the resource is bound
+ * anywhere. If it is, mark the relevant state as dirty. This is
+ * called on realloc_bo to ensure the neccessary state is re-
+ * emitted so the GPU looks at the new backing bo.
+ */
 static void
-fd_invalidate_resource(struct fd_context *ctx, struct pipe_resource *prsc)
+rebind_resource(struct fd_context *ctx, struct pipe_resource *prsc)
 {
-	/* Go through the entire state and see if the resource is bound
-	 * anywhere. If it is, mark the relevant state as dirty. This is called on
-	 * realloc_bo.
-	 */
-
 	/* VBOs */
 	for (unsigned i = 0; i < ctx->vtx.vertexbuf.count && !(ctx->dirty & FD_DIRTY_VTXBUF); i++) {
 		if (ctx->vtx.vertexbuf.vb[i].buffer.resource == prsc)
@@ -487,7 +488,7 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 		realloc_bo(rsc, fd_bo_size(rsc->bo));
 		if (rsc->stencil)
 			realloc_bo(rsc->stencil, fd_bo_size(rsc->stencil->bo));
-		fd_invalidate_resource(ctx, prsc);
+		rebind_resource(ctx, prsc);
 	} else if ((usage & PIPE_TRANSFER_WRITE) &&
 			   prsc->target == PIPE_BUFFER &&
 			   !util_ranges_intersect(&rsc->valid_buffer_range,
@@ -512,7 +513,7 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 		 */
 		bool needs_flush = pending(rsc, !!(usage & PIPE_TRANSFER_WRITE));
 		bool busy = needs_flush || (0 != fd_bo_cpu_prep(rsc->bo,
-				ctx->screen->pipe, op | DRM_FREEDRENO_PREP_NOSYNC));
+				ctx->pipe, op | DRM_FREEDRENO_PREP_NOSYNC));
 
 		/* if we need to flush/stall, see if we can make a shadow buffer
 		 * to avoid this:
@@ -524,7 +525,7 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 		if (ctx->screen->reorder && busy && !(usage & PIPE_TRANSFER_READ)) {
 			if (fd_try_shadow_resource(ctx, rsc, level, usage, box)) {
 				needs_flush = busy = false;
-				fd_invalidate_resource(ctx, prsc);
+				rebind_resource(ctx, prsc);
 			}
 		}
 
@@ -553,7 +554,7 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 		 * completed.
 		 */
 		if (busy) {
-			ret = fd_bo_cpu_prep(rsc->bo, ctx->screen->pipe, op);
+			ret = fd_bo_cpu_prep(rsc->bo, ctx->pipe, op);
 			if (ret)
 				goto fail;
 		}
@@ -1158,6 +1159,32 @@ fd_flush_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
 	assert(!rsc->write_batch);
 }
 
+static void
+fd_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
+{
+	struct fd_resource *rsc = fd_resource(prsc);
+
+	/*
+	 * TODO I guess we could track that the resource is invalidated and
+	 * use that as a hint to realloc rather than stall in _transfer_map(),
+	 * even in the non-DISCARD_WHOLE_RESOURCE case?
+	 */
+
+	if (rsc->write_batch) {
+		struct fd_batch *batch = rsc->write_batch;
+		struct pipe_framebuffer_state *pfb = &batch->framebuffer;
+
+		if (pfb->zsbuf && pfb->zsbuf->texture == prsc)
+			batch->resolve &= ~(FD_BUFFER_DEPTH | FD_BUFFER_STENCIL);
+
+		for (unsigned i = 0; i < pfb->nr_cbufs; i++) {
+			if (pfb->cbufs[i] && pfb->cbufs[i]->texture == prsc) {
+				batch->resolve &= ~(PIPE_CLEAR_COLOR0 << i);
+			}
+		}
+	}
+}
+
 void
 fd_resource_screen_init(struct pipe_screen *pscreen)
 {
@@ -1180,4 +1207,5 @@ fd_resource_context_init(struct pipe_context *pctx)
 	pctx->resource_copy_region = fd_resource_copy_region;
 	pctx->blit = fd_blit;
 	pctx->flush_resource = fd_flush_resource;
+	pctx->invalidate_resource = fd_invalidate_resource;
 }

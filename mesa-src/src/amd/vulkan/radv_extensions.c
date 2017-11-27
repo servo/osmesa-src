@@ -209,10 +209,14 @@ radv_physical_device_extension_supported(struct radv_physical_device *device,
         return true;
     if (strcmp(name, "VK_KHX_multiview") == 0)
         return true;
+    if (strcmp(name, "VK_EXT_global_priority") == 0)
+        return device->rad_info.has_ctx_priority;
     if (strcmp(name, "VK_AMD_draw_indirect_count") == 0)
         return true;
     if (strcmp(name, "VK_AMD_rasterization_order") == 0)
         return device->rad_info.chip_class >= VI && device->rad_info.max_se >= 2;
+    if (strcmp(name, "VK_AMD_shader_info") == 0)
+        return true;
     return false;
 }
 
@@ -386,6 +390,14 @@ VkResult radv_EnumerateDeviceExtensionProperties(
             };
         }
     }
+    if (device->rad_info.has_ctx_priority) {
+        vk_outarray_append(&out, prop) {
+            *prop = (VkExtensionProperties) {
+                .extensionName = "VK_EXT_global_priority",
+                .specVersion = 1,
+            };
+        }
+    }
     if (true) {
         vk_outarray_append(&out, prop) {
             *prop = (VkExtensionProperties) {
@@ -398,6 +410,14 @@ VkResult radv_EnumerateDeviceExtensionProperties(
         vk_outarray_append(&out, prop) {
             *prop = (VkExtensionProperties) {
                 .extensionName = "VK_AMD_rasterization_order",
+                .specVersion = 1,
+            };
+        }
+    }
+    if (true) {
+        vk_outarray_append(&out, prop) {
+            *prop = (VkExtensionProperties) {
+                .extensionName = "VK_AMD_shader_info",
                 .specVersion = 1,
             };
         }

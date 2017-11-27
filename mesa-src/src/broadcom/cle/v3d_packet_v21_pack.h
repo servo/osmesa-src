@@ -871,7 +871,7 @@ struct V3D21_CONFIGURATION_BITS {
    uint32_t                             depth_test_function;
    uint32_t                             coverage_read_mode;
    bool                                 coverage_pipe_select;
-   bool                                 rasteriser_oversample_mode;
+   uint32_t                             rasteriser_oversample_mode;
    uint32_t                             coverage_read_type;
    bool                                 antialiased_points_and_lines;
    bool                                 enable_depth_offset;

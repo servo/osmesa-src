@@ -189,6 +189,8 @@ bool
 anv_physical_device_extension_supported(struct anv_physical_device *device,
                                         const char *name)
 {
+    if (strcmp(name, "VK_ANDROID_native_buffer") == 0)
+        return ANDROID;
     if (strcmp(name, "VK_KHR_bind_memory2") == 0)
         return true;
     if (strcmp(name, "VK_KHR_dedicated_allocation") == 0)
@@ -248,6 +250,14 @@ VkResult anv_EnumerateDeviceExtensionProperties(
     VK_OUTARRAY_MAKE(out, pProperties, pPropertyCount);
     (void)device;
 
+    if (ANDROID) {
+        vk_outarray_append(&out, prop) {
+            *prop = (VkExtensionProperties) {
+                .extensionName = "VK_ANDROID_native_buffer",
+                .specVersion = 5,
+            };
+        }
+    }
     if (true) {
         vk_outarray_append(&out, prop) {
             *prop = (VkExtensionProperties) {

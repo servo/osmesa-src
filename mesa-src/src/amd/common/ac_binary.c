@@ -19,10 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * Authors: Tom Stellard <thomas.stellard@amd.com>
- *
- * Based on radeon_elf_util.c.
  */
 
 #include "ac_binary.h"
@@ -252,6 +248,7 @@ void ac_shader_binary_read_config(struct ac_shader_binary *binary,
 		case R_00B128_SPI_SHADER_PGM_RSRC1_VS:
 		case R_00B228_SPI_SHADER_PGM_RSRC1_GS:
 		case R_00B848_COMPUTE_PGM_RSRC1:
+		case R_00B428_SPI_SHADER_PGM_RSRC1_HS:
 			conf->num_sgprs = MAX2(conf->num_sgprs, (G_00B028_SGPRS(value) + 1) * 8);
 			conf->num_vgprs = MAX2(conf->num_vgprs, (G_00B028_VGPRS(value) + 1) * 4);
 			conf->float_mode =  G_00B028_FLOAT_MODE(value);

@@ -19,10 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * Authors:
- *  Nicolai Hähnle <nicolai.haehnle@amd.com>
- *
  */
 
 #include "radeon/r600_cs.h"
@@ -377,7 +373,7 @@ static struct si_pc_block groups_CIK[] = {
 };
 
 static struct si_pc_block groups_VI[] = {
-	{ &cik_CB, 396, 4 },
+	{ &cik_CB, 405, 4 },
 	{ &cik_CPF, 19 },
 	{ &cik_DB, 257, 4 },
 	{ &cik_GRBM, 34 },

@@ -19,9 +19,6 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *      Marek Olšák
  */
 
 #include "r600_cs.h"
@@ -193,11 +190,19 @@ void si_init_resource_fields(struct r600_common_screen *rscreen,
 	/* Set expected VRAM and GART usage for the buffer. */
 	res->vram_usage = 0;
 	res->gart_usage = 0;
+	res->max_forced_staging_uploads = 0;
+	res->b.max_forced_staging_uploads = 0;
 
-	if (res->domains & RADEON_DOMAIN_VRAM)
+	if (res->domains & RADEON_DOMAIN_VRAM) {
 		res->vram_usage = size;
-	else if (res->domains & RADEON_DOMAIN_GTT)
+
+		res->max_forced_staging_uploads =
+		res->b.max_forced_staging_uploads =
+			rscreen->info.has_dedicated_vram &&
+			size >= rscreen->info.vram_vis_size / 4 ? 1 : 0;
+	} else if (res->domains & RADEON_DOMAIN_GTT) {
 		res->gart_usage = size;
+	}
 }
 
 bool si_alloc_resource(struct r600_common_screen *rscreen,
@@ -292,6 +297,8 @@ void si_replace_buffer_storage(struct pipe_context *ctx,
 	pb_reference(&rdst->buf, rsrc->buf);
 	rdst->gpu_address = rsrc->gpu_address;
 	rdst->b.b.bind = rsrc->b.b.bind;
+	rdst->b.max_forced_staging_uploads = rsrc->b.max_forced_staging_uploads;
+	rdst->max_forced_staging_uploads = rsrc->max_forced_staging_uploads;
 	rdst->flags = rsrc->flags;
 
 	assert(rdst->vram_usage == rsrc->vram_usage);
@@ -344,17 +351,6 @@ static void *r600_buffer_get_transfer(struct pipe_context *ctx,
 	return data;
 }
 
-static bool r600_can_dma_copy_buffer(struct r600_common_context *rctx,
-				     unsigned dstx, unsigned srcx, unsigned size)
-{
-	bool dword_aligned = !(dstx % 4) && !(srcx % 4) && !(size % 4);
-
-	return rctx->screen->has_cp_dma ||
-	       (dword_aligned && (rctx->dma.cs ||
-				  rctx->screen->has_streamout));
-
-}
-
 static void *r600_buffer_transfer_map(struct pipe_context *ctx,
                                       struct pipe_resource *resource,
                                       unsigned level,
@@ -363,7 +359,6 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
                                       struct pipe_transfer **ptransfer)
 {
 	struct r600_common_context *rctx = (struct r600_common_context*)ctx;
-	struct r600_common_screen *rscreen = (struct r600_common_screen*)ctx->screen;
 	struct r600_resource *rbuffer = r600_resource(resource);
 	uint8_t *data;
 
@@ -399,6 +394,23 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 		usage |= PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE;
 	}
 
+	/* If a buffer in VRAM is too large and the range is discarded, don't
+	 * map it directly. This makes sure that the buffer stays in VRAM.
+	 */
+	bool force_discard_range = false;
+	if (usage & (PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE |
+		     PIPE_TRANSFER_DISCARD_RANGE) &&
+	    !(usage & PIPE_TRANSFER_PERSISTENT) &&
+	    /* Try not to decrement the counter if it's not positive. Still racy,
+	     * but it makes it harder to wrap the counter from INT_MIN to INT_MAX. */
+	    rbuffer->max_forced_staging_uploads > 0 &&
+	    p_atomic_dec_return(&rbuffer->max_forced_staging_uploads) >= 0) {
+		usage &= ~(PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE |
+			   PIPE_TRANSFER_UNSYNCHRONIZED);
+		usage |= PIPE_TRANSFER_DISCARD_RANGE;
+		force_discard_range = true;
+	}
+
 	if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE &&
 	    !(usage & (PIPE_TRANSFER_UNSYNCHRONIZED |
 		       TC_TRANSFER_MAP_NO_INVALIDATE))) {
@@ -414,16 +426,15 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 	}
 
 	if ((usage & PIPE_TRANSFER_DISCARD_RANGE) &&
-	    !(rscreen->debug_flags & DBG(NO_DISCARD_RANGE)) &&
 	    ((!(usage & (PIPE_TRANSFER_UNSYNCHRONIZED |
-			 PIPE_TRANSFER_PERSISTENT)) &&
-	      r600_can_dma_copy_buffer(rctx, box->x, 0, box->width)) ||
+			 PIPE_TRANSFER_PERSISTENT))) ||
 	     (rbuffer->flags & RADEON_FLAG_SPARSE))) {
 		assert(usage & PIPE_TRANSFER_WRITE);
 
 		/* Check if mapping this buffer would cause waiting for the GPU.
 		 */
 		if (rbuffer->flags & RADEON_FLAG_SPARSE ||
+		    force_discard_range ||
 		    si_rings_is_buffer_referenced(rctx, rbuffer->buf, RADEON_USAGE_READWRITE) ||
 		    !rctx->ws->buffer_wait(rbuffer->buf, 0, RADEON_USAGE_READWRITE)) {
 			/* Do a wait-free write-only transfer using a temporary buffer. */
@@ -452,8 +463,7 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 	else if (((usage & PIPE_TRANSFER_READ) &&
 		  !(usage & PIPE_TRANSFER_PERSISTENT) &&
 		  (rbuffer->domains & RADEON_DOMAIN_VRAM ||
-		   rbuffer->flags & RADEON_FLAG_GTT_WC) &&
-		  r600_can_dma_copy_buffer(rctx, 0, box->x, box->width)) ||
+		   rbuffer->flags & RADEON_FLAG_GTT_WC)) ||
 		 (rbuffer->flags & RADEON_FLAG_SPARSE)) {
 		struct r600_resource *staging;
 

@@ -152,6 +152,16 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    *addr = (struct blorp_address) {
       .buffer = brw->batch.state_bo,
       .offset = offset,
+
+#if GEN_GEN == 10
+      .mocs = CNL_MOCS_WB,
+#elif GEN_GEN == 9
+      .mocs = SKL_MOCS_WB,
+#elif GEN_GEN == 8
+      .mocs = BDW_MOCS_WB,
+#elif GEN_GEN == 7
+      .mocs = GEN7_MOCS_L3,
+#endif
    };
 
    return data;
@@ -215,8 +225,13 @@ genX(blorp_exec)(struct blorp_batch *batch,
     * data.
     */
    if (params->src.enabled)
-      brw_render_cache_set_check_flush(brw, params->src.addr.buffer);
-   brw_render_cache_set_check_flush(brw, params->dst.addr.buffer);
+      brw_cache_flush_for_read(brw, params->src.addr.buffer);
+   if (params->dst.enabled)
+      brw_cache_flush_for_render(brw, params->dst.addr.buffer);
+   if (params->depth.enabled)
+      brw_cache_flush_for_depth(brw, params->depth.addr.buffer);
+   if (params->stencil.enabled)
+      brw_cache_flush_for_depth(brw, params->stencil.addr.buffer);
 
    brw_select_pipeline(brw, BRW_RENDER_PIPELINE);
 
@@ -283,9 +298,9 @@ retry:
    brw->ib.index_size = -1;
 
    if (params->dst.enabled)
-      brw_render_cache_set_add_bo(brw, params->dst.addr.buffer);
+      brw_render_cache_add_bo(brw, params->dst.addr.buffer);
    if (params->depth.enabled)
-      brw_render_cache_set_add_bo(brw, params->depth.addr.buffer);
+      brw_depth_cache_add_bo(brw, params->depth.addr.buffer);
    if (params->stencil.enabled)
-      brw_render_cache_set_add_bo(brw, params->stencil.addr.buffer);
+      brw_depth_cache_add_bo(brw, params->stencil.addr.buffer);
 }

@@ -1496,6 +1496,23 @@ vk_QueryType_to_str(VkQueryType input)
 }
 
 const char *
+vk_QueueGlobalPriorityEXT_to_str(VkQueueGlobalPriorityEXT input)
+{
+    switch(input) {
+        case 128:
+            return "VK_QUEUE_GLOBAL_PRIORITY_LOW";
+        case 256:
+            return "VK_QUEUE_GLOBAL_PRIORITY_MEDIUM";
+        case 512:
+            return "VK_QUEUE_GLOBAL_PRIORITY_HIGH";
+        case 1024:
+            return "VK_QUEUE_GLOBAL_PRIORITY_REALTIME";
+    default:
+        unreachable("Undefined enum value.");
+    }
+}
+
+const char *
 vk_RasterizationOrderAMD_to_str(VkRasterizationOrderAMD input)
 {
     switch(input) {
@@ -1512,6 +1529,8 @@ const char *
 vk_Result_to_str(VkResult input)
 {
     switch(input) {
+        case -1000174001:
+            return "VK_ERROR_NOT_PERMITTED_EXT";
         case -1000072003:
             return "VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR";
         case -1000069000:
@@ -1645,6 +1664,21 @@ vk_SamplerYcbcrRangeKHR_to_str(VkSamplerYcbcrRangeKHR input)
             return "VK_SAMPLER_YCBCR_RANGE_ITU_FULL_KHR";
         case 1:
             return "VK_SAMPLER_YCBCR_RANGE_ITU_NARROW_KHR";
+    default:
+        unreachable("Undefined enum value.");
+    }
+}
+
+const char *
+vk_ShaderInfoTypeAMD_to_str(VkShaderInfoTypeAMD input)
+{
+    switch(input) {
+        case 0:
+            return "VK_SHADER_INFO_TYPE_STATISTICS_AMD";
+        case 1:
+            return "VK_SHADER_INFO_TYPE_BINARY_AMD";
+        case 2:
+            return "VK_SHADER_INFO_TYPE_DISASSEMBLY_AMD";
     default:
         unreachable("Undefined enum value.");
     }
@@ -2097,6 +2131,8 @@ vk_StructureType_to_str(VkStructureType input)
             return "VK_STRUCTURE_TYPE_VALIDATION_CACHE_CREATE_INFO_EXT";
         case 1000160001:
             return "VK_STRUCTURE_TYPE_SHADER_MODULE_VALIDATION_CACHE_CREATE_INFO_EXT";
+        case 1000174000:
+            return "VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_EXT";
     default:
         unreachable("Undefined enum value.");
     }

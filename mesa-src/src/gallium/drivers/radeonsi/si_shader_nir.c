@@ -59,6 +59,11 @@ static void scan_instruction(struct tgsi_shader_info *info,
 	} else if (instr->type == nir_instr_type_tex) {
 		nir_tex_instr *tex = nir_instr_as_tex(instr);
 
+		if (!tex->texture) {
+			info->samplers_declared |=
+				u_bit_consecutive(tex->sampler_index, 1);
+		}
+
 		switch (tex->op) {
 		case nir_texop_tex:
 		case nir_texop_txb:
@@ -124,21 +129,28 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	nir_function *func;
 	unsigned i;
 
-	assert(nir->stage == MESA_SHADER_VERTEX ||
-	       nir->stage == MESA_SHADER_FRAGMENT);
+	assert(nir->info.stage == MESA_SHADER_VERTEX ||
+	       nir->info.stage == MESA_SHADER_FRAGMENT);
 
-	info->processor = pipe_shader_type_from_mesa(nir->stage);
+	info->processor = pipe_shader_type_from_mesa(nir->info.stage);
 	info->num_tokens = 2; /* indicate that the shader is non-empty */
 	info->num_instructions = 2;
 
 	info->num_inputs = nir->num_inputs;
 	info->num_outputs = nir->num_outputs;
 
+	if (nir->info.stage == MESA_SHADER_GEOMETRY) {
+		info->properties[TGSI_PROPERTY_GS_INPUT_PRIM] = nir->info.gs.input_primitive;
+		info->properties[TGSI_PROPERTY_GS_OUTPUT_PRIM] = nir->info.gs.output_primitive;
+		info->properties[TGSI_PROPERTY_GS_MAX_OUTPUT_VERTICES] = nir->info.gs.vertices_out;
+		info->properties[TGSI_PROPERTY_GS_INVOCATIONS] = nir->info.gs.invocations;
+	}
+
 	i = 0;
 	nir_foreach_variable(variable, &nir->inputs) {
 		unsigned semantic_name, semantic_index;
 		unsigned attrib_count = glsl_count_attribute_slots(variable->type,
-								   nir->stage == MESA_SHADER_VERTEX);
+								   nir->info.stage == MESA_SHADER_VERTEX);
 
 		assert(attrib_count == 1 && "not implemented");
 
@@ -146,11 +158,11 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		 * tracker has already mapped them to attributes via
 		 * variable->data.driver_location.
 		 */
-		if (nir->stage == MESA_SHADER_VERTEX)
+		if (nir->info.stage == MESA_SHADER_VERTEX)
 			continue;
 
 		/* Fragment shader position is a system value. */
-		if (nir->stage == MESA_SHADER_FRAGMENT &&
+		if (nir->info.stage == MESA_SHADER_FRAGMENT &&
 		    variable->data.location == VARYING_SLOT_POS) {
 			if (variable->data.pixel_center_integer)
 				info->properties[TGSI_PROPERTY_FS_COORD_PIXEL_CENTER] =
@@ -231,7 +243,7 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	nir_foreach_variable(variable, &nir->outputs) {
 		unsigned semantic_name, semantic_index;
 
-		if (nir->stage == MESA_SHADER_FRAGMENT) {
+		if (nir->info.stage == MESA_SHADER_FRAGMENT) {
 			tgsi_get_gl_frag_result_semantic(variable->data.location,
 				&semantic_name, &semantic_index);
 		} else {
@@ -242,6 +254,43 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		info->output_semantic_name[i] = semantic_name;
 		info->output_semantic_index[i] = semantic_index;
 		info->output_usagemask[i] = TGSI_WRITEMASK_XYZW;
+
+		unsigned num_components = 4;
+		unsigned vector_elements = glsl_get_vector_elements(glsl_without_array(variable->type));
+		if (vector_elements)
+			num_components = vector_elements;
+
+		unsigned gs_out_streams;
+		if (variable->data.stream & (1u << 31)) {
+			gs_out_streams = variable->data.stream & ~(1u << 31);
+		} else {
+			assert(variable->data.stream < 4);
+			gs_out_streams = 0;
+			for (unsigned j = 0; j < num_components; ++j)
+				gs_out_streams |= variable->data.stream << (2 * (variable->data.location_frac + j));
+		}
+
+		unsigned streamx = gs_out_streams & 3;
+		unsigned streamy = (gs_out_streams >> 2) & 3;
+		unsigned streamz = (gs_out_streams >> 4) & 3;
+		unsigned streamw = (gs_out_streams >> 6) & 3;
+
+		if (info->output_usagemask[i] & TGSI_WRITEMASK_X) {
+			info->output_streams[i] |= streamx;
+			info->num_stream_output_components[streamx]++;
+		}
+		if (info->output_usagemask[i] & TGSI_WRITEMASK_Y) {
+			info->output_streams[i] |= streamy << 2;
+			info->num_stream_output_components[streamy]++;
+		}
+		if (info->output_usagemask[i] & TGSI_WRITEMASK_Z) {
+			info->output_streams[i] |= streamz << 4;
+			info->num_stream_output_components[streamz]++;
+		}
+		if (info->output_usagemask[i] & TGSI_WRITEMASK_W) {
+			info->output_streams[i] |= streamw << 6;
+			info->num_stream_output_components[streamw]++;
+		}
 
 		switch (semantic_name) {
 		case TGSI_SEMANTIC_PRIMID:
@@ -302,8 +351,7 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	info->num_written_clipdistance = nir->info.clip_distance_array_size;
 	info->num_written_culldistance = nir->info.cull_distance_array_size;
 	info->clipdist_writemask = u_bit_consecutive(0, info->num_written_clipdistance);
-	info->culldist_writemask = u_bit_consecutive(info->num_written_clipdistance,
-						     info->num_written_culldistance);
+	info->culldist_writemask = u_bit_consecutive(0, info->num_written_culldistance);
 
 	if (info->processor == PIPE_SHADER_FRAGMENT)
 		info->uses_kill = nir->info.fs.uses_discard;
@@ -336,7 +384,7 @@ si_lower_nir(struct si_shader_selector* sel)
 	nir_foreach_variable(variable, &sel->nir->outputs) {
 		variable->data.driver_location *= 4;
 
-		if (sel->nir->stage == MESA_SHADER_FRAGMENT) {
+		if (sel->nir->info.stage == MESA_SHADER_FRAGMENT) {
 			if (variable->data.location == FRAG_RESULT_DEPTH)
 				variable->data.driver_location += 2;
 			else if (variable->data.location == FRAG_RESULT_STENCIL)
@@ -478,15 +526,15 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 	unsigned fs_attr_idx = 0;
 	nir_foreach_variable(variable, &nir->inputs) {
 		unsigned attrib_count = glsl_count_attribute_slots(variable->type,
-								   nir->stage == MESA_SHADER_VERTEX);
+								   nir->info.stage == MESA_SHADER_VERTEX);
 		unsigned input_idx = variable->data.driver_location;
 
 		for (unsigned i = 0; i < attrib_count; ++i) {
 			LLVMValueRef data[4];
 
-			if (nir->stage == MESA_SHADER_VERTEX)
+			if (nir->info.stage == MESA_SHADER_VERTEX)
 				declare_nir_input_vs(ctx, variable, i, data);
-			else if (nir->stage == MESA_SHADER_FRAGMENT)
+			else if (nir->info.stage == MESA_SHADER_FRAGMENT)
 				declare_nir_input_fs(ctx, variable, i, &fs_attr_idx, data);
 
 			for (unsigned chan = 0; chan < 4; chan++) {
@@ -498,6 +546,7 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 
 	ctx->abi.inputs = &ctx->inputs[0];
 	ctx->abi.load_sampler_desc = si_nir_load_sampler_desc;
+	ctx->abi.clamp_shadow_reference = true;
 
 	ctx->num_samplers = util_last_bit(info->samplers_declared);
 	ctx->num_images = util_last_bit(info->images_declared);

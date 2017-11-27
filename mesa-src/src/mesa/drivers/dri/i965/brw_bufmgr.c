@@ -86,6 +86,8 @@
 
 #define memclear(s) memset(&s, 0, sizeof(s))
 
+#define PAGE_SIZE 4096
+
 #define FILE_DEBUG_FLAG DEBUG_BUFMGR
 
 static inline int
@@ -180,19 +182,44 @@ bo_tile_pitch(struct brw_bufmgr *bufmgr, uint32_t pitch, uint32_t tiling)
    return ALIGN(pitch, tile_width);
 }
 
+/**
+ * This function finds the correct bucket fit for the input size.
+ * The function works with O(1) complexity when the requested size
+ * was queried instead of iterating the size through all the buckets.
+ */
 static struct bo_cache_bucket *
 bucket_for_size(struct brw_bufmgr *bufmgr, uint64_t size)
 {
-   int i;
+   /* Calculating the pages and rounding up to the page size. */
+   const unsigned pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
 
-   for (i = 0; i < bufmgr->num_buckets; i++) {
-      struct bo_cache_bucket *bucket = &bufmgr->cache_bucket[i];
-      if (bucket->size >= size) {
-         return bucket;
-      }
-   }
+   /* Row  Bucket sizes    clz((x-1) | 3)   Row    Column
+    *        in pages                      stride   size
+    *   0:   1  2  3  4 -> 30 30 30 30        4       1
+    *   1:   5  6  7  8 -> 29 29 29 29        4       1
+    *   2:  10 12 14 16 -> 28 28 28 28        8       2
+    *   3:  20 24 28 32 -> 27 27 27 27       16       4
+    */
+   const unsigned row = 30 - __builtin_clz((pages - 1) | 3);
+   const unsigned row_max_pages = 4 << row;
 
-   return NULL;
+   /* The '& ~2' is the special case for row 1. In row 1, max pages /
+    * 2 is 2, but the previous row maximum is zero (because there is
+    * no previous row). All row maximum sizes are power of 2, so that
+    * is the only case where that bit will be set.
+    */
+   const unsigned prev_row_max_pages = (row_max_pages / 2) & ~2;
+   int col_size_log2 = row - 1;
+   col_size_log2 += (col_size_log2 < 0);
+
+   const unsigned col = (pages - prev_row_max_pages +
+                        ((1 << col_size_log2) - 1)) >> col_size_log2;
+
+   /* Calculating the index based on the row and column. */
+   const unsigned index = (row * 4) + (col - 1);
+
+   return (index < bufmgr->num_buckets) ?
+          &bufmgr->cache_bucket[index] : NULL;
 }
 
 int
@@ -669,11 +696,12 @@ bo_wait_with_stall_warning(struct brw_context *brw,
                            struct brw_bo *bo,
                            const char *action)
 {
-   double elapsed = unlikely(brw && brw->perf_debug) ? -get_time() : 0.0;
+   bool busy = brw && brw->perf_debug && !bo->idle;
+   double elapsed = unlikely(busy) ? -get_time() : 0.0;
 
    brw_bo_wait_rendering(bo);
 
-   if (unlikely(brw && brw->perf_debug)) {
+   if (unlikely(busy)) {
       elapsed += get_time();
       if (elapsed > 1e-5) /* 0.01ms */
          perf_debug("%s a busy \"%s\" BO stalled and took %.03f ms.\n",
@@ -1176,8 +1204,8 @@ err:
    return NULL;
 }
 
-int
-brw_bo_gem_export_to_prime(struct brw_bo *bo, int *prime_fd)
+static void
+brw_bo_make_external(struct brw_bo *bo)
 {
    struct brw_bufmgr *bufmgr = bo->bufmgr;
 
@@ -1189,6 +1217,14 @@ brw_bo_gem_export_to_prime(struct brw_bo *bo, int *prime_fd)
       }
       mtx_unlock(&bufmgr->lock);
    }
+}
+
+int
+brw_bo_gem_export_to_prime(struct brw_bo *bo, int *prime_fd)
+{
+   struct brw_bufmgr *bufmgr = bo->bufmgr;
+
+   brw_bo_make_external(bo);
 
    if (drmPrimeHandleToFD(bufmgr->fd, bo->gem_handle,
                           DRM_CLOEXEC, prime_fd) != 0)
@@ -1197,6 +1233,14 @@ brw_bo_gem_export_to_prime(struct brw_bo *bo, int *prime_fd)
    bo->reusable = false;
 
    return 0;
+}
+
+uint32_t
+brw_bo_export_gem_handle(struct brw_bo *bo)
+{
+   brw_bo_make_external(bo);
+
+   return bo->gem_handle;
 }
 
 int
@@ -1212,11 +1256,8 @@ brw_bo_flink(struct brw_bo *bo, uint32_t *name)
       if (drmIoctl(bufmgr->fd, DRM_IOCTL_GEM_FLINK, &flink))
          return -errno;
 
+      brw_bo_make_external(bo);
       mtx_lock(&bufmgr->lock);
-      if (!bo->external) {
-         _mesa_hash_table_insert(bufmgr->handle_table, &bo->gem_handle, bo);
-         bo->external = true;
-      }
       if (!bo->global_name) {
          bo->global_name = flink.name;
          _mesa_hash_table_insert(bufmgr->name_table, &bo->global_name, bo);
@@ -1253,6 +1294,10 @@ add_bucket(struct brw_bufmgr *bufmgr, int size)
    list_inithead(&bufmgr->cache_bucket[i].head);
    bufmgr->cache_bucket[i].size = size;
    bufmgr->num_buckets++;
+
+   assert(bucket_for_size(bufmgr, size) == &bufmgr->cache_bucket[i]);
+   assert(bucket_for_size(bufmgr, size - 2048) == &bufmgr->cache_bucket[i]);
+   assert(bucket_for_size(bufmgr, size + 1) != &bufmgr->cache_bucket[i]);
 }
 
 static void
@@ -1296,6 +1341,25 @@ brw_create_hw_context(struct brw_bufmgr *bufmgr)
    }
 
    return create.ctx_id;
+}
+
+int
+brw_hw_context_set_priority(struct brw_bufmgr *bufmgr,
+                            uint32_t ctx_id,
+                            int priority)
+{
+   struct drm_i915_gem_context_param p = {
+      .ctx_id = ctx_id,
+      .param = I915_CONTEXT_PARAM_PRIORITY,
+      .value = priority,
+   };
+   int err;
+
+   err = 0;
+   if (drmIoctl(bufmgr->fd, DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, &p))
+      err = -errno;
+
+   return err;
 }
 
 void

@@ -42,9 +42,8 @@ gen7_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
    struct brw_context *brw = brw_context(ctx);
    struct brw_transform_feedback_object *brw_obj =
       (struct brw_transform_feedback_object *) obj;
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   assert(devinfo->gen == 7);
+   assert(brw->screen->devinfo.gen == 7);
 
    /* We're about to lose the information needed to compute the number of
     * vertices written during the last Begin/EndTransformFeedback section,
@@ -66,11 +65,7 @@ gen7_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
       brw->batch.needs_sol_reset = true;
    } else {
       for (int i = 0; i < 4; i++) {
-         BEGIN_BATCH(3);
-         OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
-         OUT_BATCH(GEN7_SO_WRITE_OFFSET(i));
-         OUT_BATCH(0);
-         ADVANCE_BATCH();
+         brw_load_register_imm32(brw, GEN7_SO_WRITE_OFFSET(i), 0);
       }
    }
 
@@ -110,12 +105,11 @@ gen7_pause_transform_feedback(struct gl_context *ctx,
    struct brw_context *brw = brw_context(ctx);
    struct brw_transform_feedback_object *brw_obj =
       (struct brw_transform_feedback_object *) obj;
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
    /* Flush any drawing so that the counters have the right values. */
    brw_emit_mi_flush(brw);
 
-   assert(devinfo->gen == 7);
+   assert(brw->screen->devinfo.gen == 7);
 
    /* Save the SOL buffer offset register values. */
    for (int i = 0; i < 4; i++) {
@@ -141,9 +135,8 @@ gen7_resume_transform_feedback(struct gl_context *ctx,
    struct brw_context *brw = brw_context(ctx);
    struct brw_transform_feedback_object *brw_obj =
       (struct brw_transform_feedback_object *) obj;
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   assert(devinfo->gen == 7);
+   assert(brw->screen->devinfo.gen == 7);
 
    /* Reload the SOL buffer offset registers. */
    for (int i = 0; i < 4; i++) {

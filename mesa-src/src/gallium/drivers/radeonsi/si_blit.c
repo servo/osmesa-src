@@ -95,7 +95,7 @@ static void si_blitter_end(struct pipe_context *ctx)
 
 	/* Restore shader pointers because the VS blit shader changed all
 	 * non-global VS user SGPRs. */
-	sctx->shader_pointers_dirty |= SI_VS_SHADER_POINTER_MASK;
+	sctx->shader_pointers_dirty |= SI_DESCS_SHADER_MASK(VERTEX);
 	sctx->vertex_buffer_pointer_dirty = true;
 	si_mark_atom_dirty(sctx, &sctx->shader_pointers.atom);
 }
@@ -901,16 +901,16 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 		 * corruption in ARK: Survival Evolved, but that may just be
 		 * a coincidence and the root cause is elsewhere.
 		 *
-		 * The corruption can be fixed by putting the DB metadata flush
-		 * before or after the depth clear. (suprisingly)
+		 * The corruption can be fixed by putting the DB flush before
+		 * or after the depth clear. (surprisingly)
 		 *
 		 * https://bugs.freedesktop.org/show_bug.cgi?id=102955 (apitrace)
 		 *
 		 * This hack decreases back-to-back ClearDepth performance.
 		 */
-		if (sctx->screen->clear_db_meta_before_clear)
-			sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_DB_META |
-					 SI_CONTEXT_PS_PARTIAL_FLUSH;
+		if (sctx->screen->clear_db_cache_before_clear) {
+			sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_DB;
+		}
 	}
 
 	si_blitter_begin(ctx, SI_CLEAR);

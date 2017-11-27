@@ -165,7 +165,7 @@ remap_patch_urb_offsets(nir_block *block, nir_builder *b,
 
       nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
 
-      gl_shader_stage stage = b->shader->stage;
+      gl_shader_stage stage = b->shader->info.stage;
 
       if ((stage == MESA_SHADER_TESS_CTRL && is_output(intrin)) ||
           (stage == MESA_SHADER_TESS_EVAL && is_input(intrin))) {
@@ -521,17 +521,28 @@ brw_nir_lower_cs_shared(nir_shader *nir)
    this_progress;                                          \
 })
 
+static nir_variable_mode
+brw_nir_no_indirect_mask(const struct brw_compiler *compiler,
+                         gl_shader_stage stage)
+{
+   nir_variable_mode indirect_mask = 0;
+
+   if (compiler->glsl_compiler_options[stage].EmitNoIndirectInput)
+      indirect_mask |= nir_var_shader_in;
+   if (compiler->glsl_compiler_options[stage].EmitNoIndirectOutput)
+      indirect_mask |= nir_var_shader_out;
+   if (compiler->glsl_compiler_options[stage].EmitNoIndirectTemp)
+      indirect_mask |= nir_var_local;
+
+   return indirect_mask;
+}
+
 nir_shader *
 brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
                  bool is_scalar)
 {
-   nir_variable_mode indirect_mask = 0;
-   if (compiler->glsl_compiler_options[nir->stage].EmitNoIndirectInput)
-      indirect_mask |= nir_var_shader_in;
-   if (compiler->glsl_compiler_options[nir->stage].EmitNoIndirectOutput)
-      indirect_mask |= nir_var_shader_out;
-   if (compiler->glsl_compiler_options[nir->stage].EmitNoIndirectTemp)
-      indirect_mask |= nir_var_local;
+   nir_variable_mode indirect_mask =
+      brw_nir_no_indirect_mask(compiler, nir->info.stage);
 
    bool progress;
    do {
@@ -601,9 +612,9 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
    const struct gen_device_info *devinfo = compiler->devinfo;
    UNUSED bool progress; /* Written by OPT */
 
-   const bool is_scalar = compiler->scalar_stage[nir->stage];
+   const bool is_scalar = compiler->scalar_stage[nir->info.stage];
 
-   if (nir->stage == MESA_SHADER_GEOMETRY)
+   if (nir->info.stage == MESA_SHADER_GEOMETRY)
       OPT(nir_lower_gs_intrinsics);
 
    /* See also brw_nir_trig_workarounds.py */
@@ -620,7 +631,6 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
 
    OPT(nir_lower_tex, &tex_options);
    OPT(nir_normalize_cubemap_coords);
-   OPT(nir_lower_read_invocation_to_scalar);
 
    OPT(nir_lower_global_vars_to_local);
 
@@ -635,16 +645,22 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
    /* Lower a bunch of stuff */
    OPT(nir_lower_var_copies);
 
+   OPT(nir_lower_system_values);
+
+   const nir_lower_subgroups_options subgroups_options = {
+      .subgroup_size = nir->info.stage == MESA_SHADER_COMPUTE ? 32 :
+                       nir->info.stage == MESA_SHADER_FRAGMENT ? 16 : 8,
+      .ballot_bit_size = 32,
+      .lower_to_scalar = true,
+      .lower_subgroup_masks = true,
+      .lower_vote_trivial = !is_scalar,
+   };
+   OPT(nir_lower_subgroups, &subgroups_options);
+
    OPT(nir_lower_clip_cull_distance_arrays);
 
-   nir_variable_mode indirect_mask = 0;
-   if (compiler->glsl_compiler_options[nir->stage].EmitNoIndirectInput)
-      indirect_mask |= nir_var_shader_in;
-   if (compiler->glsl_compiler_options[nir->stage].EmitNoIndirectOutput)
-      indirect_mask |= nir_var_shader_out;
-   if (compiler->glsl_compiler_options[nir->stage].EmitNoIndirectTemp)
-      indirect_mask |= nir_var_local;
-
+   nir_variable_mode indirect_mask =
+      brw_nir_no_indirect_mask(compiler, nir->info.stage);
    nir_lower_indirect_derefs(nir, indirect_mask);
 
    nir_lower_int64(nir, nir_lower_imul64 |
@@ -657,6 +673,36 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
    OPT(nir_remove_dead_variables, nir_var_local);
 
    return nir;
+}
+
+void
+brw_nir_link_shaders(const struct brw_compiler *compiler,
+                     nir_shader **producer, nir_shader **consumer)
+{
+   NIR_PASS_V(*producer, nir_remove_dead_variables, nir_var_shader_out);
+   NIR_PASS_V(*consumer, nir_remove_dead_variables, nir_var_shader_in);
+
+   if (nir_remove_unused_varyings(*producer, *consumer)) {
+      NIR_PASS_V(*producer, nir_lower_global_vars_to_local);
+      NIR_PASS_V(*consumer, nir_lower_global_vars_to_local);
+
+      /* The backend might not be able to handle indirects on
+       * temporaries so we need to lower indirects on any of the
+       * varyings we have demoted here.
+       */
+      NIR_PASS_V(*producer, nir_lower_indirect_derefs,
+                 brw_nir_no_indirect_mask(compiler, (*producer)->info.stage));
+      NIR_PASS_V(*consumer, nir_lower_indirect_derefs,
+                 brw_nir_no_indirect_mask(compiler, (*consumer)->info.stage));
+
+      const bool p_is_scalar =
+         compiler->scalar_stage[(*producer)->info.stage];
+      *producer = brw_nir_optimize(*producer, compiler, p_is_scalar);
+
+      const bool c_is_scalar =
+         compiler->scalar_stage[(*producer)->info.stage];
+      *consumer = brw_nir_optimize(*consumer, compiler, c_is_scalar);
+   }
 }
 
 /* Prepare the given shader for codegen
@@ -672,7 +718,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 {
    const struct gen_device_info *devinfo = compiler->devinfo;
    bool debug_enabled =
-      (INTEL_DEBUG & intel_debug_flag_for_shader_stage(nir->stage));
+      (INTEL_DEBUG & intel_debug_flag_for_shader_stage(nir->info.stage));
 
    UNUSED bool progress; /* Written by OPT */
 
@@ -706,7 +752,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
       }
 
       fprintf(stderr, "NIR (SSA form) for %s shader:\n",
-              _mesa_shader_stage_to_string(nir->stage));
+              _mesa_shader_stage_to_string(nir->info.stage));
       nir_print_shader(nir, stderr);
    }
 
@@ -729,7 +775,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    if (unlikely(debug_enabled)) {
       fprintf(stderr, "NIR (final form) for %s shader:\n",
-              _mesa_shader_stage_to_string(nir->stage));
+              _mesa_shader_stage_to_string(nir->info.stage));
       nir_print_shader(nir, stderr);
    }
 

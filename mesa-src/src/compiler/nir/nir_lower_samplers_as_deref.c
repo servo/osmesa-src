@@ -116,7 +116,7 @@ lower_deref(nir_deref_var *deref,
             nir_builder *b)
 {
    nir_variable *var = deref->var;
-   gl_shader_stage stage = state->shader->stage;
+   gl_shader_stage stage = state->shader->info.stage;
    unsigned location = var->data.location;
    unsigned binding;
    const struct glsl_type *orig_type = deref->deref.type;
@@ -157,8 +157,10 @@ static bool
 lower_sampler(nir_tex_instr *instr, struct lower_samplers_as_deref_state *state,
               nir_builder *b)
 {
+   if (!instr->texture)
+      return false;
+
    /* In GLSL, we only fill out the texture field.  The sampler is inferred */
-   assert(instr->texture != NULL);
    assert(instr->sampler == NULL);
 
    b->cursor = nir_before_instr(&instr->instr);

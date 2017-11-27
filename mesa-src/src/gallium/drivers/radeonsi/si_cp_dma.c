@@ -19,9 +19,6 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *      Marek Olšák <maraeo@gmail.com>
  */
 
 #include "si_pipe.h"
@@ -460,7 +457,8 @@ static void cik_prefetch_VBO_descriptors(struct si_context *sctx)
 		return;
 
 	cik_prefetch_TC_L2_async(sctx, &sctx->vertex_buffers.buffer->b.b,
-				 sctx->vertex_buffers.buffer_offset,
+				 sctx->vertex_buffers.gpu_address -
+				 sctx->vertex_buffers.buffer->gpu_address,
 				 sctx->vertex_elements->desc_list_byte_size);
 }
 

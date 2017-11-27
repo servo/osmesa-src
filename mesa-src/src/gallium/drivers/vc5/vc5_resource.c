@@ -40,6 +40,56 @@
 #define DRM_FORMAT_MOD_INVALID ((1ULL << 56) - 1)
 #endif
 
+static void
+vc5_debug_resource_layout(struct vc5_resource *rsc, const char *caller)
+{
+        if (!(V3D_DEBUG & V3D_DEBUG_SURFACE))
+                return;
+
+        struct pipe_resource *prsc = &rsc->base;
+
+        if (prsc->target == PIPE_BUFFER) {
+                fprintf(stderr,
+                        "rsc %s %p (format %s), %dx%d buffer @0x%08x-0x%08x\n",
+                        caller, rsc,
+                        util_format_short_name(prsc->format),
+                        prsc->width0, prsc->height0,
+                        rsc->bo->offset,
+                        rsc->bo->offset + rsc->bo->size - 1);
+                return;
+        }
+
+        static const char *const tiling_descriptions[] = {
+                [VC5_TILING_RASTER] = "R",
+                [VC5_TILING_LINEARTILE] = "LT",
+                [VC5_TILING_UBLINEAR_1_COLUMN] = "UB1",
+                [VC5_TILING_UBLINEAR_2_COLUMN] = "UB2",
+                [VC5_TILING_UIF_NO_XOR] = "UIF",
+                [VC5_TILING_UIF_XOR] = "UIF^",
+        };
+
+        for (int i = 0; i <= prsc->last_level; i++) {
+                struct vc5_resource_slice *slice = &rsc->slices[i];
+
+                int level_width = slice->stride / rsc->cpp;
+                int level_height = slice->size / slice->stride;
+
+                fprintf(stderr,
+                        "rsc %s %p (format %s), %dx%d: "
+                        "level %d (%s) %dx%d -> %dx%d, stride %d@0x%08x\n",
+                        caller, rsc,
+                        util_format_short_name(prsc->format),
+                        prsc->width0, prsc->height0,
+                        i, tiling_descriptions[slice->tiling],
+                        u_minify(prsc->width0, i),
+                        u_minify(prsc->height0, i),
+                        level_width,
+                        level_height,
+                        slice->stride,
+                        rsc->bo->offset + slice->offset);
+        }
+}
+
 static bool
 vc5_resource_bo_alloc(struct vc5_resource *rsc)
 {
@@ -55,9 +105,9 @@ vc5_resource_bo_alloc(struct vc5_resource *rsc)
                           rsc->cube_map_stride * layers - 1,
                           "resource");
         if (bo) {
-                DBG(V3D_DEBUG_SURFACE, "alloc %p @ 0x%08x:\n", rsc, bo->offset);
                 vc5_bo_unreference(&rsc->bo);
                 rsc->bo = bo;
+                vc5_debug_resource_layout(rsc, "alloc");
                 return true;
         } else {
                 return false;
@@ -355,7 +405,7 @@ vc5_resource_get_handle(struct pipe_screen *pscreen,
 }
 
 static void
-vc5_setup_slices(struct vc5_resource *rsc, const char *caller)
+vc5_setup_slices(struct vc5_resource *rsc)
 {
         struct pipe_resource *prsc = &rsc->base;
         uint32_t width = prsc->width0;
@@ -367,7 +417,11 @@ vc5_setup_slices(struct vc5_resource *rsc, const char *caller)
         uint32_t utile_h = vc5_utile_height(rsc->cpp);
         uint32_t uif_block_w = utile_w * 2;
         uint32_t uif_block_h = utile_h * 2;
-        bool uif_top = false;
+        bool msaa = prsc->nr_samples > 1;
+        /* MSAA textures/renderbuffers are always laid out as single-level
+         * UIF.
+         */
+        bool uif_top = msaa;
 
         for (int i = prsc->last_level; i >= 0; i--) {
                 struct vc5_resource_slice *slice = &rsc->slices[i];
@@ -381,13 +435,15 @@ vc5_setup_slices(struct vc5_resource *rsc, const char *caller)
                         level_height = u_minify(pot_height, i);
                 }
 
+                if (msaa) {
+                        level_width *= 2;
+                        level_height *= 2;
+                }
+
                 if (!rsc->tiled) {
                         slice->tiling = VC5_TILING_RASTER;
-                        if (prsc->nr_samples > 1) {
-                                /* MSAA (4x) surfaces are stored as raw tile buffer contents. */
-                                level_width = align(level_width, 32);
-                                level_height = align(level_height, 32);
-                        }
+                        if (prsc->target == PIPE_TEXTURE_1D)
+                                level_width = align(level_width, 64 / rsc->cpp);
                 } else {
                         if ((i != 0 || !uif_top) &&
                             (level_width <= utile_w ||
@@ -408,42 +464,22 @@ vc5_setup_slices(struct vc5_resource *rsc, const char *caller)
                         } else {
                                 slice->tiling = VC5_TILING_UIF_NO_XOR;
 
+                                /* We align the width to a 4-block column of
+                                 * UIF blocks, but we only align height to UIF
+                                 * blocks.
+                                 */
                                 level_width = align(level_width,
                                                     4 * uif_block_w);
                                 level_height = align(level_height,
-                                                     4 * uif_block_h);
+                                                     uif_block_h);
                         }
                 }
 
                 slice->offset = offset;
-                slice->stride = (level_width * rsc->cpp *
-                                 MAX2(prsc->nr_samples, 1));
+                slice->stride = level_width * rsc->cpp;
                 slice->size = level_height * slice->stride;
 
                 offset += slice->size;
-
-                if (V3D_DEBUG & V3D_DEBUG_SURFACE) {
-                        static const char *const tiling_descriptions[] = {
-                                [VC5_TILING_RASTER] = "R",
-                                [VC5_TILING_LINEARTILE] = "LT",
-                                [VC5_TILING_UBLINEAR_1_COLUMN] = "UB1",
-                                [VC5_TILING_UBLINEAR_2_COLUMN] = "UB2",
-                                [VC5_TILING_UIF_NO_XOR] = "UIF",
-                                [VC5_TILING_UIF_XOR] = "UIF^",
-                        };
-
-                        fprintf(stderr,
-                                "rsc %s %p (format %s), %dx%d: "
-                                "level %d (%s) %dx%d -> %dx%d, stride %d@0x%08x\n",
-                                caller, rsc,
-                                util_format_short_name(prsc->format),
-                                prsc->width0, prsc->height0,
-                                i, tiling_descriptions[slice->tiling],
-                                u_minify(prsc->width0, i),
-                                u_minify(prsc->height0, i),
-                                level_width, level_height,
-                                slice->stride, slice->offset);
-                }
         }
 
         /* UIF/UBLINEAR levels need to be aligned to UIF-blocks, and LT only
@@ -482,10 +518,28 @@ vc5_resource_setup(struct pipe_screen *pscreen,
         pipe_reference_init(&prsc->reference, 1);
         prsc->screen = pscreen;
 
-        if (prsc->nr_samples <= 1)
-                rsc->cpp = util_format_get_blocksize(tmpl->format);
-        else
-                rsc->cpp = sizeof(uint32_t);
+        if (prsc->nr_samples <= 1) {
+                rsc->cpp = util_format_get_blocksize(prsc->format);
+        } else {
+                assert(vc5_rt_format_supported(prsc->format));
+                uint32_t output_image_format = vc5_get_rt_format(prsc->format);
+                uint32_t internal_type;
+                uint32_t internal_bpp;
+                vc5_get_internal_type_bpp_for_output_format(output_image_format,
+                                                            &internal_type,
+                                                            &internal_bpp);
+                switch (internal_bpp) {
+                case INTERNAL_BPP_32:
+                        rsc->cpp = 4;
+                        break;
+                case INTERNAL_BPP_64:
+                        rsc->cpp = 8;
+                        break;
+                case INTERNAL_BPP_128:
+                        rsc->cpp = 16;
+                        break;
+                }
+        }
 
         assert(rsc->cpp);
 
@@ -526,6 +580,11 @@ vc5_resource_create_with_modifiers(struct pipe_screen *pscreen,
         if (tmpl->bind & (PIPE_BIND_LINEAR | PIPE_BIND_CURSOR))
                 should_tile = false;
 
+        /* 1D and 1D_ARRAY textures are always raster-order. */
+        if (tmpl->target == PIPE_TEXTURE_1D ||
+            tmpl->target == PIPE_TEXTURE_1D_ARRAY)
+                should_tile = false;
+
         /* Scanout BOs for simulator need to be linear for interaction with
          * i965.
          */
@@ -548,10 +607,7 @@ vc5_resource_create_with_modifiers(struct pipe_screen *pscreen,
                 return NULL;
         }
 
-        if (tmpl->target != PIPE_BUFFER)
-                rsc->tex_format = vc5_get_tex_format(prsc->format);
-
-        vc5_setup_slices(rsc, "create");
+        vc5_setup_slices(rsc);
         if (!vc5_resource_bo_alloc(rsc))
                 goto fail;
 
@@ -621,16 +677,8 @@ vc5_resource_from_handle(struct pipe_screen *pscreen,
         if (!rsc->bo)
                 goto fail;
 
-        vc5_setup_slices(rsc, "import");
-
-        rsc->tex_format = vc5_get_tex_format(prsc->format);
-
-        DBG(V3D_DEBUG_SURFACE,
-            "rsc import %p (format %s), %dx%d: "
-            "level 0 (R) -> stride %d@0x%08x\n",
-            rsc, util_format_short_name(prsc->format),
-            prsc->width0, prsc->height0,
-            slice->stride, slice->offset);
+        vc5_setup_slices(rsc);
+        vc5_debug_resource_layout(rsc, "import");
 
         if (whandle->stride != slice->stride) {
                 static bool warned = false;
@@ -669,6 +717,7 @@ vc5_create_surface(struct pipe_context *pctx,
 
         struct pipe_surface *psurf = &surface->base;
         unsigned level = surf_tmpl->u.tex.level;
+        struct vc5_resource_slice *slice = &rsc->slices[level];
 
         pipe_reference_init(&psurf->reference, 1);
         pipe_resource_reference(&psurf->texture, ptex);
@@ -681,9 +730,9 @@ vc5_create_surface(struct pipe_context *pctx,
         psurf->u.tex.first_layer = surf_tmpl->u.tex.first_layer;
         psurf->u.tex.last_layer = surf_tmpl->u.tex.last_layer;
 
-        surface->offset = (rsc->slices[level].offset +
+        surface->offset = (slice->offset +
                            psurf->u.tex.first_layer * rsc->cube_map_stride);
-        surface->tiling = rsc->slices[level].tiling;
+        surface->tiling = slice->tiling;
         surface->format = vc5_get_rt_format(psurf->format);
 
         if (util_format_is_depth_or_stencil(psurf->format)) {
@@ -704,6 +753,13 @@ vc5_create_surface(struct pipe_context *pctx,
                                                             &type, &bpp);
                 surface->internal_type = type;
                 surface->internal_bpp = bpp;
+        }
+
+        if (surface->tiling == VC5_TILING_UIF_NO_XOR ||
+            surface->tiling == VC5_TILING_UIF_XOR) {
+                surface->padded_height_of_output_image_in_uif_blocks =
+                        ((slice->size / slice->stride) /
+                         (2 * vc5_utile_height(rsc->cpp)));
         }
 
         return &surface->base;

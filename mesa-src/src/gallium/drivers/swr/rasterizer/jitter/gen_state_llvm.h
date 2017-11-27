@@ -179,26 +179,28 @@ namespace SwrJit
         LLVMContext& ctx = pJitMgr->mContext;
         std::vector<Type*> members;
         
-        /* PrimitiveID  */ members.push_back( Type::getInt32Ty(ctx) );
-        /* vectorOffset */ members.push_back( Type::getInt32Ty(ctx) );
-        /* vectorStride */ members.push_back( Type::getInt32Ty(ctx) );
-        /* pCpIn        */ members.push_back( PointerType::get(Gen_ScalarPatch(pJitMgr), 0) );
-        /* pDomainU     */ members.push_back( PointerType::get(VectorType::get(Type::getFloatTy(ctx), pJitMgr->mVWidth), 0) );
-        /* pDomainV     */ members.push_back( PointerType::get(VectorType::get(Type::getFloatTy(ctx), pJitMgr->mVWidth), 0) );
-        /* mask         */ members.push_back( VectorType::get(Type::getInt32Ty(ctx), pJitMgr->mVWidth) );
-        /* pOutputData  */ members.push_back( PointerType::get(VectorType::get(Type::getFloatTy(ctx), pJitMgr->mVWidth), 0) );
+        /* PrimitiveID           */ members.push_back( Type::getInt32Ty(ctx) );
+        /* vectorOffset          */ members.push_back( Type::getInt32Ty(ctx) );
+        /* vectorStride          */ members.push_back( Type::getInt32Ty(ctx) );
+        /* outVertexAttribOffset */ members.push_back( Type::getInt32Ty(ctx) );
+        /* pCpIn                 */ members.push_back( PointerType::get(Gen_ScalarPatch(pJitMgr), 0) );
+        /* pDomainU              */ members.push_back( PointerType::get(VectorType::get(Type::getFloatTy(ctx), pJitMgr->mVWidth), 0) );
+        /* pDomainV              */ members.push_back( PointerType::get(VectorType::get(Type::getFloatTy(ctx), pJitMgr->mVWidth), 0) );
+        /* mask                  */ members.push_back( VectorType::get(Type::getInt32Ty(ctx), pJitMgr->mVWidth) );
+        /* pOutputData           */ members.push_back( PointerType::get(VectorType::get(Type::getFloatTy(ctx), pJitMgr->mVWidth), 0) );
 
         return StructType::get(ctx, members, false);
     }
 
-    static const uint32_t SWR_DS_CONTEXT_PrimitiveID  = 0;
-    static const uint32_t SWR_DS_CONTEXT_vectorOffset = 1;
-    static const uint32_t SWR_DS_CONTEXT_vectorStride = 2;
-    static const uint32_t SWR_DS_CONTEXT_pCpIn        = 3;
-    static const uint32_t SWR_DS_CONTEXT_pDomainU     = 4;
-    static const uint32_t SWR_DS_CONTEXT_pDomainV     = 5;
-    static const uint32_t SWR_DS_CONTEXT_mask         = 6;
-    static const uint32_t SWR_DS_CONTEXT_pOutputData  = 7;
+    static const uint32_t SWR_DS_CONTEXT_PrimitiveID           = 0;
+    static const uint32_t SWR_DS_CONTEXT_vectorOffset          = 1;
+    static const uint32_t SWR_DS_CONTEXT_vectorStride          = 2;
+    static const uint32_t SWR_DS_CONTEXT_outVertexAttribOffset = 3;
+    static const uint32_t SWR_DS_CONTEXT_pCpIn                 = 4;
+    static const uint32_t SWR_DS_CONTEXT_pDomainU              = 5;
+    static const uint32_t SWR_DS_CONTEXT_pDomainV              = 6;
+    static const uint32_t SWR_DS_CONTEXT_mask                  = 7;
+    static const uint32_t SWR_DS_CONTEXT_pOutputData           = 8;
 
     INLINE static StructType *Gen_SWR_GS_CONTEXT(JitManager* pJitMgr)
     {
@@ -563,28 +565,32 @@ namespace SwrJit
         LLVMContext& ctx = pJitMgr->mContext;
         std::vector<Type*> members;
         
-        /* tsEnable           */ members.push_back( Type::getInt8Ty(ctx) );
-        /* tsOutputTopology   */ members.push_back( Type::getInt32Ty(ctx) );
-        /* partitioning       */ members.push_back( Type::getInt32Ty(ctx) );
-        /* domain             */ members.push_back( Type::getInt32Ty(ctx) );
-        /* postDSTopology     */ members.push_back( Type::getInt32Ty(ctx) );
-        /* numHsInputAttribs  */ members.push_back( Type::getInt32Ty(ctx) );
-        /* numHsOutputAttribs */ members.push_back( Type::getInt32Ty(ctx) );
-        /* numDsOutputAttribs */ members.push_back( Type::getInt32Ty(ctx) );
-        /* vertexAttribOffset */ members.push_back( Type::getInt32Ty(ctx) );
+        /* tsEnable             */ members.push_back( Type::getInt8Ty(ctx) );
+        /* tsOutputTopology     */ members.push_back( Type::getInt32Ty(ctx) );
+        /* partitioning         */ members.push_back( Type::getInt32Ty(ctx) );
+        /* domain               */ members.push_back( Type::getInt32Ty(ctx) );
+        /* postDSTopology       */ members.push_back( Type::getInt32Ty(ctx) );
+        /* numHsInputAttribs    */ members.push_back( Type::getInt32Ty(ctx) );
+        /* numHsOutputAttribs   */ members.push_back( Type::getInt32Ty(ctx) );
+        /* numDsOutputAttribs   */ members.push_back( Type::getInt32Ty(ctx) );
+        /* dsAllocationSize     */ members.push_back( Type::getInt32Ty(ctx) );
+        /* dsOutVtxAttribOffset */ members.push_back( Type::getInt32Ty(ctx) );
+        /* vertexAttribOffset   */ members.push_back( Type::getInt32Ty(ctx) );
 
         return StructType::get(ctx, members, false);
     }
 
-    static const uint32_t SWR_TS_STATE_tsEnable           = 0;
-    static const uint32_t SWR_TS_STATE_tsOutputTopology   = 1;
-    static const uint32_t SWR_TS_STATE_partitioning       = 2;
-    static const uint32_t SWR_TS_STATE_domain             = 3;
-    static const uint32_t SWR_TS_STATE_postDSTopology     = 4;
-    static const uint32_t SWR_TS_STATE_numHsInputAttribs  = 5;
-    static const uint32_t SWR_TS_STATE_numHsOutputAttribs = 6;
-    static const uint32_t SWR_TS_STATE_numDsOutputAttribs = 7;
-    static const uint32_t SWR_TS_STATE_vertexAttribOffset = 8;
+    static const uint32_t SWR_TS_STATE_tsEnable             = 0;
+    static const uint32_t SWR_TS_STATE_tsOutputTopology     = 1;
+    static const uint32_t SWR_TS_STATE_partitioning         = 2;
+    static const uint32_t SWR_TS_STATE_domain               = 3;
+    static const uint32_t SWR_TS_STATE_postDSTopology       = 4;
+    static const uint32_t SWR_TS_STATE_numHsInputAttribs    = 5;
+    static const uint32_t SWR_TS_STATE_numHsOutputAttribs   = 6;
+    static const uint32_t SWR_TS_STATE_numDsOutputAttribs   = 7;
+    static const uint32_t SWR_TS_STATE_dsAllocationSize     = 8;
+    static const uint32_t SWR_TS_STATE_dsOutVtxAttribOffset = 9;
+    static const uint32_t SWR_TS_STATE_vertexAttribOffset   = 10;
 
     INLINE static StructType *Gen_SWR_RENDER_TARGET_BLEND_STATE(JitManager* pJitMgr)
     {

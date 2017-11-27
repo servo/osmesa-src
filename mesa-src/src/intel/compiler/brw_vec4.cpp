@@ -2238,7 +2238,12 @@ vec4_visitor::lower_simd_width()
             if (linst->src[i].file == BAD_FILE)
                continue;
 
-            if (!is_uniform(linst->src[i]))
+            bool is_interleaved_attr =
+               linst->src[i].file == ATTR &&
+               stage_uses_interleaved_attributes(stage,
+                                                 prog_data->dispatch_mode);
+
+            if (!is_uniform(linst->src[i]) && !is_interleaved_attr)
                linst->src[i] = horiz_offset(linst->src[i], channel_offset);
          }
 
@@ -2741,7 +2746,6 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
                const nir_shader *src_shader,
                bool use_legacy_snorm_formula,
                int shader_time_index,
-               unsigned *final_assembly_size,
                char **error_str)
 {
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_VERTEX];
@@ -2815,9 +2819,6 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       nr_attribute_slots++;
    }
 
-   unsigned nr_attributes = nr_attribute_slots -
-      DIV_ROUND_UP(_mesa_bitcount_64(shader->info.double_inputs_read), 2);
-
    /* The 3DSTATE_VS documentation lists the lower bound on "Vertex URB Entry
     * Read Length" as 1 in vec4 mode, and 0 in SIMD8 mode.  Empirically, in
     * vec4 mode, the hardware appears to wedge unless we read something.
@@ -2829,7 +2830,6 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       prog_data->base.urb_read_length =
          DIV_ROUND_UP(MAX2(nr_attribute_slots, 1), 2);
 
-   prog_data->nr_attributes = nr_attributes;
    prog_data->nr_attribute_slots = nr_attribute_slots;
 
    /* Since vertex shaders reuse the same VUE entry for inputs and outputs
@@ -2884,7 +2884,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
          g.enable_debug(debug_name);
       }
       g.generate_code(v.cfg, 8);
-      assembly = g.get_assembly(final_assembly_size);
+      assembly = g.get_assembly(&prog_data->base.base.program_size);
    }
 
    if (!assembly) {
@@ -2902,7 +2902,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
 
       assembly = brw_vec4_generate_assembly(compiler, log_data, mem_ctx,
                                             shader, &prog_data->base, v.cfg,
-                                            final_assembly_size);
+                                            &prog_data->base.base.program_size);
    }
 
    return assembly;

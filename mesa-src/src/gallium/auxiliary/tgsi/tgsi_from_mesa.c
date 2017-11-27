@@ -62,6 +62,10 @@ tgsi_get_gl_varying_semantic(gl_varying_slot attr,
                              unsigned *semantic_index)
 {
    switch (attr) {
+   case VARYING_SLOT_PRIMITIVE_ID:
+      *semantic_name = TGSI_SEMANTIC_PRIMID;
+      *semantic_index = 0;
+      break;
    case VARYING_SLOT_POS:
       *semantic_name = TGSI_SEMANTIC_POSITION;
       *semantic_index = 0;
@@ -121,6 +125,14 @@ tgsi_get_gl_varying_semantic(gl_varying_slot attr,
       break;
    case VARYING_SLOT_PNTC:
       *semantic_name = TGSI_SEMANTIC_PCOORD;
+      *semantic_index = 0;
+      break;
+   case VARYING_SLOT_TESS_LEVEL_OUTER:
+      *semantic_name = TGSI_SEMANTIC_TESSOUTER;
+      *semantic_index = 0;
+      break;
+   case VARYING_SLOT_TESS_LEVEL_INNER:
+      *semantic_name = TGSI_SEMANTIC_TESSINNER;
       *semantic_index = 0;
       break;
 

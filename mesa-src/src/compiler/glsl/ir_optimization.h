@@ -123,9 +123,8 @@ bool lower_if_to_cond_assign(gl_shader_stage stage, exec_list *instructions,
                              unsigned max_depth = 0, unsigned min_branch_cost = 0);
 bool do_mat_op_to_vec(exec_list *instructions);
 bool do_minmax_prune(exec_list *instructions);
-bool do_noop_swizzle(exec_list *instructions);
 bool do_structure_splitting(exec_list *instructions);
-bool do_swizzle_swizzle(exec_list *instructions);
+bool optimize_swizzles(exec_list *instructions);
 bool do_vectorize(exec_list *instructions);
 bool do_tree_grafting(exec_list *instructions);
 bool do_vec_index_to_cond_assign(exec_list *instructions);
@@ -166,6 +165,7 @@ void optimize_dead_builtin_variables(exec_list *instructions,
 bool lower_tess_level(gl_linked_shader *shader);
 
 bool lower_vertex_id(gl_linked_shader *shader);
+bool lower_cs_derived(gl_linked_shader *shader);
 bool lower_blend_equation_advanced(gl_linked_shader *shader);
 
 bool lower_subroutine(exec_list *instructions, struct _mesa_glsl_parse_state *state);

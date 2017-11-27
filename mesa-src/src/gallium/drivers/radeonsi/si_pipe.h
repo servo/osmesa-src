@@ -19,9 +19,6 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *      Jerome Glisse
  */
 #ifndef SI_PIPE_H
 #define SI_PIPE_H
@@ -98,8 +95,9 @@ struct si_screen {
 	bool				has_out_of_order_rast;
 	bool				assume_no_z_fights;
 	bool				commutative_blend_add;
-	bool				clear_db_meta_before_clear;
+	bool				clear_db_cache_before_clear;
 	bool				has_msaa_sample_loc_bug;
+	bool				has_ls_vgpr_init_bug;
 	bool				dpbb_allowed;
 	bool				dfsm_allowed;
 	bool				llvm_has_working_vgpr_indexing;
@@ -347,6 +345,7 @@ struct si_saved_cs {
 
 	unsigned		gfx_last_dw;
 	bool			flushed;
+	int64_t			time_flush;
 };
 
 struct si_context {
@@ -363,6 +362,7 @@ struct si_context {
 	void				*vs_blit_color_layered;
 	void				*vs_blit_texcoord;
 	struct si_screen		*screen;
+	struct pipe_debug_callback	debug;
 	LLVMTargetMachineRef		tm; /* only non-threaded compilation */
 	struct si_shader_ctx_state	fixed_func_tcs_shader;
 	struct r600_resource		*wait_mem_scratch;
@@ -601,6 +601,12 @@ bool si_replace_shader(unsigned num, struct ac_shader_binary *binary);
 
 /* si_dma.c */
 void si_init_dma_functions(struct si_context *sctx);
+
+/* si_fence.c */
+void si_init_fence_functions(struct si_context *ctx);
+void si_init_screen_fence_functions(struct si_screen *screen);
+struct pipe_fence_handle *si_create_fence(struct pipe_context *ctx,
+					  struct tc_unflushed_batch_token *tc_token);
 
 /* si_hw_context.c */
 void si_destroy_saved_cs(struct si_saved_cs *scs);

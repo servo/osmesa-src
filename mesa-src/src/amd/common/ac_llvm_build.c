@@ -66,7 +66,10 @@ ac_llvm_context_init(struct ac_llvm_context *ctx, LLVMContextRef context,
 	ctx->f16 = LLVMHalfTypeInContext(ctx->context);
 	ctx->f32 = LLVMFloatTypeInContext(ctx->context);
 	ctx->f64 = LLVMDoubleTypeInContext(ctx->context);
+	ctx->v2i32 = LLVMVectorType(ctx->i32, 2);
+	ctx->v3i32 = LLVMVectorType(ctx->i32, 3);
 	ctx->v4i32 = LLVMVectorType(ctx->i32, 4);
+	ctx->v2f32 = LLVMVectorType(ctx->f32, 2);
 	ctx->v4f32 = LLVMVectorType(ctx->f32, 4);
 	ctx->v8i32 = LLVMVectorType(ctx->i32, 8);
 
@@ -74,6 +77,9 @@ ac_llvm_context_init(struct ac_llvm_context *ctx, LLVMContextRef context,
 	ctx->i32_1 = LLVMConstInt(ctx->i32, 1, false);
 	ctx->f32_0 = LLVMConstReal(ctx->f32, 0.0);
 	ctx->f32_1 = LLVMConstReal(ctx->f32, 1.0);
+
+	ctx->i1false = LLVMConstInt(ctx->i1, 0, false);
+	ctx->i1true = LLVMConstInt(ctx->i1, 1, false);
 
 	ctx->range_md_kind = LLVMGetMDKindIDInContext(ctx->context,
 						     "range", 5);
@@ -717,32 +723,40 @@ ac_build_indexed_store(struct ac_llvm_context *ctx,
  * \param base_ptr  Where the array starts.
  * \param index     The element index into the array.
  * \param uniform   Whether the base_ptr and index can be assumed to be
- *                  dynamically uniform
+ *                  dynamically uniform (i.e. load to an SGPR)
+ * \param invariant Whether the load is invariant (no other opcodes affect it)
  */
-LLVMValueRef
-ac_build_indexed_load(struct ac_llvm_context *ctx,
-		      LLVMValueRef base_ptr, LLVMValueRef index,
-		      bool uniform)
+static LLVMValueRef
+ac_build_load_custom(struct ac_llvm_context *ctx, LLVMValueRef base_ptr,
+		     LLVMValueRef index, bool uniform, bool invariant)
 {
-	LLVMValueRef pointer;
+	LLVMValueRef pointer, result;
 
 	pointer = ac_build_gep0(ctx, base_ptr, index);
 	if (uniform)
 		LLVMSetMetadata(pointer, ctx->uniform_md_kind, ctx->empty_md);
-	return LLVMBuildLoad(ctx->builder, pointer, "");
+	result = LLVMBuildLoad(ctx->builder, pointer, "");
+	if (invariant)
+		LLVMSetMetadata(result, ctx->invariant_load_md_kind, ctx->empty_md);
+	return result;
 }
 
-/**
- * Do a load from &base_ptr[index], but also add a flag that it's loading
- * a constant from a dynamically uniform index.
- */
-LLVMValueRef
-ac_build_indexed_load_const(struct ac_llvm_context *ctx,
-			    LLVMValueRef base_ptr, LLVMValueRef index)
+LLVMValueRef ac_build_load(struct ac_llvm_context *ctx, LLVMValueRef base_ptr,
+			   LLVMValueRef index)
 {
-	LLVMValueRef result = ac_build_indexed_load(ctx, base_ptr, index, true);
-	LLVMSetMetadata(result, ctx->invariant_load_md_kind, ctx->empty_md);
-	return result;
+	return ac_build_load_custom(ctx, base_ptr, index, false, false);
+}
+
+LLVMValueRef ac_build_load_invariant(struct ac_llvm_context *ctx,
+				     LLVMValueRef base_ptr, LLVMValueRef index)
+{
+	return ac_build_load_custom(ctx, base_ptr, index, false, true);
+}
+
+LLVMValueRef ac_build_load_to_sgpr(struct ac_llvm_context *ctx,
+				   LLVMValueRef base_ptr, LLVMValueRef index)
+{
+	return ac_build_load_custom(ctx, base_ptr, index, true, true);
 }
 
 /* TBUFFER_STORE_FORMAT_{X,XY,XYZ,XYZW} <- the suffix is selected by num_channels=1..4.
@@ -938,8 +952,8 @@ LLVMValueRef ac_build_buffer_load_format(struct ac_llvm_context *ctx,
 		LLVMBuildBitCast(ctx->builder, rsrc, ctx->v4i32, ""),
 		vindex,
 		voffset,
-		LLVMConstInt(ctx->i1, 0, 0), /* glc */
-		LLVMConstInt(ctx->i1, 0, 0), /* slc */
+		ctx->i1false, /* glc */
+		ctx->i1false, /* slc */
 	};
 
 	return ac_build_intrinsic(ctx,
@@ -1142,7 +1156,7 @@ ac_build_umsb(struct ac_llvm_context *ctx,
 {
 	LLVMValueRef args[2] = {
 		arg,
-		LLVMConstInt(ctx->i1, 1, 0),
+		ctx->i1true,
 	};
 	LLVMValueRef msb = ac_build_intrinsic(ctx, "llvm.ctlz.i32",
 					      dst_type, args, ARRAY_SIZE(args),
@@ -1249,7 +1263,7 @@ LLVMValueRef ac_build_image_opcode(struct ac_llvm_context *ctx,
 	LLVMTypeRef dst_type;
 	LLVMValueRef args[11];
 	unsigned num_args = 0;
-	const char *name;
+	const char *name = NULL;
 	char intr_name[128], type[64];
 
 	if (HAVE_LLVM >= 0x0400) {
@@ -1268,9 +1282,9 @@ LLVMValueRef ac_build_image_opcode(struct ac_llvm_context *ctx,
 		args[num_args++] = LLVMConstInt(ctx->i32, a->dmask, 0);
 		if (sample)
 			args[num_args++] = LLVMConstInt(ctx->i1, a->unorm, 0);
-		args[num_args++] = LLVMConstInt(ctx->i1, 0, 0); /* glc */
-		args[num_args++] = LLVMConstInt(ctx->i1, 0, 0); /* slc */
-		args[num_args++] = LLVMConstInt(ctx->i1, 0, 0); /* lwe */
+		args[num_args++] = ctx->i1false; /* glc */
+		args[num_args++] = ctx->i1false; /* slc */
+		args[num_args++] = ctx->i1false; /* lwe */
 		args[num_args++] = LLVMConstInt(ctx->i1, a->da, 0);
 
 		switch (a->opcode) {
@@ -1397,20 +1411,26 @@ LLVMValueRef ac_build_cvt_pkrtz_f16(struct ac_llvm_context *ctx,
 				  AC_FUNC_ATTR_LEGACY);
 }
 
-/**
- * KILL, AKA discard in GLSL.
- *
- * \param value  kill if value < 0.0 or value == NULL.
- */
-void ac_build_kill(struct ac_llvm_context *ctx, LLVMValueRef value)
+LLVMValueRef ac_build_wqm_vote(struct ac_llvm_context *ctx, LLVMValueRef i1)
 {
-	if (value) {
-		ac_build_intrinsic(ctx, "llvm.AMDGPU.kill", ctx->voidt,
-				   &value, 1, AC_FUNC_ATTR_LEGACY);
-	} else {
-		ac_build_intrinsic(ctx, "llvm.AMDGPU.kilp", ctx->voidt,
-				   NULL, 0, AC_FUNC_ATTR_LEGACY);
+	assert(HAVE_LLVM >= 0x0600);
+	return ac_build_intrinsic(ctx, "llvm.amdgcn.wqm.vote", ctx->i1,
+				  &i1, 1, AC_FUNC_ATTR_READNONE);
+}
+
+void ac_build_kill_if_false(struct ac_llvm_context *ctx, LLVMValueRef i1)
+{
+	if (HAVE_LLVM >= 0x0600) {
+		ac_build_intrinsic(ctx, "llvm.amdgcn.kill", ctx->voidt,
+				   &i1, 1, 0);
+		return;
 	}
+
+	LLVMValueRef value = LLVMBuildSelect(ctx->builder, i1,
+					     LLVMConstReal(ctx->f32, 1),
+					     LLVMConstReal(ctx->f32, -1), "");
+	ac_build_intrinsic(ctx, "llvm.AMDGPU.kill", ctx->voidt,
+			   &value, 1, AC_FUNC_ATTR_LEGACY);
 }
 
 LLVMValueRef ac_build_bfe(struct ac_llvm_context *ctx, LLVMValueRef input,
@@ -1725,4 +1745,66 @@ void ac_optimize_vs_outputs(struct ac_llvm_context *ctx,
 		}
 		*num_param_exports = exports.num;
 	}
+}
+
+void ac_init_exec_full_mask(struct ac_llvm_context *ctx)
+{
+	LLVMValueRef full_mask = LLVMConstInt(ctx->i64, ~0ull, 0);
+	ac_build_intrinsic(ctx,
+			   "llvm.amdgcn.init.exec", ctx->voidt,
+			   &full_mask, 1, AC_FUNC_ATTR_CONVERGENT);
+}
+
+void ac_declare_lds_as_pointer(struct ac_llvm_context *ctx)
+{
+	unsigned lds_size = ctx->chip_class >= CIK ? 65536 : 32768;
+	ctx->lds = LLVMBuildIntToPtr(ctx->builder, ctx->i32_0,
+				     LLVMPointerType(LLVMArrayType(ctx->i32, lds_size / 4), AC_LOCAL_ADDR_SPACE),
+				     "lds");
+}
+
+LLVMValueRef ac_lds_load(struct ac_llvm_context *ctx,
+			 LLVMValueRef dw_addr)
+{
+	return ac_build_load(ctx, ctx->lds, dw_addr);
+}
+
+void ac_lds_store(struct ac_llvm_context *ctx,
+		  LLVMValueRef dw_addr,
+		  LLVMValueRef value)
+{
+	value = ac_to_integer(ctx, value);
+	ac_build_indexed_store(ctx, ctx->lds,
+			       dw_addr, value);
+}
+
+LLVMValueRef ac_find_lsb(struct ac_llvm_context *ctx,
+			 LLVMTypeRef dst_type,
+			 LLVMValueRef src0)
+{
+	LLVMValueRef params[2] = {
+		src0,
+
+		/* The value of 1 means that ffs(x=0) = undef, so LLVM won't
+		 * add special code to check for x=0. The reason is that
+		 * the LLVM behavior for x=0 is different from what we
+		 * need here. However, LLVM also assumes that ffs(x) is
+		 * in [0, 31], but GLSL expects that ffs(0) = -1, so
+		 * a conditional assignment to handle 0 is still required.
+		 *
+		 * The hardware already implements the correct behavior.
+		 */
+		LLVMConstInt(ctx->i1, 1, false),
+	};
+
+	LLVMValueRef lsb = ac_build_intrinsic(ctx, "llvm.cttz.i32", ctx->i32,
+					      params, 2,
+					      AC_FUNC_ATTR_READNONE);
+
+	/* TODO: We need an intrinsic to skip this conditional. */
+	/* Check for zero: */
+	return LLVMBuildSelect(ctx->builder, LLVMBuildICmp(ctx->builder,
+							   LLVMIntEQ, src0,
+							   ctx->i32_0, ""),
+			       LLVMConstInt(ctx->i32, -1, 0), lsb, "");
 }

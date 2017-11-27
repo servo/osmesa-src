@@ -3904,6 +3904,14 @@ KEYWORD1 void KEYWORD2 NAME(BeginQueryARB)(GLenum target, GLuint id)
    DISPATCH(BeginQuery, (target, id), (F, "glBeginQueryARB(0x%x, %d);\n", target, id));
 }
 
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_460)(GLenum target, GLuint id);
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_460)(GLenum target, GLuint id)
+{
+    (void) target; (void) id;
+   DISPATCH(BeginQuery, (target, id), (F, "glBeginQueryEXT(0x%x, %d);\n", target, id));
+}
+
 KEYWORD1 void KEYWORD2 NAME(BindBuffer)(GLenum target, GLuint buffer)
 {
     (void) target; (void) buffer;
@@ -3964,6 +3972,14 @@ KEYWORD1 void KEYWORD2 NAME(DeleteQueriesARB)(GLsizei n, const GLuint * ids)
    DISPATCH(DeleteQueries, (n, ids), (F, "glDeleteQueriesARB(%d, %p);\n", n, (const void *) ids));
 }
 
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_465)(GLsizei n, const GLuint * ids);
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_465)(GLsizei n, const GLuint * ids)
+{
+    (void) n; (void) ids;
+   DISPATCH(DeleteQueries, (n, ids), (F, "glDeleteQueriesEXT(%d, %p);\n", n, (const void *) ids));
+}
+
 KEYWORD1 void KEYWORD2 NAME(EndQuery)(GLenum target)
 {
     (void) target;
@@ -3974,6 +3990,14 @@ KEYWORD1 void KEYWORD2 NAME(EndQueryARB)(GLenum target)
 {
     (void) target;
    DISPATCH(EndQuery, (target), (F, "glEndQueryARB(0x%x);\n", target));
+}
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_466)(GLenum target);
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_466)(GLenum target)
+{
+    (void) target;
+   DISPATCH(EndQuery, (target), (F, "glEndQueryEXT(0x%x);\n", target));
 }
 
 KEYWORD1 void KEYWORD2 NAME(GenBuffers)(GLsizei n, GLuint * buffer)
@@ -3998,6 +4022,14 @@ KEYWORD1 void KEYWORD2 NAME(GenQueriesARB)(GLsizei n, GLuint * ids)
 {
     (void) n; (void) ids;
    DISPATCH(GenQueries, (n, ids), (F, "glGenQueriesARB(%d, %p);\n", n, (const void *) ids));
+}
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_468)(GLsizei n, GLuint * ids);
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_468)(GLsizei n, GLuint * ids)
+{
+    (void) n; (void) ids;
+   DISPATCH(GenQueries, (n, ids), (F, "glGenQueriesEXT(%d, %p);\n", n, (const void *) ids));
 }
 
 KEYWORD1 void KEYWORD2 NAME(GetBufferParameteriv)(GLenum target, GLenum pname, GLint * params)
@@ -4056,6 +4088,14 @@ KEYWORD1 void KEYWORD2 NAME(GetQueryObjectivARB)(GLuint id, GLenum pname, GLint 
    DISPATCH(GetQueryObjectiv, (id, pname, params), (F, "glGetQueryObjectivARB(%d, 0x%x, %p);\n", id, pname, (const void *) params));
 }
 
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_472)(GLuint id, GLenum pname, GLint * params);
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_472)(GLuint id, GLenum pname, GLint * params)
+{
+    (void) id; (void) pname; (void) params;
+   DISPATCH(GetQueryObjectiv, (id, pname, params), (F, "glGetQueryObjectivEXT(%d, 0x%x, %p);\n", id, pname, (const void *) params));
+}
+
 KEYWORD1 void KEYWORD2 NAME(GetQueryObjectuiv)(GLuint id, GLenum pname, GLuint * params)
 {
     (void) id; (void) pname; (void) params;
@@ -4068,6 +4108,14 @@ KEYWORD1 void KEYWORD2 NAME(GetQueryObjectuivARB)(GLuint id, GLenum pname, GLuin
    DISPATCH(GetQueryObjectuiv, (id, pname, params), (F, "glGetQueryObjectuivARB(%d, 0x%x, %p);\n", id, pname, (const void *) params));
 }
 
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_473)(GLuint id, GLenum pname, GLuint * params);
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_473)(GLuint id, GLenum pname, GLuint * params)
+{
+    (void) id; (void) pname; (void) params;
+   DISPATCH(GetQueryObjectuiv, (id, pname, params), (F, "glGetQueryObjectuivEXT(%d, 0x%x, %p);\n", id, pname, (const void *) params));
+}
+
 KEYWORD1 void KEYWORD2 NAME(GetQueryiv)(GLenum target, GLenum pname, GLint * params)
 {
     (void) target; (void) pname; (void) params;
@@ -4078,6 +4126,14 @@ KEYWORD1 void KEYWORD2 NAME(GetQueryivARB)(GLenum target, GLenum pname, GLint * 
 {
     (void) target; (void) pname; (void) params;
    DISPATCH(GetQueryiv, (target, pname, params), (F, "glGetQueryivARB(0x%x, 0x%x, %p);\n", target, pname, (const void *) params));
+}
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_474)(GLenum target, GLenum pname, GLint * params);
+
+KEYWORD1_ALT void KEYWORD2 NAME(_dispatch_stub_474)(GLenum target, GLenum pname, GLint * params)
+{
+    (void) target; (void) pname; (void) params;
+   DISPATCH(GetQueryiv, (target, pname, params), (F, "glGetQueryivEXT(0x%x, 0x%x, %p);\n", target, pname, (const void *) params));
 }
 
 KEYWORD1 GLboolean KEYWORD2 NAME(IsBuffer)(GLuint buffer)
@@ -4102,6 +4158,14 @@ KEYWORD1 GLboolean KEYWORD2 NAME(IsQueryARB)(GLuint id)
 {
     (void) id;
    RETURN_DISPATCH(IsQuery, (id), (F, "glIsQueryARB(%d);\n", id));
+}
+
+KEYWORD1_ALT GLboolean KEYWORD2 NAME(_dispatch_stub_476)(GLuint id);
+
+KEYWORD1_ALT GLboolean KEYWORD2 NAME(_dispatch_stub_476)(GLuint id)
+{
+    (void) id;
+   RETURN_DISPATCH(IsQuery, (id), (F, "glIsQueryEXT(%d);\n", id));
 }
 
 KEYWORD1 GLvoid * KEYWORD2 NAME(MapBuffer)(GLenum target, GLenum access)
@@ -14879,23 +14943,31 @@ _glapi_proc UNUSED_TABLE_NAME[] = {
    TABLE_ENTRY(WindowPos3svARB),
    TABLE_ENTRY(_dispatch_stub_459),
    TABLE_ENTRY(BeginQueryARB),
+   TABLE_ENTRY(_dispatch_stub_460),
    TABLE_ENTRY(BindBufferARB),
    TABLE_ENTRY(BufferDataARB),
    TABLE_ENTRY(BufferSubDataARB),
    TABLE_ENTRY(DeleteBuffersARB),
    TABLE_ENTRY(DeleteQueriesARB),
+   TABLE_ENTRY(_dispatch_stub_465),
    TABLE_ENTRY(EndQueryARB),
+   TABLE_ENTRY(_dispatch_stub_466),
    TABLE_ENTRY(GenBuffersARB),
    TABLE_ENTRY(GenQueriesARB),
+   TABLE_ENTRY(_dispatch_stub_468),
    TABLE_ENTRY(GetBufferParameterivARB),
    TABLE_ENTRY(GetBufferPointervARB),
    TABLE_ENTRY(_dispatch_stub_470),
    TABLE_ENTRY(GetBufferSubDataARB),
    TABLE_ENTRY(GetQueryObjectivARB),
+   TABLE_ENTRY(_dispatch_stub_472),
    TABLE_ENTRY(GetQueryObjectuivARB),
+   TABLE_ENTRY(_dispatch_stub_473),
    TABLE_ENTRY(GetQueryivARB),
+   TABLE_ENTRY(_dispatch_stub_474),
    TABLE_ENTRY(IsBufferARB),
    TABLE_ENTRY(IsQueryARB),
+   TABLE_ENTRY(_dispatch_stub_476),
    TABLE_ENTRY(MapBufferARB),
    TABLE_ENTRY(_dispatch_stub_477),
    TABLE_ENTRY(UnmapBufferARB),

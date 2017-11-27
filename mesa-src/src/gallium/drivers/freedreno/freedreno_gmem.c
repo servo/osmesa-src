@@ -226,7 +226,7 @@ calculate_tiles(struct fd_batch *batch)
 	/* configure pipes: */
 	xoff = yoff = 0;
 	for (i = 0; i < npipes; i++) {
-		struct fd_vsc_pipe *pipe = &ctx->pipe[i];
+		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[i];
 
 		if (xoff >= nbins_x) {
 			xoff = 0;
@@ -246,7 +246,7 @@ calculate_tiles(struct fd_batch *batch)
 	}
 
 	for (; i < npipes; i++) {
-		struct fd_vsc_pipe *pipe = &ctx->pipe[i];
+		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[i];
 		pipe->x = pipe->y = pipe->w = pipe->h = 0;
 	}
 
@@ -395,6 +395,11 @@ fd_gmem_render_tiles(struct fd_batch *batch)
 			DBG("GMEM: cleared=%x, gmem_reason=%x, num_draws=%u",
 				batch->cleared, batch->gmem_reason, batch->num_draws);
 		} else if (!(fd_mesa_debug & FD_DBG_NOBYPASS)) {
+			sysmem = true;
+		}
+
+		/* For ARB_framebuffer_no_attachments: */
+		if ((pfb->nr_cbufs == 0) && !pfb->zsbuf) {
 			sysmem = true;
 		}
 	}

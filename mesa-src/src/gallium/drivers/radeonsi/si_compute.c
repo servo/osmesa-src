@@ -23,6 +23,7 @@
  */
 
 #include "tgsi/tgsi_parse.h"
+#include "util/u_async_debug.h"
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
 
@@ -84,14 +85,10 @@ static void si_create_compute_state_async(void *job, int thread_index)
 	LLVMTargetMachineRef tm;
 	struct pipe_debug_callback *debug = &program->compiler_ctx_state.debug;
 
-	if (thread_index >= 0) {
-		assert(thread_index < ARRAY_SIZE(program->screen->tm));
-		tm = program->screen->tm[thread_index];
-		if (!debug->async)
-			debug = NULL;
-	} else {
-		tm = program->compiler_ctx_state.tm;
-	}
+	assert(!debug->debug_message || debug->async);
+	assert(thread_index >= 0);
+	assert(thread_index < ARRAY_SIZE(program->screen->tm));
+	tm = program->screen->tm[thread_index];
 
 	memset(&sel, 0, sizeof(sel));
 
@@ -167,20 +164,31 @@ static void *si_create_compute_state(
 			return NULL;
 		}
 
-		program->compiler_ctx_state.tm = sctx->tm;
-		program->compiler_ctx_state.debug = sctx->b.debug;
+		program->compiler_ctx_state.debug = sctx->debug;
 		program->compiler_ctx_state.is_debug_context = sctx->is_debug;
 		p_atomic_inc(&sscreen->b.num_shaders_created);
 		util_queue_fence_init(&program->ready);
 
-		if ((sctx->b.debug.debug_message && !sctx->b.debug.async) ||
-		    sctx->is_debug ||
-		    si_can_dump_shader(&sscreen->b, PIPE_SHADER_COMPUTE))
-			si_create_compute_state_async(program, -1);
-		else
-			util_queue_add_job(&sscreen->shader_compiler_queue,
-					   program, &program->ready,
-					   si_create_compute_state_async, NULL);
+		struct util_async_debug_callback async_debug;
+		bool wait =
+			(sctx->debug.debug_message && !sctx->debug.async) ||
+			sctx->is_debug ||
+			si_can_dump_shader(&sscreen->b, PIPE_SHADER_COMPUTE);
+
+		if (wait) {
+			u_async_debug_init(&async_debug);
+			program->compiler_ctx_state.debug = async_debug.base;
+		}
+
+		util_queue_add_job(&sscreen->shader_compiler_queue,
+				   program, &program->ready,
+				   si_create_compute_state_async, NULL);
+
+		if (wait) {
+			util_queue_fence_wait(&program->ready);
+			u_async_debug_drain(&async_debug, &sctx->debug);
+			u_async_debug_cleanup(&async_debug);
+		}
 	} else {
 		const struct pipe_llvm_program_header *header;
 		const char *code;
@@ -196,7 +204,7 @@ static void *si_create_compute_state(
 			si_shader_binary_read_config(&program->shader.binary,
 				     &program->shader.config, 0);
 		}
-		si_shader_dump(sctx->screen, &program->shader, &sctx->b.debug,
+		si_shader_dump(sctx->screen, &program->shader, &sctx->debug,
 			       PIPE_SHADER_COMPUTE, stderr, true);
 		if (si_shader_binary_upload(sctx->screen, &program->shader) < 0) {
 			fprintf(stderr, "LLVM failed to upload shader\n");
@@ -706,13 +714,28 @@ static void si_setup_tgsi_grid(struct si_context *sctx,
 static void si_emit_dispatch_packets(struct si_context *sctx,
                                      const struct pipe_grid_info *info)
 {
+	struct si_screen *sscreen = sctx->screen;
 	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	bool render_cond_bit = sctx->b.render_cond && !sctx->b.render_cond_force_off;
 	unsigned waves_per_threadgroup =
 		DIV_ROUND_UP(info->block[0] * info->block[1] * info->block[2], 64);
+	unsigned compute_resource_limits =
+		S_00B854_SIMD_DEST_CNTL(waves_per_threadgroup % 4 == 0);
+
+	if (sctx->b.chip_class >= CIK) {
+		unsigned num_cu_per_se = sscreen->b.info.num_good_compute_units /
+					 sscreen->b.info.max_se;
+
+		/* Force even distribution on all SIMDs in CU if the workgroup
+		 * size is 64. This has shown some good improvements if # of CUs
+		 * per SE is not a multiple of 4.
+		 */
+		if (num_cu_per_se % 4 && waves_per_threadgroup == 1)
+			compute_resource_limits |= S_00B854_FORCE_SIMD_DIST(1);
+	}
 
 	radeon_set_sh_reg(cs, R_00B854_COMPUTE_RESOURCE_LIMITS,
-			  S_00B854_SIMD_DEST_CNTL(waves_per_threadgroup % 4 == 0));
+			  compute_resource_limits);
 
 	radeon_set_sh_reg_seq(cs, R_00B81C_COMPUTE_NUM_THREAD_X, 3);
 	radeon_emit(cs, S_00B81C_NUM_THREAD_FULL(info->block[0]));

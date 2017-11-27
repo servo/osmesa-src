@@ -69,11 +69,13 @@ struct gen_l3_config;
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_intel.h>
 #include <vulkan/vk_icd.h>
+#include <vulkan/vk_android_native_buffer.h>
 
 #include "anv_entrypoints.h"
 #include "isl/isl.h"
 
 #include "common/gen_debug.h"
+#include "common/intel_log.h"
 #include "wsi_common.h"
 
 /* Allowing different clear colors requires us to perform a depth resolve at
@@ -314,11 +316,9 @@ VkResult __vk_errorf(struct anv_instance *instance, const void *object,
 #define vk_errorf(instance, obj, error, format, ...)\
     __vk_errorf(instance, obj, REPORT_OBJECT_TYPE(obj), error,\
                 __FILE__, __LINE__, format, ## __VA_ARGS__);
-#define anv_debug(format, ...) fprintf(stderr, "debug: " format, ##__VA_ARGS__)
 #else
 #define vk_error(error) error
 #define vk_errorf(instance, obj, error, format, ...) error
-#define anv_debug(format, ...)
 #endif
 
 /**
@@ -337,10 +337,8 @@ VkResult __vk_errorf(struct anv_instance *instance, const void *object,
  *    defined by extensions supported by that component.
  */
 #define anv_debug_ignored_stype(sType) \
-   anv_debug("%s: ignored VkStructureType %u\n", __func__, (sType))
+   intel_logd("%s: ignored VkStructureType %u\n", __func__, (sType))
 
-void __anv_finishme(const char *file, int line, const char *format, ...)
-   anv_printflike(3, 4);
 void __anv_perf_warn(struct anv_instance *instance, const void *object,
                      VkDebugReportObjectTypeEXT type, const char *file,
                      int line, const char *format, ...)
@@ -364,7 +362,8 @@ void anv_debug_report(struct anv_instance *instance,
    do { \
       static bool reported = false; \
       if (!reported) { \
-         __anv_finishme(__FILE__, __LINE__, format, ##__VA_ARGS__); \
+         intel_logw("%s:%d: FINISHME: " format, __FILE__, __LINE__, \
+                    ##__VA_ARGS__); \
          reported = true; \
       } \
    } while (0)
@@ -386,7 +385,7 @@ void anv_debug_report(struct anv_instance *instance,
 #ifdef DEBUG
 #define anv_assert(x) ({ \
    if (unlikely(!(x))) \
-      fprintf(stderr, "%s:%d ASSERT: %s\n", __FILE__, __LINE__, #x); \
+      intel_loge("%s:%d ASSERT: %s", __FILE__, __LINE__, #x); \
 })
 #else
 #define anv_assert(x)
@@ -552,6 +551,8 @@ struct anv_block_state {
 struct anv_block_pool {
    struct anv_device *device;
 
+   uint64_t bo_flags;
+
    struct anv_bo bo;
 
    /* The offset from the start of the bo to the "center" of the block
@@ -650,7 +651,8 @@ struct anv_state_stream {
  */
 VkResult anv_block_pool_init(struct anv_block_pool *pool,
                              struct anv_device *device,
-                             uint32_t initial_size);
+                             uint32_t initial_size,
+                             uint64_t bo_flags);
 void anv_block_pool_finish(struct anv_block_pool *pool);
 int32_t anv_block_pool_alloc(struct anv_block_pool *pool,
                              uint32_t block_size);
@@ -659,7 +661,8 @@ int32_t anv_block_pool_alloc_back(struct anv_block_pool *pool,
 
 VkResult anv_state_pool_init(struct anv_state_pool *pool,
                              struct anv_device *device,
-                             uint32_t block_size);
+                             uint32_t block_size,
+                             uint64_t bo_flags);
 void anv_state_pool_finish(struct anv_state_pool *pool);
 struct anv_state anv_state_pool_alloc(struct anv_state_pool *pool,
                                       uint32_t state_size, uint32_t alignment);
@@ -679,10 +682,13 @@ struct anv_state anv_state_stream_alloc(struct anv_state_stream *stream,
 struct anv_bo_pool {
    struct anv_device *device;
 
+   uint64_t bo_flags;
+
    void *free_list[16];
 };
 
-void anv_bo_pool_init(struct anv_bo_pool *pool, struct anv_device *device);
+void anv_bo_pool_init(struct anv_bo_pool *pool, struct anv_device *device,
+                      uint64_t bo_flags);
 void anv_bo_pool_finish(struct anv_bo_pool *pool);
 VkResult anv_bo_pool_alloc(struct anv_bo_pool *pool, struct anv_bo *bo,
                            uint32_t size);
@@ -720,7 +726,7 @@ VkResult anv_bo_cache_alloc(struct anv_device *device,
                             uint64_t size, struct anv_bo **bo);
 VkResult anv_bo_cache_import(struct anv_device *device,
                              struct anv_bo_cache *cache,
-                             int fd, uint64_t size, struct anv_bo **bo);
+                             int fd, struct anv_bo **bo);
 VkResult anv_bo_cache_export(struct anv_device *device,
                              struct anv_bo_cache *cache,
                              struct anv_bo *bo_in, int *fd_out);
@@ -767,6 +773,7 @@ struct anv_physical_device {
     struct isl_device                           isl_dev;
     int                                         cmd_parser_version;
     bool                                        has_exec_async;
+    bool                                        has_exec_capture;
     bool                                        has_exec_fence;
     bool                                        has_syncobj;
     bool                                        has_syncobj_wait;
@@ -931,6 +938,7 @@ int anv_gem_destroy_context(struct anv_device *device, int context);
 int anv_gem_get_context_param(int fd, int context, uint32_t param,
                               uint64_t *value);
 int anv_gem_get_param(int fd, uint32_t param);
+int anv_gem_get_tiling(struct anv_device *device, uint32_t gem_handle);
 bool anv_gem_get_bit6_swizzle(int fd, uint32_t tiling);
 int anv_gem_get_aperture(int fd, uint64_t *size);
 bool anv_gem_supports_48b_addresses(int fd);
@@ -1552,12 +1560,12 @@ anv_pipe_invalidate_bits_for_access_flags(VkAccessFlags flags)
    return pipe_bits;
 }
 
-#define VK_IMAGE_ASPECT_ANY_COLOR_BIT (         \
+#define VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV (         \
    VK_IMAGE_ASPECT_COLOR_BIT | \
    VK_IMAGE_ASPECT_PLANE_0_BIT_KHR | \
    VK_IMAGE_ASPECT_PLANE_1_BIT_KHR | \
    VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
-#define VK_IMAGE_ASPECT_PLANES_BITS ( \
+#define VK_IMAGE_ASPECT_PLANES_BITS_ANV ( \
    VK_IMAGE_ASPECT_PLANE_0_BIT_KHR | \
    VK_IMAGE_ASPECT_PLANE_1_BIT_KHR | \
    VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
@@ -2253,7 +2261,7 @@ static inline VkImageAspectFlags
 anv_plane_to_aspect(VkImageAspectFlags image_aspects,
                     uint32_t plane)
 {
-   if (image_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT) {
+   if (image_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
       if (_mesa_bitcount(image_aspects) > 1)
          return VK_IMAGE_ASPECT_PLANE_0_BIT_KHR << plane;
       return VK_IMAGE_ASPECT_COLOR_BIT;
@@ -2280,7 +2288,7 @@ anv_get_format_planes(VkFormat vk_format)
 
 struct anv_format_plane
 anv_get_format_plane(const struct gen_device_info *devinfo, VkFormat vk_format,
-                     VkImageAspectFlags aspect, VkImageTiling tiling);
+                     VkImageAspectFlagBits aspect, VkImageTiling tiling);
 
 static inline enum isl_format
 anv_get_isl_format(const struct gen_device_info *devinfo, VkFormat vk_format,
@@ -2422,6 +2430,11 @@ struct anv_image {
        */
       struct anv_bo *bo;
       VkDeviceSize bo_offset;
+
+      /**
+       * When destroying the image, also free the bo.
+       * */
+      bool bo_is_owned;
    } planes[3];
 };
 
@@ -2542,7 +2555,7 @@ anv_image_expand_aspects(const struct anv_image *image,
    /* If the underlying image has color plane aspects and
     * VK_IMAGE_ASPECT_COLOR_BIT has been requested, then return the aspects of
     * the underlying image. */
-   if ((image->aspects & VK_IMAGE_ASPECT_PLANES_BITS) != 0 &&
+   if ((image->aspects & VK_IMAGE_ASPECT_PLANES_BITS_ANV) != 0 &&
        aspects == VK_IMAGE_ASPECT_COLOR_BIT)
       return image->aspects;
 
@@ -2557,8 +2570,8 @@ anv_image_aspects_compatible(VkImageAspectFlags aspects1,
       return true;
 
    /* Only 1 color aspects are compatibles. */
-   if ((aspects1 & VK_IMAGE_ASPECT_ANY_COLOR_BIT) != 0 &&
-       (aspects2 & VK_IMAGE_ASPECT_ANY_COLOR_BIT) != 0 &&
+   if ((aspects1 & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) != 0 &&
+       (aspects2 & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) != 0 &&
        _mesa_bitcount(aspects1) == _mesa_bitcount(aspects2))
       return true;
 
@@ -2625,6 +2638,9 @@ struct anv_image_create_info {
    /** An opt-in bitmask which filters an ISL-mapping of the Vulkan tiling. */
    isl_tiling_flags_t isl_tiling_flags;
 
+   /** These flags will be added to any derived from VkImageCreateInfo. */
+   isl_surf_usage_flags_t isl_extra_usage_flags;
+
    uint32_t stride;
 };
 
@@ -2632,6 +2648,14 @@ VkResult anv_image_create(VkDevice _device,
                           const struct anv_image_create_info *info,
                           const VkAllocationCallbacks* alloc,
                           VkImage *pImage);
+
+#ifdef ANDROID
+VkResult anv_image_from_gralloc(VkDevice device_h,
+                                const VkImageCreateInfo *base_info,
+                                const VkNativeBufferANDROID *gralloc_info,
+                                const VkAllocationCallbacks *alloc,
+                                VkImage *pImage);
+#endif
 
 const struct anv_surface *
 anv_image_get_surface_for_aspect_mask(const struct anv_image *image,

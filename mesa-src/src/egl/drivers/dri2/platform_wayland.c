@@ -42,7 +42,6 @@
 #include "egl_dri2.h"
 #include "egl_dri2_fallbacks.h"
 #include "loader.h"
-#include "util/debug.h"
 #include "util/u_vector.h"
 #include "eglglobals.h"
 
@@ -672,6 +671,35 @@ static const struct wl_callback_listener throttle_listener = {
    .done = wayland_throttle_callback
 };
 
+static EGLBoolean
+get_fourcc(struct dri2_egl_display *dri2_dpy,
+           __DRIimage *image, int *fourcc)
+{
+   EGLBoolean query;
+   int dri_format;
+
+   query = dri2_dpy->image->queryImage(image, __DRI_IMAGE_ATTRIB_FOURCC,
+                                       fourcc);
+   if (query)
+      return true;
+
+   query = dri2_dpy->image->queryImage(image, __DRI_IMAGE_ATTRIB_FORMAT,
+                                       &dri_format);
+   if (!query)
+      return false;
+
+   switch (dri_format) {
+   case __DRI_IMAGE_FORMAT_ARGB8888:
+      *fourcc = __DRI_IMAGE_FOURCC_ARGB8888;
+      return true;
+   case __DRI_IMAGE_FORMAT_XRGB8888:
+      *fourcc = __DRI_IMAGE_FOURCC_XRGB8888;
+      return true;
+   default:
+      return false;
+   }
+}
+
 static struct wl_buffer *
 create_wl_buffer(struct dri2_egl_display *dri2_dpy,
                  struct dri2_egl_surface *dri2_surf,
@@ -685,8 +713,7 @@ create_wl_buffer(struct dri2_egl_display *dri2_dpy,
    query = dri2_dpy->image->queryImage(image, __DRI_IMAGE_ATTRIB_WIDTH, &width);
    query &= dri2_dpy->image->queryImage(image, __DRI_IMAGE_ATTRIB_HEIGHT,
                                         &height);
-   query &= dri2_dpy->image->queryImage(image, __DRI_IMAGE_ATTRIB_FOURCC,
-                                        &fourcc);
+   query &= get_fourcc(dri2_dpy, image, &fourcc);
    if (!query)
       return NULL;
 
@@ -1972,7 +1999,7 @@ dri2_initialize_wayland(_EGLDriver *drv, _EGLDisplay *disp)
 {
    EGLBoolean initialized = EGL_FALSE;
 
-   if (!env_var_as_boolean("LIBGL_ALWAYS_SOFTWARE", false))
+   if (!disp->Options.UseFallback)
       initialized = dri2_initialize_wayland_drm(drv, disp);
 
    if (!initialized)
@@ -1980,4 +2007,26 @@ dri2_initialize_wayland(_EGLDriver *drv, _EGLDisplay *disp)
 
    return initialized;
 
+}
+
+void
+dri2_teardown_wayland(struct dri2_egl_display *dri2_dpy)
+{
+   if (dri2_dpy->wl_drm)
+      wl_drm_destroy(dri2_dpy->wl_drm);
+   if (dri2_dpy->wl_dmabuf)
+      zwp_linux_dmabuf_v1_destroy(dri2_dpy->wl_dmabuf);
+   if (dri2_dpy->wl_shm)
+      wl_shm_destroy(dri2_dpy->wl_shm);
+   if (dri2_dpy->wl_registry)
+      wl_registry_destroy(dri2_dpy->wl_registry);
+   if (dri2_dpy->wl_queue)
+      wl_event_queue_destroy(dri2_dpy->wl_queue);
+   if (dri2_dpy->wl_dpy_wrapper)
+      wl_proxy_wrapper_destroy(dri2_dpy->wl_dpy_wrapper);
+   u_vector_finish(&dri2_dpy->wl_modifiers.argb8888);
+   u_vector_finish(&dri2_dpy->wl_modifiers.xrgb8888);
+   u_vector_finish(&dri2_dpy->wl_modifiers.rgb565);
+   if (dri2_dpy->own_device)
+      wl_display_disconnect(dri2_dpy->wl_dpy);
 }

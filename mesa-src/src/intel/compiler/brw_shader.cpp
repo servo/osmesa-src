@@ -76,10 +76,6 @@ brw_conditional_for_comparison(unsigned int op)
    switch (op) {
    case ir_binop_less:
       return BRW_CONDITIONAL_L;
-   case ir_binop_greater:
-      return BRW_CONDITIONAL_G;
-   case ir_binop_lequal:
-      return BRW_CONDITIONAL_LE;
    case ir_binop_gequal:
       return BRW_CONDITIONAL_GE;
    case ir_binop_equal:
@@ -626,38 +622,6 @@ brw_abs_immediate(enum brw_reg_type type, struct brw_reg *reg)
    return false;
 }
 
-/**
- * Get the appropriate atomic op for an image atomic intrinsic.
- */
-unsigned
-get_atomic_counter_op(nir_intrinsic_op op)
-{
-   switch (op) {
-   case nir_intrinsic_atomic_counter_inc:
-      return BRW_AOP_INC;
-   case nir_intrinsic_atomic_counter_dec:
-      return BRW_AOP_PREDEC;
-   case nir_intrinsic_atomic_counter_add:
-      return BRW_AOP_ADD;
-   case nir_intrinsic_atomic_counter_min:
-      return BRW_AOP_UMIN;
-   case nir_intrinsic_atomic_counter_max:
-      return BRW_AOP_UMAX;
-   case nir_intrinsic_atomic_counter_and:
-      return BRW_AOP_AND;
-   case nir_intrinsic_atomic_counter_or:
-      return BRW_AOP_OR;
-   case nir_intrinsic_atomic_counter_xor:
-      return BRW_AOP_XOR;
-   case nir_intrinsic_atomic_counter_exchange:
-      return BRW_AOP_MOV;
-   case nir_intrinsic_atomic_counter_comp_swap:
-      return BRW_AOP_CMPWR;
-   default:
-      unreachable("Not reachable.");
-   }
-}
-
 backend_shader::backend_shader(const struct brw_compiler *compiler,
                                void *log_data,
                                void *mem_ctx,
@@ -670,11 +634,15 @@ backend_shader::backend_shader(const struct brw_compiler *compiler,
      stage_prog_data(stage_prog_data),
      mem_ctx(mem_ctx),
      cfg(NULL),
-     stage(shader->stage)
+     stage(shader->info.stage)
 {
    debug_enabled = INTEL_DEBUG & intel_debug_flag_for_shader_stage(stage);
    stage_name = _mesa_shader_stage_to_string(stage);
    stage_abbrev = _mesa_shader_stage_to_abbrev(stage);
+}
+
+backend_shader::~backend_shader()
+{
 }
 
 bool
@@ -855,6 +823,8 @@ backend_instruction::can_do_source_mods() const
    case BRW_OPCODE_FBH:
    case BRW_OPCODE_FBL:
    case BRW_OPCODE_SUBB:
+   case SHADER_OPCODE_BROADCAST:
+   case SHADER_OPCODE_MOV_INDIRECT:
       return false;
    default:
       return true;
@@ -1000,7 +970,7 @@ backend_instruction::has_side_effects() const
    case TCS_OPCODE_RELEASE_INPUT:
       return true;
    default:
-      return false;
+      return eot;
    }
 }
 
@@ -1161,11 +1131,11 @@ brw_compile_tes(const struct brw_compiler *compiler,
                 const nir_shader *src_shader,
                 struct gl_program *prog,
                 int shader_time_index,
-                unsigned *final_assembly_size,
                 char **error_str)
 {
    const struct gen_device_info *devinfo = compiler->devinfo;
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_TESS_EVAL];
+   const unsigned *assembly;
 
    nir_shader *nir = nir_shader_clone(mem_ctx, src_shader);
    nir->info.inputs_read = key->inputs_read;
@@ -1274,7 +1244,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
 
       g.generate_code(v.cfg, 8);
 
-      return g.get_assembly(final_assembly_size);
+      assembly = g.get_assembly(&prog_data->base.base.program_size);
    } else {
       brw::vec4_tes_visitor v(compiler, log_data, key, prog_data,
 			      nir, mem_ctx, shader_time_index);
@@ -1287,8 +1257,10 @@ brw_compile_tes(const struct brw_compiler *compiler,
       if (unlikely(INTEL_DEBUG & DEBUG_TES))
 	 v.dump_instructions();
 
-      return brw_vec4_generate_assembly(compiler, log_data, mem_ctx, nir,
-					&prog_data->base, v.cfg,
-					final_assembly_size);
+      assembly = brw_vec4_generate_assembly(compiler, log_data, mem_ctx, nir,
+                                            &prog_data->base, v.cfg,
+                                            &prog_data->base.base.program_size);
    }
+
+   return assembly;
 }

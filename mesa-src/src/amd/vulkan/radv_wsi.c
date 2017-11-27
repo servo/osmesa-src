@@ -194,14 +194,29 @@ radv_wsi_image_create(VkDevice device_h,
 		.image = image_h
 	};
 
-	result = radv_AllocateMemory(device_h,
+	/* Find the first VRAM memory type, or GART for PRIME images. */
+	int memory_type_index = -1;
+	for (int i = 0; i < device->physical_device->memory_properties.memoryTypeCount; ++i) {
+		bool is_local = !!(device->physical_device->memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		if ((linear && !is_local) || (!linear && is_local)) {
+			memory_type_index = i;
+			break;
+		}
+	}
+
+	/* fallback */
+	if (memory_type_index == -1)
+		memory_type_index = 0;
+
+	result = radv_alloc_memory(device_h,
 				     &(VkMemoryAllocateInfo) {
 					     .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
 					     .pNext = &ded_alloc,
 					     .allocationSize = image->size,
-					     .memoryTypeIndex = linear ? 1 : 0,
+					     .memoryTypeIndex = memory_type_index,
 				     },
 				     NULL /* XXX: pAllocator */,
+				     RADV_MEM_IMPLICIT_SYNC,
 				     &memory_h);
 	if (result != VK_SUCCESS)
 		goto fail_create_image;
@@ -290,7 +305,7 @@ radv_wsi_create_prime_command_buffers(struct radv_device *device,
 	swapchain->cmd_buffers = vk_alloc(alloc, (sizeof(VkCommandBuffer) * num_cmd_buffers), 8,
 					  VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
 	if (!swapchain->cmd_buffers)
-		return VK_ERROR_OUT_OF_HOST_MEMORY;
+		return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
 	memset(swapchain->cmd_buffers, 0, sizeof(VkCommandBuffer) * num_cmd_buffers);
 	memset(swapchain->cmd_pools, 0, sizeof(VkCommandPool) * num_pools);

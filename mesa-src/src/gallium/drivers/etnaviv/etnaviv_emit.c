@@ -171,6 +171,10 @@ etna_submit_rs_state(struct etna_context *ctx,
    struct etna_cmd_stream *stream = ctx->stream;
    struct etna_coalesce coalesce;
 
+   if (cs->RS_KICKER_INPLACE && !cs->source_ts_valid)
+      /* Inplace resolve is no-op if TS is not configured */
+      return;
+
    ctx->stats.rs_operations++;
 
    if (cs->RS_KICKER_INPLACE) {
@@ -318,6 +322,11 @@ etna_emit_state(struct etna_context *ctx)
       etna_stall(stream, SYNC_RECIPIENT_RA, SYNC_RECIPIENT_PE);
    }
 
+   /* Flush TS cache before changing TS configuration. */
+   if (unlikely(dirty & ETNA_DIRTY_TS)) {
+      etna_set_state(stream, VIVS_TS_FLUSH_CACHE, VIVS_TS_FLUSH_CACHE_FLUSH);
+   }
+
    /* If MULTI_SAMPLE_CONFIG.MSAA_SAMPLES changed, clobber affected shader
     * state to make sure it is always rewritten. */
    if (unlikely(dirty & (ETNA_DIRTY_FRAMEBUFFER))) {
@@ -382,18 +391,18 @@ etna_emit_state(struct etna_context *ctx)
       /*00644*/ EMIT_STATE_RELOC(FE_INDEX_STREAM_BASE_ADDR, &ctx->index_buffer.FE_INDEX_STREAM_BASE_ADDR);
       /*00648*/ EMIT_STATE(FE_INDEX_STREAM_CONTROL, ctx->index_buffer.FE_INDEX_STREAM_CONTROL);
    }
-   if (likely(dirty & (ETNA_DIRTY_VERTEX_BUFFERS))) {
+   if (likely((dirty & (ETNA_DIRTY_VERTEX_BUFFERS) && ctx->specs.stream_count == 1))) {
       /*0064C*/ EMIT_STATE_RELOC(FE_VERTEX_STREAM_BASE_ADDR, &ctx->vertex_buffer.cvb[0].FE_VERTEX_STREAM_BASE_ADDR);
       /*00650*/ EMIT_STATE(FE_VERTEX_STREAM_CONTROL, ctx->vertex_buffer.cvb[0].FE_VERTEX_STREAM_CONTROL);
    }
    if (likely(dirty & (ETNA_DIRTY_INDEX_BUFFER))) {
       /*00674*/ EMIT_STATE(FE_PRIMITIVE_RESTART_INDEX, ctx->index_buffer.FE_PRIMITIVE_RESTART_INDEX);
    }
-   if (likely(dirty & (ETNA_DIRTY_VERTEX_BUFFERS))) {
-      for (int x = 1; x < ctx->vertex_buffer.count; ++x) {
+   if (likely((dirty & (ETNA_DIRTY_VERTEX_BUFFERS)) && ctx->specs.stream_count > 1)) {
+      for (int x = 0; x < ctx->vertex_buffer.count; ++x) {
          /*00680*/ EMIT_STATE_RELOC(FE_VERTEX_STREAMS_BASE_ADDR(x), &ctx->vertex_buffer.cvb[x].FE_VERTEX_STREAM_BASE_ADDR);
       }
-      for (int x = 1; x < ctx->vertex_buffer.count; ++x) {
+      for (int x = 0; x < ctx->vertex_buffer.count; ++x) {
          if (ctx->vertex_buffer.cvb[x].FE_VERTEX_STREAM_BASE_ADDR.bo) {
             /*006A0*/ EMIT_STATE(FE_VERTEX_STREAMS_CONTROL(x), ctx->vertex_buffer.cvb[x].FE_VERTEX_STREAM_CONTROL);
          }
@@ -623,6 +632,32 @@ etna_emit_state(struct etna_context *ctx)
       /*01668*/ EMIT_STATE_RELOC(TS_DEPTH_SURFACE_BASE, &ctx->framebuffer.TS_DEPTH_SURFACE_BASE);
       /*0166C*/ EMIT_STATE(TS_DEPTH_CLEAR_VALUE, ctx->framebuffer.TS_DEPTH_CLEAR_VALUE);
    }
+   if (unlikely(dirty & ETNA_DIRTY_SAMPLER_VIEWS)) {
+      for (int x = 0; x < VIVS_TS_SAMPLER__LEN; ++x) {
+         if ((1 << x) & active_samplers) {
+            struct etna_sampler_view *sv = etna_sampler_view(ctx->sampler_view[x]);
+            /*01720*/ EMIT_STATE(TS_SAMPLER_CONFIG(x), sv->TS_SAMPLER_CONFIG);
+         }
+      }
+      for (int x = 0; x < VIVS_TS_SAMPLER__LEN; ++x) {
+         if ((1 << x) & active_samplers) {
+            struct etna_sampler_view *sv = etna_sampler_view(ctx->sampler_view[x]);
+            /*01740*/ EMIT_STATE_RELOC(TS_SAMPLER_STATUS_BASE(x), &sv->TS_SAMPLER_STATUS_BASE);
+         }
+      }
+      for (int x = 0; x < VIVS_TS_SAMPLER__LEN; ++x) {
+         if ((1 << x) & active_samplers) {
+            struct etna_sampler_view *sv = etna_sampler_view(ctx->sampler_view[x]);
+            /*01760*/ EMIT_STATE(TS_SAMPLER_CLEAR_VALUE(x), sv->TS_SAMPLER_CLEAR_VALUE);
+         }
+      }
+      for (int x = 0; x < VIVS_TS_SAMPLER__LEN; ++x) {
+         if ((1 << x) & active_samplers) {
+            struct etna_sampler_view *sv = etna_sampler_view(ctx->sampler_view[x]);
+            /*01780*/ EMIT_STATE(TS_SAMPLER_CLEAR_VALUE2(x), sv->TS_SAMPLER_CLEAR_VALUE2);
+         }
+      }
+   }
    if (unlikely(dirty & (ETNA_DIRTY_SAMPLER_VIEWS | ETNA_DIRTY_SAMPLERS))) {
       for (int x = 0; x < VIVS_TE_SAMPLER__LEN; ++x) {
          uint32_t val = 0; /* 0 == sampler inactive */
@@ -697,6 +732,14 @@ etna_emit_state(struct etna_context *ctx)
       /*03820*/ EMIT_STATE(GL_VARYING_NUM_COMPONENTS, ctx->shader_state.GL_VARYING_NUM_COMPONENTS);
       for (int x = 0; x < 2; ++x) {
          /*03828*/ EMIT_STATE(GL_VARYING_COMPONENT_USE(x), ctx->shader_state.GL_VARYING_COMPONENT_USE[x]);
+      }
+   }
+   if (unlikely(ctx->specs.tex_astc && (dirty & (ETNA_DIRTY_SAMPLER_VIEWS)))) {
+      for (int x = 0; x < VIVS_TE_SAMPLER__LEN; ++x) {
+         if ((1 << x) & active_samplers) {
+            struct etna_sampler_view *sv = etna_sampler_view(ctx->sampler_view[x]);
+            /*10500*/ EMIT_STATE(NTE_SAMPLER_ASTC0(x), sv->TE_SAMPLER_ASTC0);
+         }
       }
    }
    etna_coalesce_end(stream, &coalesce);

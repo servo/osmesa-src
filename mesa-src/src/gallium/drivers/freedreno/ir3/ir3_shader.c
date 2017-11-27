@@ -607,6 +607,59 @@ emit_ubos(struct fd_context *ctx, const struct ir3_shader_variant *v,
 }
 
 static void
+emit_ssbo_sizes(struct fd_context *ctx, const struct ir3_shader_variant *v,
+		struct fd_ringbuffer *ring, struct fd_shaderbuf_stateobj *sb)
+{
+	uint32_t offset = v->constbase.ssbo_sizes;
+	if (v->constlen > offset) {
+		uint32_t sizes[align(v->const_layout.ssbo_size.count, 4)];
+		unsigned mask = v->const_layout.ssbo_size.mask;
+
+		while (mask) {
+			unsigned index = u_bit_scan(&mask);
+			unsigned off = v->const_layout.ssbo_size.off[index];
+			sizes[off] = sb->sb[index].buffer_size;
+		}
+
+		fd_wfi(ctx->batch, ring);
+		ctx->emit_const(ring, v->type, offset * 4,
+			0, ARRAY_SIZE(sizes), sizes, NULL);
+	}
+}
+
+static void
+emit_image_dims(struct fd_context *ctx, const struct ir3_shader_variant *v,
+		struct fd_ringbuffer *ring, struct fd_shaderimg_stateobj *si)
+{
+	uint32_t offset = v->constbase.image_dims;
+	if (v->constlen > offset) {
+		uint32_t dims[align(v->const_layout.image_dims.count, 4)];
+		unsigned mask = v->const_layout.image_dims.mask;
+
+		while (mask) {
+			struct pipe_image_view *img;
+			struct fd_resource *rsc;
+			unsigned index = u_bit_scan(&mask);
+			unsigned off = v->const_layout.image_dims.off[index];
+
+			img = &si->si[index];
+			rsc = fd_resource(img->resource);
+
+			dims[off + 0] = rsc->cpp;
+			if (img->resource->target != PIPE_BUFFER) {
+				unsigned lvl = img->u.tex.level;
+				dims[off + 1] = rsc->slices[lvl].pitch * rsc->cpp;
+				dims[off + 2] = rsc->slices[lvl].size0;
+			}
+		}
+
+		fd_wfi(ctx->batch, ring);
+		ctx->emit_const(ring, v->type, offset * 4,
+			0, ARRAY_SIZE(dims), dims, NULL);
+	}
+}
+
+static void
 emit_immediates(struct fd_context *ctx, const struct ir3_shader_variant *v,
 		struct fd_ringbuffer *ring)
 {
@@ -708,19 +761,17 @@ max_tf_vtx(struct fd_context *ctx, const struct ir3_shader_variant *v)
 	return maxvtxcnt;
 }
 
-void
-ir3_emit_vs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
-		struct fd_context *ctx, const struct pipe_draw_info *info)
+static void
+emit_common_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
+		struct fd_context *ctx, enum pipe_shader_type t)
 {
-	enum fd_dirty_shader_state dirty = ctx->dirty_shader[PIPE_SHADER_VERTEX];
-
-	debug_assert(v->type == SHADER_VERTEX);
+	enum fd_dirty_shader_state dirty = ctx->dirty_shader[t];
 
 	if (dirty & (FD_DIRTY_SHADER_PROG | FD_DIRTY_SHADER_CONST)) {
 		struct fd_constbuf_stateobj *constbuf;
 		bool shader_dirty;
 
-		constbuf = &ctx->constbuf[PIPE_SHADER_VERTEX];
+		constbuf = &ctx->constbuf[t];
 		shader_dirty = !!(dirty & FD_DIRTY_SHADER_PROG);
 
 		emit_user_consts(ctx, v, ring, constbuf);
@@ -728,6 +779,25 @@ ir3_emit_vs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 		if (shader_dirty)
 			emit_immediates(ctx, v, ring);
 	}
+
+	if (dirty & (FD_DIRTY_SHADER_PROG | FD_DIRTY_SHADER_SSBO)) {
+		struct fd_shaderbuf_stateobj *sb = &ctx->shaderbuf[t];
+		emit_ssbo_sizes(ctx, v, ring, sb);
+	}
+
+	if (dirty & (FD_DIRTY_SHADER_PROG | FD_DIRTY_SHADER_IMAGE)) {
+		struct fd_shaderimg_stateobj *si = &ctx->shaderimg[t];
+		emit_image_dims(ctx, v, ring, si);
+	}
+}
+
+void
+ir3_emit_vs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
+		struct fd_context *ctx, const struct pipe_draw_info *info)
+{
+	debug_assert(v->type == SHADER_VERTEX);
+
+	emit_common_consts(v, ring, ctx, PIPE_SHADER_VERTEX);
 
 	/* emit driver params every time: */
 	/* TODO skip emit if shader doesn't use driver params to avoid WFI.. */
@@ -772,22 +842,9 @@ void
 ir3_emit_fs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
 		struct fd_context *ctx)
 {
-	enum fd_dirty_shader_state dirty = ctx->dirty_shader[PIPE_SHADER_FRAGMENT];
-
 	debug_assert(v->type == SHADER_FRAGMENT);
 
-	if (dirty & (FD_DIRTY_SHADER_PROG | FD_DIRTY_SHADER_CONST)) {
-		struct fd_constbuf_stateobj *constbuf;
-		bool shader_dirty;
-
-		constbuf = &ctx->constbuf[PIPE_SHADER_FRAGMENT];
-		shader_dirty = !!(dirty & FD_DIRTY_SHADER_PROG);
-
-		emit_user_consts(ctx, v, ring, constbuf);
-		emit_ubos(ctx, v, ring, constbuf);
-		if (shader_dirty)
-			emit_immediates(ctx, v, ring);
-	}
+	emit_common_consts(v, ring, ctx, PIPE_SHADER_FRAGMENT);
 }
 
 /* emit compute-shader consts: */
@@ -795,33 +852,66 @@ void
 ir3_emit_cs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
 		struct fd_context *ctx, const struct pipe_grid_info *info)
 {
-	enum fd_dirty_shader_state dirty = ctx->dirty_shader[PIPE_SHADER_COMPUTE];
+	debug_assert(v->type == SHADER_COMPUTE);
 
-	if (dirty & (FD_DIRTY_SHADER_PROG | FD_DIRTY_SHADER_CONST)) {
-		struct fd_constbuf_stateobj *constbuf;
-		bool shader_dirty;
-
-		constbuf = &ctx->constbuf[PIPE_SHADER_COMPUTE];
-		shader_dirty = !!(dirty & FD_DIRTY_SHADER_PROG);
-
-		emit_user_consts(ctx, v, ring, constbuf);
-		emit_ubos(ctx, v, ring, constbuf);
-		if (shader_dirty)
-			emit_immediates(ctx, v, ring);
-	}
+	emit_common_consts(v, ring, ctx, PIPE_SHADER_COMPUTE);
 
 	/* emit compute-shader driver-params: */
 	uint32_t offset = v->constbase.driver_param;
 	if (v->constlen > offset) {
-		uint32_t compute_params[IR3_DP_CS_COUNT] = {
-			[IR3_DP_NUM_WORK_GROUPS_X] = info->grid[0],
-			[IR3_DP_NUM_WORK_GROUPS_Y] = info->grid[1],
-			[IR3_DP_NUM_WORK_GROUPS_Z] = info->grid[2],
-			/* do we need work-group-size? */
-		};
-
 		fd_wfi(ctx->batch, ring);
-		ctx->emit_const(ring, SHADER_COMPUTE, offset * 4, 0,
-				ARRAY_SIZE(compute_params), compute_params, NULL);
+
+		if (info->indirect) {
+			struct pipe_resource *indirect = NULL;
+			unsigned indirect_offset;
+
+			/* This is a bit awkward, but CP_LOAD_STATE.EXT_SRC_ADDR needs
+			 * to be aligned more strongly than 4 bytes.  So in this case
+			 * we need a temporary buffer to copy NumWorkGroups.xyz to.
+			 *
+			 * TODO if previous compute job is writing to info->indirect,
+			 * we might need a WFI.. but since we currently flush for each
+			 * compute job, we are probably ok for now.
+			 */
+			if (info->indirect_offset & 0xf) {
+				indirect = pipe_buffer_create(&ctx->screen->base,
+					PIPE_BIND_COMMAND_ARGS_BUFFER, PIPE_USAGE_STREAM,
+					0x1000);
+				indirect_offset = 0;
+
+				if (is_a5xx(ctx->screen)) {
+					struct fd_bo *src = fd_resource(info->indirect)->bo;
+					struct fd_bo *dst = fd_resource(indirect)->bo;
+					for (unsigned i = 0; i < 3; i++) {
+						unsigned dst_off = i * 4;
+						unsigned src_off = (i * 4) + info->indirect_offset;
+						OUT_PKT7(ring, CP_MEM_TO_MEM, 5);
+						OUT_RING(ring, 0x00000000);
+						OUT_RELOCW(ring, dst, dst_off, 0, 0);
+						OUT_RELOC (ring, src, src_off, 0, 0);
+					}
+				} else {
+					assert(0);
+				}
+			} else {
+				pipe_resource_reference(&indirect, info->indirect);
+				indirect_offset = info->indirect_offset;
+			}
+
+			ctx->emit_const(ring, SHADER_COMPUTE, offset * 4,
+					indirect_offset, 4, NULL, indirect);
+
+			pipe_resource_reference(&indirect, NULL);
+		} else {
+			uint32_t compute_params[IR3_DP_CS_COUNT] = {
+				[IR3_DP_NUM_WORK_GROUPS_X] = info->grid[0],
+				[IR3_DP_NUM_WORK_GROUPS_Y] = info->grid[1],
+				[IR3_DP_NUM_WORK_GROUPS_Z] = info->grid[2],
+				/* do we need work-group-size? */
+			};
+
+			ctx->emit_const(ring, SHADER_COMPUTE, offset * 4, 0,
+					ARRAY_SIZE(compute_params), compute_params, NULL);
+		}
 	}
 }

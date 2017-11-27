@@ -19,13 +19,12 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *      Jerome Glisse
  */
 
 #include "si_pipe.h"
 #include "radeon/r600_cs.h"
+
+#include "util/os_time.h"
 
 void si_destroy_saved_cs(struct si_saved_cs *scs)
 {
@@ -123,12 +122,16 @@ void si_context_gfx_flush(void *context, unsigned flags,
 		/* Save the IB for debug contexts. */
 		si_save_cs(ws, cs, &ctx->current_saved_cs->gfx, true);
 		ctx->current_saved_cs->flushed = true;
+		ctx->current_saved_cs->time_flush = os_time_get_nano();
 	}
 
 	/* Flush the CS. */
 	ws->cs_flush(cs, flags, &ctx->b.last_gfx_fence);
 	if (fence)
 		ws->fence_reference(fence, ctx->b.last_gfx_fence);
+
+	/* This must be after cs_flush returns, since the context's API
+	 * thread can concurrently read this value in si_fence_finish. */
 	ctx->b.num_gfx_cs_flushes++;
 
 	/* Check VM faults if needed. */

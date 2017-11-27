@@ -1,3 +1,5 @@
+/* DO NOT EDIT - This file is generated automatically by spirv_info_c.py script */
+
 /*
  * Copyright (C) 2017 Intel Corporation
  *

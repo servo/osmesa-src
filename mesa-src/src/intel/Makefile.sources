@@ -18,7 +18,9 @@ COMMON_FILES = \
 	common/gen_l3_config.c \
 	common/gen_l3_config.h \
 	common/gen_urb_config.c \
-	common/gen_sample_positions.h
+	common/gen_sample_positions.h \
+	common/intel_log.c \
+	common/intel_log.h
 
 COMPILER_FILES = \
 	compiler/brw_cfg.cpp \
@@ -36,6 +38,8 @@ COMPILER_FILES = \
 	compiler/brw_dead_control_flow.cpp \
 	compiler/brw_dead_control_flow.h \
 	compiler/brw_disasm.c \
+	compiler/brw_disasm_info.c \
+	compiler/brw_disasm_info.h \
 	compiler/brw_eu.c \
 	compiler/brw_eu_compact.c \
 	compiler/brw_eu_defines.h \
@@ -113,9 +117,7 @@ COMPILER_FILES = \
 	compiler/brw_vue_map.c \
 	compiler/brw_wm_iz.cpp \
 	compiler/gen6_gs_visitor.cpp \
-	compiler/gen6_gs_visitor.h \
-	compiler/intel_asm_annotation.c \
-	compiler/intel_asm_annotation.h
+	compiler/gen6_gs_visitor.h
 
 COMPILER_GENERATED_FILES = \
 	compiler/brw_nir_trig_workarounds.c
@@ -228,6 +230,9 @@ VULKAN_FILES := \
 	vulkan/anv_util.c \
 	vulkan/anv_wsi.c \
 	vulkan/vk_format_info.h
+
+VULKAN_ANDROID_FILES := \
+	vulkan/anv_android.c
 
 VULKAN_WSI_WAYLAND_FILES := \
 	vulkan/anv_wsi_wayland.c

@@ -25,12 +25,6 @@
  *
  **************************************************************************/
 
-/*
- * Authors:
- *      Christian König <christian.koenig@amd.com>
- *
- */
-
 #include <unistd.h>
 
 #include "util/u_memory.h"
@@ -182,8 +176,11 @@ void si_vid_join_surfaces(struct r600_common_context *rctx,
 
 			for (j = 0; j < ARRAY_SIZE(surfaces[i]->u.legacy.level); ++j)
 				surfaces[i]->u.legacy.level[j].offset += off;
-		} else
+		} else {
 			surfaces[i]->u.gfx9.surf_offset += off;
+			for (j = 0; j < ARRAY_SIZE(surfaces[i]->u.gfx9.offset); ++j)
+				surfaces[i]->u.gfx9.offset[j] += off;
+		}
 
 		off += surfaces[i]->surf_size;
 	}
@@ -233,7 +230,8 @@ int si_vid_get_video_param(struct pipe_screen *screen,
 		switch (param) {
 		case PIPE_VIDEO_CAP_SUPPORTED:
 			return codec == PIPE_VIDEO_FORMAT_MPEG4_AVC &&
-				si_vce_is_fw_version_supported(rscreen);
+				(si_vce_is_fw_version_supported(rscreen) ||
+				rscreen->family == CHIP_RAVEN);
 		case PIPE_VIDEO_CAP_NPOT_TEXTURES:
 			return 1;
 		case PIPE_VIDEO_CAP_MAX_WIDTH:

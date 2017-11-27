@@ -19,9 +19,6 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *      Christian König <christian.koenig@amd.com>
  */
 
 #include "si_pipe.h"
@@ -1285,7 +1282,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	}
 
 	if (sctx->tes_shader.cso &&
-	    (sctx->b.family == CHIP_VEGA10 || sctx->b.family == CHIP_RAVEN)) {
+	    sctx->screen->has_ls_vgpr_init_bug) {
 		/* Determine whether the LS VGPR fix should be applied.
 		 *
 		 * It is only required when num input CPs > num output CPs,
@@ -1408,11 +1405,11 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	if (!si_upload_vertex_buffer_descriptors(sctx))
 		return;
 
-	/* GFX9 scissor bug workaround. This must be done before VPORT scissor
-	 * registers are changed. There is also a more efficient but more
-	 * involved alternative workaround.
+	/* Vega10/Raven scissor bug workaround. This must be done before VPORT
+	 * scissor registers are changed. There is also a more efficient but
+	 * more involved alternative workaround.
 	 */
-	if (sctx->b.chip_class == GFX9 &&
+	if ((sctx->b.family == CHIP_VEGA10 || sctx->b.family == CHIP_RAVEN) &&
 	    si_is_atom_dirty(sctx, &sctx->scissors.atom)) {
 		sctx->b.flags |= SI_CONTEXT_PS_PARTIAL_FLUSH;
 		si_emit_cache_flush(sctx);
@@ -1544,7 +1541,7 @@ void si_draw_rectangle(struct blitter_context *blitter,
 	info.instance_count = num_instances;
 
 	/* Don't set per-stage shader pointers for VS. */
-	sctx->shader_pointers_dirty &= ~SI_VS_SHADER_POINTER_MASK;
+	sctx->shader_pointers_dirty &= ~SI_DESCS_SHADER_MASK(VERTEX);
 	sctx->vertex_buffer_pointer_dirty = false;
 
 	si_draw_vbo(pipe, &info);

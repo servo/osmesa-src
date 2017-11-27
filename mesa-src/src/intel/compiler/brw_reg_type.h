@@ -24,6 +24,8 @@
 #ifndef BRW_REG_TYPE_H
 #define BRW_REG_TYPE_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -65,6 +67,19 @@ enum PACKED brw_reg_type {
    BRW_REGISTER_TYPE_LAST = BRW_REGISTER_TYPE_UV
 };
 
+static inline bool
+brw_reg_type_is_floating_point(enum brw_reg_type type)
+{
+   switch (type) {
+   case BRW_REGISTER_TYPE_DF:
+   case BRW_REGISTER_TYPE_F:
+   case BRW_REGISTER_TYPE_HF:
+      return true;
+   default:
+      return false;
+   }
+}
+
 unsigned
 brw_reg_type_to_hw_type(const struct gen_device_info *devinfo,
                         enum brw_reg_file file, enum brw_reg_type type);
@@ -72,6 +87,22 @@ brw_reg_type_to_hw_type(const struct gen_device_info *devinfo,
 enum brw_reg_type ATTRIBUTE_PURE
 brw_hw_type_to_reg_type(const struct gen_device_info *devinfo,
                         enum brw_reg_file file, unsigned hw_type);
+
+unsigned
+brw_reg_type_to_a16_hw_3src_type(const struct gen_device_info *devinfo,
+                                 enum brw_reg_type type);
+
+unsigned
+brw_reg_type_to_a1_hw_3src_type(const struct gen_device_info *devinfo,
+                                enum brw_reg_type type);
+
+enum brw_reg_type
+brw_a16_hw_3src_type_to_reg_type(const struct gen_device_info *devinfo,
+                                 unsigned hw_type);
+
+enum brw_reg_type
+brw_a1_hw_3src_type_to_reg_type(const struct gen_device_info *devinfo,
+                                unsigned hw_type, unsigned exec_type);
 
 unsigned
 brw_reg_type_to_size(enum brw_reg_type type);

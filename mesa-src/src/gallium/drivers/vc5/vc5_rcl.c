@@ -27,7 +27,70 @@
 #include "broadcom/cle/v3d_packet_v33_pack.h"
 
 static void
-vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job)
+load_raw(struct vc5_cl *cl, struct pipe_surface *psurf, int buffer)
+{
+        struct vc5_surface *surf = vc5_surface(psurf);
+        struct vc5_resource *rsc = vc5_resource(psurf->texture);
+
+        cl_emit(cl, LOAD_TILE_BUFFER_GENERAL, load) {
+                load.raw_mode = true;
+                load.buffer_to_load = buffer;
+                load.address = cl_address(rsc->bo, surf->offset);
+                load.padded_height_of_output_image_in_uif_blocks =
+                        surf->padded_height_of_output_image_in_uif_blocks;
+        }
+}
+
+static void
+store_raw(struct vc5_cl *cl, struct pipe_surface *psurf, int buffer,
+          bool color_clear, bool z_clear, bool s_clear)
+{
+        struct vc5_surface *surf = vc5_surface(psurf);
+        struct vc5_resource *rsc = vc5_resource(psurf->texture);
+
+        cl_emit(cl, STORE_TILE_BUFFER_GENERAL, store) {
+                store.raw_mode = true;
+                store.buffer_to_store = buffer;
+                store.address = cl_address(rsc->bo, surf->offset);
+                store.disable_colour_buffers_clear_on_write = !color_clear;
+                store.disable_z_buffer_clear_on_write = !z_clear;
+                store.disable_stencil_buffer_clear_on_write = !s_clear;
+                store.padded_height_of_output_image_in_uif_blocks =
+                        surf->padded_height_of_output_image_in_uif_blocks;
+        }
+}
+
+static int
+zs_buffer_from_pipe_bits(int pipe_clear_bits)
+{
+        switch (pipe_clear_bits & PIPE_CLEAR_DEPTHSTENCIL) {
+        case PIPE_CLEAR_DEPTHSTENCIL:
+                return ZSTENCIL;
+        case PIPE_CLEAR_DEPTH:
+                return Z;
+        case PIPE_CLEAR_STENCIL:
+                return STENCIL;
+        default:
+                return NONE;
+        }
+}
+
+/* The HW queues up the load until the tile coordinates show up, but can only
+ * track one at a time.  If we need to do more than one load, then we need to
+ * flush out the previous load by emitting the tile coordinates and doing a
+ * dummy store.
+ */
+static void
+flush_last_load(struct vc5_cl *cl)
+{
+        cl_emit(cl, TILE_COORDINATES_IMPLICIT, coords);
+        cl_emit(cl, STORE_TILE_BUFFER_GENERAL, store) {
+                store.buffer_to_store = NONE;
+        }
+}
+
+static void
+vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job, int last_cbuf)
 {
         /* Emit the generic list in our indirect state -- the rcl will just
          * have pointers into it.
@@ -43,6 +106,31 @@ vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job)
         const uint32_t first_color_buffer_bit = (ffs(PIPE_CLEAR_COLOR0) - 1);
 
         uint32_t read_but_not_cleared = job->resolve & ~job->cleared;
+
+        for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++) {
+                uint32_t bit = PIPE_CLEAR_COLOR0 << i;
+                if (!(read_but_not_cleared & bit))
+                        continue;
+
+                struct pipe_surface *psurf = job->cbufs[i];
+                if (!psurf || psurf->texture->nr_samples <= 1)
+                        continue;
+
+                load_raw(cl, psurf, RENDER_TARGET_0 + i);
+                read_but_not_cleared &= ~bit;
+
+                if (read_but_not_cleared)
+                        flush_last_load(cl);
+        }
+
+        if (job->zsbuf && job->zsbuf->texture->nr_samples > 1 &&
+            read_but_not_cleared & PIPE_CLEAR_DEPTHSTENCIL) {
+                load_raw(cl, job->zsbuf,
+                         zs_buffer_from_pipe_bits(read_but_not_cleared));
+                read_but_not_cleared &= ~PIPE_CLEAR_DEPTHSTENCIL;
+                if (read_but_not_cleared)
+                        cl_emit(cl, TILE_COORDINATES_IMPLICIT, coords);
+        }
 
         /* The initial reload will be queued until we get the
          * tile coordinates.
@@ -66,21 +154,82 @@ vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job)
 
         cl_emit(cl, BRANCH_TO_IMPLICIT_TILE_LIST, branch);
 
-        cl_emit(cl, STORE_MULTI_SAMPLE_RESOLVED_TILE_COLOR_BUFFER_EXTENDED, store) {
-                uint32_t color_write_enables =
-                        job->resolve >> first_color_buffer_bit;
+        bool needs_color_clear = job->cleared & pipe_clear_color_buffers;
+        bool needs_z_clear = job->cleared & PIPE_CLEAR_DEPTH;
+        bool needs_s_clear = job->cleared & PIPE_CLEAR_STENCIL;
+        /* Note that only the color RT being stored will be cleared by a
+         * STORE_GENERAL, or all of them if the buffer is NONE.
+         */
+        bool msaa_color_clear = (needs_color_clear &&
+                                 (job->cleared & pipe_clear_color_buffers) ==
+                                 (job->resolve & pipe_clear_color_buffers));
 
-                store.disable_color_buffer_write = (~color_write_enables) & 0xf;
-                store.enable_z_write = job->resolve & PIPE_CLEAR_DEPTH;
-                store.enable_stencil_write = job->resolve & PIPE_CLEAR_STENCIL;
+        uint32_t stores_pending = job->resolve;
 
-                store.disable_colour_buffers_clear_on_write =
-                        (job->cleared & pipe_clear_color_buffers) == 0;
-                store.disable_z_buffer_clear_on_write =
-                        !(job->cleared & PIPE_CLEAR_DEPTH);
-                store.disable_stencil_buffer_clear_on_write =
-                        !(job->cleared & PIPE_CLEAR_STENCIL);
-        };
+        /* Use raw stores for any MSAA surfaces.  These output UIF tiled
+         * images where each 4x MSAA pixel is a 2x2 quad, and the format will
+         * be that of the internal_type/internal_bpp, rather than the format
+         * from GL's perspective.
+         */
+        for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++) {
+                uint32_t bit = PIPE_CLEAR_COLOR0 << i;
+                if (!(job->resolve & bit))
+                        continue;
+
+                struct pipe_surface *psurf = job->cbufs[i];
+                if (!psurf || psurf->texture->nr_samples <= 1)
+                        continue;
+
+                stores_pending &= ~bit;
+                store_raw(cl, psurf, RENDER_TARGET_0 + i,
+                          !stores_pending && msaa_color_clear,
+                          !stores_pending && needs_z_clear,
+                          !stores_pending && needs_s_clear);
+
+                if (stores_pending)
+                        cl_emit(cl, TILE_COORDINATES_IMPLICIT, coords);
+        }
+
+        if (job->resolve & PIPE_CLEAR_DEPTHSTENCIL && job->zsbuf &&
+            job->zsbuf->texture->nr_samples > 1) {
+                stores_pending &= ~PIPE_CLEAR_DEPTHSTENCIL;
+                store_raw(cl, job->zsbuf,
+                          zs_buffer_from_pipe_bits(job->resolve),
+                          false,
+                          !stores_pending && needs_z_clear,
+                          !stores_pending && needs_s_clear);
+
+                if (stores_pending)
+                        cl_emit(cl, TILE_COORDINATES_IMPLICIT, coords);
+        }
+
+        if (stores_pending) {
+                cl_emit(cl, STORE_MULTI_SAMPLE_RESOLVED_TILE_COLOR_BUFFER_EXTENDED, store) {
+
+                        store.disable_color_buffer_write =
+                                (~stores_pending >> first_color_buffer_bit) & 0xf;
+                        store.enable_z_write = stores_pending & PIPE_CLEAR_DEPTH;
+                        store.enable_stencil_write = stores_pending & PIPE_CLEAR_STENCIL;
+
+                        /* Note that when set this will clear all of the color
+                         * buffers.
+                         */
+                        store.disable_colour_buffers_clear_on_write =
+                                !needs_color_clear;
+                        store.disable_z_buffer_clear_on_write =
+                                !needs_z_clear;
+                        store.disable_stencil_buffer_clear_on_write =
+                                !needs_s_clear;
+                };
+        } else if (needs_color_clear && !msaa_color_clear) {
+                /* If we had MSAA color stores that didn't match the set of
+                 * MSAA color clears, then we need to clear the color buffers
+                 * now.
+                 */
+                cl_emit(&job->rcl, STORE_TILE_BUFFER_GENERAL, store) {
+                        store.buffer_to_store = NONE;
+                }
+        }
 
         cl_emit(cl, RETURN_FROM_SUB_LIST, ret);
 
@@ -135,16 +284,36 @@ vc5_emit_rcl(struct vc5_job *job)
                 struct pipe_surface *psurf = job->cbufs[i];
                 if (!psurf)
                         continue;
+                struct vc5_surface *surf = vc5_surface(psurf);
+                struct vc5_resource *rsc = vc5_resource(psurf->texture);
+
+                uint32_t config_pad = 0;
+                uint32_t clear_pad = 0;
+
+                /* XXX: Set the pad for raster. */
+                if (surf->tiling == VC5_TILING_UIF_NO_XOR ||
+                    surf->tiling == VC5_TILING_UIF_XOR) {
+                        int uif_block_height = vc5_utile_height(rsc->cpp) * 2;
+                        uint32_t implicit_padded_height = (align(job->draw_height, uif_block_height) /
+                                                           uif_block_height);
+                        if (surf->padded_height_of_output_image_in_uif_blocks -
+                            implicit_padded_height < 15) {
+                                config_pad = (surf->padded_height_of_output_image_in_uif_blocks -
+                                              implicit_padded_height);
+                        } else {
+                                config_pad = 15;
+                                clear_pad = surf->padded_height_of_output_image_in_uif_blocks;
+                        }
+                }
 
                 cl_emit(&job->rcl, TILE_RENDERING_MODE_CONFIGURATION_RENDER_TARGET_CONFIG, rt) {
-                        struct vc5_surface *surf = vc5_surface(psurf);
-                        struct vc5_resource *rsc = vc5_resource(psurf->texture);
                         rt.address = cl_address(rsc->bo, surf->offset);
                         rt.internal_type = surf->internal_type;
                         rt.output_image_format = surf->format;
                         rt.memory_format = surf->tiling;
                         rt.internal_bpp = surf->internal_bpp;
                         rt.render_target_number = i;
+                        rt.pad = config_pad;
 
                         if (job->resolve & PIPE_CLEAR_COLOR0 << i)
                                 rsc->writes++;
@@ -157,7 +326,7 @@ vc5_emit_rcl(struct vc5_job *job)
                         clear.render_target_number = i;
                 };
 
-                if (util_format_get_blocksize(psurf->format) > 7) {
+                if (surf->internal_bpp >= INTERNAL_BPP_64) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CONFIGURATION_CLEAR_COLORS_PART2,
                                 clear) {
                                 clear.clear_color_mid_low_32_bits =
@@ -170,9 +339,10 @@ vc5_emit_rcl(struct vc5_job *job)
                         };
                 }
 
-                if (util_format_get_blocksize(psurf->format) > 14) {
+                if (surf->internal_bpp >= INTERNAL_BPP_128 || clear_pad) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CONFIGURATION_CLEAR_COLORS_PART3,
                                 clear) {
+                                clear.uif_padded_height_in_uif_blocks = clear_pad;
                                 clear.clear_color_high_16_bits = job->clear_color[i][3] >> 16;
                                 clear.render_target_number = i;
                         };
@@ -190,11 +360,8 @@ vc5_emit_rcl(struct vc5_job *job)
 
                         zs.internal_type = surf->internal_type;
                         zs.output_image_format = surf->format;
-
-                        struct vc5_resource_slice *slice = &rsc->slices[psurf->u.tex.level];
-                        /* XXX */
                         zs.padded_height_of_output_image_in_uif_blocks =
-                                (slice->size / slice->stride) / (2 * vc5_utile_height(rsc->cpp));
+                                surf->padded_height_of_output_image_in_uif_blocks;
 
                         assert(surf->tiling != VC5_TILING_RASTER);
                         zs.memory_format = surf->tiling;
@@ -272,7 +439,7 @@ vc5_emit_rcl(struct vc5_job *job)
 
         cl_emit(&job->rcl, FLUSH_VCD_CACHE, flush);
 
-        vc5_rcl_emit_generic_per_tile_list(job);
+        vc5_rcl_emit_generic_per_tile_list(job, nr_cbufs - 1);
 
         cl_emit(&job->rcl, WAIT_ON_SEMAPHORE, sem);
 

@@ -229,8 +229,6 @@ enum quniform_contents {
         QUNIFORM_TEXTURE_ARRAY_SIZE,
         QUNIFORM_TEXTURE_LEVELS,
 
-        QUNIFORM_TEXTURE_MSAA_ADDR,
-
         QUNIFORM_UBO_ADDR,
 
         QUNIFORM_TEXRECT_SCALE_X,
@@ -294,8 +292,9 @@ struct v3d_key {
                         struct {
                                 unsigned compare_mode:1;
                                 unsigned compare_func:3;
-                                unsigned wrap_s:3;
-                                unsigned wrap_t:3;
+                                bool clamp_s:1;
+                                bool clamp_t:1;
+                                bool clamp_r:1;
                         };
                         struct {
                                 uint16_t msaa_width, msaa_height;
@@ -457,9 +456,6 @@ struct v3d_compile {
 
         /* Fragment shader payload regs. */
         struct qreg payload_w, payload_w_centroid, payload_z;
-
-        /** boolean (~0 -> true) if the fragment has been discarded. */
-        struct qreg discard;
 
         uint8_t vattr_sizes[V3D_MAX_VS_INPUTS];
         uint32_t num_vpm_writes;

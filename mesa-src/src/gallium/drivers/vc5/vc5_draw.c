@@ -93,6 +93,9 @@ vc5_start_draw(struct vc5_context *vc5)
         /* There's definitely nothing in the VCD cache we want. */
         cl_emit(&job->bcl, FLUSH_VCD_CACHE, bin);
 
+        /* Disable any leftover OQ state from another job. */
+        cl_emit(&job->bcl, OCCLUSION_QUERY_COUNTER, counter);
+
         /* "Binning mode lists must have a Start Tile Binning item (6) after
          *  any prefix state data before the binning list proper starts."
          */
@@ -123,32 +126,6 @@ vc5_predraw_check_textures(struct pipe_context *pctx,
         }
 }
 
-static struct vc5_cl_reloc
-vc5_get_default_values(struct vc5_context *vc5)
-{
-        struct vc5_job *job = vc5->job;
-
-        /* VC5_DIRTY_VTXSTATE */
-        struct vc5_vertex_stateobj *vtx = vc5->vtx;
-
-        /* Set up the default values for attributes. */
-        vc5_cl_ensure_space(&job->indirect, 4 * 4 * vtx->num_elements, 4);
-        struct vc5_cl_reloc default_values =
-                cl_address(job->indirect.bo, cl_offset(&job->indirect));
-        vc5_bo_reference(default_values.bo);
-
-        struct vc5_cl_out *defaults = cl_start(&job->indirect);
-        for (int i = 0; i < vtx->num_elements; i++) {
-                cl_aligned_f(&defaults, 0.0);
-                cl_aligned_f(&defaults, 0.0);
-                cl_aligned_f(&defaults, 0.0);
-                cl_aligned_f(&defaults, 1.0);
-        }
-        cl_end(&job->indirect, defaults);
-
-        return default_values;
-}
-
 static void
 vc5_emit_gl_shader_state(struct vc5_context *vc5,
                          const struct pipe_draw_info *info)
@@ -172,12 +149,13 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 vc5_write_uniforms(vc5, vc5->prog.cs,
                                    &vc5->constbuf[PIPE_SHADER_VERTEX],
                                    &vc5->verttex);
-        struct vc5_cl_reloc default_values = vc5_get_default_values(vc5);
 
+        /* See GFXH-930 workaround below */
+        uint32_t num_elements_to_emit = MAX2(vtx->num_elements, 1);
         uint32_t shader_rec_offset =
                 vc5_cl_ensure_space(&job->indirect,
                                     cl_packet_length(GL_SHADER_STATE_RECORD) +
-                                    vtx->num_elements *
+                                    num_elements_to_emit *
                                     cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD),
                                     32);
 
@@ -214,9 +192,9 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 shader.coordinate_shader_has_separate_input_and_output_vpm_blocks = true;
                 shader.vertex_shader_has_separate_input_and_output_vpm_blocks = true;
                 shader.coordinate_shader_input_vpm_segment_size =
-                        vc5->prog.cs->prog_data.vs->vpm_input_size;
+                        MAX2(vc5->prog.cs->prog_data.vs->vpm_input_size, 1);
                 shader.vertex_shader_input_vpm_segment_size =
-                        vc5->prog.vs->prog_data.vs->vpm_input_size;
+                        MAX2(vc5->prog.vs->prog_data.vs->vpm_input_size, 1);
 
                 shader.coordinate_shader_output_vpm_segment_size =
                         vc5->prog.cs->prog_data.vs->vpm_output_size;
@@ -236,7 +214,8 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 shader.instance_id_read_by_vertex_shader =
                         vc5->prog.vs->prog_data.vs->uses_iid;
 
-                shader.address_of_default_attribute_values = default_values;
+                shader.address_of_default_attribute_values =
+                        cl_address(vtx->default_attribute_values, 0);
         }
 
         for (int i = 0; i < vtx->num_elements; i++) {
@@ -244,66 +223,16 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 struct pipe_vertex_buffer *vb =
                         &vertexbuf->vb[elem->vertex_buffer_index];
                 struct vc5_resource *rsc = vc5_resource(vb->buffer.resource);
-                const struct util_format_description *desc =
-                        util_format_description(elem->src_format);
 
-                uint32_t offset = vb->buffer_offset + elem->src_offset;
-
-                cl_emit(&job->indirect, GL_SHADER_STATE_ATTRIBUTE_RECORD, attr) {
-                        uint32_t r_size = desc->channel[0].size;
-
-                        /* vec_size == 0 means 4 */
-                        attr.vec_size = desc->nr_channels & 3;
-
-                        switch (desc->channel[0].type) {
-                        case UTIL_FORMAT_TYPE_FLOAT:
-                                if (r_size == 32) {
-                                        attr.type = ATTRIBUTE_FLOAT;
-                                } else {
-                                        assert(r_size == 16);
-                                        attr.type = ATTRIBUTE_HALF_FLOAT;
-                                }
-                                break;
-
-                        case UTIL_FORMAT_TYPE_SIGNED:
-                        case UTIL_FORMAT_TYPE_UNSIGNED:
-                                switch (r_size) {
-                                case 32:
-                                        attr.type = ATTRIBUTE_INT;
-                                        break;
-                                case 16:
-                                        attr.type = ATTRIBUTE_SHORT;
-                                        break;
-                                case 10:
-                                        attr.type = ATTRIBUTE_INT2_10_10_10;
-                                        break;
-                                case 8:
-                                        attr.type = ATTRIBUTE_BYTE;
-                                        break;
-                                default:
-                                        fprintf(stderr,
-                                                "format %s unsupported\n",
-                                                desc->name);
-                                        attr.type = ATTRIBUTE_BYTE;
-                                        abort();
-                                }
-                                break;
-
-                        default:
-                                fprintf(stderr,
-                                        "format %s unsupported\n",
-                                        desc->name);
-                                abort();
-                        }
-
-                        attr.signed_int_type =
-                                desc->channel[0].type == UTIL_FORMAT_TYPE_SIGNED;
-
-                        attr.normalized_int_type = desc->channel[0].normalized;
-                        attr.read_as_int_uint = desc->channel[0].pure_integer;
-                        attr.address = cl_address(rsc->bo, offset);
+                const uint32_t size =
+                        cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD);
+                cl_emit_with_prepacked(&job->indirect,
+                                       GL_SHADER_STATE_ATTRIBUTE_RECORD,
+                                       &vtx->attrs[i * size], attr) {
                         attr.stride = vb->stride;
-                        attr.instance_divisor = elem->instance_divisor;
+                        attr.address = cl_address(rsc->bo,
+                                                  vb->buffer_offset +
+                                                  elem->src_offset);
                         attr.number_of_values_read_by_coordinate_shader =
                                 vc5->prog.cs->prog_data.vs->vattr_sizes[i];
                         attr.number_of_values_read_by_vertex_shader =
@@ -311,17 +240,55 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 }
         }
 
+        if (vtx->num_elements == 0) {
+                /* GFXH-930: At least one attribute must be enabled and read
+                 * by CS and VS.  If we have no attributes being consumed by
+                 * the shader, set up a dummy to be loaded into the VPM.
+                 */
+                cl_emit(&job->indirect, GL_SHADER_STATE_ATTRIBUTE_RECORD, attr) {
+                        /* Valid address of data whose value will be unused. */
+                        attr.address = cl_address(job->indirect.bo, 0);
+
+                        attr.type = ATTRIBUTE_FLOAT;
+                        attr.stride = 0;
+                        attr.vec_size = 1;
+
+                        attr.number_of_values_read_by_coordinate_shader = 1;
+                        attr.number_of_values_read_by_vertex_shader = 1;
+                }
+        }
+
         cl_emit(&job->bcl, GL_SHADER_STATE, state) {
                 state.address = cl_address(job->indirect.bo, shader_rec_offset);
-                state.number_of_attribute_arrays = vtx->num_elements;
+                state.number_of_attribute_arrays = num_elements_to_emit;
         }
 
         vc5_bo_unreference(&cs_uniforms.bo);
         vc5_bo_unreference(&vs_uniforms.bo);
         vc5_bo_unreference(&fs_uniforms.bo);
-        vc5_bo_unreference(&default_values.bo);
 
         job->shader_rec_count++;
+}
+
+/**
+ * Computes the various transform feedback statistics, since they can't be
+ * recorded by CL packets.
+ */
+static void
+vc5_tf_statistics_record(struct vc5_context *vc5,
+                         const struct pipe_draw_info *info,
+                         bool prim_tf)
+{
+        if (!vc5->active_queries)
+                return;
+
+        uint32_t prims = u_prims_for_vertices(info->mode, info->count);
+        vc5->prims_generated += prims;
+
+        if (prim_tf) {
+                /* XXX: Only count if we didn't overflow. */
+                vc5->tf_prims_generated += prims;
+        }
 }
 
 static void
@@ -414,8 +381,10 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
          * flag set.
          */
         uint32_t prim_tf_enable = 0;
-        if (vc5->prog.bind_vs->num_tf_outputs)
+        if (vc5->streamout.num_targets)
                 prim_tf_enable = (V3D_PRIM_POINTS_TF - V3D_PRIM_POINTS);
+
+        vc5_tf_statistics_record(vc5, info, prim_tf_enable);
 
         /* Note that the primitive type fields match with OpenGL/gallium
          * definitions, up to but not including QUADS.
@@ -512,6 +481,12 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 vc5_job_add_bo(job, rsc->bo);
         }
 
+        if (job->referenced_size > 768 * 1024 * 1024) {
+                perf_debug("Flushing job with %dkb to try to free up memory\n",
+                        job->referenced_size / 1024);
+                vc5_flush(pctx);
+        }
+
         if (V3D_DEBUG & V3D_DEBUG_ALWAYS_FLUSH)
                 vc5_flush(pctx);
 }
@@ -537,15 +512,63 @@ vc5_clear(struct pipe_context *pctx, unsigned buffers,
                 if (!(buffers & bit))
                         continue;
 
-                struct pipe_surface *cbuf = vc5->framebuffer.cbufs[i];
-                struct vc5_resource *rsc =
-                        vc5_resource(cbuf->texture);
+                struct pipe_surface *psurf = vc5->framebuffer.cbufs[i];
+                struct vc5_surface *surf = vc5_surface(psurf);
+                struct vc5_resource *rsc = vc5_resource(psurf->texture);
 
                 union util_color uc;
-                util_pack_color(color->f, cbuf->format, &uc);
+                uint32_t internal_size = 4 << surf->internal_bpp;
 
-                memcpy(job->clear_color[i], uc.ui,
-                       util_format_get_blocksize(cbuf->format));
+                static union pipe_color_union swapped_color;
+                if (vc5->swap_color_rb & (1 << i)) {
+                        swapped_color.f[0] = color->f[2];
+                        swapped_color.f[1] = color->f[1];
+                        swapped_color.f[2] = color->f[0];
+                        swapped_color.f[3] = color->f[3];
+                        color = &swapped_color;
+                }
+
+                switch (surf->internal_type) {
+                case INTERNAL_TYPE_8:
+                        if (surf->format == PIPE_FORMAT_B4G4R4A4_UNORM ||
+                            surf->format == PIPE_FORMAT_B4G4R4A4_UNORM) {
+                                /* Our actual hardware layout is ABGR4444, but
+                                 * we apply a swizzle when texturing to flip
+                                 * things back around.
+                                 */
+                                util_pack_color(color->f, PIPE_FORMAT_A8R8G8B8_UNORM,
+                                                &uc);
+                        } else {
+                                util_pack_color(color->f, PIPE_FORMAT_R8G8B8A8_UNORM,
+                                                &uc);
+                        }
+                        memcpy(job->clear_color[i], uc.ui, internal_size);
+                        break;
+                case INTERNAL_TYPE_8I:
+                case INTERNAL_TYPE_8UI:
+                        job->clear_color[i][0] = ((uc.ui[0] & 0xff) |
+                                                  (uc.ui[1] & 0xff) << 8 |
+                                                  (uc.ui[2] & 0xff) << 16 |
+                                                  (uc.ui[3] & 0xff) << 24);
+                        break;
+                case INTERNAL_TYPE_16F:
+                        util_pack_color(color->f, PIPE_FORMAT_R16G16B16A16_FLOAT,
+                                        &uc);
+                        memcpy(job->clear_color[i], uc.ui, internal_size);
+                        break;
+                case INTERNAL_TYPE_16I:
+                case INTERNAL_TYPE_16UI:
+                        job->clear_color[i][0] = ((uc.ui[0] & 0xffff) |
+                                                  uc.ui[1] << 16);
+                        job->clear_color[i][1] = ((uc.ui[2] & 0xffff) |
+                                                  uc.ui[3] << 16);
+                        break;
+                case INTERNAL_TYPE_32F:
+                case INTERNAL_TYPE_32I:
+                case INTERNAL_TYPE_32UI:
+                        memcpy(job->clear_color[i], color->ui, internal_size);
+                        break;
+                }
 
                 rsc->initialized_buffers |= bit;
         }

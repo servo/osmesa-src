@@ -167,6 +167,7 @@ struct backend_instruction {
    bool no_dd_check:1;
    bool saturate:1;
    bool shadow_compare:1;
+   bool eot:1;
 
    /* Chooses which flag subregister (f0.0 or f0.1) is used for conditional
     * mod and predication.
@@ -196,6 +197,7 @@ protected:
                   struct brw_stage_prog_data *stage_prog_data);
 
 public:
+   virtual ~backend_shader();
 
    const struct brw_compiler *compiler;
    void *log_data; /* Passed to compiler->*_log functions */
@@ -283,8 +285,6 @@ struct brw_gs_compile
    unsigned control_data_bits_per_vertex;
    unsigned control_data_header_size_bits;
 };
-
-unsigned get_atomic_counter_op(nir_intrinsic_op op);
 
 #ifdef __cplusplus
 }

@@ -605,10 +605,6 @@ st_init_atifs_prog(struct gl_context *ctx, struct gl_program *prog)
    }
    _mesa_add_state_reference(prog->Parameters, fog_params_state);
    _mesa_add_state_reference(prog->Parameters, fog_color);
-
-   prog->arb.NumInstructions = 0;
-   prog->arb.NumTemporaries = MAX_NUM_FRAGMENT_REGISTERS_ATI + 3; /* 3 input temps for arith ops */
-   prog->arb.NumParameters = MAX_NUM_FRAGMENT_CONSTANTS_ATI + 2; /* 2 state variables for fog */
 }
 
 
@@ -637,6 +633,10 @@ set_src(struct tgsi_full_instruction *inst, unsigned i, unsigned file, unsigned 
    inst->Src[i].Register.SwizzleY = y;
    inst->Src[i].Register.SwizzleZ = z;
    inst->Src[i].Register.SwizzleW = w;
+   if (file == TGSI_FILE_CONSTANT) {
+      inst->Src[i].Register.Dimension = 1;
+      inst->Src[i].Dimension.Index = 0;
+   }
 }
 
 #define SET_SRC(inst, i, file, index, x, y, z, w) \

@@ -85,6 +85,7 @@ LIBGLSL_FILES = \
 	glsl/lower_buffer_access.cpp \
 	glsl/lower_buffer_access.h \
 	glsl/lower_const_arrays_to_uniforms.cpp \
+	glsl/lower_cs_derived.cpp \
 	glsl/lower_discard.cpp \
 	glsl/lower_discard_flow.cpp \
 	glsl/lower_distance.cpp \
@@ -129,11 +130,10 @@ LIBGLSL_FILES = \
 	glsl/opt_function_inlining.cpp \
 	glsl/opt_if_simplification.cpp \
 	glsl/opt_minmax.cpp \
-	glsl/opt_noop_swizzle.cpp \
 	glsl/opt_rebalance_tree.cpp \
 	glsl/opt_redundant_jumps.cpp \
 	glsl/opt_structure_splitting.cpp \
-	glsl/opt_swizzle_swizzle.cpp \
+	glsl/opt_swizzle.cpp \
 	glsl/opt_tree_grafting.cpp \
 	glsl/opt_vectorize.cpp \
 	glsl/program.h \
@@ -232,11 +232,11 @@ NIR_FILES = \
 	nir/nir_lower_passthrough_edgeflags.c \
 	nir/nir_lower_patch_vertices.c \
 	nir/nir_lower_phis_to_scalar.c \
-	nir/nir_lower_read_invocation_to_scalar.c \
 	nir/nir_lower_regs_to_ssa.c \
 	nir/nir_lower_returns.c \
 	nir/nir_lower_samplers.c \
 	nir/nir_lower_samplers_as_deref.c \
+	nir/nir_lower_subgroups.c \
 	nir/nir_lower_system_values.c \
 	nir/nir_lower_tex.c \
 	nir/nir_lower_to_source_mods.c \
@@ -276,6 +276,8 @@ NIR_FILES = \
 	nir/nir_search.c \
 	nir/nir_search.h \
 	nir/nir_search_helpers.h \
+	nir/nir_serialize.c \
+	nir/nir_serialize.h \
 	nir/nir_split_var_copies.c \
 	nir/nir_sweep.c \
 	nir/nir_to_lcssa.c \

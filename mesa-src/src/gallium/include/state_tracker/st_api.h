@@ -91,6 +91,7 @@ enum st_api_feature
 #define ST_CONTEXT_FLAG_ROBUST_ACCESS       (1 << 2)
 #define ST_CONTEXT_FLAG_RESET_NOTIFICATION_ENABLED (1 << 3)
 #define ST_CONTEXT_FLAG_NO_ERROR            (1 << 4)
+#define ST_CONTEXT_FLAG_RELEASE_NONE	    (1 << 5)
 
 /**
  * Reasons that context creation might fail.
@@ -146,6 +147,7 @@ enum st_attachment_type {
 #define ST_FLUSH_FRONT                    (1 << 0)
 #define ST_FLUSH_END_OF_FRAME             (1 << 1)
 #define ST_FLUSH_WAIT                     (1 << 2)
+#define ST_FLUSH_FENCE_FD                 (1 << 3)
 
 /**
  * Value to st_manager->get_param function.

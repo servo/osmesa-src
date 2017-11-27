@@ -89,7 +89,7 @@ etna_set_constant_buffer(struct pipe_context *pctx,
 
    /* Note that the state tracker can unbind constant buffers by
     * passing NULL here. */
-   if (unlikely(!cb))
+   if (unlikely(!cb || (!cb->buffer && !cb->user_buffer)))
       return;
 
    /* there is no support for ARB_uniform_buffer_object */
@@ -177,7 +177,7 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
       /* MSAA */
       if (cbuf->base.texture->nr_samples > 1)
          ts_mem_config |=
-            VIVS_TS_MEM_CONFIG_MSAA | translate_msaa_format(cbuf->base.format);
+            VIVS_TS_MEM_CONFIG_COLOR_COMPRESSION | translate_msaa_format(cbuf->base.format);
 
       nr_samples_color = cbuf->base.texture->nr_samples;
    } else {
@@ -185,7 +185,7 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
       /* Clearing VIVS_PE_COLOR_FORMAT_COMPONENTS__MASK and
        * VIVS_PE_COLOR_FORMAT_OVERWRITE prevents us from overwriting the
        * color target */
-      cs->PE_COLOR_FORMAT = 0;
+      cs->PE_COLOR_FORMAT = VIVS_PE_COLOR_FORMAT_OVERWRITE;
       cs->PE_COLOR_STRIDE = 0;
       cs->TS_COLOR_STATUS_BASE.bo = NULL;
       cs->TS_COLOR_SURFACE_BASE.bo = NULL;

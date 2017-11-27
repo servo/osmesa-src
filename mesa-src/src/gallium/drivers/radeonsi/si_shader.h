@@ -19,11 +19,6 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *	Tom Stellard <thomas.stellard@amd.com>
- *	Michel Dänzer <michel.daenzer@amd.com>
- *      Christian König <christian.koenig@amd.com>
  */
 
 /* The compiler middle-end architecture: Explaining (non-)monolithic shaders
@@ -154,14 +149,11 @@ struct nir_shader;
 
 /* SGPR user data indices */
 enum {
-	/* GFX9 merged shaders have RW_BUFFERS among the first 8 system SGPRs,
-	 * and these two are used for other purposes.
-	 */
 	SI_SGPR_RW_BUFFERS,  /* rings (& stream-out, VS only) */
 	SI_SGPR_RW_BUFFERS_HI,
 	SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES,
 	SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES_HI,
-	SI_SGPR_CONST_AND_SHADER_BUFFERS,
+	SI_SGPR_CONST_AND_SHADER_BUFFERS, /* or just a constant buffer 0 pointer */
 	SI_SGPR_CONST_AND_SHADER_BUFFERS_HI,
 	SI_SGPR_SAMPLERS_AND_IMAGES,
 	SI_SGPR_SAMPLERS_AND_IMAGES_HI,
@@ -344,6 +336,7 @@ struct si_shader_selector {
 	/* PIPE_SHADER_[VERTEX|FRAGMENT|...] */
 	unsigned	type;
 	bool		vs_needs_prolog;
+	bool		force_correct_derivs_after_kill;
 	unsigned	pa_cl_vs_out_cntl;
 	ubyte		clipdist_mask;
 	ubyte		culldist_mask;
@@ -459,6 +452,7 @@ union si_shader_part_key {
 		unsigned	num_merged_next_stage_vgprs:3;
 		unsigned	last_input:4;
 		unsigned	as_ls:1;
+		unsigned	as_es:1;
 		/* Prologs for monolithic shaders shouldn't set EXEC. */
 		unsigned	is_monolithic:1;
 	} vs_prolog;
@@ -597,7 +591,7 @@ struct si_shader {
 	struct r600_resource		*bo;
 	struct r600_resource		*scratch_bo;
 	struct si_shader_key		key;
-	struct util_queue_fence		optimized_ready;
+	struct util_queue_fence		ready;
 	bool				compilation_failed;
 	bool				is_monolithic;
 	bool				is_optimized;

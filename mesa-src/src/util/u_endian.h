@@ -54,7 +54,8 @@
 # define PIPE_ARCH_BIG_ENDIAN
 #endif
 
-#elif defined(__OpenBSD__) || defined(__NetBSD__)
+#elif defined(__OpenBSD__) || defined(__NetBSD__) || \
+      defined(__FreeBSD__) || defined(__DragonFly__)
 #include <sys/types.h>
 #include <machine/endian.h>
 
@@ -63,6 +64,10 @@
 #elif _BYTE_ORDER == _BIG_ENDIAN
 # define PIPE_ARCH_BIG_ENDIAN
 #endif
+
+#elif defined(_MSC_VER)
+
+#define PIPE_ARCH_LITTLE_ENDIAN
 
 #endif
 

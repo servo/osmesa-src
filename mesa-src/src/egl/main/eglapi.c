@@ -376,7 +376,7 @@ eglGetDisplay(EGLNativeDisplayType nativeDisplay)
 
 static EGLDisplay
 _eglGetPlatformDisplayCommon(EGLenum platform, void *native_display,
-                             const EGLint *attrib_list)
+                             const EGLAttrib *attrib_list)
 {
    _EGLDisplay *dpy;
 
@@ -412,28 +412,27 @@ _eglGetPlatformDisplayCommon(EGLenum platform, void *native_display,
 
 static EGLDisplay EGLAPIENTRY
 eglGetPlatformDisplayEXT(EGLenum platform, void *native_display,
-                         const EGLint *attrib_list)
+                         const EGLint *int_attribs)
 {
+   EGLAttrib *attrib_list;
+   EGLDisplay display;
+
    _EGL_FUNC_START(NULL, EGL_OBJECT_THREAD_KHR, NULL, EGL_NO_DISPLAY);
-   return _eglGetPlatformDisplayCommon(platform, native_display, attrib_list);
+
+   if (_eglConvertIntsToAttribs(int_attribs, &attrib_list) != EGL_SUCCESS)
+      RETURN_EGL_ERROR(NULL, EGL_BAD_ALLOC, NULL);
+
+   display = _eglGetPlatformDisplayCommon(platform, native_display, attrib_list);
+   free(attrib_list);
+   return display;
 }
 
 EGLDisplay EGLAPIENTRY
 eglGetPlatformDisplay(EGLenum platform, void *native_display,
                       const EGLAttrib *attrib_list)
 {
-   EGLDisplay display;
-   EGLint *int_attribs;
-
    _EGL_FUNC_START(NULL, EGL_OBJECT_THREAD_KHR, NULL, EGL_NO_DISPLAY);
-
-   int_attribs = _eglConvertAttribsToInt(attrib_list);
-   if (attrib_list && !int_attribs)
-      RETURN_EGL_ERROR(NULL, EGL_BAD_ALLOC, NULL);
-
-   display = _eglGetPlatformDisplayCommon(platform, native_display, int_attribs);
-   free(int_attribs);
-   return display;
+   return _eglGetPlatformDisplayCommon(platform, native_display, attrib_list);
 }
 
 /**
@@ -490,8 +489,11 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
    _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import_modifiers);
    _EGL_CHECK_EXTENSION(EXT_swap_buffers_with_damage);
 
+   _EGL_CHECK_EXTENSION(IMG_context_priority);
+
    _EGL_CHECK_EXTENSION(KHR_cl_event2);
    _EGL_CHECK_EXTENSION(KHR_config_attribs);
+   _EGL_CHECK_EXTENSION(KHR_context_flush_control);
    _EGL_CHECK_EXTENSION(KHR_create_context);
    _EGL_CHECK_EXTENSION(KHR_create_context_no_error);
    _EGL_CHECK_EXTENSION(KHR_fence_sync);
@@ -511,6 +513,7 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
    _EGL_CHECK_EXTENSION(KHR_surfaceless_context);
    if (dpy->Extensions.EXT_swap_buffers_with_damage)
       _eglAppendExtension(&exts, "EGL_KHR_swap_buffers_with_damage");
+   _EGL_CHECK_EXTENSION(EXT_pixel_format_float);
    _EGL_CHECK_EXTENSION(KHR_wait_sync);
 
    if (dpy->Extensions.KHR_no_config_context)
@@ -583,7 +586,7 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
       RETURN_EGL_ERROR(NULL, EGL_BAD_DISPLAY, EGL_FALSE);
 
    if (!disp->Initialized) {
-      if (!_eglMatchDriver(disp, EGL_FALSE))
+      if (!_eglMatchDriver(disp))
          RETURN_EGL_ERROR(disp, EGL_NOT_INITIALIZED, EGL_FALSE);
 
       /* limit to APIs supported by core */

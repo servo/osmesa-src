@@ -241,6 +241,27 @@ intel_miptree_supports_hiz(const struct brw_context *brw,
    }
 }
 
+/**
+ * Return true if the format that will be used to access the miptree is
+ * CCS_E-compatible with the miptree's linear/non-sRGB format.
+ *
+ * Why use the linear format? Well, although the miptree may be specified with
+ * an sRGB format, the usage of that color space/format can be toggled. Since
+ * our HW tends to support more linear formats than sRGB ones, we use this
+ * format variant for check for CCS_E compatibility.
+ */
+static bool
+format_ccs_e_compat_with_miptree(const struct gen_device_info *devinfo,
+                                 const struct intel_mipmap_tree *mt,
+                                 enum isl_format access_format)
+{
+   assert(mt->aux_usage == ISL_AUX_USAGE_CCS_E);
+
+   mesa_format linear_format = _mesa_get_srgb_format_linear(mt->format);
+   enum isl_format isl_format = brw_isl_format_for_mesa_format(linear_format);
+   return isl_formats_are_ccs_e_compatible(devinfo, isl_format, access_format);
+}
+
 static bool
 intel_miptree_supports_ccs_e(struct brw_context *brw,
                              const struct intel_mipmap_tree *mt)
@@ -1669,9 +1690,7 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
                         struct intel_mipmap_tree *mt,
                         GLuint num_samples)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 7); /* MCS only used on Gen7+ */
+   assert(brw->screen->devinfo.gen >= 7); /* MCS only used on Gen7+ */
    assert(mt->mcs_buf == NULL);
    assert(mt->aux_usage == ISL_AUX_USAGE_MCS);
 
@@ -1996,13 +2015,11 @@ intel_miptree_check_color_resolve(const struct brw_context *brw,
                                   const struct intel_mipmap_tree *mt,
                                   unsigned level, unsigned layer)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
    if (!mt->mcs_buf)
       return;
 
    /* Fast color clear is supported for mipmapped surfaces only on Gen8+. */
-   assert(devinfo->gen >= 8 ||
+   assert(brw->screen->devinfo.gen >= 8 ||
           (level == 0 && mt->first_level == 0 && mt->last_level == 0));
 
    /* Compression of arrayed msaa surfaces is supported. */
@@ -2010,7 +2027,7 @@ intel_miptree_check_color_resolve(const struct brw_context *brw,
       return;
 
    /* Fast color clear is supported for non-msaa arrays only on Gen8+. */
-   assert(devinfo->gen >= 8 ||
+   assert(brw->screen->devinfo.gen >= 8 ||
           (layer == 0 &&
            mt->surf.logical_level0_px.depth == 1 &&
            mt->surf.logical_level0_px.array_len == 1));
@@ -2549,6 +2566,7 @@ can_texture_with_ccs(struct brw_context *brw,
    if (mt->aux_usage != ISL_AUX_USAGE_CCS_E)
       return false;
 
+   /* TODO: Replace with format_ccs_e_compat_with_miptree for better perf. */
    if (!isl_formats_are_ccs_e_compatible(&brw->screen->devinfo,
                                          mt->surf.format, view_format)) {
       perf_debug("Incompatible sampling format (%s) for rbc (%s)\n",
@@ -2617,13 +2635,13 @@ isl_formats_are_fast_clear_compatible(enum isl_format a, enum isl_format b)
    return isl_format_srgb_to_linear(a) == isl_format_srgb_to_linear(b);
 }
 
-static void
-intel_miptree_prepare_texture_slices(struct brw_context *brw,
-                                     struct intel_mipmap_tree *mt,
-                                     enum isl_format view_format,
-                                     uint32_t start_level, uint32_t num_levels,
-                                     uint32_t start_layer, uint32_t num_layers,
-                                     bool disable_aux)
+void
+intel_miptree_prepare_texture(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt,
+                              enum isl_format view_format,
+                              uint32_t start_level, uint32_t num_levels,
+                              uint32_t start_layer, uint32_t num_layers,
+                              bool disable_aux)
 {
    enum isl_aux_usage aux_usage = disable_aux ? ISL_AUX_USAGE_NONE :
       intel_miptree_texture_aux_usage(brw, mt, view_format);
@@ -2642,18 +2660,6 @@ intel_miptree_prepare_texture_slices(struct brw_context *brw,
 }
 
 void
-intel_miptree_prepare_texture(struct brw_context *brw,
-                              struct intel_mipmap_tree *mt,
-                              enum isl_format view_format,
-                              bool disable_aux)
-{
-   intel_miptree_prepare_texture_slices(brw, mt, view_format,
-                                        0, INTEL_REMAINING_LEVELS,
-                                        0, INTEL_REMAINING_LAYERS,
-                                        disable_aux);
-}
-
-void
 intel_miptree_prepare_image(struct brw_context *brw,
                             struct intel_mipmap_tree *mt)
 {
@@ -2663,24 +2669,11 @@ intel_miptree_prepare_image(struct brw_context *brw,
                                 ISL_AUX_USAGE_NONE, false);
 }
 
-void
-intel_miptree_prepare_fb_fetch(struct brw_context *brw,
-                               struct intel_mipmap_tree *mt, uint32_t level,
-                               uint32_t start_layer, uint32_t num_layers)
-{
-   /* This is only used for non-coherent framebuffer fetch, so we don't
-    * need to worry about CCS_E and can simply pass 'false' below.
-    */
-   assert(brw->screen->devinfo.gen < 9);
-
-   intel_miptree_prepare_texture_slices(brw, mt, mt->surf.format, level, 1,
-                                        start_layer, num_layers, false);
-}
-
 enum isl_aux_usage
 intel_miptree_render_aux_usage(struct brw_context *brw,
                                struct intel_mipmap_tree *mt,
-                               bool srgb_enabled, bool blend_enabled)
+                               enum isl_format render_format,
+                               bool blend_enabled)
 {
    switch (mt->aux_usage) {
    case ISL_AUX_USAGE_MCS:
@@ -2691,12 +2684,11 @@ intel_miptree_render_aux_usage(struct brw_context *brw,
       return mt->mcs_buf ? ISL_AUX_USAGE_CCS_D : ISL_AUX_USAGE_NONE;
 
    case ISL_AUX_USAGE_CCS_E: {
-      mesa_format mesa_format =
-         srgb_enabled ? mt->format :_mesa_get_srgb_format_linear(mt->format);
-      enum isl_format isl_format = brw_isl_format_for_mesa_format(mesa_format);
-
-      /* If the format supports CCS_E, then we can just use it */
-      if (isl_format_supports_ccs_e(&brw->screen->devinfo, isl_format))
+      /* If the format supports CCS_E and is compatible with the miptree,
+       * then we can use it.
+       */
+      if (format_ccs_e_compat_with_miptree(&brw->screen->devinfo,
+                                           mt, render_format))
          return ISL_AUX_USAGE_CCS_E;
 
       /* Otherwise, we have to fall back to CCS_D */
@@ -2705,8 +2697,8 @@ intel_miptree_render_aux_usage(struct brw_context *brw,
        * formats.  However, there are issues with blending where it doesn't
        * properly apply the sRGB curve to the clear color when blending.
        */
-      if (blend_enabled && isl_format_is_srgb(isl_format) &&
-          !isl_color_value_is_zero_one(mt->fast_clear_color, isl_format))
+      if (blend_enabled && isl_format_is_srgb(render_format) &&
+          !isl_color_value_is_zero_one(mt->fast_clear_color, render_format))
          return ISL_AUX_USAGE_NONE;
 
       return ISL_AUX_USAGE_CCS_D;
@@ -2721,10 +2713,11 @@ void
 intel_miptree_prepare_render(struct brw_context *brw,
                              struct intel_mipmap_tree *mt, uint32_t level,
                              uint32_t start_layer, uint32_t layer_count,
-                             bool srgb_enabled, bool blend_enabled)
+                             enum isl_format render_format,
+                             bool blend_enabled)
 {
    enum isl_aux_usage aux_usage =
-      intel_miptree_render_aux_usage(brw, mt, srgb_enabled, blend_enabled);
+      intel_miptree_render_aux_usage(brw, mt, render_format, blend_enabled);
    intel_miptree_prepare_access(brw, mt, level, 1, start_layer, layer_count,
                                 aux_usage, aux_usage != ISL_AUX_USAGE_NONE);
 }
@@ -2733,12 +2726,13 @@ void
 intel_miptree_finish_render(struct brw_context *brw,
                             struct intel_mipmap_tree *mt, uint32_t level,
                             uint32_t start_layer, uint32_t layer_count,
-                            bool srgb_enabled, bool blend_enabled)
+                            enum isl_format render_format,
+                            bool blend_enabled)
 {
    assert(_mesa_is_format_color_format(mt->format));
 
    enum isl_aux_usage aux_usage =
-      intel_miptree_render_aux_usage(brw, mt, srgb_enabled, blend_enabled);
+      intel_miptree_render_aux_usage(brw, mt, render_format, blend_enabled);
    intel_miptree_finish_write(brw, mt, level, start_layer, layer_count,
                               aux_usage);
 }
@@ -3002,7 +2996,7 @@ intel_update_r8stencil(struct brw_context *brw,
       }
    }
 
-   brw_render_cache_set_check_flush(brw, dst->bo);
+   brw_cache_flush_for_read(brw, dst->bo);
    src->r8stencil_needs_update = false;
 }
 

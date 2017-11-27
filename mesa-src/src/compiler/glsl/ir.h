@@ -457,7 +457,7 @@ public:
     *
     * For the first declaration below, there will be an \c ir_variable named
     * "instance" whose type and whose instance_type will be the same
-    *  \cglsl_type.  For the second declaration, there will be an \c ir_variable
+    * \c glsl_type.  For the second declaration, there will be an \c ir_variable
     * named "f" whose type is float and whose instance_type is B2.
     *
     * "instance" is an interface instance variable, but "f" is not.
@@ -2411,10 +2411,6 @@ clone_ir_list(void *mem_ctx, exec_list *out, const exec_list *in);
 extern void
 _mesa_glsl_initialize_variables(exec_list *instructions,
 				struct _mesa_glsl_parse_state *state);
-
-extern void
-_mesa_glsl_initialize_derived_variables(struct gl_context *ctx,
-                                        gl_shader *shader);
 
 extern void
 reparent_ir(exec_list *list, void *mem_ctx);

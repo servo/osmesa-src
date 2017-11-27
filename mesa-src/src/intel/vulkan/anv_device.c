@@ -50,7 +50,7 @@ compiler_perf_log(void *data, const char *fmt, ...)
    va_start(args, fmt);
 
    if (unlikely(INTEL_DEBUG & DEBUG_PERF))
-      vfprintf(stderr, fmt, args);
+      intel_logd_v(fmt, args);
 
    va_end(args);
 }
@@ -112,6 +112,18 @@ anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
    VkResult result = anv_compute_heap_size(fd, &heap_size);
    if (result != VK_SUCCESS)
       return result;
+
+   if (heap_size > (2ull << 30) && !device->supports_48bit_addresses) {
+      /* When running with an overridden PCI ID, we may get a GTT size from
+       * the kernel that is greater than 2 GiB but the execbuf check for 48bit
+       * address support can still fail.  Just clamp the address space size to
+       * 2 GiB if we don't have 48-bit support.
+       */
+      intel_logw("%s:%d: The kernel reported a GTT size larger than 2 GiB but "
+                        "not support for 48-bit addresses",
+                        __FILE__, __LINE__);
+      heap_size = 2ull << 30;
+   }
 
    if (heap_size <= 3ull * (1ull << 30)) {
       /* In this case, everything fits nicely into the 32-bit address space,
@@ -294,14 +306,16 @@ anv_physical_device_init(struct anv_physical_device *device,
    }
 
    if (device->info.is_haswell) {
-      fprintf(stderr, "WARNING: Haswell Vulkan support is incomplete\n");
+      intel_logw("Haswell Vulkan support is incomplete");
    } else if (device->info.gen == 7 && !device->info.is_baytrail) {
-      fprintf(stderr, "WARNING: Ivy Bridge Vulkan support is incomplete\n");
+      intel_logw("Ivy Bridge Vulkan support is incomplete");
    } else if (device->info.gen == 7 && device->info.is_baytrail) {
-      fprintf(stderr, "WARNING: Bay Trail Vulkan support is incomplete\n");
+      intel_logw("Bay Trail Vulkan support is incomplete");
    } else if (device->info.gen >= 8 && device->info.gen <= 9) {
-      /* Broadwell, Cherryview, Skylake, Broxton, Kabylake is as fully
-       * supported as anything */
+      /* Broadwell, Cherryview, Skylake, Broxton, Kabylake, Coffelake is as
+       * fully supported as anything */
+   } else if (device->info.gen == 10) {
+      intel_logw("Cannonlake Vulkan support is alpha");
    } else {
       result = vk_errorf(device->instance, device,
                          VK_ERROR_INCOMPATIBLE_DRIVER,
@@ -348,6 +362,7 @@ anv_physical_device_init(struct anv_physical_device *device,
       goto fail;
 
    device->has_exec_async = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_ASYNC);
+   device->has_exec_capture = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_CAPTURE);
    device->has_exec_fence = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE);
    device->has_syncobj = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE_ARRAY);
    device->has_syncobj_wait = device->has_syncobj &&
@@ -365,8 +380,7 @@ anv_physical_device_init(struct anv_physical_device *device,
        * many platforms, but otherwise, things will just work.
        */
       if (device->subslice_total < 1 || device->eu_total < 1) {
-         fprintf(stderr, "WARNING: Kernel 4.1 required to properly"
-                         " query GPU properties.\n");
+         intel_logw("Kernel 4.1 required to properly query GPU properties");
       }
    } else if (device->info.gen == 7) {
       device->subslice_total = 1 << (device->info.gt - 1);
@@ -1198,21 +1212,33 @@ VkResult anv_CreateDevice(
    }
    pthread_condattr_destroy(&condattr);
 
-   anv_bo_pool_init(&device->batch_bo_pool, device);
+   uint64_t bo_flags =
+      (physical_device->supports_48bit_addresses ? EXEC_OBJECT_SUPPORTS_48B_ADDRESS : 0) |
+      (physical_device->has_exec_async ? EXEC_OBJECT_ASYNC : 0) |
+      (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0);
+
+   anv_bo_pool_init(&device->batch_bo_pool, device, bo_flags);
 
    result = anv_bo_cache_init(&device->bo_cache);
    if (result != VK_SUCCESS)
       goto fail_batch_bo_pool;
 
-   result = anv_state_pool_init(&device->dynamic_state_pool, device, 16384);
+   /* For the state pools we explicitly disable 48bit. */
+   bo_flags = physical_device->has_exec_async ? EXEC_OBJECT_ASYNC : 0;
+
+   result = anv_state_pool_init(&device->dynamic_state_pool, device, 16384,
+                                bo_flags);
    if (result != VK_SUCCESS)
       goto fail_bo_cache;
 
-   result = anv_state_pool_init(&device->instruction_state_pool, device, 16384);
+   result = anv_state_pool_init(&device->instruction_state_pool, device, 16384,
+                                bo_flags |
+                                (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0));
    if (result != VK_SUCCESS)
       goto fail_dynamic_state_pool;
 
-   result = anv_state_pool_init(&device->surface_state_pool, device, 4096);
+   result = anv_state_pool_init(&device->surface_state_pool, device, 4096,
+                                bo_flags);
    if (result != VK_SUCCESS)
       goto fail_instruction_state_pool;
 
@@ -1544,10 +1570,42 @@ VkResult anv_AllocateMemory(
              VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
 
       result = anv_bo_cache_import(device, &device->bo_cache,
-                                   fd_info->fd, pAllocateInfo->allocationSize,
-                                   &mem->bo);
+                                   fd_info->fd, &mem->bo);
       if (result != VK_SUCCESS)
          goto fail;
+
+      VkDeviceSize aligned_alloc_size =
+         align_u64(pAllocateInfo->allocationSize, 4096);
+
+      /* For security purposes, we reject importing the bo if it's smaller
+       * than the requested allocation size.  This prevents a malicious client
+       * from passing a buffer to a trusted client, lying about the size, and
+       * telling the trusted client to try and texture from an image that goes
+       * out-of-bounds.  This sort of thing could lead to GPU hangs or worse
+       * in the trusted client.  The trusted client can protect itself against
+       * this sort of attack but only if it can trust the buffer size.
+       */
+      if (mem->bo->size < aligned_alloc_size) {
+         result = vk_errorf(device->instance, device,
+                            VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR,
+                            "aligned allocationSize too large for "
+                            "VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR: "
+                            "%"PRIu64"B > %"PRIu64"B",
+                            aligned_alloc_size, mem->bo->size);
+         anv_bo_cache_release(device, &device->bo_cache, mem->bo);
+         goto fail;
+      }
+
+      /* From the Vulkan spec:
+       *
+       *    "Importing memory from a file descriptor transfers ownership of
+       *    the file descriptor from the application to the Vulkan
+       *    implementation. The application must not perform any operations on
+       *    the file descriptor after a successful import."
+       *
+       * If the import fails, we leave the file descriptor open.
+       */
+      close(fd_info->fd);
    } else {
       result = anv_bo_cache_alloc(device, &device->bo_cache,
                                   pAllocateInfo->allocationSize,

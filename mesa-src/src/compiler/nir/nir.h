@@ -275,6 +275,14 @@ typedef struct nir_variable {
       unsigned int driver_location;
 
       /**
+       * Vertex stream output identifier.
+       *
+       * For packed outputs, bit 31 is set and bits [2*i+1,2*i] indicate the
+       * stream of the i-th component.
+       */
+      unsigned stream;
+
+      /**
        * output index for dual source blending.
        */
       int index;
@@ -1155,7 +1163,7 @@ typedef enum {
    nir_texop_tex,                /**< Regular texture look-up */
    nir_texop_txb,                /**< Texture look-up with LOD bias */
    nir_texop_txl,                /**< Texture look-up with explicit LOD */
-   nir_texop_txd,                /**< Texture look-up with partial derivatvies */
+   nir_texop_txd,                /**< Texture look-up with partial derivatives */
    nir_texop_txf,                /**< Texel fetch with explicit LOD */
    nir_texop_txf_ms,                /**< Multisample texture fetch */
    nir_texop_txf_ms_mcs,         /**< Multisample compression value fetch */
@@ -1214,7 +1222,6 @@ typedef struct {
     *    - nir_texop_txf_ms
     *    - nir_texop_txs
     *    - nir_texop_lod
-    *    - nir_texop_tg4
     *    - nir_texop_query_levels
     *    - nir_texop_texture_samples
     *    - nir_texop_samples_identical
@@ -1357,10 +1364,21 @@ nir_tex_instr_src_size(const nir_tex_instr *instr, unsigned src)
    if (instr->src[src].src_type == nir_tex_src_ms_mcs)
       return 4;
 
-   if (instr->src[src].src_type == nir_tex_src_offset ||
-       instr->src[src].src_type == nir_tex_src_ddx ||
+   if (instr->src[src].src_type == nir_tex_src_ddx ||
        instr->src[src].src_type == nir_tex_src_ddy) {
       if (instr->is_array)
+         return instr->coord_components - 1;
+      else
+         return instr->coord_components;
+   }
+
+   /* Usual APIs don't allow cube + offset, but we allow it, with 2 coords for
+    * the offset, since a cube maps to a single face.
+    */
+   if (instr->src[src].src_type == nir_tex_src_offset) {
+      if (instr->sampler_dim == GLSL_SAMPLER_DIM_CUBE)
+         return 2;
+      else if (instr->is_array)
          return instr->coord_components - 1;
       else
          return instr->coord_components;
@@ -1378,6 +1396,10 @@ nir_tex_instr_src_index(const nir_tex_instr *instr, nir_tex_src_type type)
 
    return -1;
 }
+
+void nir_tex_instr_add_src(nir_tex_instr *tex,
+                           nir_tex_src_type src_type,
+                           nir_src src);
 
 void nir_tex_instr_remove_src(nir_tex_instr *tex, unsigned src_idx);
 
@@ -1831,9 +1853,6 @@ typedef struct nir_shader_compiler_options {
    bool lower_extract_byte;
    bool lower_extract_word;
 
-   bool lower_vote_trivial;
-   bool lower_subgroup_masks;
-
    /**
     * Does the driver support real 32-bit integers?  (Otherwise, integers
     * are simulated by floats.)
@@ -1852,8 +1871,6 @@ typedef struct nir_shader_compiler_options {
     * information must be inferred from the list of input nir_variables.
     */
    bool use_interpolated_input_intrinsics;
-
-   unsigned max_subgroup_size;
 
    unsigned max_unroll_iterations;
 } nir_shader_compiler_options;
@@ -1900,9 +1917,6 @@ typedef struct nir_shader {
     * access plus one
     */
    unsigned num_inputs, num_uniforms, num_outputs, num_shared;
-
-   /** The shader stage, such as MESA_SHADER_VERTEX. */
-   gl_shader_stage stage;
 } nir_shader;
 
 static inline nir_function_impl *
@@ -2230,6 +2244,15 @@ void nir_ssa_dest_init(nir_instr *instr, nir_dest *dest,
 void nir_ssa_def_init(nir_instr *instr, nir_ssa_def *def,
                       unsigned num_components, unsigned bit_size,
                       const char *name);
+static inline void
+nir_ssa_dest_init_for_type(nir_instr *instr, nir_dest *dest,
+                           const struct glsl_type *type,
+                           const char *name)
+{
+   assert(glsl_type_is_vector_or_scalar(type));
+   nir_ssa_dest_init(instr, dest, glsl_get_components(type),
+                     glsl_get_bit_size(type), name);
+}
 void nir_ssa_def_rewrite_uses(nir_ssa_def *def, nir_src new_src);
 void nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_src new_src,
                                     nir_instr *after_me);
@@ -2311,6 +2334,8 @@ nir_variable *nir_variable_clone(const nir_variable *c, nir_shader *shader);
 nir_deref *nir_deref_clone(const nir_deref *deref, void *mem_ctx);
 nir_deref_var *nir_deref_var_clone(const nir_deref_var *deref, void *mem_ctx);
 
+nir_shader *nir_shader_serialize_deserialize(void *mem_ctx, nir_shader *s);
+
 #ifdef DEBUG
 void nir_validate_shader(nir_shader *shader);
 void nir_metadata_set_validation_flag(nir_shader *shader);
@@ -2327,6 +2352,16 @@ should_clone_nir(void)
 }
 
 static inline bool
+should_serialize_deserialize_nir(void)
+{
+   static int test_serialize = -1;
+   if (test_serialize < 0)
+      test_serialize = env_var_as_boolean("NIR_TEST_SERIALIZE", false);
+
+   return test_serialize;
+}
+
+static inline bool
 should_print_nir(void)
 {
    static int should_print = -1;
@@ -2340,6 +2375,7 @@ static inline void nir_validate_shader(nir_shader *shader) { (void) shader; }
 static inline void nir_metadata_set_validation_flag(nir_shader *shader) { (void) shader; }
 static inline void nir_metadata_check_validation_flag(nir_shader *shader) { (void) shader; }
 static inline bool should_clone_nir(void) { return false; }
+static inline bool should_serialize_deserialize_nir(void) { return false; }
 static inline bool should_print_nir(void) { return false; }
 #endif /* DEBUG */
 
@@ -2350,6 +2386,10 @@ static inline bool should_print_nir(void) { return false; }
       nir_shader *clone = nir_shader_clone(ralloc_parent(nir), nir); \
       ralloc_free(nir);                                              \
       nir = clone;                                                   \
+   }                                                                 \
+   if (should_serialize_deserialize_nir()) {                         \
+      void *mem_ctx = ralloc_parent(nir);                            \
+      nir = nir_shader_serialize_deserialize(mem_ctx, nir);          \
    }                                                                 \
 } while (0)
 
@@ -2460,6 +2500,17 @@ bool nir_lower_samplers(nir_shader *shader,
                         const struct gl_shader_program *shader_program);
 bool nir_lower_samplers_as_deref(nir_shader *shader,
                                  const struct gl_shader_program *shader_program);
+
+typedef struct nir_lower_subgroups_options {
+   uint8_t subgroup_size;
+   uint8_t ballot_bit_size;
+   bool lower_to_scalar:1;
+   bool lower_vote_trivial:1;
+   bool lower_subgroup_masks:1;
+} nir_lower_subgroups_options;
+
+bool nir_lower_subgroups(nir_shader *shader,
+                         const nir_lower_subgroups_options *options);
 
 bool nir_lower_system_values(nir_shader *shader);
 

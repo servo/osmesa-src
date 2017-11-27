@@ -25,6 +25,7 @@
 
 #include <sys/errno.h>
 
+#include "main/blend.h"
 #include "main/context.h"
 #include "main/condrender.h"
 #include "main/samplerobj.h"
@@ -241,11 +242,7 @@ brw_emit_prim(struct brw_context *brw,
       } else {
          brw_load_register_mem(brw, GEN7_3DPRIM_START_INSTANCE, bo,
                                prim->indirect_offset + 12);
-         BEGIN_BATCH(3);
-         OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
-         OUT_BATCH(GEN7_3DPRIM_BASE_VERTEX);
-         OUT_BATCH(0);
-         ADVANCE_BATCH();
+         brw_load_register_imm32(brw, GEN7_3DPRIM_BASE_VERTEX, 0);
       }
    } else {
       indirect_flag = 0;
@@ -344,6 +341,7 @@ brw_merge_inputs(struct brw_context *brw,
 static bool
 intel_disable_rb_aux_buffer(struct brw_context *brw,
                             struct intel_mipmap_tree *tex_mt,
+                            unsigned min_level, unsigned num_levels,
                             const char *usage)
 {
    const struct gl_framebuffer *fb = brw->ctx.DrawBuffer;
@@ -358,7 +356,9 @@ intel_disable_rb_aux_buffer(struct brw_context *brw,
       const struct intel_renderbuffer *irb =
          intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
-      if (irb && irb->mt->bo == tex_mt->bo) {
+      if (irb && irb->mt->bo == tex_mt->bo &&
+          irb->mt_level >= min_level &&
+          irb->mt_level < min_level + num_levels) {
          found = brw->draw_aux_buffer_disabled[i] = true;
       }
    }
@@ -378,7 +378,7 @@ intel_disable_rb_aux_buffer(struct brw_context *brw,
  * enabled depth texture, and flush the render cache for any dirty textures.
  */
 void
-brw_predraw_resolve_inputs(struct brw_context *brw)
+brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering)
 {
    struct gl_context *ctx = &brw->ctx;
    struct intel_texture_object *tex_obj;
@@ -399,13 +399,30 @@ brw_predraw_resolve_inputs(struct brw_context *brw)
       enum isl_format view_format =
          translate_tex_format(brw, tex_obj->_Format, sampler->sRGBDecode);
 
-      const bool disable_aux =
-         intel_disable_rb_aux_buffer(brw, tex_obj->mt, "for sampling");
+      unsigned min_level, min_layer, num_levels, num_layers;
+      if (tex_obj->base.Immutable) {
+         min_level  = tex_obj->base.MinLevel;
+         num_levels = MIN2(tex_obj->base.NumLevels, tex_obj->_MaxLevel + 1);
+         min_layer  = tex_obj->base.MinLayer;
+         num_layers = tex_obj->base.Target != GL_TEXTURE_3D ?
+                      tex_obj->base.NumLayers : INTEL_REMAINING_LAYERS;
+      } else {
+         min_level  = tex_obj->base.BaseLevel;
+         num_levels = tex_obj->_MaxLevel - tex_obj->base.BaseLevel + 1;
+         min_layer  = 0;
+         num_layers = INTEL_REMAINING_LAYERS;
+      }
+
+      const bool disable_aux = rendering &&
+         intel_disable_rb_aux_buffer(brw, tex_obj->mt, min_level, num_levels,
+                                     "for sampling");
 
       intel_miptree_prepare_texture(brw, tex_obj->mt, view_format,
+                                    min_level, num_levels,
+                                    min_layer, num_layers,
                                     disable_aux);
 
-      brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
+      brw_cache_flush_for_read(brw, tex_obj->mt->bo);
 
       if (tex_obj->base.StencilSampling ||
           tex_obj->mt->format == MESA_FORMAT_S_UINT8) {
@@ -424,12 +441,12 @@ brw_predraw_resolve_inputs(struct brw_context *brw)
             tex_obj = intel_texture_object(u->TexObj);
 
             if (tex_obj && tex_obj->mt) {
-               intel_disable_rb_aux_buffer(brw, tex_obj->mt,
+               intel_disable_rb_aux_buffer(brw, tex_obj->mt, 0, ~0,
                                            "as a shader image");
 
                intel_miptree_prepare_image(brw, tex_obj->mt);
 
-               brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
+               brw_cache_flush_for_read(brw, tex_obj->mt->bo);
             }
          }
       }
@@ -457,13 +474,20 @@ brw_predraw_resolve_framebuffer(struct brw_context *brw)
        ctx->FragmentProgram._Current->info.outputs_read) {
       const struct gl_framebuffer *fb = ctx->DrawBuffer;
 
+      /* This is only used for non-coherent framebuffer fetch, so we don't
+       * need to worry about CCS_E and can simply pass 'false' below.
+       */
+      assert(brw->screen->devinfo.gen < 9);
+
       for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
          const struct intel_renderbuffer *irb =
             intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
          if (irb) {
-            intel_miptree_prepare_fb_fetch(brw, irb->mt, irb->mt_level,
-                                           irb->mt_layer, irb->layer_count);
+            intel_miptree_prepare_texture(brw, irb->mt, irb->mt->surf.format,
+                                          irb->mt_level, 1,
+                                          irb->mt_layer, irb->layer_count,
+                                          false);
          }
       }
    }
@@ -476,9 +500,13 @@ brw_predraw_resolve_framebuffer(struct brw_context *brw)
       if (irb == NULL || irb->mt == NULL)
          continue;
 
+      mesa_format mesa_format =
+         _mesa_get_render_format(ctx, intel_rb_format(irb));
+      enum isl_format isl_format = brw_isl_format_for_mesa_format(mesa_format);
+
       intel_miptree_prepare_render(brw, irb->mt, irb->mt_level,
                                    irb->mt_layer, irb->layer_count,
-                                   ctx->Color.sRGBEnabled,
+                                   isl_format,
                                    ctx->Color.BlendEnabled & (1 << i));
    }
 }
@@ -529,13 +557,11 @@ brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
                                     depth_written);
       }
       if (depth_written)
-         brw_render_cache_set_add_bo(brw, depth_irb->mt->bo);
+         brw_depth_cache_add_bo(brw, depth_irb->mt->bo);
    }
 
-   if (ctx->Extensions.ARB_stencil_texturing &&
-       stencil_irb && brw->stencil_write_enabled) {
-      brw_render_cache_set_add_bo(brw, stencil_irb->mt->bo);
-   }
+   if (stencil_irb && brw->stencil_write_enabled)
+      brw_depth_cache_add_bo(brw, stencil_irb->mt->bo);
 
    for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
       struct intel_renderbuffer *irb =
@@ -544,10 +570,14 @@ brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
       if (!irb)
          continue;
 
-      brw_render_cache_set_add_bo(brw, irb->mt->bo);
+      mesa_format mesa_format =
+         _mesa_get_render_format(ctx, intel_rb_format(irb));
+      enum isl_format isl_format = brw_isl_format_for_mesa_format(mesa_format);
+
+      brw_render_cache_add_bo(brw, irb->mt->bo);
       intel_miptree_finish_render(brw, irb->mt, irb->mt_level,
                                   irb->mt_layer, irb->layer_count,
-                                  ctx->Color.sRGBEnabled,
+                                  isl_format,
                                   ctx->Color.BlendEnabled & (1 << i));
    }
 }
@@ -559,7 +589,7 @@ intel_renderbuffer_move_temp_back(struct brw_context *brw,
    if (irb->align_wa_mt == NULL)
       return;
 
-   brw_render_cache_set_check_flush(brw, irb->align_wa_mt->bo);
+   brw_cache_flush_for_read(brw, irb->align_wa_mt->bo);
 
    intel_miptree_copy_slice(brw, irb->align_wa_mt, 0, 0,
                             irb->mt,
@@ -651,7 +681,7 @@ brw_prepare_drawing(struct gl_context *ctx,
     * and finalizing textures but before setting up any hardware state for
     * this draw call.
     */
-   brw_predraw_resolve_inputs(brw);
+   brw_predraw_resolve_inputs(brw, true);
    brw_predraw_resolve_framebuffer(brw);
 
    /* Bind all inputs, derive varying and size information:
@@ -839,7 +869,6 @@ brw_draw_prims(struct gl_context *ctx,
    struct brw_context *brw = brw_context(ctx);
    const struct gl_vertex_array **arrays = ctx->Array._DrawArrays;
    int predicate_state = brw->predicate.state;
-   int combine_op = MI_PREDICATE_COMBINEOP_SET;
    struct brw_transform_feedback_object *xfb_obj =
       (struct brw_transform_feedback_object *) gl_xfb_obj;
 
@@ -883,49 +912,35 @@ brw_draw_prims(struct gl_context *ctx,
     * to it.
     */
 
-    if (brw->draw.draw_params_count_bo &&
-        predicate_state == BRW_PREDICATE_STATE_USE_BIT) {
-      /* We need to empty the MI_PREDICATE_DATA register since it might
-       * already be set.
-       */
-
-      BEGIN_BATCH(4);
-      OUT_BATCH(MI_PREDICATE_DATA);
-      OUT_BATCH(0u);
-      OUT_BATCH(MI_PREDICATE_DATA + 4);
-      OUT_BATCH(0u);
-      ADVANCE_BATCH();
-
-      /* We need to combine the results of both predicates.*/
-      combine_op = MI_PREDICATE_COMBINEOP_AND;
-   }
-
    for (i = 0; i < nr_prims; i++) {
       /* Implementation of ARB_indirect_parameters via predicates */
       if (brw->draw.draw_params_count_bo) {
-         struct brw_bo *draw_id_bo = NULL;
-         uint32_t draw_id_offset;
-
-         intel_upload_data(brw, &prims[i].draw_id, 4, 4, &draw_id_bo,
-                           &draw_id_offset);
-
          brw_emit_pipe_control_flush(brw, PIPE_CONTROL_FLUSH_ENABLE);
 
+         /* Upload the current draw count from the draw parameters buffer to
+          * MI_PREDICATE_SRC0.
+          */
          brw_load_register_mem(brw, MI_PREDICATE_SRC0,
                                brw->draw.draw_params_count_bo,
                                brw->draw.draw_params_count_offset);
-         brw_load_register_mem(brw, MI_PREDICATE_SRC1, draw_id_bo,
-                               draw_id_offset);
+         /* Zero the top 32-bits of MI_PREDICATE_SRC0 */
+         brw_load_register_imm32(brw, MI_PREDICATE_SRC0 + 4, 0);
+         /* Upload the id of the current primitive to MI_PREDICATE_SRC1. */
+         brw_load_register_imm64(brw, MI_PREDICATE_SRC1, prims[i].draw_id);
 
          BEGIN_BATCH(1);
-         OUT_BATCH(GEN7_MI_PREDICATE |
-                   MI_PREDICATE_LOADOP_LOADINV | combine_op |
-                   MI_PREDICATE_COMPAREOP_DELTAS_EQUAL);
+         if (i == 0 && brw->predicate.state != BRW_PREDICATE_STATE_USE_BIT) {
+            OUT_BATCH(GEN7_MI_PREDICATE | MI_PREDICATE_LOADOP_LOADINV |
+                      MI_PREDICATE_COMBINEOP_SET |
+                      MI_PREDICATE_COMPAREOP_SRCS_EQUAL);
+         } else {
+            OUT_BATCH(GEN7_MI_PREDICATE |
+                      MI_PREDICATE_LOADOP_LOAD | MI_PREDICATE_COMBINEOP_XOR |
+                      MI_PREDICATE_COMPAREOP_SRCS_EQUAL);
+         }
          ADVANCE_BATCH();
 
          brw->predicate.state = BRW_PREDICATE_STATE_USE_BIT;
-
-         brw_bo_unreference(draw_id_bo);
       }
 
       brw_draw_single_prim(ctx, arrays, &prims[i], i, xfb_obj, stream,

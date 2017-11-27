@@ -19,9 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * Authors: Marek Olšák <maraeo@gmail.com>
- *
  */
 
 /**
@@ -104,9 +101,9 @@ enum {
 	/* Driver options: */
 	DBG_FORCE_DMA,
 	DBG_NO_ASYNC_DMA,
-	DBG_NO_DISCARD_RANGE,
 	DBG_NO_WC,
 	DBG_CHECK_VM,
+	DBG_RESERVE_VMID,
 
 	/* 3D engine options: */
 	DBG_SWITCH_ON_EOP,
@@ -176,6 +173,7 @@ struct r600_resource {
 	enum radeon_bo_domain		domains;
 	enum radeon_bo_flag		flags;
 	unsigned			bind_history;
+	int				max_forced_staging_uploads;
 
 	/* The buffer range which is initialized (with a write transfer,
 	 * streamout, DMA, or as a random access target). The rest of
@@ -235,17 +233,9 @@ struct r600_cmask_info {
 struct r600_texture {
 	struct r600_resource		resource;
 
-	uint64_t			size;
-	unsigned			num_level0_transfers;
-	enum pipe_format		db_render_format;
-	bool				is_depth;
-	bool				db_compatible;
-	bool				can_sample_z;
-	bool				can_sample_s;
-	unsigned			dirty_level_mask; /* each bit says if that mipmap is compressed */
-	unsigned			stencil_dirty_level_mask; /* each bit says if that mipmap is compressed */
-	struct r600_texture		*flushed_depth_texture;
 	struct radeon_surf		surface;
+	uint64_t			size;
+	struct r600_texture		*flushed_depth_texture;
 
 	/* Colorbuffer compression and fast clear. */
 	struct r600_fmask_info		fmask;
@@ -255,18 +245,37 @@ struct r600_texture {
 	unsigned			cb_color_info; /* fast clear enable bit */
 	unsigned			color_clear_value[2];
 	unsigned			last_msaa_resolve_target_micro_mode;
+	unsigned			num_level0_transfers;
 
 	/* Depth buffer compression and fast clear. */
 	uint64_t			htile_offset;
-	bool				tc_compatible_htile;
-	bool				depth_cleared; /* if it was cleared at least once */
 	float				depth_clear_value;
-	bool				stencil_cleared; /* if it was cleared at least once */
+	uint16_t			dirty_level_mask; /* each bit says if that mipmap is compressed */
+	uint16_t			stencil_dirty_level_mask; /* each bit says if that mipmap is compressed */
+	enum pipe_format		db_render_format:16;
 	uint8_t				stencil_clear_value;
-	bool				upgraded_depth; /* upgraded from unorm to Z32_FLOAT */
+	bool				tc_compatible_htile:1;
+	bool				depth_cleared:1; /* if it was cleared at least once */
+	bool				stencil_cleared:1; /* if it was cleared at least once */
+	bool				upgraded_depth:1; /* upgraded from unorm to Z32_FLOAT */
+	bool				is_depth:1;
+	bool				db_compatible:1;
+	bool				can_sample_z:1;
+	bool				can_sample_s:1;
 
-	bool				non_disp_tiling; /* R600-Cayman only */
-
+	/* We need to track DCC dirtiness, because st/dri usually calls
+	 * flush_resource twice per frame (not a bug) and we don't wanna
+	 * decompress DCC twice. Also, the dirty tracking must be done even
+	 * if DCC isn't used, because it's required by the DCC usage analysis
+	 * for a possible future enablement.
+	 */
+	bool				separate_dcc_dirty:1;
+	/* Statistics gathering for the DCC enablement heuristic. */
+	bool				dcc_gather_statistics:1;
+	/* Counter that should be non-zero if the texture is bound to a
+	 * framebuffer.
+	 */
+	unsigned                        framebuffers_bound;
 	/* Whether the texture is a displayable back buffer and needs DCC
 	 * decompression, which is expensive. Therefore, it's enabled only
 	 * if statistics suggest that it will pay off and it's allocated
@@ -277,15 +286,6 @@ struct r600_texture {
 	struct r600_resource		*dcc_separate_buffer;
 	/* When DCC is temporarily disabled, the separate buffer is here. */
 	struct r600_resource		*last_dcc_separate_buffer;
-	/* We need to track DCC dirtiness, because st/dri usually calls
-	 * flush_resource twice per frame (not a bug) and we don't wanna
-	 * decompress DCC twice. Also, the dirty tracking must be done even
-	 * if DCC isn't used, because it's required by the DCC usage analysis
-	 * for a possible future enablement.
-	 */
-	bool				separate_dcc_dirty;
-	/* Statistics gathering for the DCC enablement heuristic. */
-	bool				dcc_gather_statistics;
 	/* Estimate of how much this color buffer is written to in units of
 	 * full-screen draws: ps_invocations / (width * height)
 	 * Shader kills, late Z, and blending with trivial discards make it
@@ -294,67 +294,47 @@ struct r600_texture {
 	unsigned			ps_draw_ratio;
 	/* The number of clears since the last DCC usage analysis. */
 	unsigned			num_slow_clears;
-
-	/* Counter that should be non-zero if the texture is bound to a
-	 * framebuffer. Implemented in radeonsi only.
-	 */
-	uint32_t			framebuffers_bound;
 };
 
 struct r600_surface {
 	struct pipe_surface		base;
 
 	/* These can vary with block-compressed textures. */
-	unsigned width0;
-	unsigned height0;
+	uint16_t width0;
+	uint16_t height0;
 
-	bool color_initialized;
-	bool depth_initialized;
+	bool color_initialized:1;
+	bool depth_initialized:1;
 
 	/* Misc. color flags. */
-	bool alphatest_bypass;
-	bool export_16bpc;
-	bool color_is_int8;
-	bool color_is_int10;
-	bool dcc_incompatible;
+	bool color_is_int8:1;
+	bool color_is_int10:1;
+	bool dcc_incompatible:1;
 
 	/* Color registers. */
 	unsigned cb_color_info;
-	unsigned cb_color_base;
 	unsigned cb_color_view;
-	unsigned cb_color_size;		/* R600 only */
-	unsigned cb_color_dim;		/* EG only */
-	unsigned cb_color_pitch;	/* EG and later */
-	unsigned cb_color_slice;	/* EG and later */
-	unsigned cb_color_attrib;	/* EG and later */
+	unsigned cb_color_attrib;
 	unsigned cb_color_attrib2;	/* GFX9 and later */
 	unsigned cb_dcc_control;	/* VI and later */
-	unsigned cb_color_fmask;	/* CB_COLORn_FMASK (EG and later) or CB_COLORn_FRAG (r600) */
-	unsigned cb_color_fmask_slice;	/* EG and later */
-	unsigned cb_color_cmask;	/* CB_COLORn_TILE (r600 only) */
-	unsigned cb_color_mask;		/* R600 only */
-	unsigned spi_shader_col_format;		/* SI+, no blending, no alpha-to-coverage. */
-	unsigned spi_shader_col_format_alpha;	/* SI+, alpha-to-coverage */
-	unsigned spi_shader_col_format_blend;	/* SI+, blending without alpha. */
-	unsigned spi_shader_col_format_blend_alpha; /* SI+, blending with alpha. */
-	struct r600_resource *cb_buffer_fmask; /* Used for FMASK relocations. R600 only */
-	struct r600_resource *cb_buffer_cmask; /* Used for CMASK relocations. R600 only */
+	unsigned spi_shader_col_format:8;	/* no blending, no alpha-to-coverage. */
+	unsigned spi_shader_col_format_alpha:8;	/* alpha-to-coverage */
+	unsigned spi_shader_col_format_blend:8;	/* blending without alpha. */
+	unsigned spi_shader_col_format_blend_alpha:8; /* blending with alpha. */
 
 	/* DB registers. */
-	uint64_t db_depth_base;		/* DB_Z_READ/WRITE_BASE (EG and later) or DB_DEPTH_BASE (r600) */
-	uint64_t db_stencil_base;	/* EG and later */
+	uint64_t db_depth_base;		/* DB_Z_READ/WRITE_BASE */
+	uint64_t db_stencil_base;
 	uint64_t db_htile_data_base;
-	unsigned db_depth_info;		/* R600 only, then SI and later */
-	unsigned db_z_info;		/* EG and later */
+	unsigned db_depth_info;
+	unsigned db_z_info;
 	unsigned db_z_info2;		/* GFX9+ */
 	unsigned db_depth_view;
 	unsigned db_depth_size;
-	unsigned db_depth_slice;	/* EG and later */
-	unsigned db_stencil_info;	/* EG and later */
+	unsigned db_depth_slice;
+	unsigned db_stencil_info;
 	unsigned db_stencil_info2;	/* GFX9+ */
-	unsigned db_prefetch_limit;	/* R600 only */
 	unsigned db_htile_surface;
-	unsigned db_preload_control;	/* EG and later */
 };
 
 struct r600_mmio_counter {
@@ -411,8 +391,6 @@ struct r600_common_screen {
 	enum chip_class			chip_class;
 	struct radeon_info		info;
 	uint64_t			debug_flags;
-	bool				has_cp_dma;
-	bool				has_streamout;
 	bool				has_rbplus;     /* if RB+ registers exist */
 	bool				rbplus_allowed; /* if RB+ is allowed */
 
@@ -597,7 +575,6 @@ struct r600_common_context {
 		bool				query_active;
 	} dcc_stats[5];
 
-	struct pipe_debug_callback	debug;
 	struct pipe_device_reset_callback device_reset_callback;
 	struct u_log_context		*log;
 
@@ -718,7 +695,6 @@ void si_screen_clear_buffer(struct r600_common_screen *rscreen, struct pipe_reso
 			    uint64_t offset, uint64_t size, unsigned value);
 struct pipe_resource *si_resource_create_common(struct pipe_screen *screen,
 						const struct pipe_resource *templ);
-const char *si_get_llvm_processor_name(enum radeon_family family);
 void si_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 		       struct r600_resource *dst, struct r600_resource *src);
 void si_save_cs(struct radeon_winsys *ws, struct radeon_winsys_cs *cs,

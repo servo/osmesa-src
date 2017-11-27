@@ -390,7 +390,7 @@ one_time_init( struct gl_context *ctx )
 
       _mesa_locale_init();
 
-      _mesa_one_time_init_extension_overrides();
+      _mesa_one_time_init_extension_overrides(ctx);
 
       _mesa_get_cpu_features();
 
@@ -436,7 +436,6 @@ _mesa_init_current(struct gl_context *ctx)
    }
 
    /* redo special cases: */
-   ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_WEIGHT], 1.0, 0.0, 0.0, 0.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_NORMAL], 0.0, 0.0, 1.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_COLOR0], 1.0, 1.0, 1.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_COLOR1], 0.0, 0.0, 0.0, 1.0 );
@@ -654,7 +653,7 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    consts->UniformBooleanTrue = FLOAT_AS_UNION(1.0f).u;
 
    /* GL_ARB_sync */
-   consts->MaxServerWaitTimeout = 0x1fff7fffffffULL;
+   consts->MaxServerWaitTimeout = 0x7fffffff7fffffffULL;
 
    /* GL_EXT_provoking_vertex */
    consts->QuadsFollowProvokingVertexConvention = GL_TRUE;
@@ -1575,8 +1574,6 @@ handle_first_current(struct gl_context *ctx)
       /* probably in the process of tearing down the context */
       return;
    }
-
-   ctx->Extensions.String = _mesa_make_extension_string(ctx);
 
    check_context_limits(ctx);
 

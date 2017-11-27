@@ -127,6 +127,22 @@ vc5_create_blend_state(struct pipe_context *pctx,
         return vc5_generic_cso_state_create(cso, sizeof(*cso));
 }
 
+static uint32_t
+translate_stencil_op(enum pipe_stencil_op op)
+{
+        switch (op) {
+        case PIPE_STENCIL_OP_KEEP:      return V3D_STENCIL_OP_KEEP;
+        case PIPE_STENCIL_OP_ZERO:      return V3D_STENCIL_OP_ZERO;
+        case PIPE_STENCIL_OP_REPLACE:   return V3D_STENCIL_OP_REPLACE;
+        case PIPE_STENCIL_OP_INCR:      return V3D_STENCIL_OP_INCR;
+        case PIPE_STENCIL_OP_DECR:      return V3D_STENCIL_OP_DECR;
+        case PIPE_STENCIL_OP_INCR_WRAP: return V3D_STENCIL_OP_INCWRAP;
+        case PIPE_STENCIL_OP_DECR_WRAP: return V3D_STENCIL_OP_DECWRAP;
+        case PIPE_STENCIL_OP_INVERT:    return V3D_STENCIL_OP_INVERT;
+        }
+        unreachable("bad stencil op");
+}
+
 static void *
 vc5_create_depth_stencil_alpha_state(struct pipe_context *pctx,
                                      const struct pipe_depth_stencil_alpha_state *cso)
@@ -151,6 +167,47 @@ vc5_create_depth_stencil_alpha_state(struct pipe_context *pctx,
                           (cso->stencil[0].zfail_op == PIPE_STENCIL_OP_KEEP &&
                            (!cso->stencil[1].enabled ||
                             cso->stencil[1].zfail_op == PIPE_STENCIL_OP_KEEP))));
+        }
+
+        const struct pipe_stencil_state *front = &cso->stencil[0];
+        const struct pipe_stencil_state *back = &cso->stencil[1];
+
+        if (front->enabled) {
+                v3dx_pack(&so->stencil_front, STENCIL_CONFIG, config) {
+                        config.front_config = true;
+                        /* If !back->enabled, then the front values should be
+                         * used for both front and back-facing primitives.
+                         */
+                        config.back_config = !back->enabled;
+
+                        config.stencil_write_mask = front->writemask;
+                        config.stencil_test_mask = front->valuemask;
+
+                        config.stencil_test_function = front->func;
+                        config.stencil_pass_op =
+                                translate_stencil_op(front->zpass_op);
+                        config.depth_test_fail_op =
+                                translate_stencil_op(front->zfail_op);
+                        config.stencil_test_fail_op =
+                                translate_stencil_op(front->fail_op);
+                }
+        }
+        if (back->enabled) {
+                v3dx_pack(&so->stencil_back, STENCIL_CONFIG, config) {
+                        config.front_config = false;
+                        config.back_config = true;
+
+                        config.stencil_write_mask = back->writemask;
+                        config.stencil_test_mask = back->valuemask;
+
+                        config.stencil_test_function = back->func;
+                        config.stencil_pass_op =
+                                translate_stencil_op(back->zpass_op);
+                        config.depth_test_fail_op =
+                                translate_stencil_op(back->zfail_op);
+                        config.stencil_test_fail_op =
+                                translate_stencil_op(back->fail_op);
+                }
         }
 
         return so;
@@ -238,6 +295,7 @@ static void *
 vc5_vertex_state_create(struct pipe_context *pctx, unsigned num_elements,
                         const struct pipe_vertex_element *elements)
 {
+        struct vc5_context *vc5 = vc5_context(pctx);
         struct vc5_vertex_stateobj *so = CALLOC_STRUCT(vc5_vertex_stateobj);
 
         if (!so)
@@ -245,6 +303,89 @@ vc5_vertex_state_create(struct pipe_context *pctx, unsigned num_elements,
 
         memcpy(so->pipe, elements, sizeof(*elements) * num_elements);
         so->num_elements = num_elements;
+
+        for (int i = 0; i < so->num_elements; i++) {
+                const struct pipe_vertex_element *elem = &elements[i];
+                const struct util_format_description *desc =
+                        util_format_description(elem->src_format);
+                uint32_t r_size = desc->channel[0].size;
+
+                const uint32_t size =
+                        cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD);
+
+                v3dx_pack(&so->attrs[i * size],
+                          GL_SHADER_STATE_ATTRIBUTE_RECORD, attr) {
+                        /* vec_size == 0 means 4 */
+                        attr.vec_size = desc->nr_channels & 3;
+                        attr.signed_int_type = (desc->channel[0].type ==
+                                                UTIL_FORMAT_TYPE_SIGNED);
+
+                        attr.normalized_int_type = desc->channel[0].normalized;
+                        attr.read_as_int_uint = desc->channel[0].pure_integer;
+                        attr.instance_divisor = elem->instance_divisor;
+
+                        switch (desc->channel[0].type) {
+                        case UTIL_FORMAT_TYPE_FLOAT:
+                                if (r_size == 32) {
+                                        attr.type = ATTRIBUTE_FLOAT;
+                                } else {
+                                        assert(r_size == 16);
+                                        attr.type = ATTRIBUTE_HALF_FLOAT;
+                                }
+                                break;
+
+                        case UTIL_FORMAT_TYPE_SIGNED:
+                        case UTIL_FORMAT_TYPE_UNSIGNED:
+                                switch (r_size) {
+                                case 32:
+                                        attr.type = ATTRIBUTE_INT;
+                                        break;
+                                case 16:
+                                        attr.type = ATTRIBUTE_SHORT;
+                                        break;
+                                case 10:
+                                        attr.type = ATTRIBUTE_INT2_10_10_10;
+                                        break;
+                                case 8:
+                                        attr.type = ATTRIBUTE_BYTE;
+                                        break;
+                                default:
+                                        fprintf(stderr,
+                                                "format %s unsupported\n",
+                                                desc->name);
+                                        attr.type = ATTRIBUTE_BYTE;
+                                        abort();
+                                }
+                                break;
+
+                        default:
+                                fprintf(stderr,
+                                        "format %s unsupported\n",
+                                        desc->name);
+                                abort();
+                        }
+                }
+        }
+
+        /* Set up the default attribute values in case any of the vertex
+         * elements use them.
+         */
+        so->default_attribute_values = vc5_bo_alloc(vc5->screen,
+                                                    VC5_MAX_ATTRIBUTES *
+                                                    4 * sizeof(float),
+                                                    "default attributes");
+        uint32_t *attrs = vc5_bo_map(so->default_attribute_values);
+        for (int i = 0; i < VC5_MAX_ATTRIBUTES; i++) {
+                attrs[i * 4 + 0] = 0;
+                attrs[i * 4 + 1] = 0;
+                attrs[i * 4 + 2] = 0;
+                if (i < so->num_elements &&
+                    util_format_is_pure_integer(so->pipe[i].src_format)) {
+                        attrs[i * 4 + 3] = 1;
+                } else {
+                        attrs[i * 4 + 3] = fui(1.0);
+                }
+        }
 
         return so;
 }
@@ -302,6 +443,25 @@ vc5_set_framebuffer_state(struct pipe_context *pctx,
         cso->width = framebuffer->width;
         cso->height = framebuffer->height;
 
+        vc5->swap_color_rb = 0;
+        vc5->blend_dst_alpha_one = 0;
+        for (int i = 0; i < vc5->framebuffer.nr_cbufs; i++) {
+                struct pipe_surface *cbuf = vc5->framebuffer.cbufs[i];
+                const struct util_format_description *desc =
+                        util_format_description(cbuf->format);
+
+                /* For BGRA8 formats (DRI window system default format), we
+                 * need to swap R and B, since the HW's format is RGBA8.
+                 */
+                if (desc->swizzle[0] == PIPE_SWIZZLE_Z &&
+                    cbuf->format != PIPE_FORMAT_B5G6R5_UNORM) {
+                        vc5->swap_color_rb |= 1 << i;
+                }
+
+                if (desc->swizzle[3] == PIPE_SWIZZLE_1)
+                        vc5->blend_dst_alpha_one |= 1 << i;
+        }
+
         vc5->dirty |= VC5_DIRTY_FRAMEBUFFER;
 }
 
@@ -357,26 +517,16 @@ vc5_create_sampler_state(struct pipe_context *pctx,
                 (cso->mag_img_filter == PIPE_TEX_MIPFILTER_NEAREST ||
                  cso->min_img_filter == PIPE_TEX_MIPFILTER_NEAREST);
 
-        struct V3D33_TEXTURE_UNIFORM_PARAMETER_0_CFG_MODE1 p0_unpacked = {
-                .s_wrap_mode = translate_wrap(cso->wrap_s, either_nearest),
-                .t_wrap_mode = translate_wrap(cso->wrap_t, either_nearest),
-                .r_wrap_mode = translate_wrap(cso->wrap_r, either_nearest),
-        };
-        V3D33_TEXTURE_UNIFORM_PARAMETER_0_CFG_MODE1_pack(NULL,
-                                                         (uint8_t *)&so->p0,
-                                                         &p0_unpacked);
+        v3dx_pack(&so->p0, TEXTURE_UNIFORM_PARAMETER_0_CFG_MODE1, p0) {
+                p0.s_wrap_mode = translate_wrap(cso->wrap_s, either_nearest);
+                p0.t_wrap_mode = translate_wrap(cso->wrap_t, either_nearest);
+                p0.r_wrap_mode = translate_wrap(cso->wrap_r, either_nearest);
+        }
 
-        struct V3D33_TEXTURE_SHADER_STATE state_unpacked = {
-                cl_packet_header(TEXTURE_SHADER_STATE),
-
-                .min_level_of_detail = MAX2(cso->min_lod, 0.0),
-                .depth_compare_function = cso->compare_func,
-                .fixed_bias = cso->lod_bias,
-        };
-        STATIC_ASSERT(ARRAY_SIZE(so->texture_shader_state) ==
-                      cl_packet_length(TEXTURE_SHADER_STATE));
-        cl_packet_pack(TEXTURE_SHADER_STATE)(NULL, so->texture_shader_state,
-                                             &state_unpacked);
+        v3dx_pack(&so->texture_shader_state, TEXTURE_SHADER_STATE, tex) {
+                tex.depth_compare_function = cso->compare_func;
+                tex.fixed_bias = cso->lod_bias;
+        }
 
         return so;
 }
@@ -438,26 +588,18 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
 
         pipe_reference(NULL, &prsc->reference);
 
-        struct V3D33_TEXTURE_UNIFORM_PARAMETER_1_CFG_MODE1 unpacked = {
-        };
+        v3dx_pack(&so->p1, TEXTURE_UNIFORM_PARAMETER_1_CFG_MODE1, p1) {
+                p1.return_word_0_of_texture_data = true;
+                if (vc5_get_tex_return_size(cso->format) == 16) {
+                        p1.return_word_1_of_texture_data = true;
+                } else {
+                        int chans = vc5_get_tex_return_channels(cso->format);
 
-        unpacked.return_word_0_of_texture_data = true;
-        if (vc5_get_tex_return_size(cso->format) == 16) {
-                unpacked.return_word_1_of_texture_data = true;
-        } else {
-                int chans = vc5_get_tex_return_channels(cso->format);
-
-                if (chans > 1)
-                        unpacked.return_word_1_of_texture_data = true;
-                if (chans > 2)
-                        unpacked.return_word_2_of_texture_data = true;
-                if (chans > 3)
-                        unpacked.return_word_3_of_texture_data = true;
+                        p1.return_word_1_of_texture_data = chans > 1;
+                        p1.return_word_2_of_texture_data = chans > 2;
+                        p1.return_word_3_of_texture_data = chans > 3;
+                }
         }
-
-        V3D33_TEXTURE_UNIFORM_PARAMETER_1_CFG_MODE1_pack(NULL,
-                                                         (uint8_t *)&so->p1,
-                                                         &unpacked);
 
         /* Compute the sampler view's swizzle up front. This will be plugged
          * into either the sampler (for 16-bit returns) or the shader's
@@ -476,57 +618,97 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
         so->base.reference.count = 1;
         so->base.context = pctx;
 
-        struct V3D33_TEXTURE_SHADER_STATE state_unpacked = {
-                cl_packet_header(TEXTURE_SHADER_STATE),
+        int msaa_scale = prsc->nr_samples > 1 ? 2 : 1;
 
-                .image_width = prsc->width0,
-                .image_height = prsc->height0,
-                .image_depth = prsc->depth0,
+        v3dx_pack(&so->texture_shader_state, TEXTURE_SHADER_STATE, tex) {
+                tex.image_width = prsc->width0 * msaa_scale;
+                tex.image_height = prsc->height0 * msaa_scale;
+                if (prsc->target == PIPE_TEXTURE_3D) {
+                        tex.image_depth = prsc->depth0;
+                } else {
+                        tex.image_depth = (cso->u.tex.last_layer -
+                                           cso->u.tex.first_layer) + 1;
+                }
 
-                .texture_type = rsc->tex_format,
-                .srgb = util_format_is_srgb(cso->format),
+                tex.srgb = util_format_is_srgb(cso->format);
 
-                .base_level = cso->u.tex.first_level,
-                .array_stride_64_byte_aligned = rsc->cube_map_stride / 64,
+                tex.base_level = cso->u.tex.first_level;
+                tex.array_stride_64_byte_aligned = rsc->cube_map_stride / 64;
+
+                if (prsc->nr_samples > 1) {
+                        /* Using texture views to reinterpret formats on our
+                         * MSAA textures won't work, because we don't lay out
+                         * the bits in memory as it's expected -- for example,
+                         * RGBA8 and RGB10_A2 are compatible in the
+                         * ARB_texture_view spec, but in HW we lay them out as
+                         * 32bpp RGBA8 and 64bpp RGBA16F.  Just assert for now
+                         * to catch failures.
+                         */
+                        assert(util_format_linear(cso->format) ==
+                               util_format_linear(prsc->format));
+                        uint32_t output_image_format =
+                                vc5_get_rt_format(cso->format);
+                        uint32_t internal_type;
+                        uint32_t internal_bpp;
+                        vc5_get_internal_type_bpp_for_output_format(output_image_format,
+                                                                    &internal_type,
+                                                                    &internal_bpp);
+
+                        switch (internal_type) {
+                        case INTERNAL_TYPE_8:
+                                tex.texture_type = TEXTURE_DATA_FORMAT_RGBA8;
+                                break;
+                        case INTERNAL_TYPE_16F:
+                                tex.texture_type = TEXTURE_DATA_FORMAT_RGBA16F;
+                                break;
+                        default:
+                                unreachable("Bad MSAA texture type");
+                        }
+
+                        /* sRGB was stored in the tile buffer as linear and
+                         * would have been encoded to sRGB on resolved tile
+                         * buffer store.  Note that this means we would need
+                         * shader code if we wanted to read an MSAA sRGB
+                         * texture without sRGB decode.
+                         */
+                        tex.srgb = false;
+                } else {
+                        tex.texture_type = vc5_get_tex_format(cso->format);
+                }
+
+                /* Note: Contrary to the docs, the swizzle still applies even
+                 * if the return size is 32.  It's just that you probably want
+                 * to swizzle in the shader, because you need the Y/Z/W
+                 * channels to be defined.
+                 */
+                if (vc5_get_tex_return_size(cso->format) != 32) {
+                        tex.swizzle_r = translate_swizzle(so->swizzle[0]);
+                        tex.swizzle_g = translate_swizzle(so->swizzle[1]);
+                        tex.swizzle_b = translate_swizzle(so->swizzle[2]);
+                        tex.swizzle_a = translate_swizzle(so->swizzle[3]);
+                } else {
+                        tex.swizzle_r = translate_swizzle(PIPE_SWIZZLE_X);
+                        tex.swizzle_g = translate_swizzle(PIPE_SWIZZLE_Y);
+                        tex.swizzle_b = translate_swizzle(PIPE_SWIZZLE_Z);
+                        tex.swizzle_a = translate_swizzle(PIPE_SWIZZLE_W);
+                }
+
+                /* XXX: While we need to use this flag to enable tiled
+                 * resource sharing (even a small shared buffer should be UIF,
+                 * not UBLINEAR or raster), this is also at the moment
+                 * patching up the fact that our resource layout's decisions
+                 * about XOR don't quite match the HW's.
+                 */
+                switch (rsc->slices[0].tiling) {
+                case VC5_TILING_UIF_NO_XOR:
+                case VC5_TILING_UIF_XOR:
+                        tex.level_0_is_strictly_uif = true;
+                        tex.level_0_xor_enable = false;
+                        break;
+                default:
+                        break;
+                }
         };
-
-        /* Note: Contrary to the docs, the swizzle still applies even
-         * if the return size is 32.  It's just that you probably want
-         * to swizzle in the shader, because you need the Y/Z/W
-         * channels to be defined.
-         */
-        if (vc5_get_tex_return_size(cso->format) != 32) {
-                state_unpacked.swizzle_r = translate_swizzle(so->swizzle[0]);
-                state_unpacked.swizzle_g = translate_swizzle(so->swizzle[1]);
-                state_unpacked.swizzle_b = translate_swizzle(so->swizzle[2]);
-                state_unpacked.swizzle_a = translate_swizzle(so->swizzle[3]);
-        } else {
-                state_unpacked.swizzle_r = translate_swizzle(PIPE_SWIZZLE_X);
-                state_unpacked.swizzle_g = translate_swizzle(PIPE_SWIZZLE_Y);
-                state_unpacked.swizzle_b = translate_swizzle(PIPE_SWIZZLE_Z);
-                state_unpacked.swizzle_a = translate_swizzle(PIPE_SWIZZLE_W);
-        }
-
-        /* XXX: While we need to use this flag to enable tiled
-         * resource sharing (even a small shared buffer should be UIF,
-         * not UBLINEAR or raster), this is also at the moment
-         * patching up the fact that our resource layout's decisions
-         * about XOR don't quite match the HW's.
-         */
-        switch (rsc->slices[0].tiling) {
-        case VC5_TILING_UIF_NO_XOR:
-        case VC5_TILING_UIF_XOR:
-                state_unpacked.level_0_is_strictly_uif = true;
-                state_unpacked.level_0_xor_enable = false;
-                break;
-        default:
-                break;
-        }
-
-        STATIC_ASSERT(ARRAY_SIZE(so->texture_shader_state) ==
-                      cl_packet_length(TEXTURE_SHADER_STATE));
-        cl_packet_pack(TEXTURE_SHADER_STATE)(NULL, so->texture_shader_state,
-                                             &state_unpacked);
 
         return &so->base;
 }

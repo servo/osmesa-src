@@ -19,9 +19,6 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *      Christian König <christian.koenig@amd.com>
  */
 
 #ifndef SI_STATE_H
@@ -247,9 +244,9 @@ enum {
 #define SI_NUM_DESCS                   (SI_DESCS_FIRST_SHADER + \
                                         SI_NUM_SHADERS * SI_NUM_SHADER_DESCS)
 
-#define SI_VS_SHADER_POINTER_MASK \
+#define SI_DESCS_SHADER_MASK(name) \
 	u_bit_consecutive(SI_DESCS_FIRST_SHADER + \
-			  PIPE_SHADER_VERTEX * SI_NUM_SHADER_DESCS, \
+			  PIPE_SHADER_##name * SI_NUM_SHADER_DESCS, \
 			  SI_NUM_SHADER_DESCS)
 
 /* This represents descriptors in memory, such as buffer resources,
@@ -263,10 +260,8 @@ struct si_descriptors {
 
 	/* The buffer where the descriptors have been uploaded. */
 	struct r600_resource *buffer;
-	int buffer_offset; /* can be negative if not using lower slots */
+	uint64_t gpu_address;
 
-	/* The size of one descriptor. */
-	ubyte element_dw_size;
 	/* The maximum number of descriptors. */
 	uint32_t num_elements;
 
@@ -279,6 +274,11 @@ struct si_descriptors {
 	/* The SGPR index where the 64-bit pointer to the descriptor array will
 	 * be stored. */
 	ubyte shader_userdata_offset;
+	/* The size of one descriptor. */
+	ubyte element_dw_size;
+	/* If there is only one slot enabled, bind it directly instead of
+	 * uploading descriptors. -1 if disabled. */
+	signed char slot_index_to_bind_directly;
 };
 
 struct si_buffer_resources {

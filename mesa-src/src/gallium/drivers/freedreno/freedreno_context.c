@@ -67,6 +67,17 @@ fd_context_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
 	}
 }
 
+static void
+fd_texture_barrier(struct pipe_context *pctx, unsigned flags)
+{
+	/* On devices that could sample from GMEM we could possibly do better.
+	 * Or if we knew that we were doing GMEM bypass we could just emit a
+	 * cache flush, perhaps?  But we don't know if future draws would cause
+	 * us to use GMEM, and a flush in bypass isn't the end of the world.
+	 */
+	fd_context_flush(pctx, NULL, 0);
+}
+
 /**
  * emit marker string as payload of a no-op packet, which can be
  * decoded by cffdump.
@@ -136,14 +147,15 @@ fd_context_destroy(struct pipe_context *pctx)
 
 	slab_destroy_child(&ctx->transfer_pool);
 
-	for (i = 0; i < ARRAY_SIZE(ctx->pipe); i++) {
-		struct fd_vsc_pipe *pipe = &ctx->pipe[i];
+	for (i = 0; i < ARRAY_SIZE(ctx->vsc_pipe); i++) {
+		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[i];
 		if (!pipe->bo)
 			break;
 		fd_bo_del(pipe->bo);
 	}
 
 	fd_device_del(ctx->dev);
+	fd_pipe_del(ctx->pipe);
 
 	if (fd_mesa_debug & (FD_DBG_BSTAT | FD_DBG_MSGS)) {
 		printf("batch_total=%u, batch_sysmem=%u, batch_gmem=%u, batch_restore=%u\n",
@@ -244,13 +256,14 @@ fd_context_cleanup_common_vbos(struct fd_context *ctx)
 
 struct pipe_context *
 fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
-		const uint8_t *primtypes, void *priv)
+		const uint8_t *primtypes, void *priv, unsigned flags)
 {
 	struct fd_screen *screen = fd_screen(pscreen);
 	struct pipe_context *pctx;
 	int i;
 
 	ctx->screen = screen;
+	ctx->pipe = fd_pipe_new(screen->dev, FD_PIPE_3D);
 
 	ctx->primtypes = primtypes;
 	ctx->primtype_mask = 0;
@@ -271,6 +284,7 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 	pctx->set_debug_callback = fd_set_debug_callback;
 	pctx->create_fence_fd = fd_create_fence_fd;
 	pctx->fence_server_sync = fd_fence_server_sync;
+	pctx->texture_barrier = fd_texture_barrier;
 
 	pctx->stream_uploader = u_upload_create_default(pctx);
 	if (!pctx->stream_uploader)

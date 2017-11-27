@@ -209,18 +209,24 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
       return NULL;
    }
 
-   /* If we have the TEXTURE_HALIGN feature, we can always align to the
-    * resolve engine's width.  If not, we must not align resources used
-    * only for textures. */
-   bool rs_align = VIV_FEATURE(screen, chipMinorFeatures1, TEXTURE_HALIGN) ||
-                   !etna_resource_sampler_only(templat);
-
    /* Determine needed padding (alignment of height/width) */
    unsigned paddingX = 0, paddingY = 0;
    unsigned halign = TEXTURE_HALIGN_FOUR;
-   etna_layout_multiple(layout, screen->specs.pixel_pipes, rs_align, &paddingX,
-                        &paddingY, &halign);
-   assert(paddingX && paddingY);
+   if (!util_format_is_compressed(templat->format)) {
+      /* If we have the TEXTURE_HALIGN feature, we can always align to the
+       * resolve engine's width.  If not, we must not align resources used
+       * only for textures. */
+      bool rs_align = VIV_FEATURE(screen, chipMinorFeatures1, TEXTURE_HALIGN) ||
+                      !etna_resource_sampler_only(templat);
+      etna_layout_multiple(layout, screen->specs.pixel_pipes, rs_align, &paddingX,
+                           &paddingY, &halign);
+      assert(paddingX && paddingY);
+   } else {
+      /* Compressed textures are padded to their block size, but we don't have
+       * to do anything special for that. */
+      paddingX = 1;
+      paddingY = 1;
+   }
 
    if (templat->target != PIPE_BUFFER)
       etna_adjust_rs_align(screen->specs.pixel_pipes, NULL, &paddingY);
@@ -621,6 +627,19 @@ etna_resource_used(struct etna_context *ctx, struct pipe_resource *prsc,
    list_delinit(&rsc->list);
    list_addtail(&rsc->list, &ctx->used_resources);
    rsc->pending_ctx = ctx;
+}
+
+bool
+etna_resource_has_valid_ts(struct etna_resource *rsc)
+{
+   if (!rsc->ts_bo)
+      return false;
+
+   for (int level = 0; level <= rsc->base.last_level; level++)
+      if (rsc->levels[level].ts_valid)
+         return true;
+
+   return false;
 }
 
 void

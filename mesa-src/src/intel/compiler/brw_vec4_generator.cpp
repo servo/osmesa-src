@@ -1497,11 +1497,10 @@ generate_code(struct brw_codegen *p,
               const struct cfg_t *cfg)
 {
    const struct gen_device_info *devinfo = p->devinfo;
-   const char *stage_abbrev = _mesa_shader_stage_to_abbrev(nir->stage);
+   const char *stage_abbrev = _mesa_shader_stage_to_abbrev(nir->info.stage);
    bool debug_flag = INTEL_DEBUG &
-      intel_debug_flag_for_shader_stage(nir->stage);
-   struct annotation_info annotation;
-   memset(&annotation, 0, sizeof(annotation));
+      intel_debug_flag_for_shader_stage(nir->info.stage);
+   struct disasm_info *disasm_info = disasm_initialize(devinfo, cfg);
    int spill_count = 0, fill_count = 0;
    int loop_count = 0;
 
@@ -1509,7 +1508,7 @@ generate_code(struct brw_codegen *p,
       struct brw_reg src[3], dst;
 
       if (unlikely(debug_flag))
-         annotate(p->devinfo, &annotation, cfg, inst, p->next_insn_offset);
+         disasm_annotate(disasm_info, inst, p->next_insn_offset);
 
       for (unsigned int i = 0; i < 3; i++) {
          src[i] = inst->src[i].as_brw_reg();
@@ -1770,7 +1769,7 @@ generate_code(struct brw_codegen *p,
       case SHADER_OPCODE_TG4:
       case SHADER_OPCODE_TG4_OFFSET:
       case SHADER_OPCODE_SAMPLEINFO:
-         generate_tex(p, prog_data, nir->stage,
+         generate_tex(p, prog_data, nir->info.stage,
                       inst, dst, src[0], src[1], src[2]);
          break;
 
@@ -1910,7 +1909,7 @@ generate_code(struct brw_codegen *p,
 
       case SHADER_OPCODE_FIND_LIVE_CHANNEL: {
          const struct brw_reg mask =
-            brw_stage_has_packed_dispatch(devinfo, nir->stage,
+            brw_stage_has_packed_dispatch(devinfo, nir->info.stage,
                                           &prog_data->base) ? brw_imm_ud(~0u) :
             brw_dmask_reg();
          brw_find_live_channel(p, dst, mask);
@@ -2175,27 +2174,27 @@ generate_code(struct brw_codegen *p,
    }
 
    brw_set_uip_jip(p, 0);
-   annotation_finalize(&annotation, p->next_insn_offset);
+
+   /* end of program sentinel */
+   disasm_new_inst_group(disasm_info, p->next_insn_offset);
 
 #ifndef NDEBUG
-   bool validated = brw_validate_instructions(devinfo, p->store,
-                                              0, p->next_insn_offset,
-                                              &annotation);
+   bool validated =
 #else
    if (unlikely(debug_flag))
+#endif
       brw_validate_instructions(devinfo, p->store,
                                 0, p->next_insn_offset,
-                                &annotation);
-#endif
+                                disasm_info);
 
    int before_size = p->next_insn_offset;
-   brw_compact_instructions(p, 0, annotation.ann_count, annotation.ann);
+   brw_compact_instructions(p, 0, disasm_info);
    int after_size = p->next_insn_offset;
 
    if (unlikely(debug_flag)) {
       fprintf(stderr, "Native code for %s %s shader %s:\n",
               nir->info.label ? nir->info.label : "unnamed",
-              _mesa_shader_stage_to_string(nir->stage), nir->info.name);
+              _mesa_shader_stage_to_string(nir->info.stage), nir->info.name);
 
       fprintf(stderr, "%s vec4 shader: %d instructions. %d loops. %u cycles. %d:%d "
                       "spills:fills. Compacted %d to %d bytes (%.0f%%)\n",
@@ -2203,10 +2202,9 @@ generate_code(struct brw_codegen *p,
               spill_count, fill_count, before_size, after_size,
               100.0f * (before_size - after_size) / before_size);
 
-      dump_assembly(p->store, annotation.ann_count, annotation.ann,
-                    p->devinfo);
-      ralloc_free(annotation.mem_ctx);
+      dump_assembly(p->store, disasm_info);
    }
+   ralloc_free(disasm_info);
    assert(validated);
 
    compiler->shader_debug_log(log_data,

@@ -42,6 +42,8 @@ struct ac_shader_abi {
 	LLVMValueRef draw_id;
 	LLVMValueRef vertex_id;
 	LLVMValueRef instance_id;
+	LLVMValueRef gs_prim_id;
+	LLVMValueRef gs_invocation_id;
 	LLVMValueRef frag_pos[4];
 	LLVMValueRef front_face;
 	LLVMValueRef ancillary;
@@ -57,6 +59,10 @@ struct ac_shader_abi {
 	void (*emit_outputs)(struct ac_shader_abi *abi,
 			     unsigned max_outputs,
 			     LLVMValueRef *addrs);
+
+	void (*emit_vertex)(struct ac_shader_abi *abi,
+			    unsigned stream,
+			    LLVMValueRef *addrs);
 
 	LLVMValueRef (*load_ubo)(struct ac_shader_abi *abi, LLVMValueRef index);
 
@@ -88,6 +94,10 @@ struct ac_shader_abi {
 					  LLVMValueRef index,
 					  enum ac_descriptor_type desc_type,
 					  bool image, bool write);
+
+	/* Whether to clamp the shadow reference value to [0,1]on VI. Radeonsi currently
+	 * uses it due to promoting D16 to D32, but radv needs it off. */
+	bool clamp_shadow_reference;
 };
 
 #endif /* AC_SHADER_ABI_H */

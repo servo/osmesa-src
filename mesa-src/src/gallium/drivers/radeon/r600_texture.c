@@ -19,10 +19,6 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *      Jerome Glisse
- *      Corbin Simpson
  */
 #include "r600_pipe_common.h"
 #include "r600_cs.h"
@@ -32,7 +28,7 @@
 #include "util/u_memory.h"
 #include "util/u_pack_color.h"
 #include "util/u_surface.h"
-#include "os/os_time.h"
+#include "util/os_time.h"
 #include <errno.h>
 #include <inttypes.h>
 #include "state_tracker/drm_driver.h"
@@ -203,7 +199,8 @@ static unsigned r600_texture_get_offset(struct r600_common_screen *rscreen,
 	} else {
 		*stride = rtex->surface.u.legacy.level[level].nblk_x *
 			  rtex->surface.bpe;
-		*layer_stride = rtex->surface.u.legacy.level[level].slice_size;
+		assert((uint64_t)rtex->surface.u.legacy.level[level].slice_size_dw * 4 <= UINT_MAX);
+		*layer_stride = (uint64_t)rtex->surface.u.legacy.level[level].slice_size_dw * 4;
 
 		if (!box)
 			return rtex->surface.u.legacy.level[level].offset;
@@ -211,7 +208,7 @@ static unsigned r600_texture_get_offset(struct r600_common_screen *rscreen,
 		/* Each texture is an array of mipmap levels. Each level is
 		 * an array of slices. */
 		return rtex->surface.u.legacy.level[level].offset +
-		       box->z * rtex->surface.u.legacy.level[level].slice_size +
+		       box->z * (uint64_t)rtex->surface.u.legacy.level[level].slice_size_dw * 4 +
 		       (box->y / rtex->surface.blk_h *
 		        rtex->surface.u.legacy.level[level].nblk_x +
 		        box->x / rtex->surface.blk_w) * rtex->surface.bpe;
@@ -301,16 +298,6 @@ static int r600_init_surface(struct r600_common_screen *rscreen,
 		       pitch_in_bytes_override == surface->u.gfx9.surf_pitch * bpe);
 		surface->u.gfx9.surf_offset = offset;
 	} else {
-		if (pitch_in_bytes_override &&
-		    pitch_in_bytes_override != surface->u.legacy.level[0].nblk_x * bpe) {
-			/* old ddx on evergreen over estimate alignment for 1d, only 1 level
-			 * for those
-			 */
-			surface->u.legacy.level[0].nblk_x = pitch_in_bytes_override / bpe;
-			surface->u.legacy.level[0].slice_size = pitch_in_bytes_override *
-								surface->u.legacy.level[0].nblk_y;
-		}
-
 		if (offset) {
 			for (i = 0; i < ARRAY_SIZE(surface->u.legacy.level); ++i)
 				surface->u.legacy.level[i].offset += offset;
@@ -557,7 +544,6 @@ static void r600_reallocate_texture_inplace(struct r600_common_context *rctx,
 	rtex->tc_compatible_htile = new_tex->tc_compatible_htile;
 	rtex->depth_cleared = new_tex->depth_cleared;
 	rtex->stencil_cleared = new_tex->stencil_cleared;
-	rtex->non_disp_tiling = new_tex->non_disp_tiling;
 	rtex->dcc_gather_statistics = new_tex->dcc_gather_statistics;
 	rtex->framebuffers_bound = new_tex->framebuffers_bound;
 
@@ -653,7 +639,7 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 			offset = rtex->surface.u.legacy.level[0].offset;
 			stride = rtex->surface.u.legacy.level[0].nblk_x *
 				 rtex->surface.bpe;
-			slice_size = rtex->surface.u.legacy.level[0].slice_size;
+			slice_size = (uint64_t)rtex->surface.u.legacy.level[0].slice_size_dw * 4;
 		}
 	} else {
 		/* Move a suballocated buffer into a non-suballocated allocation. */
@@ -1010,7 +996,7 @@ void si_print_texture_info(struct r600_common_screen *rscreen,
 		}
 
 		if (rtex->htile_offset) {
-			u_log_printf(log, "  HTile: offset=%"PRIu64", size=%"PRIu64", alignment=%u, "
+			u_log_printf(log, "  HTile: offset=%"PRIu64", size=%u, alignment=%u, "
 				"rb_aligned=%u, pipe_aligned=%u\n",
 				rtex->htile_offset,
 				rtex->surface.htile_size,
@@ -1020,7 +1006,7 @@ void si_print_texture_info(struct r600_common_screen *rscreen,
 		}
 
 		if (rtex->dcc_offset) {
-			u_log_printf(log, "  DCC: offset=%"PRIu64", size=%"PRIu64", "
+			u_log_printf(log, "  DCC: offset=%"PRIu64", size=%u, "
 				"alignment=%u, pitch_max=%u, num_dcc_levels=%u\n",
 				rtex->dcc_offset, rtex->surface.dcc_size,
 				rtex->surface.dcc_alignment,
@@ -1058,19 +1044,19 @@ void si_print_texture_info(struct r600_common_screen *rscreen,
 			rtex->cmask.slice_tile_max);
 
 	if (rtex->htile_offset)
-		u_log_printf(log, "  HTile: offset=%"PRIu64", size=%"PRIu64", "
+		u_log_printf(log, "  HTile: offset=%"PRIu64", size=%u, "
 			"alignment=%u, TC_compatible = %u\n",
 			rtex->htile_offset, rtex->surface.htile_size,
 			rtex->surface.htile_alignment,
 			rtex->tc_compatible_htile);
 
 	if (rtex->dcc_offset) {
-		u_log_printf(log, "  DCC: offset=%"PRIu64", size=%"PRIu64", alignment=%u\n",
+		u_log_printf(log, "  DCC: offset=%"PRIu64", size=%u, alignment=%u\n",
 			rtex->dcc_offset, rtex->surface.dcc_size,
 			rtex->surface.dcc_alignment);
 		for (i = 0; i <= rtex->resource.b.b.last_level; i++)
-			u_log_printf(log, "  DCCLevel[%i]: enabled=%u, offset=%"PRIu64", "
-				"fast_clear_size=%"PRIu64"\n",
+			u_log_printf(log, "  DCCLevel[%i]: enabled=%u, offset=%u, "
+				"fast_clear_size=%u\n",
 				i, i < rtex->surface.num_dcc_levels,
 				rtex->surface.u.legacy.level[i].dcc_offset,
 				rtex->surface.u.legacy.level[i].dcc_fast_clear_size);
@@ -1081,7 +1067,7 @@ void si_print_texture_info(struct r600_common_screen *rscreen,
 			"npix_x=%u, npix_y=%u, npix_z=%u, nblk_x=%u, nblk_y=%u, "
 			"mode=%u, tiling_index = %u\n",
 			i, rtex->surface.u.legacy.level[i].offset,
-			rtex->surface.u.legacy.level[i].slice_size,
+			(uint64_t)rtex->surface.u.legacy.level[i].slice_size_dw * 4,
 			u_minify(rtex->resource.b.b.width0, i),
 			u_minify(rtex->resource.b.b.height0, i),
 			u_minify(rtex->resource.b.b.depth0, i),
@@ -1099,7 +1085,7 @@ void si_print_texture_info(struct r600_common_screen *rscreen,
 				"npix_y=%u, npix_z=%u, nblk_x=%u, nblk_y=%u, "
 				"mode=%u, tiling_index = %u\n",
 				i, rtex->surface.u.legacy.stencil_level[i].offset,
-				rtex->surface.u.legacy.stencil_level[i].slice_size,
+				(uint64_t)rtex->surface.u.legacy.stencil_level[i].slice_size_dw * 4,
 				u_minify(rtex->resource.b.b.width0, i),
 				u_minify(rtex->resource.b.b.height0, i),
 				u_minify(rtex->resource.b.b.depth0, i),
@@ -1159,10 +1145,6 @@ r600_texture_create_object(struct pipe_screen *screen,
 		rtex->db_render_format = base->format;
 	}
 
-	/* Tiled depth textures utilize the non-displayable tile order.
-	 * This must be done after r600_setup_surface.
-	 * Applies to R600-Cayman. */
-	rtex->non_disp_tiling = rtex->is_depth && rtex->surface.u.legacy.level[0].mode >= RADEON_SURF_MODE_1D;
 	/* Applies to GCN. */
 	rtex->last_msaa_resolve_target_micro_mode = rtex->surface.micro_tile_mode;
 
@@ -1495,8 +1477,6 @@ bool si_init_flushed_depth_texture(struct pipe_context *ctx,
 		R600_ERR("failed to create temporary texture to hold flushed depth\n");
 		return false;
 	}
-
-	(*flushed_depth_texture)->non_disp_tiling = false;
 	return true;
 }
 
@@ -1984,9 +1964,6 @@ static struct pipe_surface *r600_create_surface(struct pipe_context *pipe,
 static void r600_surface_destroy(struct pipe_context *pipe,
 				 struct pipe_surface *surface)
 {
-	struct r600_surface *surf = (struct r600_surface*)surface;
-	r600_resource_reference(&surf->cb_buffer_fmask, NULL);
-	r600_resource_reference(&surf->cb_buffer_cmask, NULL);
 	pipe_resource_reference(&surface->texture, NULL);
 	FREE(surface);
 }

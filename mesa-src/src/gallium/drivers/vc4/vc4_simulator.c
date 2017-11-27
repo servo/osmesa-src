@@ -619,6 +619,10 @@ vc4_simulator_get_param_ioctl(int fd, struct drm_vc4_get_param *args)
                 args->value = true;
                 return 0;
 
+        case DRM_VC4_PARAM_SUPPORTS_MADVISE:
+                errno = -EINVAL;
+                return -1;
+
         case DRM_VC4_PARAM_V3D_IDENT0:
                 args->value = 0x02000000;
                 return 0;
@@ -654,11 +658,16 @@ vc4_simulator_ioctl(int fd, unsigned long request, void *args)
                  */
                 return 0;
 
+        case DRM_IOCTL_VC4_LABEL_BO:
+                /* This is just debug information, nothing to do. */
+                return 0;
+
         case DRM_IOCTL_VC4_GET_TILING:
         case DRM_IOCTL_VC4_SET_TILING:
                 /* Disable these for now, since the sharing with i965 requires
                  * linear buffers.
                  */
+                errno = -EINVAL;
                 return -1;
 
         case DRM_IOCTL_VC4_GET_PARAM:

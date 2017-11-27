@@ -107,11 +107,11 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_OCCLUSION_QUERY:
         case PIPE_CAP_POINT_SPRITE:
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-        case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
         case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
         case PIPE_CAP_COMPUTE:
         case PIPE_CAP_DRAW_INDIRECT:
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
+        case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
                 return 1;
 
         case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
@@ -127,8 +127,11 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 return 1;
 
         case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
                 return 1;
+        case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
+        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+                return 0;
 
         case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
         case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
@@ -169,8 +172,6 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_INDEP_BLEND_FUNC:
         case PIPE_CAP_DEPTH_CLIP_DISABLE:
         case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
-        case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
-        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
         case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
         case PIPE_CAP_USER_VERTEX_BUFFERS:
         case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
@@ -245,6 +246,8 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_MEMOBJ:
         case PIPE_CAP_LOAD_CONSTBUF:
         case PIPE_CAP_TILE_RASTER_ORDER:
+        case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
+        case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
                 return 0;
 
                 /* Geometry shader output, unsupported. */
@@ -317,7 +320,7 @@ vc5_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
         case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
                 return 0.0f;
         case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
-                return 0.0f;
+                return 16.0f;
         case PIPE_CAPF_GUARD_BAND_LEFT:
         case PIPE_CAPF_GUARD_BAND_TOP:
         case PIPE_CAPF_GUARD_BAND_RIGHT:
@@ -355,7 +358,10 @@ vc5_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                 else
                         return 16;
         case PIPE_SHADER_CAP_MAX_OUTPUTS:
-                return shader == PIPE_SHADER_FRAGMENT ? 4 : 8;
+                if (shader == PIPE_SHADER_FRAGMENT)
+                        return 4;
+                else
+                        return VC5_MAX_FS_INPUTS / 4;
         case PIPE_SHADER_CAP_MAX_TEMPS:
                 return 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
         case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
@@ -381,6 +387,8 @@ vc5_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
         case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
         case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
+        case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
+        case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
                 return 0;
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
         case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:

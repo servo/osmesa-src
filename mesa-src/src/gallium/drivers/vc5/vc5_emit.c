@@ -28,7 +28,7 @@
 #include "broadcom/compiler/v3d_compiler.h"
 
 static uint8_t
-vc5_factor(enum pipe_blendfactor factor)
+vc5_factor(enum pipe_blendfactor factor, bool dst_alpha_one)
 {
         /* We may get a bad blendfactor when blending is disabled. */
         if (factor == 0)
@@ -52,9 +52,13 @@ vc5_factor(enum pipe_blendfactor factor)
         case PIPE_BLENDFACTOR_INV_SRC_ALPHA:
                 return V3D_BLEND_FACTOR_INV_SRC_ALPHA;
         case PIPE_BLENDFACTOR_DST_ALPHA:
-                return V3D_BLEND_FACTOR_DST_ALPHA;
+                return (dst_alpha_one ?
+                        V3D_BLEND_FACTOR_ONE :
+                        V3D_BLEND_FACTOR_DST_ALPHA);
         case PIPE_BLENDFACTOR_INV_DST_ALPHA:
-                return V3D_BLEND_FACTOR_INV_DST_ALPHA;
+                return (dst_alpha_one ?
+                        V3D_BLEND_FACTOR_ZERO :
+                        V3D_BLEND_FACTOR_INV_DST_ALPHA);
         case PIPE_BLENDFACTOR_CONST_COLOR:
                 return V3D_BLEND_FACTOR_CONST_COLOR;
         case PIPE_BLENDFACTOR_INV_CONST_COLOR:
@@ -126,9 +130,22 @@ emit_one_texture(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex
                 .border_color_blue = swizzled_border_color(psampler, sview, 2),
                 .border_color_alpha = swizzled_border_color(psampler, sview, 3),
 
-                /* XXX: Disable min/maxlod for txf */
-                .max_level_of_detail = MIN2(MIN2(psampler->max_lod,
-                                                 VC5_MAX_MIP_LEVELS),
+                /* In the normal texturing path, the LOD gets clamped between
+                 * min/max, and the base_level field (set in the sampler view
+                 * from first_level) only decides where the min/mag switch
+                 * happens, so we need to use the LOD clamps to keep us
+                 * between min and max.
+                 *
+                 * For txf, the LOD clamp is still used, despite GL not
+                 * wanting that.  We will need to have a separate
+                 * TEXTURE_SHADER_STATE that ignores psview->min/max_lod to
+                 * support txf properly.
+                 */
+                .min_level_of_detail = MIN2(psview->u.tex.first_level +
+                                            MAX2(psampler->min_lod, 0),
+                                            psview->u.tex.last_level),
+                .max_level_of_detail = MIN2(psview->u.tex.first_level +
+                                            psampler->max_lod,
                                             psview->u.tex.last_level),
 
                 .texture_base_pointer = cl_address(rsc->bo,
@@ -145,20 +162,31 @@ emit_one_texture(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex
                 mag_img_filter = PIPE_TEX_FILTER_NEAREST;
         }
 
-        bool min_nearest = (min_img_filter == PIPE_TEX_FILTER_NEAREST);
+        bool min_nearest = min_img_filter == PIPE_TEX_FILTER_NEAREST;
         switch (min_mip_filter) {
         case PIPE_TEX_MIPFILTER_NONE:
-                unpacked.minification_filter = 0 + min_nearest;
+                unpacked.filter += min_nearest ? 2 : 0;
                 break;
         case PIPE_TEX_MIPFILTER_NEAREST:
-                unpacked.minification_filter = 2 + !min_nearest;
+                unpacked.filter += min_nearest ? 4 : 8;
                 break;
         case PIPE_TEX_MIPFILTER_LINEAR:
-                unpacked.minification_filter = 4 + !min_nearest;
+                unpacked.filter += min_nearest ? 4 : 8;
+                unpacked.filter += 2;
                 break;
         }
-        unpacked.magnification_filter = (mag_img_filter ==
-                                         PIPE_TEX_FILTER_NEAREST);
+
+        if (mag_img_filter == PIPE_TEX_FILTER_NEAREST)
+                unpacked.filter++;
+
+        if (psampler->max_anisotropy > 8)
+                unpacked.filter = V3D_TMU_FILTER_ANISOTROPIC_16_1;
+        else if (psampler->max_anisotropy > 4)
+                unpacked.filter = V3D_TMU_FILTER_ANISOTROPIC_8_1;
+        else if (psampler->max_anisotropy > 2)
+                unpacked.filter = V3D_TMU_FILTER_ANISOTROPIC_4_1;
+        else if (psampler->max_anisotropy)
+                unpacked.filter = V3D_TMU_FILTER_ANISOTROPIC_2_1;
 
         uint8_t packed[cl_packet_length(TEXTURE_SHADER_STATE)];
         cl_packet_pack(TEXTURE_SHADER_STATE)(&job->indirect, packed, &unpacked);
@@ -166,14 +194,30 @@ emit_one_texture(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex
         for (int i = 0; i < ARRAY_SIZE(packed); i++)
                 packed[i] |= sview->texture_shader_state[i] | sampler->texture_shader_state[i];
 
+        /* TMU indirect structs need to be 32b aligned. */
+        vc5_cl_ensure_space(&job->indirect, ARRAY_SIZE(packed), 32);
         cl_emit_prepacked(&job->indirect, &packed);
 }
 
 static void
 emit_textures(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex)
 {
-        for (int i = 0; i < stage_tex->num_textures; i++)
-                emit_one_texture(vc5, stage_tex, i);
+        for (int i = 0; i < stage_tex->num_textures; i++) {
+                if (stage_tex->textures[i])
+                        emit_one_texture(vc5, stage_tex, i);
+        }
+}
+
+static uint32_t
+translate_colormask(struct vc5_context *vc5, uint32_t colormask, int rt)
+{
+        if (vc5->swap_color_rb & (1 << rt)) {
+                colormask = ((colormask & (2 | 8)) |
+                             ((colormask & 1) << 2) |
+                             ((colormask & 4) >> 2));
+        }
+
+        return (~colormask) & 0xf;
 }
 
 void
@@ -215,7 +259,6 @@ vc5_emit_state(struct pipe_context *pctx)
                 cl_emit(&job->bcl, CLIP_WINDOW, clip) {
                         clip.clip_window_left_pixel_coordinate = minx;
                         clip.clip_window_bottom_pixel_coordinate = miny;
-                        clip.clip_window_height_in_pixels = maxy - miny;
                         clip.clip_window_width_in_pixels = maxx - minx;
                         clip.clip_window_height_in_pixels = maxy - miny;
                 }
@@ -232,9 +275,11 @@ vc5_emit_state(struct pipe_context *pctx)
                           VC5_DIRTY_COMPILED_FS)) {
                 cl_emit(&job->bcl, CONFIGURATION_BITS, config) {
                         config.enable_forward_facing_primitive =
+                                !vc5->rasterizer->base.rasterizer_discard &&
                                 !(vc5->rasterizer->base.cull_face &
                                   PIPE_FACE_FRONT);
                         config.enable_reverse_facing_primitive =
+                                !vc5->rasterizer->base.rasterizer_discard &&
                                 !(vc5->rasterizer->base.cull_face &
                                   PIPE_FACE_BACK);
                         /* This seems backwards, but it's what gets the
@@ -259,24 +304,31 @@ vc5_emit_state(struct pipe_context *pctx)
                                 config.z_updates_enable =
                                         vc5->zsa->base.depth.writemask;
                                 config.early_z_enable =
-                                        vc5->zsa->early_z_enable;
+                                        (vc5->zsa->early_z_enable &&
+                                         !vc5->prog.fs->prog_data.fs->writes_z);
                                 config.depth_test_function =
                                         vc5->zsa->base.depth.func;
                         } else {
                                 config.depth_test_function = PIPE_FUNC_ALWAYS;
                         }
+
+                        config.stencil_enable =
+                                vc5->zsa->base.stencil[0].enabled;
                 }
 
         }
 
-        if (vc5->dirty & VC5_DIRTY_RASTERIZER) {
+        if (vc5->dirty & VC5_DIRTY_RASTERIZER &&
+            vc5->rasterizer->base.offset_tri) {
                 cl_emit(&job->bcl, DEPTH_OFFSET, depth) {
                         depth.depth_offset_factor =
                                 vc5->rasterizer->offset_factor;
                         depth.depth_offset_units =
                                 vc5->rasterizer->offset_units;
                 }
+        }
 
+        if (vc5->dirty & VC5_DIRTY_RASTERIZER) {
                 cl_emit(&job->bcl, POINT_SIZE, point_size) {
                         point_size.point_size = vc5->rasterizer->point_size;
                 }
@@ -300,13 +352,11 @@ vc5_emit_state(struct pipe_context *pctx)
                         clip.viewport_z_scale_zc_to_zs =
                                 vc5->viewport.scale[2];
                 }
-                if (0 /* XXX */) {
                 cl_emit(&job->bcl, CLIPPER_Z_MIN_MAX_CLIPPING_PLANES, clip) {
                         clip.minimum_zw = (vc5->viewport.translate[2] -
                                            vc5->viewport.scale[2]);
                         clip.maximum_zw = (vc5->viewport.translate[2] +
                                            vc5->viewport.scale[2]);
-                }
                 }
 
                 cl_emit(&job->bcl, VIEWPORT_OFFSET, vp) {
@@ -317,7 +367,7 @@ vc5_emit_state(struct pipe_context *pctx)
                 }
         }
 
-        if (vc5->dirty & VC5_DIRTY_BLEND) {
+        if (vc5->dirty & VC5_DIRTY_BLEND && vc5->blend->rt[0].blend_enable) {
                 struct pipe_blend_state *blend = vc5->blend;
 
                 cl_emit(&job->bcl, BLEND_CONFIG, config) {
@@ -325,43 +375,57 @@ vc5_emit_state(struct pipe_context *pctx)
 
                         config.colour_blend_mode = rtblend->rgb_func;
                         config.colour_blend_dst_factor =
-                                vc5_factor(rtblend->rgb_dst_factor);
+                                vc5_factor(rtblend->rgb_dst_factor,
+                                           vc5->blend_dst_alpha_one);
                         config.colour_blend_src_factor =
-                                vc5_factor(rtblend->rgb_src_factor);
+                                vc5_factor(rtblend->rgb_src_factor,
+                                           vc5->blend_dst_alpha_one);
 
                         config.alpha_blend_mode = rtblend->alpha_func;
                         config.alpha_blend_dst_factor =
-                                vc5_factor(rtblend->alpha_dst_factor);
+                                vc5_factor(rtblend->alpha_dst_factor,
+                                           vc5->blend_dst_alpha_one);
                         config.alpha_blend_src_factor =
-                                vc5_factor(rtblend->alpha_src_factor);
+                                vc5_factor(rtblend->alpha_src_factor,
+                                           vc5->blend_dst_alpha_one);
                 }
+        }
+
+        if (vc5->dirty & VC5_DIRTY_BLEND) {
+                struct pipe_blend_state *blend = vc5->blend;
 
                 cl_emit(&job->bcl, COLOUR_WRITE_MASKS, mask) {
                         if (blend->independent_blend_enable) {
                                 mask.render_target_0_per_colour_component_write_masks =
-                                        (~blend->rt[0].colormask) & 0xf;
+                                        translate_colormask(vc5, blend->rt[0].colormask, 0);
                                 mask.render_target_1_per_colour_component_write_masks =
-                                        (~blend->rt[1].colormask) & 0xf;
+                                        translate_colormask(vc5, blend->rt[1].colormask, 1);
                                 mask.render_target_2_per_colour_component_write_masks =
-                                        (~blend->rt[2].colormask) & 0xf;
+                                        translate_colormask(vc5, blend->rt[2].colormask, 2);
                                 mask.render_target_3_per_colour_component_write_masks =
-                                        (~blend->rt[3].colormask) & 0xf;
+                                        translate_colormask(vc5, blend->rt[3].colormask, 3);
                         } else {
-                                uint8_t colormask = (~blend->rt[0].colormask) & 0xf;
-                                mask.render_target_0_per_colour_component_write_masks = colormask;
-                                mask.render_target_1_per_colour_component_write_masks = colormask;
-                                mask.render_target_2_per_colour_component_write_masks = colormask;
-                                mask.render_target_3_per_colour_component_write_masks = colormask;
+                                mask.render_target_0_per_colour_component_write_masks =
+                                        translate_colormask(vc5, blend->rt[0].colormask, 0);
+                                mask.render_target_1_per_colour_component_write_masks =
+                                        translate_colormask(vc5, blend->rt[0].colormask, 1);
+                                mask.render_target_2_per_colour_component_write_masks =
+                                        translate_colormask(vc5, blend->rt[0].colormask, 2);
+                                mask.render_target_3_per_colour_component_write_masks =
+                                        translate_colormask(vc5, blend->rt[0].colormask, 3);
                         }
                 }
         }
 
         if (vc5->dirty & VC5_DIRTY_BLEND_COLOR) {
                 cl_emit(&job->bcl, BLEND_CONSTANT_COLOUR, colour) {
-                        /* XXX: format-dependent swizzling */
-                        colour.red_f16 = vc5->blend_color.hf[2];
+                        colour.red_f16 = (vc5->swap_color_rb ?
+                                          vc5->blend_color.hf[2] :
+                                          vc5->blend_color.hf[0]);
                         colour.green_f16 = vc5->blend_color.hf[1];
-                        colour.blue_f16 = vc5->blend_color.hf[0];
+                        colour.blue_f16 = (vc5->swap_color_rb ?
+                                           vc5->blend_color.hf[0] :
+                                           vc5->blend_color.hf[2]);
                         colour.alpha_f16 = vc5->blend_color.hf[3];
                 }
         }
@@ -370,34 +434,17 @@ vc5_emit_state(struct pipe_context *pctx)
                 struct pipe_stencil_state *front = &vc5->zsa->base.stencil[0];
                 struct pipe_stencil_state *back = &vc5->zsa->base.stencil[1];
 
-                cl_emit(&job->bcl, STENCIL_CONFIG, config) {
-                        config.front_config = true;
-                        config.back_config = !back->enabled;
-
-                        config.stencil_write_mask = front->writemask;
-                        config.stencil_test_mask = front->valuemask;
-
-                        config.stencil_test_function = front->func;
-                        config.stencil_pass_op = front->zpass_op;
-                        config.depth_test_fail_op = front->zfail_op;
-                        config.stencil_test_fail_op = front->fail_op;
-
-                        config.stencil_ref_value = vc5->stencil_ref.ref_value[0];
+                if (front->enabled) {
+                        cl_emit_with_prepacked(&job->bcl, STENCIL_CONFIG,
+                                               vc5->zsa->stencil_front, config) {
+                                config.stencil_ref_value =
+                                        vc5->stencil_ref.ref_value[0];
+                        }
                 }
 
                 if (back->enabled) {
-                        cl_emit(&job->bcl, STENCIL_CONFIG, config) {
-                                config.front_config = false;
-                                config.back_config = true;
-
-                                config.stencil_write_mask = back->writemask;
-                                config.stencil_test_mask = back->valuemask;
-
-                                config.stencil_test_function = back->func;
-                                config.stencil_pass_op = back->zpass_op;
-                                config.depth_test_fail_op = back->zfail_op;
-                                config.stencil_test_fail_op = back->fail_op;
-
+                        cl_emit_with_prepacked(&job->bcl, STENCIL_CONFIG,
+                                               vc5->zsa->stencil_back, config) {
                                 config.stencil_ref_value =
                                         vc5->stencil_ref.ref_value[1];
                         }
@@ -408,7 +455,7 @@ vc5_emit_state(struct pipe_context *pctx)
                 emit_textures(vc5, &vc5->fragtex);
 
         if (vc5->dirty & VC5_DIRTY_VERTTEX)
-                emit_textures(vc5, &vc5->fragtex);
+                emit_textures(vc5, &vc5->verttex);
 
         if (vc5->dirty & VC5_DIRTY_FLAT_SHADE_FLAGS) {
                 /* XXX: Need to handle more than 24 entries. */
@@ -459,6 +506,15 @@ vc5_emit_state(struct pipe_context *pctx)
                         }
                 } else {
                         /* XXX? */
+                }
+        }
+
+        if (vc5->dirty & VC5_DIRTY_OQ) {
+                cl_emit(&job->bcl, OCCLUSION_QUERY_COUNTER, counter) {
+                        job->oq_enabled = vc5->active_queries && vc5->current_oq;
+                        if (job->oq_enabled) {
+                                counter.address = cl_address(vc5->current_oq, 0);
+                        }
                 }
         }
 }

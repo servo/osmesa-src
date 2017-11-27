@@ -78,6 +78,7 @@ enum ring_type {
     RING_VCE,
     RING_UVD_ENC,
     RING_VCN_DEC,
+    RING_VCN_ENC,
     RING_LAST,
 };
 
@@ -92,6 +93,7 @@ enum radeon_value_id {
     RADEON_NUM_GFX_IBS,
     RADEON_NUM_SDMA_IBS,
     RADEON_GFX_BO_LIST_COUNTER, /* number of BOs submitted in gfx IBs */
+    RADEON_GFX_IB_SIZE_COUNTER,
     RADEON_NUM_BYTES_MOVED,
     RADEON_NUM_EVICTIONS,
     RADEON_NUM_VRAM_CPU_PAGE_FAULTS,
@@ -542,7 +544,9 @@ struct radeon_winsys {
     /**
      * Create a fence before the CS is flushed.
      * The user must flush manually to complete the initializaton of the fence.
-     * The fence must not be used before the flush.
+     *
+     * The fence must not be used for anything except \ref cs_add_fence_dependency
+     * before the flush.
      */
     struct pipe_fence_handle *(*cs_get_next_fence)(struct radeon_winsys_cs *cs);
 

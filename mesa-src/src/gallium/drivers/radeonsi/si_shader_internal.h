@@ -182,14 +182,7 @@ struct si_shader_context {
 	/* API GS */
 	int param_gs2vs_offset;
 	int param_gs_wave_id; /* GFX6 */
-	int param_gs_vtx0_offset; /* in dwords (GFX6) */
-	int param_gs_vtx1_offset; /* in dwords (GFX6) */
-	int param_gs_prim_id;
-	int param_gs_vtx2_offset; /* in dwords (GFX6) */
-	int param_gs_vtx3_offset; /* in dwords (GFX6) */
-	int param_gs_vtx4_offset; /* in dwords (GFX6) */
-	int param_gs_vtx5_offset; /* in dwords (GFX6) */
-	int param_gs_instance_id;
+	LLVMValueRef gs_vtx_offset[6]; /* in dwords (GFX6) */
 	int param_gs_vtx01_offset; /* in dwords (GFX9) */
 	int param_gs_vtx23_offset; /* in dwords (GFX9) */
 	int param_gs_vtx45_offset; /* in dwords (GFX9) */
@@ -209,7 +202,6 @@ struct si_shader_context {
 	LLVMValueRef esgs_ring;
 	LLVMValueRef gsvs_ring[4];
 
-	LLVMValueRef lds;
 	LLVMValueRef invoc0_tess_factors[6]; /* outer[4], inner[2] */
 	LLVMValueRef gs_next_vertex[4];
 	LLVMValueRef postponed_kill;
@@ -229,8 +221,6 @@ struct si_shader_context {
 
 	LLVMValueRef i32_0;
 	LLVMValueRef i32_1;
-
-	LLVMValueRef shared_memory;
 };
 
 static inline struct si_shader_context *

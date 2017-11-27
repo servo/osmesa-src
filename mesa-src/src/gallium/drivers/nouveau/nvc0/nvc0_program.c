@@ -575,10 +575,12 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
    info->target = debug_get_num_option("NV50_PROG_CHIPSET", chipset);
    info->optLevel = debug_get_num_option("NV50_PROG_OPTIMIZE", 3);
    info->dbgFlags = debug_get_num_option("NV50_PROG_DEBUG", 0);
+   info->omitLineNum = debug_get_num_option("NV50_PROG_DEBUG_OMIT_LINENUM", 0);
 #else
    info->optLevel = 3;
 #endif
 
+   info->bin.smemSize = prog->cp.smem_size;
    info->io.genUserClip = prog->vp.num_ucps;
    info->io.auxCBSlot = 15;
    info->io.msInfoCBSlot = 15;
@@ -618,6 +620,7 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
    prog->relocs = info->bin.relocData;
    prog->fixups = info->bin.fixupData;
    prog->num_gprs = MAX2(4, (info->bin.maxGPR + 1));
+   prog->cp.smem_size = info->bin.smemSize;
    prog->num_barriers = info->numBarriers;
 
    prog->vp.need_vertex_id = info->io.vertexId < PIPE_MAX_SHADER_INPUTS;
@@ -682,9 +685,10 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
                                                 &prog->pipe.stream_output);
 
    pipe_debug_message(debug, SHADER_INFO,
-                      "type: %d, local: %d, gpr: %d, inst: %d, bytes: %d",
-                      prog->type, info->bin.tlsSpace, prog->num_gprs,
-                      info->bin.instructions, info->bin.codeSize);
+                      "type: %d, local: %d, shared: %d, gpr: %d, inst: %d, bytes: %d",
+                      prog->type, info->bin.tlsSpace, info->bin.smemSize,
+                      prog->num_gprs, info->bin.instructions,
+                      info->bin.codeSize);
 
 #ifdef DEBUG
    if (debug_get_option("NV50_PROG_CHIPSET", NULL) && info->dbgFlags)

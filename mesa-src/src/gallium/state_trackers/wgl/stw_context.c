@@ -133,6 +133,25 @@ DrvCreateLayerContext(HDC hdc, INT iLayerPlane)
 
 
 /**
+ * Return the stw pixel format that most closely matches the pixel format
+ * on HDC.
+ * Used to get a pixel format when SetPixelFormat() hasn't been called before.
+ */
+static int
+get_matching_pixel_format(HDC hdc)
+{
+   int iPixelFormat = GetPixelFormat(hdc);
+   PIXELFORMATDESCRIPTOR pfd;
+
+   if (!iPixelFormat)
+      return 0;
+   if (!DescribePixelFormat(hdc, iPixelFormat, sizeof(pfd), &pfd))
+      return 0;
+   return stw_pixelformat_choose(hdc, &pfd);
+}
+
+
+/**
  * Called via DrvCreateContext(), DrvCreateLayerContext() and
  * wglCreateContextAttribsARB() to actually create a rendering context.
  * \param handle  the desired DHGLRC handle to use for the context, or zero
@@ -174,7 +193,7 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
        * but not all do, and the opengl32 runtime seems to use a default
        * pixel format in some cases, so use that.
        */
-      iPixelFormat = GetPixelFormat(hdc);
+      iPixelFormat = get_matching_pixel_format(hdc);
       if (!iPixelFormat)
          return 0;
    }
@@ -259,7 +278,7 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
    ctx->st->st_manager_private = (void *) ctx;
 
    if (ctx->st->cso_context) {
-      ctx->hud = hud_create(ctx->st->pipe, ctx->st->cso_context);
+      ctx->hud = hud_create(ctx->st->cso_context, NULL);
    }
 
    stw_lock_contexts(stw_dev);
@@ -272,7 +291,7 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
       if (old_ctx) {
          /* free the old context data associated with this handle */
          if (old_ctx->hud) {
-            hud_destroy(old_ctx->hud);
+            hud_destroy(old_ctx->hud, NULL);
          }
          ctx->st->destroy(old_ctx->st);
          FREE(old_ctx);
@@ -297,7 +316,7 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
 
 no_hglrc:
    if (ctx->hud) {
-      hud_destroy(ctx->hud);
+      hud_destroy(ctx->hud, NULL);
    }
    ctx->st->destroy(ctx->st);
 no_st_ctx:
@@ -329,7 +348,7 @@ DrvDeleteContext(DHGLRC dhglrc)
          stw_dev->stapi->make_current(stw_dev->stapi, NULL, NULL, NULL);
 
       if (ctx->hud) {
-         hud_destroy(ctx->hud);
+         hud_destroy(ctx->hud, NULL);
       }
 
       ctx->st->destroy(ctx->st);
@@ -458,7 +477,7 @@ stw_make_current(HDC hDrawDC, HDC hReadDC, DHGLRC dhglrc)
           * pixel format in some cases, so we must create a framebuffer for
           * those here.
           */
-         int iPixelFormat = GetPixelFormat(hDrawDC);
+         int iPixelFormat = get_matching_pixel_format(hDrawDC);
          if (iPixelFormat)
             fb = stw_framebuffer_create( hDrawDC, iPixelFormat );
          if (!fb)

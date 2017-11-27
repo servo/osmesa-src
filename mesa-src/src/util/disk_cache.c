@@ -1110,7 +1110,7 @@ disk_cache_get(struct disk_cache *cache, const cache_key key, size_t *size)
        * TODO: pass the metadata back to the caller and do some basic
        * validation.
        */
-      cache_item_md_size += sizeof(cache_key);
+      cache_item_md_size += num_keys * sizeof(cache_key);
       ret = lseek(fd, num_keys * sizeof(cache_key), SEEK_CUR);
       if (ret == -1)
          goto fail;
@@ -1170,7 +1170,7 @@ void
 disk_cache_put_key(struct disk_cache *cache, const cache_key key)
 {
    const uint32_t *key_chunk = (const uint32_t *) key;
-   int i = *key_chunk & CACHE_INDEX_KEY_MASK;
+   int i = CPU_TO_LE32(*key_chunk) & CACHE_INDEX_KEY_MASK;
    unsigned char *entry;
 
    entry = &cache->stored_keys[i * CACHE_KEY_SIZE];
@@ -1189,7 +1189,7 @@ bool
 disk_cache_has_key(struct disk_cache *cache, const cache_key key)
 {
    const uint32_t *key_chunk = (const uint32_t *) key;
-   int i = *key_chunk & CACHE_INDEX_KEY_MASK;
+   int i = CPU_TO_LE32(*key_chunk) & CACHE_INDEX_KEY_MASK;
    unsigned char *entry;
 
    entry = &cache->stored_keys[i * CACHE_KEY_SIZE];

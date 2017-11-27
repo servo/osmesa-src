@@ -75,177 +75,6 @@ compile_shaders(struct gl_context *ctx, struct gl_shader_program *prog) {
 }
 
 static void
-get_struct_type_field_and_pointer_sizes(size_t *s_field_size,
-                                        size_t *s_field_ptrs)
-{
-   *s_field_size = sizeof(glsl_struct_field);
-   *s_field_ptrs =
-     sizeof(((glsl_struct_field *)0)->type) +
-     sizeof(((glsl_struct_field *)0)->name);
-}
-
-static void
-encode_type_to_blob(struct blob *blob, const glsl_type *type)
-{
-   uint32_t encoding;
-
-   if (!type) {
-      blob_write_uint32(blob, 0);
-      return;
-   }
-
-   switch (type->base_type) {
-   case GLSL_TYPE_UINT:
-   case GLSL_TYPE_INT:
-   case GLSL_TYPE_FLOAT:
-   case GLSL_TYPE_BOOL:
-   case GLSL_TYPE_DOUBLE:
-   case GLSL_TYPE_UINT64:
-   case GLSL_TYPE_INT64:
-      encoding = (type->base_type << 24) |
-         (type->vector_elements << 4) |
-         (type->matrix_columns);
-      break;
-   case GLSL_TYPE_SAMPLER:
-      encoding = (type->base_type) << 24 |
-         (type->sampler_dimensionality << 4) |
-         (type->sampler_shadow << 3) |
-         (type->sampler_array << 2) |
-         (type->sampled_type);
-      break;
-   case GLSL_TYPE_SUBROUTINE:
-      encoding = type->base_type << 24;
-      blob_write_uint32(blob, encoding);
-      blob_write_string(blob, type->name);
-      return;
-   case GLSL_TYPE_IMAGE:
-      encoding = (type->base_type) << 24 |
-         (type->sampler_dimensionality << 3) |
-         (type->sampler_array << 2) |
-         (type->sampled_type);
-      break;
-   case GLSL_TYPE_ATOMIC_UINT:
-      encoding = (type->base_type << 24);
-      break;
-   case GLSL_TYPE_ARRAY:
-      blob_write_uint32(blob, (type->base_type) << 24);
-      blob_write_uint32(blob, type->length);
-      encode_type_to_blob(blob, type->fields.array);
-      return;
-   case GLSL_TYPE_STRUCT:
-   case GLSL_TYPE_INTERFACE:
-      blob_write_uint32(blob, (type->base_type) << 24);
-      blob_write_string(blob, type->name);
-      blob_write_uint32(blob, type->length);
-
-      size_t s_field_size, s_field_ptrs;
-      get_struct_type_field_and_pointer_sizes(&s_field_size, &s_field_ptrs);
-
-      for (unsigned i = 0; i < type->length; i++) {
-         encode_type_to_blob(blob, type->fields.structure[i].type);
-         blob_write_string(blob, type->fields.structure[i].name);
-
-         /* Write the struct field skipping the pointers */
-         blob_write_bytes(blob,
-                          ((char *)&type->fields.structure[i]) + s_field_ptrs,
-                          s_field_size - s_field_ptrs);
-      }
-
-      if (type->is_interface()) {
-         blob_write_uint32(blob, type->interface_packing);
-         blob_write_uint32(blob, type->interface_row_major);
-      }
-      return;
-   case GLSL_TYPE_VOID:
-   case GLSL_TYPE_ERROR:
-   default:
-      assert(!"Cannot encode type!");
-      encoding = 0;
-      break;
-   }
-
-   blob_write_uint32(blob, encoding);
-}
-
-static const glsl_type *
-decode_type_from_blob(struct blob_reader *blob)
-{
-   uint32_t u = blob_read_uint32(blob);
-
-   if (u == 0) {
-      return NULL;
-   }
-
-   glsl_base_type base_type = (glsl_base_type) (u >> 24);
-
-   switch (base_type) {
-   case GLSL_TYPE_UINT:
-   case GLSL_TYPE_INT:
-   case GLSL_TYPE_FLOAT:
-   case GLSL_TYPE_BOOL:
-   case GLSL_TYPE_DOUBLE:
-   case GLSL_TYPE_UINT64:
-   case GLSL_TYPE_INT64:
-      return glsl_type::get_instance(base_type, (u >> 4) & 0x0f, u & 0x0f);
-   case GLSL_TYPE_SAMPLER:
-      return glsl_type::get_sampler_instance((enum glsl_sampler_dim) ((u >> 4) & 0x07),
-                                             (u >> 3) & 0x01,
-                                             (u >> 2) & 0x01,
-                                             (glsl_base_type) ((u >> 0) & 0x03));
-   case GLSL_TYPE_SUBROUTINE:
-      return glsl_type::get_subroutine_instance(blob_read_string(blob));
-   case GLSL_TYPE_IMAGE:
-      return glsl_type::get_image_instance((enum glsl_sampler_dim) ((u >> 3) & 0x07),
-                                             (u >> 2) & 0x01,
-                                             (glsl_base_type) ((u >> 0) & 0x03));
-   case GLSL_TYPE_ATOMIC_UINT:
-      return glsl_type::atomic_uint_type;
-   case GLSL_TYPE_ARRAY: {
-      unsigned length = blob_read_uint32(blob);
-      return glsl_type::get_array_instance(decode_type_from_blob(blob),
-                                           length);
-   }
-   case GLSL_TYPE_STRUCT:
-   case GLSL_TYPE_INTERFACE: {
-      char *name = blob_read_string(blob);
-      unsigned num_fields = blob_read_uint32(blob);
-
-      size_t s_field_size, s_field_ptrs;
-      get_struct_type_field_and_pointer_sizes(&s_field_size, &s_field_ptrs);
-
-      glsl_struct_field *fields =
-         (glsl_struct_field *) malloc(s_field_size * num_fields);
-      for (unsigned i = 0; i < num_fields; i++) {
-         fields[i].type = decode_type_from_blob(blob);
-         fields[i].name = blob_read_string(blob);
-
-         blob_copy_bytes(blob, ((uint8_t *) &fields[i]) + s_field_ptrs,
-                         s_field_size - s_field_ptrs);
-      }
-
-      const glsl_type *t;
-      if (base_type == GLSL_TYPE_INTERFACE) {
-         enum glsl_interface_packing packing =
-            (glsl_interface_packing) blob_read_uint32(blob);
-         bool row_major = blob_read_uint32(blob);
-         t = glsl_type::get_interface_instance(fields, num_fields, packing,
-                                               row_major, name);
-      } else {
-         t = glsl_type::get_record_instance(fields, num_fields, name);
-      }
-
-      free(fields);
-      return t;
-   }
-   case GLSL_TYPE_VOID:
-   case GLSL_TYPE_ERROR:
-   default:
-      assert(!"Cannot decode type!");
-      return NULL;
-   }
-}
-
-static void
 write_subroutines(struct blob *metadata, struct gl_shader_program *prog)
 {
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
@@ -670,7 +499,7 @@ read_uniforms(struct blob_reader *metadata, struct gl_shader_program *prog)
    prog->data->NumUniformStorage = blob_read_uint32(metadata);
    prog->data->NumUniformDataSlots = blob_read_uint32(metadata);
 
-   uniforms = rzalloc_array(prog, struct gl_uniform_storage,
+   uniforms = rzalloc_array(prog->data, struct gl_uniform_storage,
                             prog->data->NumUniformStorage);
    prog->data->UniformStorage = uniforms;
 
@@ -1126,7 +955,7 @@ read_program_resource_list(struct blob_reader *metadata,
    prog->data->NumProgramResourceList = blob_read_uint32(metadata);
 
    prog->data->ProgramResourceList =
-      ralloc_array(prog, gl_program_resource,
+      ralloc_array(prog->data, gl_program_resource,
                    prog->data->NumProgramResourceList);
 
    for (unsigned i = 0; i < prog->data->NumProgramResourceList; i++) {
@@ -1232,7 +1061,18 @@ write_shader_metadata(struct blob *metadata, gl_linked_shader *shader)
                        sizeof(struct gl_bindless_image) - ptr_size);
    }
 
+   blob_write_bytes(metadata, &glprog->sh.fs.BlendSupport,
+                    sizeof(glprog->sh.fs.BlendSupport));
+
    write_shader_parameters(metadata, glprog->Parameters);
+
+   assert((glprog->driver_cache_blob == NULL) ==
+          (glprog->driver_cache_blob_size == 0));
+   blob_write_uint32(metadata, (uint32_t)glprog->driver_cache_blob_size);
+   if (glprog->driver_cache_blob_size > 0) {
+      blob_write_bytes(metadata, glprog->driver_cache_blob,
+                       glprog->driver_cache_blob_size);
+   }
 }
 
 static void
@@ -1285,8 +1125,19 @@ read_shader_metadata(struct blob_reader *metadata,
       }
    }
 
+   blob_copy_bytes(metadata, (uint8_t *) &glprog->sh.fs.BlendSupport,
+                   sizeof(glprog->sh.fs.BlendSupport));
+
    glprog->Parameters = _mesa_new_parameter_list();
    read_shader_parameters(metadata, glprog->Parameters);
+
+   glprog->driver_cache_blob_size = (size_t)blob_read_uint32(metadata);
+   if (glprog->driver_cache_blob_size > 0) {
+      glprog->driver_cache_blob =
+         (uint8_t*)ralloc_size(glprog, glprog->driver_cache_blob_size);
+      blob_copy_bytes(metadata, glprog->driver_cache_blob,
+                      glprog->driver_cache_blob_size);
+   }
 }
 
 static void
@@ -1448,7 +1299,7 @@ shader_cache_read_program_metadata(struct gl_context *ctx,
       return false;
 
    struct disk_cache *cache = ctx->Cache;
-   if (!cache || prog->data->cache_fallback || prog->data->skip_cache)
+   if (!cache || prog->data->skip_cache)
       return false;
 
    /* Include bindings when creating sha1. These bindings change the resulting

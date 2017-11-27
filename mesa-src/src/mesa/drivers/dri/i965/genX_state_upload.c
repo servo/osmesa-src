@@ -1626,6 +1626,16 @@ genX(upload_sf)(struct brw_context *brw)
          sf.SmoothPointEnable = true;
 #endif
 
+#if GEN_GEN == 10
+      /* _NEW_BUFFERS
+       * Smooth Point Enable bit MUST not be set when NUM_MULTISAMPLES > 1.
+       */
+      const bool multisampled_fbo =
+         _mesa_geometric_samples(ctx->DrawBuffer) > 1;
+      if (multisampled_fbo)
+         sf.SmoothPointEnable = false;
+#endif
+
 #if GEN_IS_G4X || GEN_GEN >= 5
       sf.AALineDistanceMode = AALINEDISTANCE_TRUE;
 #endif
@@ -1681,7 +1691,8 @@ static const struct brw_tracked_state genX(sf_state) = {
                _NEW_POINT |
                _NEW_PROGRAM |
                (GEN_GEN >= 6 ? _NEW_MULTISAMPLE : 0) |
-               (GEN_GEN <= 7 ? _NEW_BUFFERS | _NEW_POLYGON : 0),
+               (GEN_GEN <= 7 ? _NEW_BUFFERS | _NEW_POLYGON : 0) |
+               (GEN_GEN == 10 ? _NEW_BUFFERS : 0),
       .brw   = BRW_NEW_BLORP |
                BRW_NEW_VUE_MAP_GEOM_OUT |
                (GEN_GEN <= 5 ? BRW_NEW_BATCH |
@@ -3117,9 +3128,8 @@ genX(upload_push_constant_packets)(struct brw_context *brw)
       }
 
       stage_state->push_constants_dirty = false;
+      brw->ctx.NewDriverState |= GEN_GEN >= 9 ? BRW_NEW_SURFACES : 0;
    }
-
-   brw->ctx.NewDriverState |= GEN_GEN >= 9 ? BRW_NEW_SURFACES : 0;
 }
 
 const struct brw_tracked_state genX(push_constant_packets) = {
@@ -3138,13 +3148,11 @@ genX(upload_vs_push_constants)(struct brw_context *brw)
    struct brw_stage_state *stage_state = &brw->vs.base;
 
    /* BRW_NEW_VERTEX_PROGRAM */
-   const struct brw_program *vp =
-      brw_program_const(brw->programs[MESA_SHADER_VERTEX]);
+   const struct gl_program *vp = brw->programs[MESA_SHADER_VERTEX];
    /* BRW_NEW_VS_PROG_DATA */
    const struct brw_stage_prog_data *prog_data = brw->vs.base.prog_data;
 
-   _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_VERTEX);
-   gen6_upload_push_constants(brw, &vp->program, prog_data, stage_state);
+   gen6_upload_push_constants(brw, vp, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(vs_push_constants) = {
@@ -3165,16 +3173,12 @@ genX(upload_gs_push_constants)(struct brw_context *brw)
    struct brw_stage_state *stage_state = &brw->gs.base;
 
    /* BRW_NEW_GEOMETRY_PROGRAM */
-   const struct brw_program *gp =
-      brw_program_const(brw->programs[MESA_SHADER_GEOMETRY]);
+   const struct gl_program *gp = brw->programs[MESA_SHADER_GEOMETRY];
 
-   if (gp) {
-      /* BRW_NEW_GS_PROG_DATA */
-      struct brw_stage_prog_data *prog_data = brw->gs.base.prog_data;
+   /* BRW_NEW_GS_PROG_DATA */
+   struct brw_stage_prog_data *prog_data = brw->gs.base.prog_data;
 
-      _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_GEOMETRY);
-      gen6_upload_push_constants(brw, &gp->program, prog_data, stage_state);
-   }
+   gen6_upload_push_constants(brw, gp, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(gs_push_constants) = {
@@ -3194,14 +3198,11 @@ genX(upload_wm_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->wm.base;
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   const struct brw_program *fp =
-      brw_program_const(brw->programs[MESA_SHADER_FRAGMENT]);
+   const struct gl_program *fp = brw->programs[MESA_SHADER_FRAGMENT];
    /* BRW_NEW_FS_PROG_DATA */
    const struct brw_stage_prog_data *prog_data = brw->wm.base.prog_data;
 
-   _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_FRAGMENT);
-
-   gen6_upload_push_constants(brw, &fp->program, prog_data, stage_state);
+   gen6_upload_push_constants(brw, fp, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(wm_push_constants) = {
@@ -3452,15 +3453,9 @@ genX(upload_sbe)(struct brw_context *brw)
 
 #if GEN_GEN >= 9
       /* prepare the active component dwords */
-      int input_index = 0;
-      for (int attr = 0; attr < VARYING_SLOT_MAX; attr++) {
-         if (!(fp->info.inputs_read & BITFIELD64_BIT(attr)))
-            continue;
-
-         assert(input_index < 32);
-
+      const int num_inputs = urb_entry_read_length * 2;
+      for (int input_index = 0; input_index < num_inputs; input_index++) {
          sbe.AttributeActiveComponentFormat[input_index] = ACTIVE_COMPONENT_XYZW;
-         ++input_index;
       }
 #endif
    }
@@ -4038,15 +4033,11 @@ genX(upload_tes_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->tes.base;
    /* BRW_NEW_TESS_PROGRAMS */
-   const struct brw_program *tep =
-      brw_program_const(brw->programs[MESA_SHADER_TESS_EVAL]);
+   const struct gl_program *tep = brw->programs[MESA_SHADER_TESS_EVAL];
 
-   if (tep) {
-      /* BRW_NEW_TES_PROG_DATA */
-      const struct brw_stage_prog_data *prog_data = brw->tes.base.prog_data;
-      _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_TESS_EVAL);
-      gen6_upload_push_constants(brw, &tep->program, prog_data, stage_state);
-   }
+   /* BRW_NEW_TES_PROG_DATA */
+   const struct brw_stage_prog_data *prog_data = brw->tes.base.prog_data;
+   gen6_upload_push_constants(brw, tep, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(tes_push_constants) = {
@@ -4065,17 +4056,12 @@ genX(upload_tcs_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->tcs.base;
    /* BRW_NEW_TESS_PROGRAMS */
-   const struct brw_program *tcp =
-      brw_program_const(brw->programs[MESA_SHADER_TESS_CTRL]);
-   bool active = brw->programs[MESA_SHADER_TESS_EVAL];
+   const struct gl_program *tcp = brw->programs[MESA_SHADER_TESS_CTRL];
 
-   if (active) {
-      /* BRW_NEW_TCS_PROG_DATA */
-      const struct brw_stage_prog_data *prog_data = brw->tcs.base.prog_data;
+   /* BRW_NEW_TCS_PROG_DATA */
+   const struct brw_stage_prog_data *prog_data = brw->tcs.base.prog_data;
 
-      _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_TESS_CTRL);
-      gen6_upload_push_constants(brw, &tcp->program, prog_data, stage_state);
-   }
+   gen6_upload_push_constants(brw, tcp, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(tcs_push_constants) = {
@@ -4101,8 +4087,7 @@ genX(upload_cs_push_constants)(struct brw_context *brw)
    struct brw_stage_state *stage_state = &brw->cs.base;
 
    /* BRW_NEW_COMPUTE_PROGRAM */
-   const struct brw_program *cp =
-      (struct brw_program *) brw->programs[MESA_SHADER_COMPUTE];
+   const struct gl_program *cp = brw->programs[MESA_SHADER_COMPUTE];
 
    if (cp) {
       /* BRW_NEW_CS_PROG_DATA */
@@ -4110,8 +4095,7 @@ genX(upload_cs_push_constants)(struct brw_context *brw)
          brw_cs_prog_data(brw->cs.base.prog_data);
 
       _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_COMPUTE);
-      brw_upload_cs_push_constants(brw, &cp->program, cs_prog_data,
-                                   stage_state);
+      brw_upload_cs_push_constants(brw, cp, cs_prog_data, stage_state);
    }
 }
 
@@ -4263,7 +4247,7 @@ genX(upload_cs_state)(struct brw_context *brw)
    const struct GENX(INTERFACE_DESCRIPTOR_DATA) idd = {
       .KernelStartPointer = brw->cs.base.prog_offset,
       .SamplerStatePointer = stage_state->sampler_offset,
-      .SamplerCount = DIV_ROUND_UP(stage_state->sampler_count, 4) >> 2,
+      .SamplerCount = DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4),
       .BindingTablePointer = stage_state->bind_bo_offset,
       .ConstantURBEntryReadLength = cs_prog_data->push.per_thread.regs,
       .NumberofThreadsinGPGPUThreadGroup = cs_prog_data->threads,
@@ -4377,6 +4361,16 @@ genX(upload_raster)(struct brw_context *brw)
 
       /* _NEW_LINE */
       raster.AntialiasingEnable = ctx->Line.SmoothFlag;
+
+#if GEN_GEN == 10
+      /* _NEW_BUFFERS
+       * Antialiasing Enable bit MUST not be set when NUM_MULTISAMPLES > 1.
+       */
+      const bool multisampled_fbo =
+         _mesa_geometric_samples(ctx->DrawBuffer) > 1;
+      if (multisampled_fbo)
+         raster.AntialiasingEnable = false;
+#endif
 
       /* _NEW_SCISSOR */
       raster.ScissorRectangleEnable = ctx->Scissor.EnableFlags;
@@ -5372,8 +5366,6 @@ genX(init_atoms)(struct brw_context *brw)
 
       /* Command packets:
        */
-      &brw_invariant_state,
-
       &brw_binding_table_pointers,
       &genX(blend_constant_color),
 
@@ -5489,19 +5481,14 @@ genX(init_atoms)(struct brw_context *brw)
        */
       &brw_vs_pull_constants,
       &brw_vs_ubo_surfaces,
-      &brw_vs_abo_surfaces,
       &brw_tcs_pull_constants,
       &brw_tcs_ubo_surfaces,
-      &brw_tcs_abo_surfaces,
       &brw_tes_pull_constants,
       &brw_tes_ubo_surfaces,
-      &brw_tes_abo_surfaces,
       &brw_gs_pull_constants,
       &brw_gs_ubo_surfaces,
-      &brw_gs_abo_surfaces,
       &brw_wm_pull_constants,
       &brw_wm_ubo_surfaces,
-      &brw_wm_abo_surfaces,
       &gen6_renderbuffer_surfaces,
       &brw_renderbuffer_read_surfaces,
       &brw_texture_surfaces,
@@ -5581,19 +5568,14 @@ genX(init_atoms)(struct brw_context *brw)
        */
       &brw_vs_pull_constants,
       &brw_vs_ubo_surfaces,
-      &brw_vs_abo_surfaces,
       &brw_tcs_pull_constants,
       &brw_tcs_ubo_surfaces,
-      &brw_tcs_abo_surfaces,
       &brw_tes_pull_constants,
       &brw_tes_ubo_surfaces,
-      &brw_tes_abo_surfaces,
       &brw_gs_pull_constants,
       &brw_gs_ubo_surfaces,
-      &brw_gs_abo_surfaces,
       &brw_wm_pull_constants,
       &brw_wm_ubo_surfaces,
-      &brw_wm_abo_surfaces,
       &gen6_renderbuffer_surfaces,
       &brw_renderbuffer_read_surfaces,
       &brw_texture_surfaces,
@@ -5663,7 +5645,6 @@ genX(init_atoms)(struct brw_context *brw)
       &genX(cs_push_constants),
       &genX(cs_pull_constants),
       &brw_cs_ubo_surfaces,
-      &brw_cs_abo_surfaces,
       &brw_cs_texture_surfaces,
       &brw_cs_work_groups_surface,
       &genX(cs_samplers),

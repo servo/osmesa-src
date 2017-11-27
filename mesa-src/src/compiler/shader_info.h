@@ -66,12 +66,21 @@ typedef struct shader_info {
    uint32_t patch_inputs_read;
    /* Which patch outputs are actually written */
    uint32_t patch_outputs_written;
+   /* Which patch outputs are read */
+   uint32_t patch_outputs_read;
 
    /* Whether or not this shader ever uses textureGather() */
    bool uses_texture_gather;
 
    /** Bitfield of which textures are used by texelFetch() */
    uint32_t textures_used_by_txf;
+
+   /**
+    * True if this shader uses the fddx/fddy opcodes.
+    *
+    * Note that this does not include the "fine" and "coarse" variants.
+    */
+   bool uses_fddx_fddy;
 
    /* The size of the gl_ClipDistance[] array, if declared. */
    unsigned clip_distance_array_size;

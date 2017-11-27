@@ -33,6 +33,7 @@
 #include "util/slab.h"
 #include "xf86drm.h"
 #include "vc5_drm.h"
+#include "vc5_screen.h"
 
 struct vc5_job;
 struct vc5_bo;
@@ -76,6 +77,7 @@ void vc5_job_add_bo(struct vc5_job *job, struct vc5_bo *bo);
 #define VC5_DIRTY_COMPILED_FS   (1 << 25)
 #define VC5_DIRTY_FS_INPUTS     (1 << 26)
 #define VC5_DIRTY_STREAMOUT     (1 << 27)
+#define VC5_DIRTY_OQ            (1 << 28)
 
 #define VC5_MAX_FS_INPUTS 64
 
@@ -159,8 +161,11 @@ struct vc5_vertexbuf_stateobj {
 };
 
 struct vc5_vertex_stateobj {
-        struct pipe_vertex_element pipe[PIPE_MAX_ATTRIBS];
+        struct pipe_vertex_element pipe[VC5_MAX_ATTRIBUTES];
         unsigned num_elements;
+
+        uint8_t attrs[12 * VC5_MAX_ATTRIBUTES];
+        struct vc5_bo *default_attribute_values;
 };
 
 struct vc5_streamout_stateobj {
@@ -199,6 +204,9 @@ struct vc5_job {
          * execute our job.
          */
         struct set *bos;
+
+        /** Sum of the sizes of the BOs referenced by the job. */
+        uint32_t referenced_size;
 
         struct set *write_prscs;
 
@@ -257,6 +265,13 @@ struct vc5_job {
          * DRM_IOCTL_VC5_SUBMIT_CL.
          */
         bool needs_flush;
+
+        /**
+         * Set if there is a nonzero address for OCCLUSION_QUERY_COUNTER.  If
+         * so, we need to disable it and flush before ending the CL, to keep
+         * the next tile from starting with it enabled.
+         */
+        bool oq_enabled;
 
         bool uses_early_z;
 
@@ -333,12 +348,34 @@ struct vc5_context {
         struct pipe_stencil_ref stencil_ref;
         unsigned sample_mask;
         struct pipe_framebuffer_state framebuffer;
+
+        /* Per render target, whether we should swap the R and B fields in the
+         * shader's color output and in blending.  If render targets disagree
+         * on the R/B swap and use the constant color, then we would need to
+         * fall back to in-shader blending.
+         */
+        uint8_t swap_color_rb;
+
+        /* Per render target, whether we should treat the dst alpha values as
+         * one in blending.
+         *
+         * For RGBX formats, the tile buffer's alpha channel will be
+         * undefined.
+         */
+        uint8_t blend_dst_alpha_one;
+
+        bool active_queries;
+
+        uint32_t tf_prims_generated;
+        uint32_t prims_generated;
+
         struct pipe_poly_stipple stipple;
         struct pipe_clip_state clip;
         struct pipe_viewport_state viewport;
         struct vc5_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
         struct vc5_vertexbuf_stateobj vertexbuf;
         struct vc5_streamout_stateobj streamout;
+        struct vc5_bo *current_oq;
         /** @} */
 };
 
@@ -374,6 +411,9 @@ struct vc5_depth_stencil_alpha_state {
          * Index 2 is the writemask config if it's not a common mask value.
          */
         uint32_t stencil_uniforms[3];
+
+        uint8_t stencil_front[6];
+        uint8_t stencil_back[6];
 };
 
 #define perf_debug(...) do {                            \

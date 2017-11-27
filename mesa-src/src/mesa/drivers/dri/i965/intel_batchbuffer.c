@@ -220,7 +220,7 @@ static void
 intel_batchbuffer_reset_and_clear_render_cache(struct brw_context *brw)
 {
    intel_batchbuffer_reset(brw);
-   brw_render_cache_set_clear(brw);
+   brw_cache_sets_clear(brw);
 }
 
 void
@@ -564,6 +564,30 @@ do_batch_dump(struct brw_context *brw)
          decode_struct(brw, spec, "DEPTH_STENCIL_STATE", state,
                        state_gtt_offset, p[1] & ~0x3fu, color);
          break;
+      case MEDIA_INTERFACE_DESCRIPTOR_LOAD: {
+         struct gen_group *group =
+            gen_spec_find_struct(spec, "RENDER_SURFACE_STATE");
+         if (!group)
+            break;
+
+         uint32_t idd_offset = p[3] & ~0x1fu;
+         decode_struct(brw, spec, "INTERFACE_DESCRIPTOR_DATA", state,
+                       state_gtt_offset, idd_offset, color);
+
+         uint32_t ss_offset = state[idd_offset / 4 + 3] & ~0x1fu;
+         decode_structs(brw, spec, "SAMPLER_STATE", state,
+                        state_gtt_offset, ss_offset, 4 * 4, color);
+
+         uint32_t bt_offset = state[idd_offset / 4 + 4] & ~0x1fu;
+         int bt_entries = brw_state_batch_size(brw, bt_offset) / 4;
+         uint32_t *bt_pointers = &state[bt_offset / 4];
+         for (int i = 0; i < bt_entries; i++) {
+            fprintf(stderr, "SURFACE_STATE - BTI = %d\n", i);
+            gen_print_group(stderr, group, state_gtt_offset + bt_pointers[i],
+                            &state[bt_pointers[i] / 4], color);
+         }
+         break;
+      }
       }
    }
 
@@ -601,8 +625,10 @@ brw_new_batch(struct brw_context *brw)
     * would otherwise be stored in the context (which for all intents and
     * purposes means everything).
     */
-   if (brw->hw_ctx == 0)
+   if (brw->hw_ctx == 0) {
       brw->ctx.NewDriverState |= BRW_NEW_CONTEXT;
+      brw_upload_invariant_state(brw);
+   }
 
    brw->ctx.NewDriverState |= BRW_NEW_BATCH;
 
@@ -622,9 +648,7 @@ brw_new_batch(struct brw_context *brw)
  * sending it off.
  *
  * This function can emit state (say, to preserve registers that aren't saved
- * between batches).  All of this state MUST fit in the reserved space at the
- * end of the batchbuffer.  If you add more GPU state, increase the reserved
- * space by updating the BATCH_RESERVED macro.
+ * between batches).
  */
 static void
 brw_finish_batch(struct brw_context *brw)
@@ -1200,9 +1224,7 @@ brw_store_register_mem64(struct brw_context *brw,
 void
 brw_load_register_imm32(struct brw_context *brw, uint32_t reg, uint32_t imm)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 6);
+   assert(brw->screen->devinfo.gen >= 6);
 
    BEGIN_BATCH(3);
    OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
@@ -1217,9 +1239,7 @@ brw_load_register_imm32(struct brw_context *brw, uint32_t reg, uint32_t imm)
 void
 brw_load_register_imm64(struct brw_context *brw, uint32_t reg, uint64_t imm)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 6);
+   assert(brw->screen->devinfo.gen >= 6);
 
    BEGIN_BATCH(5);
    OUT_BATCH(MI_LOAD_REGISTER_IMM | (5 - 2));
@@ -1236,9 +1256,7 @@ brw_load_register_imm64(struct brw_context *brw, uint32_t reg, uint64_t imm)
 void
 brw_load_register_reg(struct brw_context *brw, uint32_t src, uint32_t dest)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 8 || devinfo->is_haswell);
+   assert(brw->screen->devinfo.gen >= 8 || brw->screen->devinfo.is_haswell);
 
    BEGIN_BATCH(3);
    OUT_BATCH(MI_LOAD_REGISTER_REG | (3 - 2));
@@ -1253,9 +1271,7 @@ brw_load_register_reg(struct brw_context *brw, uint32_t src, uint32_t dest)
 void
 brw_load_register_reg64(struct brw_context *brw, uint32_t src, uint32_t dest)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 8 || devinfo->is_haswell);
+   assert(brw->screen->devinfo.gen >= 8 || brw->screen->devinfo.is_haswell);
 
    BEGIN_BATCH(6);
    OUT_BATCH(MI_LOAD_REGISTER_REG | (3 - 2));

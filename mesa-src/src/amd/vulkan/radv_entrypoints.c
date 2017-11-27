@@ -218,6 +218,7 @@ static const char strings[] =
     "vkGetBufferMemoryRequirements2KHR\0"
     "vkGetImageMemoryRequirements2KHR\0"
     "vkGetImageSparseMemoryRequirements2KHR\0"
+    "vkGetShaderInfoAMD\0"
 ;
 
 static const struct radv_entrypoint entrypoints[] = {
@@ -403,6 +404,7 @@ static const struct radv_entrypoint entrypoints[] = {
     [179] = { 4258, 0x78dbe98d }, /* vkGetBufferMemoryRequirements2KHR */
     [180] = { 4292, 0x8de28366 }, /* vkGetImageMemoryRequirements2KHR */
     [181] = { 4325, 0x3df40f5e }, /* vkGetImageSparseMemoryRequirements2KHR */
+    [182] = { 4364, 0x5330743c }, /* vkGetShaderInfoAMD */
 };
 
 /* Weak aliases for all potential implementations. These will resolve to
@@ -604,6 +606,7 @@ static const struct radv_entrypoint entrypoints[] = {
     void radv_GetBufferMemoryRequirements2KHR(VkDevice device, const VkBufferMemoryRequirementsInfo2KHR* pInfo, VkMemoryRequirements2KHR* pMemoryRequirements) __attribute__ ((weak));
     void radv_GetImageMemoryRequirements2KHR(VkDevice device, const VkImageMemoryRequirementsInfo2KHR* pInfo, VkMemoryRequirements2KHR* pMemoryRequirements) __attribute__ ((weak));
     void radv_GetImageSparseMemoryRequirements2KHR(VkDevice device, const VkImageSparseMemoryRequirementsInfo2KHR* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2KHR* pSparseMemoryRequirements) __attribute__ ((weak));
+    VkResult radv_GetShaderInfoAMD(VkDevice device, VkPipeline pipeline, VkShaderStageFlagBits shaderStage, VkShaderInfoTypeAMD infoType, size_t* pInfoSize, void* pInfo) __attribute__ ((weak));
 
   const struct radv_dispatch_table radv_layer = {
     .CreateInstance = radv_CreateInstance,
@@ -800,6 +803,7 @@ static const struct radv_entrypoint entrypoints[] = {
     .GetBufferMemoryRequirements2KHR = radv_GetBufferMemoryRequirements2KHR,
     .GetImageMemoryRequirements2KHR = radv_GetImageMemoryRequirements2KHR,
     .GetImageSparseMemoryRequirements2KHR = radv_GetImageSparseMemoryRequirements2KHR,
+    .GetShaderInfoAMD = radv_GetShaderInfoAMD,
   };
 
 static void * __attribute__ ((noinline))
@@ -812,7 +816,7 @@ radv_resolve_entrypoint(uint32_t index)
  * size 256 entries
  * collisions entries:
  *     0     115
- *     1     34
+ *     1     35
  *     2     12
  *     3     9
  *     4     4
@@ -904,7 +908,7 @@ static const uint16_t map[] = {
       0x0082,
       0x005a,
       none,
-      none,
+      0x00b6,
       0x009c,
       0x0019,
       0x0046,

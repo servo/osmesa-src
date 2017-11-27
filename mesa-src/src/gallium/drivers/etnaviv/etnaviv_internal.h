@@ -60,6 +60,8 @@
 
 /* GPU chip 3D specs */
 struct etna_specs {
+   /* HALTI (gross architecture) level. -1 for pre-HALTI. */
+   int halti : 8;
    /* supports SUPERTILE (64x64) tiling? */
    unsigned can_supertile : 1;
    /* needs z=(z+w)/2, for older GCxxx */
@@ -80,6 +82,8 @@ struct etna_specs {
    unsigned has_unified_uniforms : 1;
    /* can load shader instructions from memory */
    unsigned has_icache : 1;
+   /* ASTC texture support (and has associated states) */
+   unsigned tex_astc : 1;
    /* can use any kind of wrapping mode on npot textures */
    unsigned npot_tex_any_wrap;
    /* number of bits per TS tile */

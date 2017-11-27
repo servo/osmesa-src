@@ -100,6 +100,8 @@ struct vc5_surface {
          * TILE_RENDERING_MODE_CONFIGURATION.
          */
         uint8_t internal_bpp;
+
+        uint32_t padded_height_of_output_image_in_uif_blocks;
 };
 
 struct vc5_resource {
@@ -109,8 +111,6 @@ struct vc5_resource {
         uint32_t cube_map_stride;
         int cpp;
         bool tiled;
-        /** One of V3D_TEXTURE_DATA_FORMAT_* */
-        uint8_t tex_format;
 
         /**
          * Number of times the resource has been written to.

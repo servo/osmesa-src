@@ -98,7 +98,7 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 {
 	struct amdgpu_buffer_size_alignments alignment_info = {};
 	struct amdgpu_heap_info vram, vram_vis, gtt;
-	struct drm_amdgpu_info_hw_ip dma = {}, compute = {}, uvd = {}, vce = {}, vcn_dec = {};
+	struct drm_amdgpu_info_hw_ip dma = {}, compute = {}, uvd = {}, vce = {}, vcn_dec = {}, vcn_enc = {};
 	uint32_t vce_version = 0, vce_feature = 0, uvd_version = 0, uvd_feature = 0;
 	int r, i, j;
 	drmDevicePtr devinfo;
@@ -174,6 +174,14 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 		}
 	}
 
+	if (info->drm_major == 3 && info->drm_minor >= 17) {
+		r = amdgpu_query_hw_ip_info(dev, AMDGPU_HW_IP_VCN_ENC, 0, &vcn_enc);
+		if (r) {
+			fprintf(stderr, "amdgpu: amdgpu_query_hw_ip_info(vcn_enc) failed.\n");
+			return false;
+		}
+	}
+
 	r = amdgpu_query_firmware_version(dev, AMDGPU_INFO_FW_GFX_ME, 0, 0,
 					&info->me_fw_version,
 					&info->me_fw_feature);
@@ -223,7 +231,7 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 	info->vce_harvest_config = amdinfo->vce_harvest_config;
 
 	switch (info->pci_id) {
-#define CHIPSET(pci_id, name, cfamily) case pci_id: info->family = CHIP_##cfamily; break;
+#define CHIPSET(pci_id, cfamily) case pci_id: info->family = CHIP_##cfamily; break;
 #include "pci_ids/radeonsi_pci_ids.h"
 #undef CHIPSET
 
@@ -270,6 +278,7 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 	info->has_userptr = true;
 	info->has_syncobj = has_syncobj(fd);
 	info->has_sync_file = info->has_syncobj && info->drm_minor >= 21;
+	info->has_ctx_priority = info->drm_minor >= 22;
 	info->num_render_backends = amdinfo->rb_pipes;
 	info->clock_crystal_freq = amdinfo->gpu_counter_freq;
 	if (!info->clock_crystal_freq) {

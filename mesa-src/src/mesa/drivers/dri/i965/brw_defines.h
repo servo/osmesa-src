@@ -1333,6 +1333,8 @@ enum brw_pixel_shader_coverage_mask_mode {
 /* DW2: start address */
 /* DW3: end address. */
 
+#define _3DSTATE_3D_MODE                     0x791e
+
 #define CMD_MI_FLUSH                  0x0200
 
 # define BLT_X_SHIFT					0
@@ -1428,7 +1430,7 @@ enum brw_pixel_shader_coverage_mask_mode {
 #define MI_LOAD_REGISTER_IMM		(CMD_MI | (0x22 << 23))
 #define MI_LOAD_REGISTER_REG		(CMD_MI | (0x2A << 23))
 
-#define MI_FLUSH_DW			(CMD_MI | (0x26 << 23) | 2)
+#define MI_FLUSH_DW			(CMD_MI | (0x26 << 23))
 
 #define MI_STORE_REGISTER_MEM		(CMD_MI | (0x24 << 23))
 # define MI_STORE_REGISTER_MEM_USE_GGTT		(1 << 22)
@@ -1609,6 +1611,7 @@ enum brw_pixel_shader_coverage_mask_mode {
 #define GEN7_GPGPU_DISPATCHDIMY         0x2504
 #define GEN7_GPGPU_DISPATCHDIMZ         0x2508
 
+#define GEN7_CACHE_MODE_0               0x7000
 #define GEN7_CACHE_MODE_1               0x7004
 # define GEN9_FLOAT_BLEND_OPTIMIZATION_ENABLE (1 << 4)
 # define GEN8_HIZ_NP_PMA_FIX_ENABLE        (1 << 11)
@@ -1686,6 +1689,9 @@ enum brw_pixel_shader_coverage_mask_mode {
 # define GEN8_L3CNTLREG_DC_ALLOC_MASK      INTEL_MASK(24, 18)
 # define GEN8_L3CNTLREG_ALL_ALLOC_SHIFT    25
 # define GEN8_L3CNTLREG_ALL_ALLOC_MASK     INTEL_MASK(31, 25)
+
+#define GEN10_CACHE_MODE_SS            0x0e420
+#define GEN10_FLOAT_BLEND_OPTIMIZATION_ENABLE (1 << 4)
 
 #define INSTPM                             0x20c0
 # define INSTPM_CONSTANT_BUFFER_ADDRESS_OFFSET_DISABLE (1 << 6)

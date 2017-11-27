@@ -163,7 +163,7 @@ glsl_to_nir(const struct gl_shader_program *shader_prog,
     * two locations. For instance, if we have in the IR code a dvec3 attr0 in
     * location 0 and vec4 attr1 in location 1, in NIR attr0 will use
     * locations/slots 0 and 1, and attr1 will use location/slot 2 */
-   if (shader->stage == MESA_SHADER_VERTEX)
+   if (shader->info.stage == MESA_SHADER_VERTEX)
       nir_remap_attributes(shader);
 
    shader->info.name = ralloc_asprintf(shader, "GLSL%d", shader_prog->Name);
@@ -219,7 +219,7 @@ constant_copy(ir_constant *ir, void *mem_ctx)
    if (ir == NULL)
       return NULL;
 
-   nir_constant *ret = ralloc(mem_ctx, nir_constant);
+   nir_constant *ret = rzalloc(mem_ctx, nir_constant);
 
    const unsigned rows = ir->type->vector_elements;
    const unsigned cols = ir->type->matrix_columns;
@@ -311,7 +311,7 @@ nir_visitor::visit(ir_variable *ir)
    if (ir->data.mode == ir_var_shader_shared)
       return;
 
-   nir_variable *var = ralloc(shader, nir_variable);
+   nir_variable *var = rzalloc(shader, nir_variable);
    var->type = ir->type;
    var->name = ralloc_strdup(var, ir->name);
 
@@ -322,6 +322,7 @@ nir_visitor::visit(ir_variable *ir)
    var->data.patch = ir->data.patch;
    var->data.invariant = ir->data.invariant;
    var->data.location = ir->data.location;
+   var->data.stream = ir->data.stream;
    var->data.compact = false;
 
    switch(ir->data.mode) {
@@ -341,12 +342,12 @@ nir_visitor::visit(ir_variable *ir)
       break;
 
    case ir_var_shader_in:
-      if (shader->stage == MESA_SHADER_FRAGMENT &&
+      if (shader->info.stage == MESA_SHADER_FRAGMENT &&
           ir->data.location == VARYING_SLOT_FACE) {
          /* For whatever reason, GLSL IR makes gl_FrontFacing an input */
          var->data.location = SYSTEM_VALUE_FRONT_FACE;
          var->data.mode = nir_var_system_value;
-      } else if (shader->stage == MESA_SHADER_GEOMETRY &&
+      } else if (shader->info.stage == MESA_SHADER_GEOMETRY &&
                  ir->data.location == VARYING_SLOT_PRIMITIVE_ID) {
          /* For whatever reason, GLSL IR makes gl_PrimitiveIDIn an input */
          var->data.location = SYSTEM_VALUE_PRIMITIVE_ID;
@@ -354,7 +355,7 @@ nir_visitor::visit(ir_variable *ir)
       } else {
          var->data.mode = nir_var_shader_in;
 
-         if (shader->stage == MESA_SHADER_TESS_EVAL &&
+         if (shader->info.stage == MESA_SHADER_TESS_EVAL &&
              (ir->data.location == VARYING_SLOT_TESS_LEVEL_INNER ||
               ir->data.location == VARYING_SLOT_TESS_LEVEL_OUTER)) {
             var->data.compact = ir->type->without_array()->is_scalar();
@@ -372,7 +373,7 @@ nir_visitor::visit(ir_variable *ir)
 
    case ir_var_shader_out:
       var->data.mode = nir_var_shader_out;
-      if (shader->stage == MESA_SHADER_TESS_CTRL &&
+      if (shader->info.stage == MESA_SHADER_TESS_CTRL &&
           (ir->data.location == VARYING_SLOT_TESS_LEVEL_INNER ||
            ir->data.location == VARYING_SLOT_TESS_LEVEL_OUTER)) {
          var->data.compact = ir->type->without_array()->is_scalar();
@@ -1165,6 +1166,7 @@ nir_visitor::visit(ir_call *ir)
       case nir_intrinsic_ballot: {
          nir_ssa_dest_init(&instr->instr, &instr->dest,
                            ir->return_deref->type->vector_elements, 64, NULL);
+         instr->num_components = ir->return_deref->type->vector_elements;
 
          ir_rvalue *value = (ir_rvalue *) ir->actual_parameters.get_head();
          instr->src[0] = nir_src_for_ssa(evaluate_rvalue(value));
@@ -1797,30 +1799,6 @@ nir_visitor::visit(ir_expression *ir)
             result = nir_ult(&b, srcs[0], srcs[1]);
       } else {
          result = nir_slt(&b, srcs[0], srcs[1]);
-      }
-      break;
-   case ir_binop_greater:
-      if (supports_ints) {
-         if (type_is_float(types[0]))
-            result = nir_flt(&b, srcs[1], srcs[0]);
-         else if (type_is_signed(types[0]))
-            result = nir_ilt(&b, srcs[1], srcs[0]);
-         else
-            result = nir_ult(&b, srcs[1], srcs[0]);
-      } else {
-         result = nir_slt(&b, srcs[1], srcs[0]);
-      }
-      break;
-   case ir_binop_lequal:
-      if (supports_ints) {
-         if (type_is_float(types[0]))
-            result = nir_fge(&b, srcs[1], srcs[0]);
-         else if (type_is_signed(types[0]))
-            result = nir_ige(&b, srcs[1], srcs[0]);
-         else
-            result = nir_uge(&b, srcs[1], srcs[0]);
-      } else {
-         result = nir_slt(&b, srcs[1], srcs[0]);
       }
       break;
    case ir_binop_gequal:

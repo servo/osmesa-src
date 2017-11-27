@@ -190,6 +190,12 @@ fs_generator::fs_generator(const struct brw_compiler *compiler, void *log_data,
 {
    p = rzalloc(mem_ctx, struct brw_codegen);
    brw_init_codegen(devinfo, p, mem_ctx);
+
+   /* In the FS code generator, we are very careful to ensure that we always
+    * set the right execution size so we don't need the EU code to "help" us
+    * by trying to infer it.  Sometimes, it infers the wrong thing.
+    */
+   p->automatic_exec_sizes = false;
 }
 
 fs_generator::~fs_generator()
@@ -323,6 +329,7 @@ fs_generator::generate_fb_write(fs_inst *inst, struct brw_reg payload)
    if (inst->header_size != 0) {
       brw_push_insn_state(p);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
       brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
       brw_set_default_flag_reg(p, 0, 0);
@@ -394,7 +401,9 @@ fs_generator::generate_fb_write(fs_inst *inst, struct brw_reg payload)
       struct brw_reg v1_null_ud = vec1(retype(brw_null_reg(), BRW_REGISTER_TYPE_UD));
 
       /* Check runtime bit to detect if we have to send AA data or not */
+      brw_push_insn_state(p);
       brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_AND(p,
               v1_null_ud,
               retype(brw_vec1_grf(1, 6), BRW_REGISTER_TYPE_UD),
@@ -402,7 +411,7 @@ fs_generator::generate_fb_write(fs_inst *inst, struct brw_reg payload)
       brw_inst_set_cond_modifier(p->devinfo, brw_last_inst, BRW_CONDITIONAL_NZ);
 
       int jmp = brw_JMPI(p, brw_imm_ud(0), BRW_PREDICATE_NORMAL) - p->store;
-      brw_inst_set_exec_size(p->devinfo, brw_last_inst, BRW_EXECUTE_1);
+      brw_pop_insn_state(p);
       {
          /* Don't send AA data */
          fire_fb_write(inst, offset(payload, 1), implied_header, inst->mlen-1);
@@ -436,6 +445,8 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
 {
    assert(indirect_byte_offset.type == BRW_REGISTER_TYPE_UD);
    assert(indirect_byte_offset.file == BRW_GENERAL_REGISTER_FILE);
+   assert(!reg.abs && !reg.negate);
+   assert(reg.type == dst.type);
 
    unsigned imm_byte_offset = reg.nr * REG_SIZE + reg.subnr;
 
@@ -485,45 +496,48 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
        * code, using it saves us 0 instructions and would require quite a bit
        * of case-by-case work.  It's just not worth it.
        */
-      if (devinfo->gen >= 8 || devinfo->is_haswell || type_sz(reg.type) < 8) {
-         brw_ADD(p, addr, indirect_byte_offset, brw_imm_uw(imm_byte_offset));
-      } else {
-         /* IVB reads two address register components per channel for
-          * indirectly addressed 64-bit sources, so we need to initialize
-          * adjacent address components to consecutive dwords of the source
-          * region by emitting two separate ADD instructions.  Found
-          * empirically.
-          */
-         assert(inst->exec_size <= 4);
-         brw_push_insn_state(p);
-         brw_set_default_exec_size(p, cvt(inst->exec_size) - 1);
+      brw_ADD(p, addr, indirect_byte_offset, brw_imm_uw(imm_byte_offset));
 
-         brw_ADD(p, spread(addr, 2), indirect_byte_offset,
-                 brw_imm_uw(imm_byte_offset));
-         brw_inst_set_no_dd_clear(devinfo, brw_last_inst, true);
-
-         brw_ADD(p, spread(suboffset(addr, 1), 2), indirect_byte_offset,
-                 brw_imm_uw(imm_byte_offset + 4));
-         brw_inst_set_no_dd_check(devinfo, brw_last_inst, true);
-
-         brw_pop_insn_state(p);
-      }
-
-      struct brw_reg ind_src = brw_VxH_indirect(0, 0);
-
-      brw_inst *mov = brw_MOV(p, dst, retype(ind_src, reg.type));
-
-      if (devinfo->gen == 6 && dst.file == BRW_MESSAGE_REGISTER_FILE &&
-          !inst->get_next()->is_tail_sentinel() &&
-          ((fs_inst *)inst->get_next())->mlen > 0) {
-         /* From the Sandybridge PRM:
+      if (type_sz(reg.type) > 4 &&
+          ((devinfo->gen == 7 && !devinfo->is_haswell) ||
+           devinfo->is_cherryview || gen_device_info_is_9lp(devinfo))) {
+         /* IVB has an issue (which we found empirically) where it reads two
+          * address register components per channel for indirectly addressed
+          * 64-bit sources.
           *
-          *    "[Errata: DevSNB(SNB)] If MRF register is updated by any
-          *    instruction that “indexed/indirect” source AND is followed by a
-          *    send, the instruction requires a “Switch”. This is to avoid
-          *    race condition where send may dispatch before MRF is updated."
+          * From the Cherryview PRM Vol 7. "Register Region Restrictions":
+          *
+          *    "When source or destination datatype is 64b or operation is
+          *    integer DWord multiply, indirect addressing must not be used."
+          *
+          * To work around both of these, we do two integer MOVs insead of one
+          * 64-bit MOV.  Because no double value should ever cross a register
+          * boundary, it's safe to use the immediate offset in the indirect
+          * here to handle adding 4 bytes to the offset and avoid the extra
+          * ADD to the register file.
           */
-         brw_inst_set_thread_control(devinfo, mov, BRW_THREAD_SWITCH);
+         brw_MOV(p, subscript(dst, BRW_REGISTER_TYPE_D, 0),
+                    retype(brw_VxH_indirect(0, 0), BRW_REGISTER_TYPE_D));
+         brw_MOV(p, subscript(dst, BRW_REGISTER_TYPE_D, 1),
+                    retype(brw_VxH_indirect(0, 4), BRW_REGISTER_TYPE_D));
+      } else {
+         struct brw_reg ind_src = brw_VxH_indirect(0, 0);
+
+         brw_inst *mov = brw_MOV(p, dst, retype(ind_src, reg.type));
+
+         if (devinfo->gen == 6 && dst.file == BRW_MESSAGE_REGISTER_FILE &&
+             !inst->get_next()->is_tail_sentinel() &&
+             ((fs_inst *)inst->get_next())->mlen > 0) {
+            /* From the Sandybridge PRM:
+             *
+             *    "[Errata: DevSNB(SNB)] If MRF register is updated by any
+             *    instruction that “indexed/indirect” source AND is followed
+             *    by a send, the instruction requires a “Switch”. This is to
+             *    avoid race condition where send may dispatch before MRF is
+             *    updated."
+             */
+            brw_inst_set_thread_control(devinfo, mov, BRW_THREAD_SWITCH);
+         }
       }
    }
 }
@@ -942,6 +956,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
          /* Explicitly set up the message header by copying g0 to the MRF. */
          brw_MOV(p, header_reg, brw_vec8_grf(0, 0));
 
+         brw_set_default_exec_size(p, BRW_EXECUTE_1);
          if (inst->offset) {
             /* Set the offset bits in DWord 2. */
             brw_MOV(p, get_element_ud(header_reg, 2),
@@ -995,6 +1010,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
       brw_push_insn_state(p);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
       brw_set_default_access_mode(p, BRW_ALIGN_1);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
 
       if (brw_regs_equal(&surface_reg, &sampler_reg)) {
          brw_MUL(p, addr, sampler_reg, brw_imm_uw(0x101));
@@ -1442,6 +1458,7 @@ fs_generator::generate_mov_dispatch_to_flags(fs_inst *inst)
 
    brw_push_insn_state(p);
    brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+   brw_set_default_exec_size(p, BRW_EXECUTE_1);
    brw_MOV(p, flags, dispatch_mask);
    brw_pop_insn_state(p);
 }
@@ -1621,8 +1638,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
    int spill_count = 0, fill_count = 0;
    int loop_count = 0;
 
-   struct annotation_info annotation;
-   memset(&annotation, 0, sizeof(annotation));
+   struct disasm_info *disasm_info = disasm_initialize(devinfo, cfg);
 
    foreach_block_and_inst (block, fs_inst, inst, cfg) {
       struct brw_reg src[3], dst;
@@ -1649,7 +1665,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
       }
 
       if (unlikely(debug_flag))
-         annotate(p->devinfo, &annotation, cfg, inst, p->next_insn_offset);
+         disasm_annotate(disasm_info, inst, p->next_insn_offset);
 
       /* If the instruction writes to more than one register, it needs to be
        * explicitly marked as compressed on Gen <= 5.  On Gen >= 6 the
@@ -1729,13 +1745,15 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
       case BRW_OPCODE_MAD:
          assert(devinfo->gen >= 6);
-	 brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_MAD(p, dst, src[0], src[1], src[2]);
 	 break;
 
       case BRW_OPCODE_LRP:
          assert(devinfo->gen >= 6);
-	 brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_LRP(p, dst, src[0], src[1], src[2]);
 	 break;
 
@@ -1833,7 +1851,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
       case BRW_OPCODE_BFE:
          assert(devinfo->gen >= 7);
-         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_BFE(p, dst, src[0], src[1], src[2]);
          break;
 
@@ -1843,7 +1862,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
          break;
       case BRW_OPCODE_BFI2:
          assert(devinfo->gen >= 7);
-         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_BFI2(p, dst, src[0], src[1], src[2]);
          break;
 
@@ -2108,7 +2128,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
           */
          if (!patch_discard_jumps_to_fb_writes()) {
             if (unlikely(debug_flag)) {
-               annotation.ann_count--;
+               disasm_info->use_tail = true;
             }
          }
          break;
@@ -2168,24 +2188,22 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
    }
 
    brw_set_uip_jip(p, start_offset);
-   annotation_finalize(&annotation, p->next_insn_offset);
+
+   /* end of program sentinel */
+   disasm_new_inst_group(disasm_info, p->next_insn_offset);
 
 #ifndef NDEBUG
-   bool validated = brw_validate_instructions(devinfo, p->store,
-                                              start_offset,
-                                              p->next_insn_offset,
-                                              &annotation);
+   bool validated =
 #else
    if (unlikely(debug_flag))
+#endif
       brw_validate_instructions(devinfo, p->store,
                                 start_offset,
                                 p->next_insn_offset,
-                                &annotation);
-#endif
+                                disasm_info);
 
    int before_size = p->next_insn_offset - start_offset;
-   brw_compact_instructions(p, start_offset, annotation.ann_count,
-                            annotation.ann);
+   brw_compact_instructions(p, start_offset, disasm_info);
    int after_size = p->next_insn_offset - start_offset;
 
    if (unlikely(debug_flag)) {
@@ -2196,10 +2214,9 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
               spill_count, fill_count, promoted_constants, before_size, after_size,
               100.0f * (before_size - after_size) / before_size);
 
-      dump_assembly(p->store, annotation.ann_count, annotation.ann,
-                    p->devinfo);
-      ralloc_free(annotation.mem_ctx);
+      dump_assembly(p->store, disasm_info);
    }
+   ralloc_free(disasm_info);
    assert(validated);
 
    compiler->shader_debug_log(log_data,

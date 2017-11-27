@@ -6,11 +6,12 @@ set -o pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-VERSION="17.3.0-devel"
-
 rm -rf mesa-tmp mesa-src
 git clone git://anongit.freedesktop.org/git/mesa/mesa mesa-tmp --depth 1
 pushd mesa-tmp
+
+VERSION=$(cat VERSION)
+
 ./autogen.sh                     \
    --disable-dri                 \
    --disable-driglx-direct       \

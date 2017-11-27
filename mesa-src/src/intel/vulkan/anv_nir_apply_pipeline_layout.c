@@ -157,24 +157,7 @@ lower_tex_deref(nir_tex_instr *tex, nir_deref_var *deref,
          if (state->add_bounds_checks)
             index = nir_umin(b, index, nir_imm_int(b, array_size - 1));
 
-         nir_tex_src *new_srcs = rzalloc_array(tex, nir_tex_src,
-                                               tex->num_srcs + 1);
-
-         for (unsigned i = 0; i < tex->num_srcs; i++) {
-            new_srcs[i].src_type = tex->src[i].src_type;
-            nir_instr_move_src(&tex->instr, &new_srcs[i].src, &tex->src[i].src);
-         }
-
-         ralloc_free(tex->src);
-         tex->src = new_srcs;
-
-         /* Now we can go ahead and move the source over to being a
-          * first-class texture source.
-          */
-         tex->src[tex->num_srcs].src_type = src_type;
-         nir_instr_rewrite_src(&tex->instr, &tex->src[tex->num_srcs].src,
-                               nir_src_for_ssa(index));
-         tex->num_srcs++;
+         nir_tex_instr_add_src(tex, src_type, nir_src_for_ssa(index));
       } else {
          *const_index += MIN2(deref_array->base_offset, array_size - 1);
       }
@@ -209,10 +192,10 @@ has_tex_src_plane(nir_tex_instr *tex)
 static uint32_t
 extract_tex_src_plane(nir_tex_instr *tex)
 {
-   nir_tex_src *new_srcs = rzalloc_array(tex, nir_tex_src, tex->num_srcs - 1);
    unsigned plane = 0;
 
-   for (unsigned i = 0, w = 0; i < tex->num_srcs; i++) {
+   int plane_src_idx = -1;
+   for (unsigned i = 0; i < tex->num_srcs; i++) {
       if (tex->src[i].src_type == nir_tex_src_plane) {
          nir_const_value *const_plane =
             nir_src_as_const_value(tex->src[i].src);
@@ -221,19 +204,12 @@ extract_tex_src_plane(nir_tex_instr *tex)
           * constants. */
          assert(const_plane);
          plane = const_plane->u32[0];
-
-         /* Remove the source from the instruction */
-         nir_instr_rewrite_src(&tex->instr, &tex->src[i].src, NIR_SRC_INIT);
-      } else {
-         new_srcs[w].src_type = tex->src[i].src_type;
-         nir_instr_move_src(&tex->instr, &new_srcs[w].src, &tex->src[i].src);
-         w++;
+         plane_src_idx = i;
       }
    }
 
-   ralloc_free(tex->src);
-   tex->src = new_srcs;
-   tex->num_srcs--;
+   assert(plane_src_idx >= 0);
+   nir_tex_instr_remove_src(tex, plane_src_idx);
 
    return plane;
 }
@@ -320,6 +296,7 @@ anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
                               struct anv_pipeline_bind_map *map)
 {
    struct anv_pipeline_layout *layout = pipeline->layout;
+   gl_shader_stage stage = shader->info.stage;
 
    struct apply_pipeline_layout_state state = {
       .shader = shader,
@@ -352,15 +329,15 @@ anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
       BITSET_WORD b, _tmp;
       BITSET_FOREACH_SET(b, _tmp, state.set[set].used,
                          set_layout->binding_count) {
-         if (set_layout->binding[b].stage[shader->stage].surface_index >= 0) {
+         if (set_layout->binding[b].stage[stage].surface_index >= 0) {
             map->surface_count +=
                anv_descriptor_set_binding_layout_get_hw_size(&set_layout->binding[b]);
          }
-         if (set_layout->binding[b].stage[shader->stage].sampler_index >= 0) {
+         if (set_layout->binding[b].stage[stage].sampler_index >= 0) {
             map->sampler_count +=
                anv_descriptor_set_binding_layout_get_hw_size(&set_layout->binding[b]);
          }
-         if (set_layout->binding[b].stage[shader->stage].image_index >= 0)
+         if (set_layout->binding[b].stage[stage].image_index >= 0)
             map->image_count += set_layout->binding[b].array_size;
       }
    }
@@ -377,7 +354,7 @@ anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
          struct anv_descriptor_set_binding_layout *binding =
             &set_layout->binding[b];
 
-         if (binding->stage[shader->stage].surface_index >= 0) {
+         if (binding->stage[stage].surface_index >= 0) {
             state.set[set].surface_offsets[b] = surface;
             struct anv_sampler **samplers = binding->immutable_samplers;
             for (unsigned i = 0; i < binding->array_size; i++) {
@@ -392,7 +369,7 @@ anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
             }
          }
 
-         if (binding->stage[shader->stage].sampler_index >= 0) {
+         if (binding->stage[stage].sampler_index >= 0) {
             state.set[set].sampler_offsets[b] = sampler;
             struct anv_sampler **samplers = binding->immutable_samplers;
             for (unsigned i = 0; i < binding->array_size; i++) {
@@ -407,7 +384,7 @@ anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
             }
          }
 
-         if (binding->stage[shader->stage].image_index >= 0) {
+         if (binding->stage[stage].image_index >= 0) {
             state.set[set].image_offsets[b] = image;
             image += binding->array_size;
          }

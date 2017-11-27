@@ -51,6 +51,12 @@ Value* VGATHERPS(Value* src, Value* pBase, Value* indices, Value* mask, Value* s
     return CALL(pFunc, std::initializer_list<Value*>{src, pBase, indices, mask, scale});
 }
 
+Value* VGATHERPS2(Value* src, Value* pBase, Value* indices, Value* mask, Value* scale)
+{
+    Function *pFunc = Intrinsic::getDeclaration(JM()->mpCurrentModule, Intrinsic::x86_avx512_gather_dps_512);
+    return CALL(pFunc, std::initializer_list<Value*>{src, pBase, indices, mask, scale});
+}
+
 Value* VGATHERDD(Value* src, Value* pBase, Value* indices, Value* mask, Value* scale)
 {
     Function *pFunc = Intrinsic::getDeclaration(JM()->mpCurrentModule, Intrinsic::x86_avx2_gather_d_d_256);

@@ -289,19 +289,6 @@ type_sz(unsigned type)
    }
 }
 
-static inline bool
-brw_reg_type_is_floating_point(enum brw_reg_type type)
-{
-   switch (type) {
-   case BRW_REGISTER_TYPE_F:
-   case BRW_REGISTER_TYPE_HF:
-   case BRW_REGISTER_TYPE_DF:
-      return true;
-   default:
-      return false;
-   }
-}
-
 static inline enum brw_reg_type
 get_exec_type(const enum brw_reg_type type)
 {
@@ -610,6 +597,24 @@ brw_imm_f(float f)
    return imm;
 }
 
+/** Construct int64_t immediate register */
+static inline struct brw_reg
+brw_imm_q(int64_t q)
+{
+   struct brw_reg imm = brw_imm_reg(BRW_REGISTER_TYPE_Q);
+   imm.d64 = q;
+   return imm;
+}
+
+/** Construct int64_t immediate register */
+static inline struct brw_reg
+brw_imm_uq(uint64_t uq)
+{
+   struct brw_reg imm = brw_imm_reg(BRW_REGISTER_TYPE_UQ);
+   imm.u64 = uq;
+   return imm;
+}
+
 /** Construct integer immediate register */
 static inline struct brw_reg
 brw_imm_d(int d)
@@ -907,6 +912,22 @@ spread(struct brw_reg reg, unsigned s)
    } else {
       return stride(reg, 0, 1, 0);
    }
+}
+
+/**
+ * Reinterpret each channel of register \p reg as a vector of values of the
+ * given smaller type and take the i-th subcomponent from each.
+ */
+static inline struct brw_reg
+subscript(struct brw_reg reg, enum brw_reg_type type, unsigned i)
+{
+   if (reg.file == IMM)
+      return reg;
+
+   unsigned scale = type_sz(reg.type) / type_sz(type);
+   assert(scale >= 1 && i < scale);
+
+   return suboffset(retype(spread(reg, scale), type), i);
 }
 
 static inline struct brw_reg

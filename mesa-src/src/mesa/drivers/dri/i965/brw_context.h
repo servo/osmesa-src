@@ -195,7 +195,6 @@ enum brw_state_id {
    BRW_STATE_RASTERIZER_DISCARD,
    BRW_STATE_STATS_WM,
    BRW_STATE_UNIFORM_BUFFER,
-   BRW_STATE_ATOMIC_BUFFER,
    BRW_STATE_IMAGE_UNITS,
    BRW_STATE_META_IN_PROGRESS,
    BRW_STATE_PUSH_CONSTANT_ALLOCATION,
@@ -288,7 +287,6 @@ enum brw_state_id {
 #define BRW_NEW_RASTERIZER_DISCARD      (1ull << BRW_STATE_RASTERIZER_DISCARD)
 #define BRW_NEW_STATS_WM                (1ull << BRW_STATE_STATS_WM)
 #define BRW_NEW_UNIFORM_BUFFER          (1ull << BRW_STATE_UNIFORM_BUFFER)
-#define BRW_NEW_ATOMIC_BUFFER           (1ull << BRW_STATE_ATOMIC_BUFFER)
 #define BRW_NEW_IMAGE_UNITS             (1ull << BRW_STATE_IMAGE_UNITS)
 #define BRW_NEW_META_IN_PROGRESS        (1ull << BRW_STATE_META_IN_PROGRESS)
 #define BRW_NEW_PUSH_CONSTANT_ALLOCATION (1ull << BRW_STATE_PUSH_CONSTANT_ALLOCATION)
@@ -453,7 +451,6 @@ struct intel_batchbuffer {
 #ifdef DEBUG
    uint16_t emit, total;
 #endif
-   uint16_t reserved_space;
    uint32_t *map_next;
    uint32_t *map;
    uint32_t *batch_cpu_map;
@@ -615,6 +612,11 @@ enum brw_query_kind {
    PIPELINE_STATS
 };
 
+struct brw_perf_query_register_prog {
+   uint32_t reg;
+   uint32_t val;
+};
+
 struct brw_perf_query_info
 {
    enum brw_query_kind kind;
@@ -634,6 +636,16 @@ struct brw_perf_query_info
    int a_offset;
    int b_offset;
    int c_offset;
+
+   /* Register programming for a given query */
+   struct brw_perf_query_register_prog *flex_regs;
+   uint32_t n_flex_regs;
+
+   struct brw_perf_query_register_prog *mux_regs;
+   uint32_t n_mux_regs;
+
+   struct brw_perf_query_register_prog *b_counter_regs;
+   uint32_t n_b_counter_regs;
 };
 
 /**
@@ -686,6 +698,13 @@ struct brw_context
     * isn't coherent with it (i.e. the sampler).
     */
    struct set *render_cache;
+
+   /**
+    * Set of struct brw_bo * that have been used as a depth buffer within this
+    * batchbuffer and would need flushing before being used from another cache
+    * domain that isn't coherent with it (i.e. the sampler).
+    */
+   struct set *depth_cache;
 
    /**
     * Number of resets observed in the system at context creation.
@@ -1087,6 +1106,7 @@ struct brw_context
          uint64_t subslice_mask;       /** $SubsliceMask */
          uint64_t gt_min_freq;         /** $GpuMinFrequency */
          uint64_t gt_max_freq;         /** $GpuMaxFrequency */
+         uint64_t revision;            /** $SkuRevisionId */
       } sys_vars;
 
       /* OA metric sets, indexed by GUID, as know by Mesa at build time,
@@ -1234,20 +1254,17 @@ void intel_update_renderbuffers(__DRIcontext *context,
                                 __DRIdrawable *drawable);
 void intel_prepare_render(struct brw_context *brw);
 
-void brw_predraw_resolve_inputs(struct brw_context *brw);
+void brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering);
 
 void intel_resolve_for_dri2_flush(struct brw_context *brw,
                                   __DRIdrawable *drawable);
 
 GLboolean brwCreateContext(gl_api api,
-		      const struct gl_config *mesaVis,
-		      __DRIcontext *driContextPriv,
-                      unsigned major_version,
-                      unsigned minor_version,
-                      uint32_t flags,
-                      bool notify_reset,
-                      unsigned *error,
-		      void *sharedContextPrivate);
+                           const struct gl_config *mesaVis,
+                           __DRIcontext *driContextPriv,
+                           const struct __DriverContextConfig *ctx_config,
+                           unsigned *error,
+                           void *sharedContextPrivate);
 
 /*======================================================================
  * brw_misc_state.c
@@ -1344,8 +1361,7 @@ void brw_get_scratch_bo(struct brw_context *brw,
 			struct brw_bo **scratch_bo, int size);
 void brw_alloc_stage_scratch(struct brw_context *brw,
                              struct brw_stage_state *stage_state,
-                             unsigned per_thread_size,
-                             unsigned thread_count);
+                             unsigned per_thread_size);
 void brw_init_shader_time(struct brw_context *brw);
 int brw_get_shader_time_index(struct brw_context *brw,
                               struct gl_program *prog,
@@ -1383,16 +1399,6 @@ brw_get_index_type(unsigned index_size)
 void brw_prepare_vertices(struct brw_context *brw);
 
 /* brw_wm_surface_state.c */
-void brw_create_constant_surface(struct brw_context *brw,
-                                 struct brw_bo *bo,
-                                 uint32_t offset,
-                                 uint32_t size,
-                                 uint32_t *out_offset);
-void brw_create_buffer_surface(struct brw_context *brw,
-                               struct brw_bo *bo,
-                               uint32_t offset,
-                               uint32_t size,
-                               uint32_t *out_offset);
 void brw_update_buffer_texture_surface(struct gl_context *ctx,
                                        unsigned unit,
                                        uint32_t *surf_offset);
@@ -1402,10 +1408,6 @@ brw_update_sol_surface(struct brw_context *brw,
                        uint32_t *out_offset, unsigned num_vector_components,
                        unsigned stride_dwords, unsigned offset_dwords);
 void brw_upload_ubo_surfaces(struct brw_context *brw, struct gl_program *prog,
-                             struct brw_stage_state *stage_state,
-                             struct brw_stage_prog_data *prog_data);
-void brw_upload_abo_surfaces(struct brw_context *brw,
-                             const struct gl_program *prog,
                              struct brw_stage_state *stage_state,
                              struct brw_stage_prog_data *prog_data);
 void brw_upload_image_surfaces(struct brw_context *brw,

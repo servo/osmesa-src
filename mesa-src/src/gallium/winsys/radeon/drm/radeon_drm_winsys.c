@@ -24,12 +24,6 @@
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
  */
-/*
- * Authors:
- *      Corbin Simpson <MostAwesomeDude@gmail.com>
- *      Joakim Sindholt <opensource@zhasha.com>
- *      Marek Olšák <maraeo@gmail.com>
- */
 
 #include "radeon_drm_bo.h"
 #include "radeon_drm_cs.h"
@@ -188,7 +182,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
 #include "pci_ids/r600_pci_ids.h"
 #undef CHIPSET
 
-#define CHIPSET(pci_id, name, cfamily) case pci_id: ws->info.family = CHIP_##cfamily; ws->gen = DRV_SI; break;
+#define CHIPSET(pci_id, cfamily) case pci_id: ws->info.family = CHIP_##cfamily; ws->gen = DRV_SI; break;
 #include "pci_ids/radeonsi_pci_ids.h"
 #undef CHIPSET
 
@@ -632,6 +626,7 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
     case RADEON_NUM_VRAM_CPU_PAGE_FAULTS:
     case RADEON_VRAM_VIS_USAGE:
     case RADEON_GFX_BO_LIST_COUNTER:
+    case RADEON_GFX_IB_SIZE_COUNTER:
         return 0; /* unimplemented */
     case RADEON_VRAM_USAGE:
         radeon_get_drm_value(ws->fd, RADEON_INFO_VRAM_USAGE,

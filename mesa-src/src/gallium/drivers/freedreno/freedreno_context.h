@@ -78,6 +78,12 @@ struct fd_shaderbuf_stateobj {
 	uint32_t dirty_mask;
 };
 
+struct fd_shaderimg_stateobj {
+	struct pipe_image_view si[PIPE_MAX_SHADER_IMAGES];
+	uint32_t enabled_mask;
+	uint32_t dirty_mask;
+};
+
 struct fd_vertexbuf_stateobj {
 	struct pipe_vertex_buffer vb[PIPE_MAX_ATTRIBS];
 	unsigned count;
@@ -149,6 +155,7 @@ enum fd_dirty_shader_state {
 	FD_DIRTY_SHADER_CONST = BIT(1),
 	FD_DIRTY_SHADER_TEX   = BIT(2),
 	FD_DIRTY_SHADER_SSBO  = BIT(3),
+	FD_DIRTY_SHADER_IMAGE = BIT(4),
 };
 
 struct fd_context {
@@ -156,6 +163,7 @@ struct fd_context {
 
 	struct fd_device *dev;
 	struct fd_screen *screen;
+	struct fd_pipe *pipe;
 
 	struct util_queue flush_queue;
 
@@ -246,7 +254,7 @@ struct fd_context {
 	 * means we'd always have to recalc tiles ever batch)
 	 */
 	struct fd_gmem_stateobj gmem;
-	struct fd_vsc_pipe      pipe[16];
+	struct fd_vsc_pipe      vsc_pipe[16];
 	struct fd_tile          tile[512];
 
 	/* which state objects need to be re-emit'd: */
@@ -273,6 +281,7 @@ struct fd_context {
 	struct pipe_viewport_state viewport;
 	struct fd_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
 	struct fd_shaderbuf_stateobj shaderbuf[PIPE_SHADER_TYPES];
+	struct fd_shaderimg_stateobj shaderimg[PIPE_SHADER_TYPES];
 	struct fd_streamout_stateobj streamout;
 	struct pipe_clip_state ucp;
 
@@ -432,7 +441,7 @@ void fd_context_cleanup_common_vbos(struct fd_context *ctx);
 
 struct pipe_context * fd_context_init(struct fd_context *ctx,
 		struct pipe_screen *pscreen, const uint8_t *primtypes,
-		void *priv);
+		void *priv, unsigned flags);
 
 void fd_context_destroy(struct pipe_context *pctx);
 

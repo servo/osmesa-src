@@ -8,15 +8,15 @@ http://github.com/freedreno/envytools/
 git clone https://github.com/freedreno/envytools.git
 
 The rules-ng-ng source files this header was generated from are:
-- /home/robclark/src/freedreno/envytools/rnndb/adreno.xml               (    431 bytes, from 2017-05-17 13:21:27)
-- /home/robclark/src/freedreno/envytools/rnndb/freedreno_copyright.xml  (   1572 bytes, from 2017-05-17 13:21:27)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a2xx.xml          (  37162 bytes, from 2017-05-17 13:21:27)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_common.xml (  13324 bytes, from 2017-05-17 13:21:27)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_pm4.xml    (  31866 bytes, from 2017-06-02 15:50:23)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a3xx.xml          (  83840 bytes, from 2017-05-17 13:21:27)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a4xx.xml          ( 111898 bytes, from 2017-05-30 19:25:27)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a5xx.xml          ( 142603 bytes, from 2017-06-06 17:02:32)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/ocmem.xml         (   1773 bytes, from 2017-05-17 13:21:27)
+- /home/ilia/src/freedreno/envytools/rnndb/adreno.xml               (    431 bytes, from 2017-11-18 20:43:22)
+- /home/ilia/src/freedreno/envytools/rnndb/freedreno_copyright.xml  (   1572 bytes, from 2016-02-11 01:04:14)
+- /home/ilia/src/freedreno/envytools/rnndb/adreno/a2xx.xml          (  36805 bytes, from 2017-11-18 20:48:10)
+- /home/ilia/src/freedreno/envytools/rnndb/adreno/adreno_common.xml (  15292 bytes, from 2017-11-19 20:45:26)
+- /home/ilia/src/freedreno/envytools/rnndb/adreno/adreno_pm4.xml    (  34349 bytes, from 2017-11-19 20:43:33)
+- /home/ilia/src/freedreno/envytools/rnndb/adreno/a3xx.xml          (  83840 bytes, from 2017-11-18 19:40:11)
+- /home/ilia/src/freedreno/envytools/rnndb/adreno/a4xx.xml          ( 112609 bytes, from 2017-11-19 04:47:10)
+- /home/ilia/src/freedreno/envytools/rnndb/adreno/a5xx.xml          ( 143017 bytes, from 2017-11-19 04:05:11)
+- /home/ilia/src/freedreno/envytools/rnndb/adreno/ocmem.xml         (   1773 bytes, from 2015-11-07 21:10:25)
 
 Copyright (C) 2013-2017 by the following authors:
 - Rob Clark <robdclark@gmail.com> (robclark)
@@ -199,6 +199,7 @@ enum adreno_pm4_type3_packets {
 	CP_WAIT_MEM_WRITES = 18,
 	CP_COND_REG_EXEC = 71,
 	CP_MEM_TO_REG = 66,
+	CP_EXEC_CS_INDIRECT = 65,
 	CP_EXEC_CS = 51,
 	CP_PERFCOUNTER_ACTION = 80,
 	CP_SMMU_TABLE_UPDATE = 83,
@@ -580,6 +581,153 @@ static inline uint32_t CP_DRAW_INDX_OFFSET_4_INDX_BASE(uint32_t val)
 static inline uint32_t CP_DRAW_INDX_OFFSET_5_INDX_SIZE(uint32_t val)
 {
 	return ((val) << CP_DRAW_INDX_OFFSET_5_INDX_SIZE__SHIFT) & CP_DRAW_INDX_OFFSET_5_INDX_SIZE__MASK;
+}
+
+#define REG_A4XX_CP_DRAW_INDIRECT_0				0x00000000
+#define A4XX_CP_DRAW_INDIRECT_0_PRIM_TYPE__MASK			0x0000003f
+#define A4XX_CP_DRAW_INDIRECT_0_PRIM_TYPE__SHIFT		0
+static inline uint32_t A4XX_CP_DRAW_INDIRECT_0_PRIM_TYPE(enum pc_di_primtype val)
+{
+	return ((val) << A4XX_CP_DRAW_INDIRECT_0_PRIM_TYPE__SHIFT) & A4XX_CP_DRAW_INDIRECT_0_PRIM_TYPE__MASK;
+}
+#define A4XX_CP_DRAW_INDIRECT_0_SOURCE_SELECT__MASK		0x000000c0
+#define A4XX_CP_DRAW_INDIRECT_0_SOURCE_SELECT__SHIFT		6
+static inline uint32_t A4XX_CP_DRAW_INDIRECT_0_SOURCE_SELECT(enum pc_di_src_sel val)
+{
+	return ((val) << A4XX_CP_DRAW_INDIRECT_0_SOURCE_SELECT__SHIFT) & A4XX_CP_DRAW_INDIRECT_0_SOURCE_SELECT__MASK;
+}
+#define A4XX_CP_DRAW_INDIRECT_0_VIS_CULL__MASK			0x00000300
+#define A4XX_CP_DRAW_INDIRECT_0_VIS_CULL__SHIFT			8
+static inline uint32_t A4XX_CP_DRAW_INDIRECT_0_VIS_CULL(enum pc_di_vis_cull_mode val)
+{
+	return ((val) << A4XX_CP_DRAW_INDIRECT_0_VIS_CULL__SHIFT) & A4XX_CP_DRAW_INDIRECT_0_VIS_CULL__MASK;
+}
+#define A4XX_CP_DRAW_INDIRECT_0_INDEX_SIZE__MASK		0x00000c00
+#define A4XX_CP_DRAW_INDIRECT_0_INDEX_SIZE__SHIFT		10
+static inline uint32_t A4XX_CP_DRAW_INDIRECT_0_INDEX_SIZE(enum a4xx_index_size val)
+{
+	return ((val) << A4XX_CP_DRAW_INDIRECT_0_INDEX_SIZE__SHIFT) & A4XX_CP_DRAW_INDIRECT_0_INDEX_SIZE__MASK;
+}
+#define A4XX_CP_DRAW_INDIRECT_0_TESS_MODE__MASK			0x01f00000
+#define A4XX_CP_DRAW_INDIRECT_0_TESS_MODE__SHIFT		20
+static inline uint32_t A4XX_CP_DRAW_INDIRECT_0_TESS_MODE(uint32_t val)
+{
+	return ((val) << A4XX_CP_DRAW_INDIRECT_0_TESS_MODE__SHIFT) & A4XX_CP_DRAW_INDIRECT_0_TESS_MODE__MASK;
+}
+
+#define REG_A4XX_CP_DRAW_INDIRECT_1				0x00000001
+#define A4XX_CP_DRAW_INDIRECT_1_INDIRECT__MASK			0xffffffff
+#define A4XX_CP_DRAW_INDIRECT_1_INDIRECT__SHIFT			0
+static inline uint32_t A4XX_CP_DRAW_INDIRECT_1_INDIRECT(uint32_t val)
+{
+	return ((val) << A4XX_CP_DRAW_INDIRECT_1_INDIRECT__SHIFT) & A4XX_CP_DRAW_INDIRECT_1_INDIRECT__MASK;
+}
+
+
+#define REG_A5XX_CP_DRAW_INDIRECT_2				0x00000002
+#define A5XX_CP_DRAW_INDIRECT_2_INDIRECT_HI__MASK		0xffffffff
+#define A5XX_CP_DRAW_INDIRECT_2_INDIRECT_HI__SHIFT		0
+static inline uint32_t A5XX_CP_DRAW_INDIRECT_2_INDIRECT_HI(uint32_t val)
+{
+	return ((val) << A5XX_CP_DRAW_INDIRECT_2_INDIRECT_HI__SHIFT) & A5XX_CP_DRAW_INDIRECT_2_INDIRECT_HI__MASK;
+}
+
+#define REG_A4XX_CP_DRAW_INDX_INDIRECT_0			0x00000000
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_PRIM_TYPE__MASK		0x0000003f
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_PRIM_TYPE__SHIFT		0
+static inline uint32_t A4XX_CP_DRAW_INDX_INDIRECT_0_PRIM_TYPE(enum pc_di_primtype val)
+{
+	return ((val) << A4XX_CP_DRAW_INDX_INDIRECT_0_PRIM_TYPE__SHIFT) & A4XX_CP_DRAW_INDX_INDIRECT_0_PRIM_TYPE__MASK;
+}
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_SOURCE_SELECT__MASK	0x000000c0
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_SOURCE_SELECT__SHIFT	6
+static inline uint32_t A4XX_CP_DRAW_INDX_INDIRECT_0_SOURCE_SELECT(enum pc_di_src_sel val)
+{
+	return ((val) << A4XX_CP_DRAW_INDX_INDIRECT_0_SOURCE_SELECT__SHIFT) & A4XX_CP_DRAW_INDX_INDIRECT_0_SOURCE_SELECT__MASK;
+}
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_VIS_CULL__MASK		0x00000300
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_VIS_CULL__SHIFT		8
+static inline uint32_t A4XX_CP_DRAW_INDX_INDIRECT_0_VIS_CULL(enum pc_di_vis_cull_mode val)
+{
+	return ((val) << A4XX_CP_DRAW_INDX_INDIRECT_0_VIS_CULL__SHIFT) & A4XX_CP_DRAW_INDX_INDIRECT_0_VIS_CULL__MASK;
+}
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_INDEX_SIZE__MASK		0x00000c00
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_INDEX_SIZE__SHIFT		10
+static inline uint32_t A4XX_CP_DRAW_INDX_INDIRECT_0_INDEX_SIZE(enum a4xx_index_size val)
+{
+	return ((val) << A4XX_CP_DRAW_INDX_INDIRECT_0_INDEX_SIZE__SHIFT) & A4XX_CP_DRAW_INDX_INDIRECT_0_INDEX_SIZE__MASK;
+}
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_TESS_MODE__MASK		0x01f00000
+#define A4XX_CP_DRAW_INDX_INDIRECT_0_TESS_MODE__SHIFT		20
+static inline uint32_t A4XX_CP_DRAW_INDX_INDIRECT_0_TESS_MODE(uint32_t val)
+{
+	return ((val) << A4XX_CP_DRAW_INDX_INDIRECT_0_TESS_MODE__SHIFT) & A4XX_CP_DRAW_INDX_INDIRECT_0_TESS_MODE__MASK;
+}
+
+
+#define REG_A4XX_CP_DRAW_INDX_INDIRECT_1			0x00000001
+#define A4XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE__MASK		0xffffffff
+#define A4XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE__SHIFT		0
+static inline uint32_t A4XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE(uint32_t val)
+{
+	return ((val) << A4XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE__SHIFT) & A4XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE__MASK;
+}
+
+#define REG_A4XX_CP_DRAW_INDX_INDIRECT_2			0x00000002
+#define A4XX_CP_DRAW_INDX_INDIRECT_2_INDX_SIZE__MASK		0xffffffff
+#define A4XX_CP_DRAW_INDX_INDIRECT_2_INDX_SIZE__SHIFT		0
+static inline uint32_t A4XX_CP_DRAW_INDX_INDIRECT_2_INDX_SIZE(uint32_t val)
+{
+	return ((val) << A4XX_CP_DRAW_INDX_INDIRECT_2_INDX_SIZE__SHIFT) & A4XX_CP_DRAW_INDX_INDIRECT_2_INDX_SIZE__MASK;
+}
+
+#define REG_A4XX_CP_DRAW_INDX_INDIRECT_3			0x00000003
+#define A4XX_CP_DRAW_INDX_INDIRECT_3_INDIRECT__MASK		0xffffffff
+#define A4XX_CP_DRAW_INDX_INDIRECT_3_INDIRECT__SHIFT		0
+static inline uint32_t A4XX_CP_DRAW_INDX_INDIRECT_3_INDIRECT(uint32_t val)
+{
+	return ((val) << A4XX_CP_DRAW_INDX_INDIRECT_3_INDIRECT__SHIFT) & A4XX_CP_DRAW_INDX_INDIRECT_3_INDIRECT__MASK;
+}
+
+
+#define REG_A5XX_CP_DRAW_INDX_INDIRECT_1			0x00000001
+#define A5XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE_LO__MASK		0xffffffff
+#define A5XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE_LO__SHIFT	0
+static inline uint32_t A5XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE_LO(uint32_t val)
+{
+	return ((val) << A5XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE_LO__SHIFT) & A5XX_CP_DRAW_INDX_INDIRECT_1_INDX_BASE_LO__MASK;
+}
+
+#define REG_A5XX_CP_DRAW_INDX_INDIRECT_2			0x00000002
+#define A5XX_CP_DRAW_INDX_INDIRECT_2_INDX_BASE_HI__MASK		0xffffffff
+#define A5XX_CP_DRAW_INDX_INDIRECT_2_INDX_BASE_HI__SHIFT	0
+static inline uint32_t A5XX_CP_DRAW_INDX_INDIRECT_2_INDX_BASE_HI(uint32_t val)
+{
+	return ((val) << A5XX_CP_DRAW_INDX_INDIRECT_2_INDX_BASE_HI__SHIFT) & A5XX_CP_DRAW_INDX_INDIRECT_2_INDX_BASE_HI__MASK;
+}
+
+#define REG_A5XX_CP_DRAW_INDX_INDIRECT_3			0x00000003
+#define A5XX_CP_DRAW_INDX_INDIRECT_3_MAX_INDICES__MASK		0xffffffff
+#define A5XX_CP_DRAW_INDX_INDIRECT_3_MAX_INDICES__SHIFT		0
+static inline uint32_t A5XX_CP_DRAW_INDX_INDIRECT_3_MAX_INDICES(uint32_t val)
+{
+	return ((val) << A5XX_CP_DRAW_INDX_INDIRECT_3_MAX_INDICES__SHIFT) & A5XX_CP_DRAW_INDX_INDIRECT_3_MAX_INDICES__MASK;
+}
+
+#define REG_A5XX_CP_DRAW_INDX_INDIRECT_4			0x00000004
+#define A5XX_CP_DRAW_INDX_INDIRECT_4_INDIRECT_LO__MASK		0xffffffff
+#define A5XX_CP_DRAW_INDX_INDIRECT_4_INDIRECT_LO__SHIFT		0
+static inline uint32_t A5XX_CP_DRAW_INDX_INDIRECT_4_INDIRECT_LO(uint32_t val)
+{
+	return ((val) << A5XX_CP_DRAW_INDX_INDIRECT_4_INDIRECT_LO__SHIFT) & A5XX_CP_DRAW_INDX_INDIRECT_4_INDIRECT_LO__MASK;
+}
+
+#define REG_A5XX_CP_DRAW_INDX_INDIRECT_5			0x00000005
+#define A5XX_CP_DRAW_INDX_INDIRECT_5_INDIRECT_HI__MASK		0xffffffff
+#define A5XX_CP_DRAW_INDX_INDIRECT_5_INDIRECT_HI__SHIFT		0
+static inline uint32_t A5XX_CP_DRAW_INDX_INDIRECT_5_INDIRECT_HI(uint32_t val)
+{
+	return ((val) << A5XX_CP_DRAW_INDX_INDIRECT_5_INDIRECT_HI__SHIFT) & A5XX_CP_DRAW_INDX_INDIRECT_5_INDIRECT_HI__MASK;
 }
 
 static inline uint32_t REG_CP_SET_DRAW_STATE_(uint32_t i0) { return 0x00000000 + 0x3*i0; }
@@ -1113,6 +1261,74 @@ static inline uint32_t CP_EXEC_CS_2_NGROUPS_Y(uint32_t val)
 static inline uint32_t CP_EXEC_CS_3_NGROUPS_Z(uint32_t val)
 {
 	return ((val) << CP_EXEC_CS_3_NGROUPS_Z__SHIFT) & CP_EXEC_CS_3_NGROUPS_Z__MASK;
+}
+
+#define REG_A4XX_CP_EXEC_CS_INDIRECT_0				0x00000000
+
+
+#define REG_A4XX_CP_EXEC_CS_INDIRECT_1				0x00000001
+#define A4XX_CP_EXEC_CS_INDIRECT_1_ADDR__MASK			0xffffffff
+#define A4XX_CP_EXEC_CS_INDIRECT_1_ADDR__SHIFT			0
+static inline uint32_t A4XX_CP_EXEC_CS_INDIRECT_1_ADDR(uint32_t val)
+{
+	return ((val) << A4XX_CP_EXEC_CS_INDIRECT_1_ADDR__SHIFT) & A4XX_CP_EXEC_CS_INDIRECT_1_ADDR__MASK;
+}
+
+#define REG_A4XX_CP_EXEC_CS_INDIRECT_2				0x00000002
+#define A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEX__MASK		0x00000ffc
+#define A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEX__SHIFT		2
+static inline uint32_t A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEX(uint32_t val)
+{
+	return ((val) << A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEX__SHIFT) & A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEX__MASK;
+}
+#define A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEY__MASK		0x003ff000
+#define A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEY__SHIFT		12
+static inline uint32_t A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEY(uint32_t val)
+{
+	return ((val) << A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEY__SHIFT) & A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEY__MASK;
+}
+#define A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEZ__MASK		0xffc00000
+#define A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEZ__SHIFT		22
+static inline uint32_t A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEZ(uint32_t val)
+{
+	return ((val) << A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEZ__SHIFT) & A4XX_CP_EXEC_CS_INDIRECT_2_LOCALSIZEZ__MASK;
+}
+
+
+#define REG_A5XX_CP_EXEC_CS_INDIRECT_1				0x00000001
+#define A5XX_CP_EXEC_CS_INDIRECT_1_ADDR_LO__MASK		0xffffffff
+#define A5XX_CP_EXEC_CS_INDIRECT_1_ADDR_LO__SHIFT		0
+static inline uint32_t A5XX_CP_EXEC_CS_INDIRECT_1_ADDR_LO(uint32_t val)
+{
+	return ((val) << A5XX_CP_EXEC_CS_INDIRECT_1_ADDR_LO__SHIFT) & A5XX_CP_EXEC_CS_INDIRECT_1_ADDR_LO__MASK;
+}
+
+#define REG_A5XX_CP_EXEC_CS_INDIRECT_2				0x00000002
+#define A5XX_CP_EXEC_CS_INDIRECT_2_ADDR_HI__MASK		0xffffffff
+#define A5XX_CP_EXEC_CS_INDIRECT_2_ADDR_HI__SHIFT		0
+static inline uint32_t A5XX_CP_EXEC_CS_INDIRECT_2_ADDR_HI(uint32_t val)
+{
+	return ((val) << A5XX_CP_EXEC_CS_INDIRECT_2_ADDR_HI__SHIFT) & A5XX_CP_EXEC_CS_INDIRECT_2_ADDR_HI__MASK;
+}
+
+#define REG_A5XX_CP_EXEC_CS_INDIRECT_3				0x00000003
+#define A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEX__MASK		0x00000ffc
+#define A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEX__SHIFT		2
+static inline uint32_t A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEX(uint32_t val)
+{
+	return ((val) << A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEX__SHIFT) & A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEX__MASK;
+}
+#define A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEY__MASK		0x003ff000
+#define A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEY__SHIFT		12
+static inline uint32_t A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEY(uint32_t val)
+{
+	return ((val) << A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEY__SHIFT) & A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEY__MASK;
+}
+#define A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEZ__MASK		0xffc00000
+#define A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEZ__SHIFT		22
+static inline uint32_t A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEZ(uint32_t val)
+{
+	return ((val) << A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEZ__SHIFT) & A5XX_CP_EXEC_CS_INDIRECT_3_LOCALSIZEZ__MASK;
 }
 
 

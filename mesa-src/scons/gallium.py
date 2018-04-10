@@ -134,7 +134,9 @@ def check_cc(env, cc, expr, cpp_opt = '-E'):
     source.write('#if !(%s)\n#error\n#endif\n' % expr)
     source.close()
 
-    pipe = SCons.Action._subproc(env, [env['CC'], cpp_opt, source.name],
+    # sys.stderr.write('%r %s %s\n' % (env['CC'], cpp_opt, source.name));
+
+    pipe = SCons.Action._subproc(env, env.Split(env['CC']) + [cpp_opt, source.name],
                                  stdin = 'devnull',
                                  stderr = 'devnull',
                                  stdout = 'devnull')
@@ -351,6 +353,9 @@ def generate(env):
 
         if check_header(env, 'xlocale.h'):
             cppdefines += ['HAVE_XLOCALE_H']
+
+        if check_header(env, 'endian.h'):
+            cppdefines += ['HAVE_ENDIAN_H']
 
         if check_functions(env, ['strtod_l', 'strtof_l']):
             cppdefines += ['HAVE_STRTOD_L']

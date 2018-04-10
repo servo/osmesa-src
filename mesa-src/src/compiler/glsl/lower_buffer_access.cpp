@@ -73,16 +73,22 @@ lower_buffer_access::emit_access(void *mem_ctx,
             new(mem_ctx) ir_dereference_record(deref->clone(mem_ctx, NULL),
                                                field->name);
 
-         field_offset =
-            glsl_align(field_offset,
-                       field->type->std140_base_alignment(row_major));
+         unsigned field_align;
+         if (packing == GLSL_INTERFACE_PACKING_STD430)
+            field_align = field->type->std430_base_alignment(row_major);
+         else
+            field_align = field->type->std140_base_alignment(row_major);
+         field_offset = glsl_align(field_offset, field_align);
 
          emit_access(mem_ctx, is_write, field_deref, base_offset,
                      deref_offset + field_offset,
                      row_major, NULL, packing,
                      writemask_for_size(field_deref->type->vector_elements));
 
-         field_offset += field->type->std140_size(row_major);
+         if (packing == GLSL_INTERFACE_PACKING_STD430)
+            field_offset += field->type->std430_size(row_major);
+         else
+            field_offset += field->type->std140_size(row_major);
       }
       return;
    }
@@ -144,8 +150,7 @@ lower_buffer_access::emit_access(void *mem_ctx,
       const unsigned matrix_stride =
          link_calculate_matrix_stride(matrix_type, row_major, packing);
 
-      const glsl_type *deref_type = deref->type->is_float() ?
-         glsl_type::float_type : glsl_type::double_type;
+      const glsl_type *deref_type = deref->type->get_scalar_type();
 
       for (unsigned i = 0; i < deref->type->vector_elements; i++) {
          ir_rvalue *chan_offset =

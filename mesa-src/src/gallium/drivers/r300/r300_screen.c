@@ -96,11 +96,9 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_NPOT_TEXTURES:
         case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
         case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
-        case PIPE_CAP_TWO_SIDED_STENCIL:
         case PIPE_CAP_ANISOTROPIC_FILTER:
         case PIPE_CAP_POINT_SPRITE:
         case PIPE_CAP_OCCLUSION_QUERY:
-        case PIPE_CAP_TEXTURE_SHADOW_MAP:
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
         case PIPE_CAP_BLEND_EQUATION_SEPARATE:
         case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
@@ -109,7 +107,6 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_CONDITIONAL_RENDER:
         case PIPE_CAP_TEXTURE_BARRIER:
         case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
-        case PIPE_CAP_USER_CONSTANT_BUFFERS:
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
         case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
         case PIPE_CAP_CLIP_HALFZ:
@@ -250,6 +247,10 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TILE_RASTER_ORDER:
         case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
         case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
+        case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+        case PIPE_CAP_FENCE_SIGNAL:
+        case PIPE_CAP_CONSTBUF0_FLAGS:
+        case PIPE_CAP_PACKED_UNIFORMS:
             return 0;
 
         /* SWTCL-only features. */
@@ -474,11 +475,6 @@ static float r300_get_paramf(struct pipe_screen* pscreen,
             return 16.0f;
         case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
             return 16.0f;
-        case PIPE_CAPF_GUARD_BAND_LEFT:
-        case PIPE_CAPF_GUARD_BAND_TOP:
-        case PIPE_CAPF_GUARD_BAND_RIGHT:
-        case PIPE_CAPF_GUARD_BAND_BOTTOM:
-            return 0.0f;
         default:
             debug_printf("r300: Warning: Unknown CAP %d in get_paramf.\n",
                          param);

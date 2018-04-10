@@ -455,7 +455,7 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
          prog_data->base.binding_table.ssbo_start + ssbo_index;
       dst_reg result_dst = get_nir_dest(instr->dest);
       vec4_instruction *inst = new(mem_ctx)
-         vec4_instruction(VS_OPCODE_GET_BUFFER_SIZE, result_dst);
+         vec4_instruction(SHADER_OPCODE_GET_BUFFER_SIZE, result_dst);
 
       inst->base_mrf = 2;
       inst->mlen = 1; /* always at least one */
@@ -842,7 +842,9 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
       if (const_offset) {
          offset_reg = brw_imm_ud(const_offset->u32[0] & ~15);
       } else {
-         offset_reg = get_nir_src(instr->src[1], nir_type_uint32, 1);
+         offset_reg = src_reg(this, glsl_type::uint_type);
+         emit(MOV(dst_reg(offset_reg),
+                  get_nir_src(instr->src[1], nir_type_uint32, 1)));
       }
 
       src_reg packed_consts;

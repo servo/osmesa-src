@@ -1,5 +1,5 @@
 /******************************************************************************
-* Copyright (C) 2015-2017 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2015-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -164,6 +164,30 @@ struct GlobalKnobs
     DEFINE_KNOB(MAX_WORKER_THREADS, uint32_t, 0);
 
     //-----------------------------------------------------------
+    // KNOB_BASE_NUMA_NODE
+    //
+    // Starting NUMA node index to use when allocating compute resources.
+    // Setting this to a non-zero value will reduce the maximum # of NUMA nodes used.
+    //
+    DEFINE_KNOB(BASE_NUMA_NODE, uint32_t, 0);
+
+    //-----------------------------------------------------------
+    // KNOB_BASE_CORE
+    //
+    // Starting core index to use when allocating compute resources.
+    // Setting this to a non-zero value will reduce the maximum # of cores used.
+    //
+    DEFINE_KNOB(BASE_CORE, uint32_t, 0);
+
+    //-----------------------------------------------------------
+    // KNOB_BASE_THREAD
+    //
+    // Starting thread index to use when allocating compute resources.
+    // Setting this to a non-zero value will reduce the maximum # of threads used.
+    //
+    DEFINE_KNOB(BASE_THREAD, uint32_t, 0);
+
+    //-----------------------------------------------------------
     // KNOB_BUCKETS_START_FRAME
     //
     // Frame from when to start saving buckets data.
@@ -308,6 +332,16 @@ struct GlobalKnobs
     //
     DEFINE_KNOB(TOSS_RS, bool, false);
 
+    //-----------------------------------------------------------
+    // KNOB_DISABLE_SPLIT_DRAW
+    //
+    // Don't split large draws into smaller draws.,
+    // MAX_PRIMS_PER_DRAW and MAX_TESS_PRIMS_PER_DRAW can be used to control split size.
+    // 
+    // Useful to disable split draws for gathering archrast stats.
+    //
+    DEFINE_KNOB(DISABLE_SPLIT_DRAW, bool, false);
+
 
     std::string ToString(const char* optPerLinePrefix="");
     GlobalKnobs();
@@ -325,6 +359,9 @@ extern GlobalKnobs g_GlobalKnobs;
 #define KNOB_MAX_CORES_PER_NUMA_NODE     GET_KNOB(MAX_CORES_PER_NUMA_NODE)
 #define KNOB_MAX_THREADS_PER_CORE        GET_KNOB(MAX_THREADS_PER_CORE)
 #define KNOB_MAX_WORKER_THREADS          GET_KNOB(MAX_WORKER_THREADS)
+#define KNOB_BASE_NUMA_NODE              GET_KNOB(BASE_NUMA_NODE)
+#define KNOB_BASE_CORE                   GET_KNOB(BASE_CORE)
+#define KNOB_BASE_THREAD                 GET_KNOB(BASE_THREAD)
 #define KNOB_BUCKETS_START_FRAME         GET_KNOB(BUCKETS_START_FRAME)
 #define KNOB_BUCKETS_END_FRAME           GET_KNOB(BUCKETS_END_FRAME)
 #define KNOB_WORKER_SPIN_LOOP_COUNT      GET_KNOB(WORKER_SPIN_LOOP_COUNT)
@@ -342,5 +379,6 @@ extern GlobalKnobs g_GlobalKnobs;
 #define KNOB_TOSS_SETUP_TRIS             GET_KNOB(TOSS_SETUP_TRIS)
 #define KNOB_TOSS_BIN_TRIS               GET_KNOB(TOSS_BIN_TRIS)
 #define KNOB_TOSS_RS                     GET_KNOB(TOSS_RS)
+#define KNOB_DISABLE_SPLIT_DRAW          GET_KNOB(DISABLE_SPLIT_DRAW)
 
 

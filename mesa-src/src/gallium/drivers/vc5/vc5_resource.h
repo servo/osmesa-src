@@ -68,15 +68,18 @@ enum vc5_tiling_mode {
 struct vc5_transfer {
         struct pipe_transfer base;
         void *map;
-
-        struct pipe_resource *ss_resource;
-        struct pipe_box ss_box;
 };
 
 struct vc5_resource_slice {
         uint32_t offset;
         uint32_t stride;
+        uint32_t padded_height;
+        /* Size of a single pane of the slice.  For 3D textures, there will be
+         * a number of panes equal to the minified, power-of-two-aligned
+         * depth.
+         */
         uint32_t size;
+        uint8_t ub_pad;
         enum vc5_tiling_mode tiling;
 };
 
@@ -102,6 +105,11 @@ struct vc5_surface {
         uint8_t internal_bpp;
 
         uint32_t padded_height_of_output_image_in_uif_blocks;
+
+        /* If the resource being referenced is separate stencil, then this is
+         * the surface to use when reading/writing stencil.
+         */
+        struct pipe_surface *separate_stencil;
 };
 
 struct vc5_resource {
@@ -109,6 +117,7 @@ struct vc5_resource {
         struct vc5_bo *bo;
         struct vc5_resource_slice slices[VC5_MAX_MIP_LEVELS];
         uint32_t cube_map_stride;
+        uint32_t size;
         int cpp;
         bool tiled;
 
@@ -130,6 +139,11 @@ struct vc5_resource {
          * buffer) may get marked.
          */
         uint32_t initialized_buffers;
+
+        enum pipe_format internal_format;
+
+        /* Resource storing the S8 part of a Z32F_S8 resource, or NULL. */
+        struct vc5_resource *separate_stencil;
 };
 
 static inline struct vc5_resource *
@@ -154,5 +168,8 @@ void vc5_resource_screen_init(struct pipe_screen *pscreen);
 void vc5_resource_context_init(struct pipe_context *pctx);
 struct pipe_resource *vc5_resource_create(struct pipe_screen *pscreen,
                                           const struct pipe_resource *tmpl);
+uint32_t vc5_layer_offset(struct pipe_resource *prsc, uint32_t level,
+                          uint32_t layer);
+
 
 #endif /* VC5_RESOURCE_H */

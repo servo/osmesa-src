@@ -60,19 +60,19 @@ typedef union gl_constant_value
 struct gl_program_parameter
 {
    const char *Name;        /**< Null-terminated string */
-   gl_register_file Type;   /**< PROGRAM_CONSTANT or STATE_VAR */
-   GLenum DataType;         /**< GL_FLOAT, GL_FLOAT_VEC2, etc */
+   gl_register_file Type:16;  /**< PROGRAM_CONSTANT or STATE_VAR */
+   GLenum16 DataType;         /**< GL_FLOAT, GL_FLOAT_VEC2, etc */
    /**
     * Number of components (1..4), or more.
     * If the number of components is greater than 4,
     * this parameter is part of a larger uniform like a GLSL matrix or array.
     * The next program parameter's Size will be Size-4 of this parameter.
     */
-   GLuint Size;
+   GLushort Size;
    /**
     * A sequence of STATE_* tokens and integers to identify GL state.
     */
-   gl_state_index StateIndexes[STATE_LENGTH];
+   gl_state_index16 StateIndexes[STATE_LENGTH];
 };
 
 
@@ -82,9 +82,11 @@ struct gl_program_parameter
 struct gl_program_parameter_list
 {
    GLuint Size;           /**< allocated size of Parameters, ParameterValues */
-   GLuint NumParameters;  /**< number of parameters in arrays */
+   GLuint NumParameters;  /**< number of used parameters in array */
+   unsigned NumParameterValues;  /**< number of used parameter values array */
    struct gl_program_parameter *Parameters; /**< Array [Size] */
-   gl_constant_value (*ParameterValues)[4]; /**< Array [Size] of constant[4] */
+   unsigned *ParameterValueOffset;
+   gl_constant_value *ParameterValues; /**< Array [Size] of gl_constant_value */
    GLbitfield StateFlags; /**< _NEW_* flags indicating which state changes
                                might invalidate ParameterValues[] */
 };
@@ -108,7 +110,8 @@ _mesa_add_parameter(struct gl_program_parameter_list *paramList,
                     gl_register_file type, const char *name,
                     GLuint size, GLenum datatype,
                     const gl_constant_value *values,
-                    const gl_state_index state[STATE_LENGTH]);
+                    const gl_state_index16 state[STATE_LENGTH],
+                    bool pad_and_align);
 
 extern GLint
 _mesa_add_typed_unnamed_constant(struct gl_program_parameter_list *paramList,
@@ -125,8 +128,13 @@ _mesa_add_unnamed_constant(struct gl_program_parameter_list *paramList,
 }
 
 extern GLint
+_mesa_add_sized_state_reference(struct gl_program_parameter_list *paramList,
+                                const gl_state_index16 stateTokens[STATE_LENGTH],
+                                const unsigned size, bool pad_and_align);
+
+extern GLint
 _mesa_add_state_reference(struct gl_program_parameter_list *paramList,
-                          const gl_state_index stateTokens[STATE_LENGTH]);
+                          const gl_state_index16 stateTokens[]);
 
 
 static inline GLint

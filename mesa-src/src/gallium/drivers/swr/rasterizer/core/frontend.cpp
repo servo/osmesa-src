@@ -150,7 +150,7 @@ void ProcessStoreTiles(
     uint32_t workerId,
     void *pUserData)
 {
-    AR_BEGIN(FEProcessStoreTiles, pDC->drawId);
+    RDTSC_BEGIN(FEProcessStoreTiles, pDC->drawId);
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
     STORE_TILES_DESC* pDesc = (STORE_TILES_DESC*)pUserData;
 
@@ -175,7 +175,7 @@ void ProcessStoreTiles(
         }
     }
 
-    AR_END(FEProcessStoreTiles, 0);
+    RDTSC_END(FEProcessStoreTiles, 0);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -191,7 +191,7 @@ void ProcessDiscardInvalidateTiles(
     uint32_t workerId,
     void *pUserData)
 {
-    AR_BEGIN(FEProcessInvalidateTiles, pDC->drawId);
+    RDTSC_BEGIN(FEProcessInvalidateTiles, pDC->drawId);
     DISCARD_INVALIDATE_TILES_DESC *pDesc = (DISCARD_INVALIDATE_TILES_DESC*)pUserData;
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
 
@@ -230,7 +230,7 @@ void ProcessDiscardInvalidateTiles(
         }
     }
 
-    AR_END(FEProcessInvalidateTiles, 0);
+    RDTSC_END(FEProcessInvalidateTiles, 0);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -485,6 +485,13 @@ static INLINE simdscalari GenerateMask(uint32_t numItemsRemaining)
     return _simd_castps_si(_simd_vmask_ps(mask));
 }
 
+static INLINE simd16scalari GenerateMask16(uint32_t numItemsRemaining)
+{
+    uint32_t numActive = (numItemsRemaining >= KNOB_SIMD16_WIDTH) ? KNOB_SIMD16_WIDTH : numItemsRemaining;
+    uint32_t mask = (numActive > 0) ? ((1 << numActive) - 1) : 0;
+    return _simd16_castps_si(_simd16_vmask_ps(mask));
+}
+
 //////////////////////////////////////////////////////////////////////////
 /// @brief StreamOut - Streams vertex data out to SO buffers.
 ///        Generally, we are only streaming out a SIMDs worth of triangles.
@@ -498,9 +505,7 @@ static void StreamOut(
     uint32_t* pPrimData,
     uint32_t streamIndex)
 {
-    SWR_CONTEXT *pContext = pDC->pContext;
-
-    AR_BEGIN(FEStreamout, pDC->drawId);
+    RDTSC_BEGIN(FEStreamout, pDC->drawId);
 
     const API_STATE& state = GetApiState(pDC);
     const SWR_STREAMOUT_STATE &soState = state.soState;
@@ -575,7 +580,7 @@ static void StreamOut(
     UPDATE_STAT_FE(SoPrimStorageNeeded[streamIndex], soContext.numPrimStorageNeeded);
     UPDATE_STAT_FE(SoNumPrimsWritten[streamIndex], soContext.numPrimsWritten);
 
-    AR_END(FEStreamout, 1);
+    RDTSC_END(FEStreamout, 1);
 }
 
 #if USE_SIMD16_FRONTEND
@@ -728,7 +733,7 @@ template<typename SIMD_T, uint32_t SimdWidth>
 void TransposeSOAtoAOS(uint8_t* pDst, uint8_t* pSrc, uint32_t numVerts, uint32_t numAttribs)
 {
     uint32_t srcVertexStride = numAttribs * sizeof(float) * 4;
-    uint32_t dstVertexStride = numAttribs * sizeof(typename SIMD_T::Float) * 4;
+    uint32_t dstVertexStride = numAttribs * sizeof(Float<SIMD_T>) * 4;
 
     OSALIGNSIMD16(uint32_t) gatherOffsets[SimdWidth];
 
@@ -736,7 +741,7 @@ void TransposeSOAtoAOS(uint8_t* pDst, uint8_t* pSrc, uint32_t numVerts, uint32_t
     {
         gatherOffsets[i] = srcVertexStride * i;
     }
-    auto vGatherOffsets = SIMD_T::load_si((typename SIMD_T::Integer*)&gatherOffsets[0]);
+    auto vGatherOffsets = SIMD_T::load_si((Integer<SIMD_T>*)&gatherOffsets[0]);
 
     uint32_t numSimd = AlignUp(numVerts, SimdWidth) / SimdWidth;
     uint32_t remainingVerts = numVerts;
@@ -754,18 +759,18 @@ void TransposeSOAtoAOS(uint8_t* pDst, uint8_t* pSrc, uint32_t numVerts, uint32_t
 
         for (uint32_t a = 0; a < numAttribs; ++a)
         {
-            auto attribGatherX = SIMD_T::template mask_i32gather_ps<typename SIMD_T::ScaleFactor(1)>(SIMD_T::setzero_ps(), (const float*)pSrcBase, vGatherOffsets, vMask);
-            auto attribGatherY = SIMD_T::template mask_i32gather_ps<typename SIMD_T::ScaleFactor(1)>(SIMD_T::setzero_ps(), (const float*)(pSrcBase + sizeof(float)), vGatherOffsets, vMask);
-            auto attribGatherZ = SIMD_T::template mask_i32gather_ps<typename SIMD_T::ScaleFactor(1)>(SIMD_T::setzero_ps(), (const float*)(pSrcBase + sizeof(float) * 2), vGatherOffsets, vMask);
-            auto attribGatherW = SIMD_T::template mask_i32gather_ps<typename SIMD_T::ScaleFactor(1)>(SIMD_T::setzero_ps(), (const float*)(pSrcBase + sizeof(float) * 3), vGatherOffsets, vMask);
+            auto attribGatherX = SIMD_T::template mask_i32gather_ps<ScaleFactor<SIMD_T>(1)>(SIMD_T::setzero_ps(), (const float*)pSrcBase, vGatherOffsets, vMask);
+            auto attribGatherY = SIMD_T::template mask_i32gather_ps<ScaleFactor<SIMD_T>(1)>(SIMD_T::setzero_ps(), (const float*)(pSrcBase + sizeof(float)), vGatherOffsets, vMask);
+            auto attribGatherZ = SIMD_T::template mask_i32gather_ps<ScaleFactor<SIMD_T>(1)>(SIMD_T::setzero_ps(), (const float*)(pSrcBase + sizeof(float) * 2), vGatherOffsets, vMask);
+            auto attribGatherW = SIMD_T::template mask_i32gather_ps<ScaleFactor<SIMD_T>(1)>(SIMD_T::setzero_ps(), (const float*)(pSrcBase + sizeof(float) * 3), vGatherOffsets, vMask);
 
             SIMD_T::maskstore_ps((float*)pDstBase, viMask, attribGatherX);
-            SIMD_T::maskstore_ps((float*)(pDstBase + sizeof(typename SIMD_T::Float)), viMask, attribGatherY);
-            SIMD_T::maskstore_ps((float*)(pDstBase + sizeof(typename SIMD_T::Float) * 2), viMask, attribGatherZ);
-            SIMD_T::maskstore_ps((float*)(pDstBase + sizeof(typename SIMD_T::Float) * 3), viMask, attribGatherW);
+            SIMD_T::maskstore_ps((float*)(pDstBase + sizeof(Float<SIMD_T>)), viMask, attribGatherY);
+            SIMD_T::maskstore_ps((float*)(pDstBase + sizeof(Float<SIMD_T>) * 2), viMask, attribGatherZ);
+            SIMD_T::maskstore_ps((float*)(pDstBase + sizeof(Float<SIMD_T>) * 3), viMask, attribGatherW);
 
             pSrcBase += sizeof(float) * 4;
-            pDstBase += sizeof(typename SIMD_T::Float) * 4;
+            pDstBase += sizeof(Float<SIMD_T>) * 4;
         }
         remainingVerts -= SimdWidth;
     }
@@ -792,9 +797,7 @@ static void GeometryShaderStage(
 #endif
     simdscalari const &primID)
 {
-    SWR_CONTEXT *pContext = pDC->pContext;
-
-    AR_BEGIN(FEGeometryShader, pDC->drawId);
+    RDTSC_BEGIN(FEGeometryShader, pDC->drawId);
 
     const API_STATE& state = GetApiState(pDC);
     const SWR_GS_STATE* pState = &state.gsState;
@@ -988,13 +991,71 @@ static void GeometryShaderStage(
                             {
 #if USE_SIMD16_FRONTEND
                                 simd16scalari vPrimId = _simd16_set1_epi32(pPrimitiveId[inputPrim]);
+
+                                // Gather data from the SVG if provided.
+                                simd16scalari vViewportIdx = SIMD16::setzero_si();
+                                simd16scalari vRtIdx = SIMD16::setzero_si();
+                                SIMD16::Vec4 svgAttrib[4];
+
+                                if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
                                 {
+                                    gsPa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
+                                }
+
+
+                                if (state.backendState.readViewportArrayIndex)
+                                {
+                                    vViewportIdx = SIMD16::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+                                    gsPa.viewportArrayActive = true;
+                                }
+                                if (state.backendState.readRenderTargetArrayIndex)
+                                {
+                                    vRtIdx = SIMD16::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                                    gsPa.rtArrayActive = true;
+                                }
+
+                                {
+                                    // OOB VPAI indices => forced to zero.
+                                    vViewportIdx = SIMD16::max_epi32(vViewportIdx, SIMD16::setzero_si());
+                                    simd16scalari vNumViewports = SIMD16::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                                    simd16scalari vClearMask = SIMD16::cmplt_epi32(vViewportIdx, vNumViewports);
+                                    vViewportIdx = SIMD16::and_si(vClearMask, vViewportIdx);
+
                                     gsPa.useAlternateOffset = false;
-                                    pfnClipFunc(pDC, gsPa, workerId, attrib_simd16, GenMask(gsPa.NumPrims()), vPrimId);
+                                    pfnClipFunc(pDC, gsPa, workerId, attrib_simd16, GenMask(gsPa.NumPrims()), vPrimId, vViewportIdx, vRtIdx);
                                 }
 #else
                                 simdscalari vPrimId = _simd_set1_epi32(pPrimitiveId[inputPrim]);
-                                pfnClipFunc(pDC, gsPa, workerId, attrib, GenMask(gsPa.NumPrims()), vPrimId);
+
+                                // Gather data from the SVG if provided.
+                                simdscalari vViewportIdx = SIMD::setzero_si();
+                                simdscalari vRtIdx = SIMD::setzero_si();
+                                SIMD::Vec4 svgAttrib[4];
+
+                                if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
+                                {
+                                    gsPa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
+                                }
+
+
+                                if (state.backendState.readViewportArrayIndex)
+                                {
+                                    vViewportIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+
+                                    // OOB VPAI indices => forced to zero.
+                                    vViewportIdx = SIMD::max_epi32(vViewportIdx, SIMD::setzero_si());
+                                    simdscalari vNumViewports = SIMD::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                                    simdscalari vClearMask = SIMD::cmplt_epi32(vViewportIdx, vNumViewports);
+                                    vViewportIdx = SIMD::and_si(vClearMask, vViewportIdx);
+                                    gsPa.viewportArrayActive = true;
+                                }
+                                if (state.backendState.readRenderTargetArrayIndex)
+                                {
+                                    vRtIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                                    gsPa.rtArrayActive = true;
+                                }
+
+                                pfnClipFunc(pDC, gsPa, workerId, attrib, GenMask(gsPa.NumPrims()), vPrimId, vViewportIdx, vRtIdx);
 #endif
                             }
                         }
@@ -1008,7 +1069,7 @@ static void GeometryShaderStage(
     UPDATE_STAT_FE(GsInvocations, numInputPrims * pState->instanceCount);
     UPDATE_STAT_FE(GsPrimitives, totalPrimsGenerated);
     AR_EVENT(GSPrimInfo(numInputPrims, totalPrimsGenerated, numVertsPerPrim*numInputPrims));
-    AR_END(FEGeometryShader, 1);
+    RDTSC_END(FEGeometryShader, 1);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1040,7 +1101,7 @@ static INLINE void AllocateGsBuffers(DRAW_CONTEXT* pDC, const API_STATE& state, 
 
     // Allocate storage for transposed GS output
     uint32_t numSimdBatches = AlignUp(gsState.maxNumVerts, SIMD_WIDTH) / SIMD_WIDTH;
-    uint32_t transposedBufferSize = numSimdBatches * gsState.outputVertexSize * sizeof(typename SIMD_T::Vec4);
+    uint32_t transposedBufferSize = numSimdBatches * gsState.outputVertexSize * sizeof(Vec4<SIMD_T>);
     pGsBuffers->pGsTransposed = (uint8_t*)pArena->AllocAligned(transposedBufferSize, 32);
 
     // Allocate storage to hold temporary stream->cut buffer, if necessary
@@ -1105,7 +1166,6 @@ static void TessellationStages(
 #endif
     simdscalari const &primID)
 {
-    SWR_CONTEXT *pContext = pDC->pContext;
     const API_STATE& state = GetApiState(pDC);
     const SWR_TS_STATE& tsState = state.tsState;
 
@@ -1188,9 +1248,9 @@ static void TessellationStages(
     hsContext.mask = GenerateMask(numPrims);
 
     // Run the HS
-    AR_BEGIN(FEHullShader, pDC->drawId);
+    RDTSC_BEGIN(FEHullShader, pDC->drawId);
     state.pfnHsFunc(GetPrivateState(pDC), &hsContext);
-    AR_END(FEHullShader, 0);
+    RDTSC_END(FEHullShader, 0);
 
     UPDATE_STAT_FE(HsInvocations, numPrims);
 
@@ -1200,10 +1260,10 @@ static void TessellationStages(
     {
         // Run Tessellator
         SWR_TS_TESSELLATED_DATA tsData = { 0 };
-        AR_BEGIN(FETessellation, pDC->drawId);
+        RDTSC_BEGIN(FETessellation, pDC->drawId);
         TSTessellate(tsCtx, hsContext.pCPout[p].tessFactors, tsData);
         AR_EVENT(TessPrimCount(1));
-        AR_END(FETessellation, 0);
+        RDTSC_END(FETessellation, 0);
 
         if (tsData.NumPrimitives == 0)
         {
@@ -1252,9 +1312,9 @@ static void TessellationStages(
         {
             dsContext.mask = GenerateMask(tsData.NumDomainPoints - dsInvocations);
 
-            AR_BEGIN(FEDomainShader, pDC->drawId);
+            RDTSC_BEGIN(FEDomainShader, pDC->drawId);
             state.pfnDsFunc(GetPrivateState(pDC), &dsContext);
-            AR_END(FEDomainShader, 0);
+            RDTSC_END(FEDomainShader, 0);
 
             dsInvocations += KNOB_SIMD_WIDTH;
         }
@@ -1274,11 +1334,11 @@ static void TessellationStages(
             dsContext.vectorStride,
 #endif
             SWR_VTX_NUM_SLOTS,
-            tsState.numDsOutputAttribs,
+            tsState.numDsOutputAttribs + tsState.dsOutVtxAttribOffset,
             tsData.ppIndices,
             tsData.NumPrimitives,
             tsState.postDSTopology,
-            numVertsPerPrim);
+            NumVertsPerPrim(tsState.postDSTopology, false));
 
         while (tessPa.HasWork())
         {
@@ -1325,26 +1385,80 @@ static void TessellationStages(
 #else
                     simdvector      prim[3];        // Only deal with triangles, lines, or points
 #endif
-                    AR_BEGIN(FEPAAssemble, pDC->drawId);
+                    RDTSC_BEGIN(FEPAAssemble, pDC->drawId);
                     bool assemble =
 #if USE_SIMD16_FRONTEND
                         tessPa.Assemble(VERTEX_POSITION_SLOT, prim_simd16);
 #else
                         tessPa.Assemble(VERTEX_POSITION_SLOT, prim);
 #endif
-                    AR_END(FEPAAssemble, 1);
+                    RDTSC_END(FEPAAssemble, 1);
                     SWR_ASSERT(assemble);
 
                     SWR_ASSERT(pfnClipFunc);
 #if USE_SIMD16_FRONTEND
+                    // Gather data from the SVG if provided.
+                    simd16scalari vViewportIdx = SIMD16::setzero_si();
+                    simd16scalari vRtIdx = SIMD16::setzero_si();
+                    SIMD16::Vec4 svgAttrib[4];
+
+                    if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
+                    {
+                        tessPa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
+                    }
+
+
+                    if (state.backendState.readViewportArrayIndex)
+                    {
+                        vViewportIdx = SIMD16::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+                        tessPa.viewportArrayActive = true;
+                    }
+                    if (state.backendState.readRenderTargetArrayIndex)
+                    {
+                        vRtIdx = SIMD16::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                        tessPa.rtArrayActive = true;
+                    }
+
 
                     {
+                        // OOB VPAI indices => forced to zero.
+                        vViewportIdx = SIMD16::max_epi32(vViewportIdx, SIMD16::setzero_si());
+                        simd16scalari vNumViewports = SIMD16::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                        simd16scalari vClearMask = SIMD16::cmplt_epi32(vViewportIdx, vNumViewports);
+                        vViewportIdx = SIMD16::and_si(vClearMask, vViewportIdx);
+
                         tessPa.useAlternateOffset = false;
-                        pfnClipFunc(pDC, tessPa, workerId, prim_simd16, GenMask(numPrims), primID);
+                        pfnClipFunc(pDC, tessPa, workerId, prim_simd16, GenMask(numPrims), primID, vViewportIdx, vRtIdx);
                     }
 #else
+                    // Gather data from the SGV if provided.
+                    simdscalari vViewportIdx = SIMD::setzero_si();
+                    simdscalari vRtIdx = SIMD::setzero_si();
+                    SIMD::Vec4 svgAttrib[4];
+
+                    if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
+                    {
+                        tessPa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
+                    }
+
+                    if (state.backendState.readViewportArrayIndex)
+                    {
+                        vViewportIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+
+                        // OOB VPAI indices => forced to zero.
+                        vViewportIdx = SIMD::max_epi32(vViewportIdx, SIMD::setzero_si());
+                        simdscalari vNumViewports = SIMD::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                        simdscalari vClearMask = SIMD::cmplt_epi32(vViewportIdx, vNumViewports);
+                        vViewportIdx = SIMD::and_si(vClearMask, vViewportIdx);
+                        tessPa.viewportArrayActive = true;
+                    }
+                    if (state.backendState.readRenderTargetArrayIndex)
+                    {
+                        vRtIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                        tessPa.rtArrayActive = true;
+                    }
                     pfnClipFunc(pDC, tessPa, workerId, prim,
-                        GenMask(tessPa.NumPrims()), _simd_set1_epi32(dsContext.PrimitiveID));
+                        GenMask(tessPa.NumPrims()), _simd_set1_epi32(dsContext.PrimitiveID), vViewportIdx, vRtIdx);
 #endif
                 }
             }
@@ -1401,7 +1515,7 @@ void ProcessDraw(
     }
 #endif
 
-    AR_BEGIN(FEProcessDraw, pDC->drawId);
+    RDTSC_BEGIN(FEProcessDraw, pDC->drawId);
 
     DRAW_WORK&          work = *(DRAW_WORK*)pUserData;
     const API_STATE&    state = GetApiState(pDC);
@@ -1605,25 +1719,42 @@ void ProcessDraw(
 
             if (i < endVertex)
             {
-                // 1. Execute FS/VS for a single SIMD.
-                AR_BEGIN(FEFetchShader, pDC->drawId);
+                if (!IsIndexedT::value)
+                {
+                    fetchInfo_lo.pLastIndex = fetchInfo_lo.pIndices;
+                    uint32_t offset;
+                    offset = std::min(endVertex-i, (uint32_t) KNOB_SIMD16_WIDTH);
 #if USE_SIMD16_SHADERS
-                state.pfnFetchFunc(fetchInfo_lo, vin);
+                    fetchInfo_lo.pLastIndex += offset;
 #else
-                state.pfnFetchFunc(fetchInfo_lo, vin_lo);
+                    fetchInfo_lo.pLastIndex += std::min(offset, (uint32_t) KNOB_SIMD_WIDTH);
+                    uint32_t offset2 = std::min(offset, (uint32_t) KNOB_SIMD16_WIDTH)-KNOB_SIMD_WIDTH;
+                    assert(offset >= 0);
+                    fetchInfo_hi.pLastIndex = fetchInfo_hi.pIndices;
+                    fetchInfo_hi.pLastIndex += offset2;
+#endif
+                }
+                // 1. Execute FS/VS for a single SIMD.
+                RDTSC_BEGIN(FEFetchShader, pDC->drawId);
+#if USE_SIMD16_SHADERS
+                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_lo, vin);
+#else
+                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_lo, vin_lo);
 
                 if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                 {
-                    state.pfnFetchFunc(fetchInfo_hi, vin_hi);
+                    state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_hi, vin_hi);
                 }
 #endif
-                AR_END(FEFetchShader, 0);
+                RDTSC_END(FEFetchShader, 0);
 
                 // forward fetch generated vertex IDs to the vertex shader
 #if USE_SIMD16_SHADERS
-#if 0
-                vsContext_lo.VertexID = _simd16_extract(fetchInfo_lo.VertexID, 0);
-                vsContext_hi.VertexID = _simd16_extract(fetchInfo_lo.VertexID, 1);
+#if USE_SIMD16_VS
+                vsContext_lo.VertexID16 = _simd16_insert_si(
+                    vsContext_lo.VertexID16, fetchInfo_lo.VertexID, 0);
+                vsContext_lo.VertexID16 = _simd16_insert_si(
+                    vsContext_lo.VertexID16, fetchInfo_lo.VertexID2, 1);
 #else
                 vsContext_lo.VertexID = fetchInfo_lo.VertexID;
                 vsContext_hi.VertexID = fetchInfo_lo.VertexID2;
@@ -1634,20 +1765,19 @@ void ProcessDraw(
 #endif
 
                 // Setup active mask for vertex shader.
+#if USE_SIMD16_VS
+                vsContext_lo.mask16 = GenerateMask16(endVertex - i);
+#else
                 vsContext_lo.mask = GenerateMask(endVertex - i);
                 vsContext_hi.mask = GenerateMask(endVertex - (i + KNOB_SIMD_WIDTH));
+#endif
 
                 // forward cut mask to the PA
                 if (IsIndexedT::value)
                 {
 #if USE_SIMD16_SHADERS
-#if 0
-                    *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(_simd16_extract(fetchInfo_lo.CutMask, 0)));
-                    *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(_simd16_extract(fetchInfo_lo.CutMask, 1)));
-#else
                     *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask));
                     *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask2));
-#endif
 #else
                     *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask));
                     *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_hi.CutMask));
@@ -1660,14 +1790,18 @@ void ProcessDraw(
                 if (!KNOB_TOSS_FETCH)
 #endif
                 {
-                    AR_BEGIN(FEVertexShader, pDC->drawId);
+                    RDTSC_BEGIN(FEVertexShader, pDC->drawId);
+#if USE_SIMD16_VS
+                    state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_lo);
+#else
                     state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_lo);
 
                     if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                     {
                         state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_hi);
                     }
-                    AR_END(FEVertexShader, 0);
+#endif
+                    RDTSC_END(FEVertexShader, 0);
 
                     UPDATE_STAT_FE(VsInvocations, GetNumInvocations(i, endVertex));
                 }
@@ -1736,9 +1870,37 @@ void ProcessDraw(
                                 if (HasRastT::value)
                                 {
                                     SWR_ASSERT(pDC->pState->pfnProcessPrims_simd16);
+                                    // Gather data from the SVG if provided.
+                                    simd16scalari vpai = SIMD16::setzero_si();
+                                    simd16scalari rtai = SIMD16::setzero_si();
+                                    SIMD16::Vec4 svgAttrib[4];
+
+                                    if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
                                     {
+                                        pa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
+                                    }
+
+
+                                    if (state.backendState.readViewportArrayIndex)
+                                    {
+                                        vpai = SIMD16::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+                                        pa.viewportArrayActive = true;
+                                    }
+                                    if (state.backendState.readRenderTargetArrayIndex)
+                                    {
+                                        rtai = SIMD16::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                                        pa.rtArrayActive = true;
+                                    }
+
+                                    {
+                                        // OOB VPAI indices => forced to zero.
+                                        vpai = SIMD16::max_epi32(vpai, SIMD16::setzero_si());
+                                        simd16scalari vNumViewports = SIMD16::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                                        simd16scalari vClearMask = SIMD16::cmplt_epi32(vpai, vNumViewports);
+                                        vpai = SIMD16::and_si(vClearMask, vpai);
+
                                         pa.useAlternateOffset = false;
-                                        pDC->pState->pfnProcessPrims_simd16(pDC, pa, workerId, prim_simd16, GenMask(numPrims), primID);
+                                        pDC->pState->pfnProcessPrims_simd16(pDC, pa, workerId, prim_simd16, GenMask(numPrims), primID, vpai, rtai);
                                     }
                                 }
                             }
@@ -1827,9 +1989,9 @@ void ProcessDraw(
             {
 
                 // 1. Execute FS/VS for a single SIMD.
-                AR_BEGIN(FEFetchShader, pDC->drawId);
-                state.pfnFetchFunc(fetchInfo, vout);
-                AR_END(FEFetchShader, 0);
+                RDTSC_BEGIN(FEFetchShader, pDC->drawId);
+                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo, vout);
+                RDTSC_END(FEFetchShader, 0);
 
                 // forward fetch generated vertex IDs to the vertex shader
                 vsContext.VertexID = fetchInfo.VertexID;
@@ -1849,9 +2011,9 @@ void ProcessDraw(
                 if (!KNOB_TOSS_FETCH)
 #endif
                 {
-                    AR_BEGIN(FEVertexShader, pDC->drawId);
+                    RDTSC_BEGIN(FEVertexShader, pDC->drawId);
                     state.pfnVertexFunc(GetPrivateState(pDC), &vsContext);
-                    AR_END(FEVertexShader, 0);
+                    RDTSC_END(FEVertexShader, 0);
 
                     UPDATE_STAT_FE(VsInvocations, GetNumInvocations(i, endVertex));
                 }
@@ -1862,9 +2024,9 @@ void ProcessDraw(
             {
                 simdvector prim[MAX_NUM_VERTS_PER_PRIM];
                 // PaAssemble returns false if there is not enough verts to assemble.
-                AR_BEGIN(FEPAAssemble, pDC->drawId);
+                RDTSC_BEGIN(FEPAAssemble, pDC->drawId);
                 bool assemble = pa.Assemble(VERTEX_POSITION_SLOT, prim);
-                AR_END(FEPAAssemble, 1);
+                RDTSC_END(FEPAAssemble, 1);
 
 #if KNOB_ENABLE_TOSS_POINTS
                 if (!KNOB_TOSS_FETCH)
@@ -1900,8 +2062,35 @@ void ProcessDraw(
                                 {
                                     SWR_ASSERT(pDC->pState->pfnProcessPrims);
 
+                                    // Gather data from the SVG if provided.
+                                    simdscalari vViewportIdx = SIMD::setzero_si();
+                                    simdscalari vRtIdx = SIMD::setzero_si();
+                                    SIMD::Vec4 svgAttrib[4];
+
+                                    if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
+                                    {
+                                        pa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
+                                    }
+
+                                    if (state.backendState.readViewportArrayIndex)
+                                    {
+                                        vViewportIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+
+                                        // OOB VPAI indices => forced to zero.
+                                        vViewportIdx = SIMD::max_epi32(vViewportIdx, SIMD::setzero_si());
+                                        simdscalari vNumViewports = SIMD::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                                        simdscalari vClearMask = SIMD::cmplt_epi32(vViewportIdx, vNumViewports);
+                                        vViewportIdx = SIMD::and_si(vClearMask, vViewportIdx);
+                                        pa.viewportArrayActive = true;
+                                    }
+                                    if (state.backendState.readRenderTargetArrayIndex)
+                                    {
+                                        vRtIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                                        pa.rtArrayActive = true;
+                                    }
+
                                     pDC->pState->pfnProcessPrims(pDC, pa, workerId, prim,
-                                        GenMask(pa.NumPrims()), pa.GetPrimID(work.startPrimID));
+                                        GenMask(pa.NumPrims()), pa.GetPrimID(work.startPrimID), vViewportIdx, vRtIdx);
                                 }
                             }
                         }
@@ -1925,7 +2114,7 @@ void ProcessDraw(
 
 #endif
 
-    AR_END(FEProcessDraw, numPrims * work.numInstances);
+    RDTSC_END(FEProcessDraw, numPrims * work.numInstances);
 }
 
 struct FEDrawChooser

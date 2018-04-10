@@ -284,7 +284,8 @@ struct bool32_vec {
 
 
 static nir_const_value
-evaluate_b2f(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_b2f(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -343,7 +344,8 @@ evaluate_b2f(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_b2i(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_b2i(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -417,7 +419,8 @@ evaluate_b2i(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ball_fequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ball_fequal2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -512,7 +515,8 @@ evaluate_ball_fequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ball_fequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ball_fequal3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -607,7 +611,8 @@ evaluate_ball_fequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ball_fequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ball_fequal4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -702,7 +707,8 @@ evaluate_ball_fequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ball_iequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ball_iequal2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -824,7 +830,8 @@ evaluate_ball_iequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ball_iequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ball_iequal3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -946,7 +953,8 @@ evaluate_ball_iequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ball_iequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ball_iequal4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1068,7 +1076,8 @@ evaluate_ball_iequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_bany_fnequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bany_fnequal2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1163,7 +1172,8 @@ evaluate_bany_fnequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_bany_fnequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bany_fnequal3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1258,7 +1268,8 @@ evaluate_bany_fnequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_bany_fnequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bany_fnequal4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1353,7 +1364,8 @@ evaluate_bany_fnequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_bany_inequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bany_inequal2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1475,7 +1487,8 @@ evaluate_bany_inequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_bany_inequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bany_inequal3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1597,7 +1610,8 @@ evaluate_bany_inequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_bany_inequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bany_inequal4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1719,7 +1733,8 @@ evaluate_bany_inequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_bcsel(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bcsel(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1809,7 +1824,8 @@ evaluate_bcsel(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_bfi(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bfi(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1849,7 +1865,8 @@ if (mask == 0) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_bfm(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bfm(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1881,7 +1898,8 @@ else
    return _dst_val;
 }
 static nir_const_value
-evaluate_bit_count(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bit_count(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1911,7 +1929,8 @@ for (unsigned bit = 0; bit < 32; bit++) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_bitfield_insert(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bitfield_insert(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1936,12 +1955,12 @@ evaluate_bitfield_insert(MAYBE_UNUSED unsigned num_components, unsigned bit_size
 unsigned base = src0, insert = src1;
 int offset = src2, bits = src3;
 if (bits == 0) {
-   dst = 0;
+   dst = base;
 } else if (offset < 0 || bits < 0 || bits + offset > 32) {
    dst = 0;
 } else {
    unsigned mask = ((1ull << bits) - 1) << offset;
-   dst = (base & ~mask) | ((insert << bits) & mask);
+   dst = (base & ~mask) | ((insert << offset) & mask);
 }
 
 
@@ -1952,7 +1971,8 @@ if (bits == 0) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_bitfield_reverse(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_bitfield_reverse(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -1981,7 +2001,84 @@ for (unsigned bit = 0; bit < 32; bit++)
    return _dst_val;
 }
 static nir_const_value
-evaluate_extract_i16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_cube_face_coord(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      
+   
+
+
+      const struct float32_vec src0 = {
+            _src[0].f32[0],
+            _src[0].f32[1],
+            _src[0].f32[2],
+         0,
+      };
+
+      struct float32_vec dst;
+
+         
+dst.x = dst.y = 0.0;
+float absX = fabs(src0.x);
+float absY = fabs(src0.y);
+float absZ = fabs(src0.z);
+if (src0.x >= 0 && absX >= absY && absX >= absZ) { dst.x = -src0.y; dst.y = -src0.z; }
+if (src0.x < 0 && absX >= absY && absX >= absZ) { dst.x = -src0.y; dst.y = src0.z; }
+if (src0.y >= 0 && absY >= absX && absY >= absZ) { dst.x = src0.z; dst.y = src0.x; }
+if (src0.y < 0 && absY >= absX && absY >= absZ) { dst.x = -src0.z; dst.y = src0.x; }
+if (src0.z >= 0 && absZ >= absX && absZ >= absY) { dst.x = -src0.y; dst.y = src0.x; }
+if (src0.z < 0 && absZ >= absX && absZ >= absY) { dst.x = -src0.y; dst.y = -src0.x; }
+
+
+            _dst_val.f32[0] = dst.x;
+            _dst_val.f32[1] = dst.y;
+
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_cube_face_index(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      
+   
+
+
+      const struct float32_vec src0 = {
+            _src[0].f32[0],
+            _src[0].f32[1],
+            _src[0].f32[2],
+         0,
+      };
+
+      struct float32_vec dst;
+
+         
+float absX = fabs(src0.x);
+float absY = fabs(src0.y);
+float absZ = fabs(src0.z);
+if (src0.x >= 0 && absX >= absY && absX >= absZ) dst.x = 0;
+if (src0.x < 0 && absX >= absY && absX >= absZ) dst.x = 1;
+if (src0.y >= 0 && absY >= absX && absY >= absZ) dst.x = 2;
+if (src0.y < 0 && absY >= absX && absY >= absZ) dst.x = 3;
+if (src0.z >= 0 && absZ >= absX && absZ >= absY) dst.x = 4;
+if (src0.z < 0 && absZ >= absX && absZ >= absY) dst.x = 5;
+
+
+            _dst_val.f32[0] = dst.x;
+
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_extract_i16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2067,7 +2164,8 @@ evaluate_extract_i16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_extract_i8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_extract_i8(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2153,7 +2251,8 @@ evaluate_extract_i8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_extract_u16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_extract_u16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2239,7 +2338,8 @@ evaluate_extract_u16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_extract_u8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_extract_u8(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2325,7 +2425,8 @@ evaluate_extract_u8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2b(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2b(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2387,7 +2488,8 @@ evaluate_f2b(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2f16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2f16_rtne(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2449,7 +2551,134 @@ evaluate_f2f16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2f32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2f16_rtz(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 16: {
+         
+   
+
+         
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float src0 =
+                  _mesa_half_to_float(_src[0].u16[_i]);
+
+            float16_t dst = src0;
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+         
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float32_t src0 =
+                  _src[0].f32[_i];
+
+            float16_t dst = src0;
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+         
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float64_t src0 =
+                  _src[0].f64[_i];
+
+            float16_t dst = src0;
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_f2f16_undef(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 16: {
+         
+   
+
+         
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float src0 =
+                  _mesa_half_to_float(_src[0].u16[_i]);
+
+            float16_t dst = src0;
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+         
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float32_t src0 =
+                  _src[0].f32[_i];
+
+            float16_t dst = src0;
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+         
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float64_t src0 =
+                  _src[0].f64[_i];
+
+            float16_t dst = src0;
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_f2f32(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2511,7 +2740,8 @@ evaluate_f2f32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2f64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2f64(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2573,7 +2803,8 @@ evaluate_f2f64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2i16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2i16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2635,7 +2866,8 @@ evaluate_f2i16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2i32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2i32(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2697,7 +2929,8 @@ evaluate_f2i32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2i64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2i64(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2759,7 +2992,8 @@ evaluate_f2i64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2i8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2i8(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2821,7 +3055,8 @@ evaluate_f2i8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2u16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2u16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2883,7 +3118,8 @@ evaluate_f2u16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2u32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2u32(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -2945,7 +3181,8 @@ evaluate_f2u32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2u64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2u64(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3007,7 +3244,8 @@ evaluate_f2u64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_f2u8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_f2u8(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3069,7 +3307,8 @@ evaluate_f2u8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fabs(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fabs(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3131,7 +3370,8 @@ evaluate_fabs(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fadd(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fadd(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3199,7 +3439,8 @@ evaluate_fadd(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fall_equal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fall_equal2(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3232,7 +3473,8 @@ evaluate_fall_equal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fall_equal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fall_equal3(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3265,7 +3507,8 @@ evaluate_fall_equal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fall_equal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fall_equal4(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3298,7 +3541,8 @@ evaluate_fall_equal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fand(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fand(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3322,7 +3566,8 @@ evaluate_fand(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fany_nequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fany_nequal2(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3355,7 +3600,8 @@ evaluate_fany_nequal2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fany_nequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fany_nequal3(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3388,7 +3634,8 @@ evaluate_fany_nequal3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fany_nequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fany_nequal4(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3421,7 +3668,8 @@ evaluate_fany_nequal4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fceil(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fceil(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3483,7 +3731,8 @@ evaluate_fceil(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fcos(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fcos(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3545,7 +3794,8 @@ evaluate_fcos(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fcsel(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fcsel(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3571,7 +3821,8 @@ evaluate_fcsel(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fddx(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fddx(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3627,7 +3878,8 @@ evaluate_fddx(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fddx_coarse(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fddx_coarse(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3683,7 +3935,8 @@ evaluate_fddx_coarse(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fddx_fine(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fddx_fine(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3739,7 +3992,8 @@ evaluate_fddx_fine(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fddy(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fddy(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3795,7 +4049,8 @@ evaluate_fddy(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fddy_coarse(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fddy_coarse(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3851,7 +4106,8 @@ evaluate_fddy_coarse(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fddy_fine(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fddy_fine(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3907,7 +4163,8 @@ evaluate_fddy_fine(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdiv(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -3975,7 +4232,8 @@ evaluate_fdiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdot2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdot2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4070,7 +4328,8 @@ evaluate_fdot2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdot3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdot3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4165,7 +4424,8 @@ evaluate_fdot3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdot4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdot4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4260,7 +4520,8 @@ evaluate_fdot4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdot_replicated2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdot_replicated2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4364,7 +4625,8 @@ evaluate_fdot_replicated2(MAYBE_UNUSED unsigned num_components, unsigned bit_siz
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdot_replicated3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdot_replicated3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4468,7 +4730,8 @@ evaluate_fdot_replicated3(MAYBE_UNUSED unsigned num_components, unsigned bit_siz
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdot_replicated4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdot_replicated4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4572,7 +4835,8 @@ evaluate_fdot_replicated4(MAYBE_UNUSED unsigned num_components, unsigned bit_siz
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdph(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdph(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4667,7 +4931,8 @@ evaluate_fdph(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fdph_replicated(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fdph_replicated(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4771,7 +5036,8 @@ evaluate_fdph_replicated(MAYBE_UNUSED unsigned num_components, unsigned bit_size
    return _dst_val;
 }
 static nir_const_value
-evaluate_feq(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_feq(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4839,7 +5105,8 @@ evaluate_feq(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fexp2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fexp2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4901,7 +5168,8 @@ evaluate_fexp2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ffloor(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ffloor(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -4963,7 +5231,8 @@ evaluate_ffloor(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ffma(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ffma(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5037,7 +5306,8 @@ evaluate_ffma(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ffract(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ffract(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5099,7 +5369,8 @@ evaluate_ffract(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fge(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fge(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5167,7 +5438,8 @@ evaluate_fge(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_find_lsb(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_find_lsb(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5199,7 +5471,8 @@ for (unsigned bit = 0; bit < 32; bit++) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_flog2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_flog2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5261,7 +5534,8 @@ evaluate_flog2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_flrp(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_flrp(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5335,7 +5609,8 @@ evaluate_flrp(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_flt(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_flt(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5403,7 +5678,8 @@ evaluate_flt(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fmax(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fmax(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5471,7 +5747,158 @@ evaluate_fmax(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fmin(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fmax3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float src0 =
+                  _mesa_half_to_float(_src[0].u16[_i]);
+               const float src1 =
+                  _mesa_half_to_float(_src[1].u16[_i]);
+               const float src2 =
+                  _mesa_half_to_float(_src[2].u16[_i]);
+
+            float16_t dst = fmaxf(src0, fmaxf(src1, src2));
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float32_t src0 =
+                  _src[0].f32[_i];
+               const float32_t src1 =
+                  _src[1].f32[_i];
+               const float32_t src2 =
+                  _src[2].f32[_i];
+
+            float32_t dst = fmaxf(src0, fmaxf(src1, src2));
+
+            _dst_val.f32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float64_t src0 =
+                  _src[0].f64[_i];
+               const float64_t src1 =
+                  _src[1].f64[_i];
+               const float64_t src2 =
+                  _src[2].f64[_i];
+
+            float64_t dst = fmaxf(src0, fmaxf(src1, src2));
+
+            _dst_val.f64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_fmed3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float src0 =
+                  _mesa_half_to_float(_src[0].u16[_i]);
+               const float src1 =
+                  _mesa_half_to_float(_src[1].u16[_i]);
+               const float src2 =
+                  _mesa_half_to_float(_src[2].u16[_i]);
+
+            float16_t dst = fmaxf(fminf(fmaxf(src0, src1), src2), fminf(src0, src1));
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float32_t src0 =
+                  _src[0].f32[_i];
+               const float32_t src1 =
+                  _src[1].f32[_i];
+               const float32_t src2 =
+                  _src[2].f32[_i];
+
+            float32_t dst = fmaxf(fminf(fmaxf(src0, src1), src2), fminf(src0, src1));
+
+            _dst_val.f32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float64_t src0 =
+                  _src[0].f64[_i];
+               const float64_t src1 =
+                  _src[1].f64[_i];
+               const float64_t src2 =
+                  _src[2].f64[_i];
+
+            float64_t dst = fmaxf(fminf(fmaxf(src0, src1), src2), fminf(src0, src1));
+
+            _dst_val.f64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_fmin(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5539,7 +5966,83 @@ evaluate_fmin(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fmod(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fmin3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float src0 =
+                  _mesa_half_to_float(_src[0].u16[_i]);
+               const float src1 =
+                  _mesa_half_to_float(_src[1].u16[_i]);
+               const float src2 =
+                  _mesa_half_to_float(_src[2].u16[_i]);
+
+            float16_t dst = fminf(src0, fminf(src1, src2));
+
+            _dst_val.u16[_i] = _mesa_float_to_half(dst);
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float32_t src0 =
+                  _src[0].f32[_i];
+               const float32_t src1 =
+                  _src[1].f32[_i];
+               const float32_t src2 =
+                  _src[2].f32[_i];
+
+            float32_t dst = fminf(src0, fminf(src1, src2));
+
+            _dst_val.f32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float64_t src0 =
+                  _src[0].f64[_i];
+               const float64_t src1 =
+                  _src[1].f64[_i];
+               const float64_t src2 =
+                  _src[2].f64[_i];
+
+            float64_t dst = fminf(src0, fminf(src1, src2));
+
+            _dst_val.f64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_fmod(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5607,7 +6110,8 @@ evaluate_fmod(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fmov(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fmov(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5669,7 +6173,8 @@ evaluate_fmov(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fmul(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fmul(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5737,7 +6242,8 @@ evaluate_fmul(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fne(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fne(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5805,7 +6311,8 @@ evaluate_fne(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fneg(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fneg(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5867,7 +6374,8 @@ evaluate_fneg(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise1_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise1_1(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5920,7 +6428,8 @@ evaluate_fnoise1_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise1_2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise1_2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -5973,7 +6482,8 @@ evaluate_fnoise1_2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise1_3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise1_3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6026,7 +6536,8 @@ evaluate_fnoise1_3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise1_4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise1_4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6079,63 +6590,8 @@ evaluate_fnoise1_4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise2_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
-                 MAYBE_UNUSED nir_const_value *_src)
-{
-   nir_const_value _dst_val = { {0, } };
-
-      switch (bit_size) {
-      case 16: {
-         
-   
-
-         
-      struct float16_vec dst;
-
-         dst.x = dst.y = dst.z = dst.w = 0.0f;
-
-            _dst_val.u16[0] = _mesa_float_to_half(dst.x);
-            _dst_val.u16[1] = _mesa_float_to_half(dst.y);
-
-         break;
-      }
-      case 32: {
-         
-   
-
-         
-      struct float32_vec dst;
-
-         dst.x = dst.y = dst.z = dst.w = 0.0f;
-
-            _dst_val.f32[0] = dst.x;
-            _dst_val.f32[1] = dst.y;
-
-         break;
-      }
-      case 64: {
-         
-   
-
-         
-      struct float64_vec dst;
-
-         dst.x = dst.y = dst.z = dst.w = 0.0f;
-
-            _dst_val.f64[0] = dst.x;
-            _dst_val.f64[1] = dst.y;
-
-         break;
-      }
-
-      default:
-         unreachable("unknown bit width");
-      }
-
-   return _dst_val;
-}
-static nir_const_value
-evaluate_fnoise2_2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise2_1(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6191,7 +6647,8 @@ evaluate_fnoise2_2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise2_3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise2_2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6247,7 +6704,8 @@ evaluate_fnoise2_3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise2_4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise2_3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6303,7 +6761,8 @@ evaluate_fnoise2_4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise3_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise2_4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6320,7 +6779,6 @@ evaluate_fnoise3_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
 
             _dst_val.u16[0] = _mesa_float_to_half(dst.x);
             _dst_val.u16[1] = _mesa_float_to_half(dst.y);
-            _dst_val.u16[2] = _mesa_float_to_half(dst.z);
 
          break;
       }
@@ -6335,7 +6793,6 @@ evaluate_fnoise3_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
 
             _dst_val.f32[0] = dst.x;
             _dst_val.f32[1] = dst.y;
-            _dst_val.f32[2] = dst.z;
 
          break;
       }
@@ -6350,7 +6807,6 @@ evaluate_fnoise3_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
 
             _dst_val.f64[0] = dst.x;
             _dst_val.f64[1] = dst.y;
-            _dst_val.f64[2] = dst.z;
 
          break;
       }
@@ -6362,7 +6818,8 @@ evaluate_fnoise3_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise3_2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise3_1(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6421,7 +6878,8 @@ evaluate_fnoise3_2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise3_3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise3_2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6480,7 +6938,8 @@ evaluate_fnoise3_3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise3_4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise3_3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6539,7 +6998,8 @@ evaluate_fnoise3_4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise4_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise3_4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6557,7 +7017,6 @@ evaluate_fnoise4_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
             _dst_val.u16[0] = _mesa_float_to_half(dst.x);
             _dst_val.u16[1] = _mesa_float_to_half(dst.y);
             _dst_val.u16[2] = _mesa_float_to_half(dst.z);
-            _dst_val.u16[3] = _mesa_float_to_half(dst.w);
 
          break;
       }
@@ -6573,7 +7032,6 @@ evaluate_fnoise4_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
             _dst_val.f32[0] = dst.x;
             _dst_val.f32[1] = dst.y;
             _dst_val.f32[2] = dst.z;
-            _dst_val.f32[3] = dst.w;
 
          break;
       }
@@ -6589,7 +7047,6 @@ evaluate_fnoise4_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
             _dst_val.f64[0] = dst.x;
             _dst_val.f64[1] = dst.y;
             _dst_val.f64[2] = dst.z;
-            _dst_val.f64[3] = dst.w;
 
          break;
       }
@@ -6601,7 +7058,8 @@ evaluate_fnoise4_1(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise4_2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise4_1(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6663,7 +7121,8 @@ evaluate_fnoise4_2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise4_3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise4_2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6725,7 +7184,8 @@ evaluate_fnoise4_3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnoise4_4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise4_3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6787,7 +7247,71 @@ evaluate_fnoise4_4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fnot(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fnoise4_4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 16: {
+         
+   
+
+         
+      struct float16_vec dst;
+
+         dst.x = dst.y = dst.z = dst.w = 0.0f;
+
+            _dst_val.u16[0] = _mesa_float_to_half(dst.x);
+            _dst_val.u16[1] = _mesa_float_to_half(dst.y);
+            _dst_val.u16[2] = _mesa_float_to_half(dst.z);
+            _dst_val.u16[3] = _mesa_float_to_half(dst.w);
+
+         break;
+      }
+      case 32: {
+         
+   
+
+         
+      struct float32_vec dst;
+
+         dst.x = dst.y = dst.z = dst.w = 0.0f;
+
+            _dst_val.f32[0] = dst.x;
+            _dst_val.f32[1] = dst.y;
+            _dst_val.f32[2] = dst.z;
+            _dst_val.f32[3] = dst.w;
+
+         break;
+      }
+      case 64: {
+         
+   
+
+         
+      struct float64_vec dst;
+
+         dst.x = dst.y = dst.z = dst.w = 0.0f;
+
+            _dst_val.f64[0] = dst.x;
+            _dst_val.f64[1] = dst.y;
+            _dst_val.f64[2] = dst.z;
+            _dst_val.f64[3] = dst.w;
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_fnot(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6849,7 +7373,8 @@ evaluate_fnot(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_for(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_for(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6873,7 +7398,8 @@ evaluate_for(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fpow(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fpow(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -6941,7 +7467,8 @@ evaluate_fpow(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fquantize2f16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fquantize2f16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7003,7 +7530,8 @@ evaluate_fquantize2f16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_frcp(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_frcp(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7065,7 +7593,8 @@ evaluate_frcp(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_frem(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_frem(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7133,7 +7662,58 @@ evaluate_frem(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fround_even(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_frexp_exp(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      
+   
+
+         
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float64_t src0 =
+                  _src[0].f64[_i];
+
+            int32_t dst;
+
+            frexp(src0, &dst);
+
+            _dst_val.i32[_i] = dst;
+      }
+
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_frexp_sig(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      
+   
+
+         
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const float64_t src0 =
+                  _src[0].f64[_i];
+
+            float64_t dst;
+
+            int n; dst = frexp(src0, &n);
+
+            _dst_val.f64[_i] = dst;
+      }
+
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_fround_even(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7195,7 +7775,8 @@ evaluate_fround_even(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_frsq(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_frsq(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7257,7 +7838,8 @@ evaluate_frsq(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fsat(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fsat(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7319,7 +7901,8 @@ evaluate_fsat(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fsign(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fsign(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7381,7 +7964,8 @@ evaluate_fsign(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fsin(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fsin(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7443,7 +8027,8 @@ evaluate_fsin(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fsqrt(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fsqrt(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7505,7 +8090,8 @@ evaluate_fsqrt(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fsub(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fsub(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7573,7 +8159,8 @@ evaluate_fsub(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ftrunc(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ftrunc(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7635,7 +8222,8 @@ evaluate_ftrunc(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_fxor(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_fxor(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7659,7 +8247,8 @@ evaluate_fxor(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_i2b(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_i2b(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7737,7 +8326,8 @@ evaluate_i2b(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_i2f16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_i2f16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7815,7 +8405,8 @@ evaluate_i2f16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_i2f32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_i2f32(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7893,7 +8484,8 @@ evaluate_i2f32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_i2f64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_i2f64(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -7971,7 +8563,8 @@ evaluate_i2f64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_i2i16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_i2i16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8049,7 +8642,8 @@ evaluate_i2i16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_i2i32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_i2i32(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8127,7 +8721,8 @@ evaluate_i2i32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_i2i64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_i2i64(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8205,7 +8800,8 @@ evaluate_i2i64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_i2i8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_i2i8(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8283,7 +8879,8 @@ evaluate_i2i8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_iabs(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_iabs(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8361,7 +8958,8 @@ evaluate_iabs(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_iadd(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_iadd(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8447,7 +9045,8 @@ evaluate_iadd(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_iand(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_iand(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8533,7 +9132,8 @@ evaluate_iand(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ibfe(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ibfe(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8573,7 +9173,8 @@ if (bits == 0) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_ibitfield_extract(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ibitfield_extract(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8611,7 +9212,8 @@ if (bits == 0) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_idiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_idiv(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8628,7 +9230,7 @@ evaluate_idiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
                const int8_t src1 =
                   _src[1].i8[_i];
 
-            int8_t dst = src0 / src1;
+            int8_t dst = src1 == 0 ? 0 : (src0 / src1);
 
             _dst_val.i8[_i] = dst;
       }
@@ -8646,7 +9248,7 @@ evaluate_idiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
                const int16_t src1 =
                   _src[1].i16[_i];
 
-            int16_t dst = src0 / src1;
+            int16_t dst = src1 == 0 ? 0 : (src0 / src1);
 
             _dst_val.i16[_i] = dst;
       }
@@ -8664,7 +9266,7 @@ evaluate_idiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
                const int32_t src1 =
                   _src[1].i32[_i];
 
-            int32_t dst = src0 / src1;
+            int32_t dst = src1 == 0 ? 0 : (src0 / src1);
 
             _dst_val.i32[_i] = dst;
       }
@@ -8682,7 +9284,7 @@ evaluate_idiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
                const int64_t src1 =
                   _src[1].i64[_i];
 
-            int64_t dst = src0 / src1;
+            int64_t dst = src1 == 0 ? 0 : (src0 / src1);
 
             _dst_val.i64[_i] = dst;
       }
@@ -8697,7 +9299,8 @@ evaluate_idiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ieq(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ieq(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8783,7 +9386,8 @@ evaluate_ieq(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ifind_msb(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ifind_msb(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8819,7 +9423,8 @@ for (int bit = 31; bit >= 0; bit--) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_ige(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ige(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8905,7 +9510,8 @@ evaluate_ige(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ilt(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ilt(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -8991,7 +9597,8 @@ evaluate_ilt(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_imax(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_imax(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9077,7 +9684,198 @@ evaluate_imax(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_imin(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_imax3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 8: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int8_t src0 =
+                  _src[0].i8[_i];
+               const int8_t src1 =
+                  _src[1].i8[_i];
+               const int8_t src2 =
+                  _src[2].i8[_i];
+
+            int8_t dst = MAX2(src0, MAX2(src1, src2));
+
+            _dst_val.i8[_i] = dst;
+      }
+
+         break;
+      }
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int16_t src0 =
+                  _src[0].i16[_i];
+               const int16_t src1 =
+                  _src[1].i16[_i];
+               const int16_t src2 =
+                  _src[2].i16[_i];
+
+            int16_t dst = MAX2(src0, MAX2(src1, src2));
+
+            _dst_val.i16[_i] = dst;
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int32_t src0 =
+                  _src[0].i32[_i];
+               const int32_t src1 =
+                  _src[1].i32[_i];
+               const int32_t src2 =
+                  _src[2].i32[_i];
+
+            int32_t dst = MAX2(src0, MAX2(src1, src2));
+
+            _dst_val.i32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int64_t src0 =
+                  _src[0].i64[_i];
+               const int64_t src1 =
+                  _src[1].i64[_i];
+               const int64_t src2 =
+                  _src[2].i64[_i];
+
+            int64_t dst = MAX2(src0, MAX2(src1, src2));
+
+            _dst_val.i64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_imed3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 8: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int8_t src0 =
+                  _src[0].i8[_i];
+               const int8_t src1 =
+                  _src[1].i8[_i];
+               const int8_t src2 =
+                  _src[2].i8[_i];
+
+            int8_t dst = MAX2(MIN2(MAX2(src0, src1), src2), MIN2(src0, src1));
+
+            _dst_val.i8[_i] = dst;
+      }
+
+         break;
+      }
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int16_t src0 =
+                  _src[0].i16[_i];
+               const int16_t src1 =
+                  _src[1].i16[_i];
+               const int16_t src2 =
+                  _src[2].i16[_i];
+
+            int16_t dst = MAX2(MIN2(MAX2(src0, src1), src2), MIN2(src0, src1));
+
+            _dst_val.i16[_i] = dst;
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int32_t src0 =
+                  _src[0].i32[_i];
+               const int32_t src1 =
+                  _src[1].i32[_i];
+               const int32_t src2 =
+                  _src[2].i32[_i];
+
+            int32_t dst = MAX2(MIN2(MAX2(src0, src1), src2), MIN2(src0, src1));
+
+            _dst_val.i32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int64_t src0 =
+                  _src[0].i64[_i];
+               const int64_t src1 =
+                  _src[1].i64[_i];
+               const int64_t src2 =
+                  _src[2].i64[_i];
+
+            int64_t dst = MAX2(MIN2(MAX2(src0, src1), src2), MIN2(src0, src1));
+
+            _dst_val.i64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_imin(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9163,7 +9961,103 @@ evaluate_imin(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_imod(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_imin3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 8: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int8_t src0 =
+                  _src[0].i8[_i];
+               const int8_t src1 =
+                  _src[1].i8[_i];
+               const int8_t src2 =
+                  _src[2].i8[_i];
+
+            int8_t dst = MIN2(src0, MIN2(src1, src2));
+
+            _dst_val.i8[_i] = dst;
+      }
+
+         break;
+      }
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int16_t src0 =
+                  _src[0].i16[_i];
+               const int16_t src1 =
+                  _src[1].i16[_i];
+               const int16_t src2 =
+                  _src[2].i16[_i];
+
+            int16_t dst = MIN2(src0, MIN2(src1, src2));
+
+            _dst_val.i16[_i] = dst;
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int32_t src0 =
+                  _src[0].i32[_i];
+               const int32_t src1 =
+                  _src[1].i32[_i];
+               const int32_t src2 =
+                  _src[2].i32[_i];
+
+            int32_t dst = MIN2(src0, MIN2(src1, src2));
+
+            _dst_val.i32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const int64_t src0 =
+                  _src[0].i64[_i];
+               const int64_t src1 =
+                  _src[1].i64[_i];
+               const int64_t src2 =
+                  _src[2].i64[_i];
+
+            int64_t dst = MIN2(src0, MIN2(src1, src2));
+
+            _dst_val.i64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_imod(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9249,7 +10143,8 @@ evaluate_imod(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_imov(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_imov(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9327,7 +10222,8 @@ evaluate_imov(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_imul(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_imul(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9413,7 +10309,8 @@ evaluate_imul(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_imul_high(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_imul_high(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9437,7 +10334,8 @@ evaluate_imul_high(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ine(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ine(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9523,7 +10421,8 @@ evaluate_ine(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ineg(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ineg(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9601,7 +10500,8 @@ evaluate_ineg(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_inot(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_inot(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9679,7 +10579,8 @@ evaluate_inot(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ior(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ior(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9765,7 +10666,8 @@ evaluate_ior(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_irem(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_irem(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9851,7 +10753,8 @@ evaluate_irem(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ishl(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ishl(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -9937,7 +10840,8 @@ evaluate_ishl(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ishr(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ishr(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10023,7 +10927,8 @@ evaluate_ishr(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_isign(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_isign(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10101,7 +11006,8 @@ evaluate_isign(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_isub(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_isub(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10187,7 +11093,8 @@ evaluate_isub(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ixor(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ixor(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10273,7 +11180,8 @@ evaluate_ixor(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ldexp(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ldexp(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10362,7 +11270,8 @@ if (!isnormal(dst))
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_64_2x32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_64_2x32(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10388,7 +11297,8 @@ evaluate_pack_64_2x32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_64_2x32_split(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_64_2x32_split(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10412,7 +11322,8 @@ evaluate_pack_64_2x32_split(MAYBE_UNUSED unsigned num_components, unsigned bit_s
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_half_2x16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_half_2x16(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10441,7 +11352,8 @@ dst.x |= ((uint32_t) pack_half_1x16(src0.y)) << 16;
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_half_2x16_split(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_half_2x16_split(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10474,7 +11386,8 @@ evaluate_pack_half_2x16_split(MAYBE_UNUSED unsigned num_components, unsigned bit
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_snorm_2x16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_snorm_2x16(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10503,7 +11416,8 @@ dst.x |= ((uint32_t) pack_snorm_1x16(src0.y)) << 16;
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_snorm_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_snorm_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10534,7 +11448,8 @@ dst.x |= ((uint32_t) pack_snorm_1x8(src0.w)) << 24;
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_unorm_2x16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_unorm_2x16(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10563,7 +11478,8 @@ dst.x |= ((uint32_t) pack_unorm_1x16(src0.y)) << 16;
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_unorm_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_unorm_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10594,7 +11510,8 @@ dst.x |= ((uint32_t) pack_unorm_1x8(src0.w)) << 24;
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_uvec2_to_uint(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_uvec2_to_uint(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10622,7 +11539,8 @@ dst.x = (src0.x & 0xffff) | (src0.y << 16);
    return _dst_val;
 }
 static nir_const_value
-evaluate_pack_uvec4_to_uint(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_pack_uvec4_to_uint(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10653,7 +11571,8 @@ dst.x = (src0.x <<  0) |
    return _dst_val;
 }
 static nir_const_value
-evaluate_seq(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_seq(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10677,7 +11596,8 @@ evaluate_seq(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_sge(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_sge(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10745,7 +11665,8 @@ evaluate_sge(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_slt(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_slt(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10769,7 +11690,8 @@ evaluate_slt(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_sne(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_sne(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10793,7 +11715,8 @@ evaluate_sne(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_u2f16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_u2f16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10871,7 +11794,8 @@ evaluate_u2f16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_u2f32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_u2f32(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -10949,7 +11873,8 @@ evaluate_u2f32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_u2f64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_u2f64(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11027,7 +11952,8 @@ evaluate_u2f64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_u2u16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_u2u16(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11105,7 +12031,8 @@ evaluate_u2u16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_u2u32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_u2u32(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11183,7 +12110,8 @@ evaluate_u2u32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_u2u64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_u2u64(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11261,7 +12189,8 @@ evaluate_u2u64(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_u2u8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_u2u8(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11339,7 +12268,8 @@ evaluate_u2u8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_uadd_carry(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_uadd_carry(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11425,7 +12355,8 @@ evaluate_uadd_carry(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ubfe(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ubfe(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11465,7 +12396,8 @@ if (bits == 0) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_ubitfield_extract(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ubitfield_extract(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11503,7 +12435,8 @@ if (bits == 0) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_udiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_udiv(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11520,7 +12453,7 @@ evaluate_udiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
                const uint8_t src1 =
                   _src[1].u8[_i];
 
-            uint8_t dst = src0 / src1;
+            uint8_t dst = src1 == 0 ? 0 : (src0 / src1);
 
             _dst_val.u8[_i] = dst;
       }
@@ -11538,7 +12471,7 @@ evaluate_udiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
                const uint16_t src1 =
                   _src[1].u16[_i];
 
-            uint16_t dst = src0 / src1;
+            uint16_t dst = src1 == 0 ? 0 : (src0 / src1);
 
             _dst_val.u16[_i] = dst;
       }
@@ -11556,7 +12489,7 @@ evaluate_udiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
                const uint32_t src1 =
                   _src[1].u32[_i];
 
-            uint32_t dst = src0 / src1;
+            uint32_t dst = src1 == 0 ? 0 : (src0 / src1);
 
             _dst_val.u32[_i] = dst;
       }
@@ -11574,7 +12507,7 @@ evaluate_udiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
                const uint64_t src1 =
                   _src[1].u64[_i];
 
-            uint64_t dst = src0 / src1;
+            uint64_t dst = src1 == 0 ? 0 : (src0 / src1);
 
             _dst_val.u64[_i] = dst;
       }
@@ -11589,7 +12522,8 @@ evaluate_udiv(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ufind_msb(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ufind_msb(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11621,7 +12555,8 @@ for (int bit = 31; bit >= 0; bit--) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_uge(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_uge(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11707,7 +12642,8 @@ evaluate_uge(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ult(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ult(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11793,7 +12729,8 @@ evaluate_ult(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_umax(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_umax(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11879,7 +12816,103 @@ evaluate_umax(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_umax_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_umax3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 8: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint8_t src0 =
+                  _src[0].u8[_i];
+               const uint8_t src1 =
+                  _src[1].u8[_i];
+               const uint8_t src2 =
+                  _src[2].u8[_i];
+
+            uint8_t dst = MAX2(src0, MAX2(src1, src2));
+
+            _dst_val.u8[_i] = dst;
+      }
+
+         break;
+      }
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint16_t src0 =
+                  _src[0].u16[_i];
+               const uint16_t src1 =
+                  _src[1].u16[_i];
+               const uint16_t src2 =
+                  _src[2].u16[_i];
+
+            uint16_t dst = MAX2(src0, MAX2(src1, src2));
+
+            _dst_val.u16[_i] = dst;
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint32_t src0 =
+                  _src[0].u32[_i];
+               const uint32_t src1 =
+                  _src[1].u32[_i];
+               const uint32_t src2 =
+                  _src[2].u32[_i];
+
+            uint32_t dst = MAX2(src0, MAX2(src1, src2));
+
+            _dst_val.u32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint64_t src0 =
+                  _src[0].u64[_i];
+               const uint64_t src1 =
+                  _src[1].u64[_i];
+               const uint64_t src2 =
+                  _src[2].u64[_i];
+
+            uint64_t dst = MAX2(src0, MAX2(src1, src2));
+
+            _dst_val.u64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_umax_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11910,7 +12943,103 @@ for (int i = 0; i < 32; i += 8) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_umin(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_umed3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 8: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint8_t src0 =
+                  _src[0].u8[_i];
+               const uint8_t src1 =
+                  _src[1].u8[_i];
+               const uint8_t src2 =
+                  _src[2].u8[_i];
+
+            uint8_t dst = MAX2(MIN2(MAX2(src0, src1), src2), MIN2(src0, src1));
+
+            _dst_val.u8[_i] = dst;
+      }
+
+         break;
+      }
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint16_t src0 =
+                  _src[0].u16[_i];
+               const uint16_t src1 =
+                  _src[1].u16[_i];
+               const uint16_t src2 =
+                  _src[2].u16[_i];
+
+            uint16_t dst = MAX2(MIN2(MAX2(src0, src1), src2), MIN2(src0, src1));
+
+            _dst_val.u16[_i] = dst;
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint32_t src0 =
+                  _src[0].u32[_i];
+               const uint32_t src1 =
+                  _src[1].u32[_i];
+               const uint32_t src2 =
+                  _src[2].u32[_i];
+
+            uint32_t dst = MAX2(MIN2(MAX2(src0, src1), src2), MIN2(src0, src1));
+
+            _dst_val.u32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint64_t src0 =
+                  _src[0].u64[_i];
+               const uint64_t src1 =
+                  _src[1].u64[_i];
+               const uint64_t src2 =
+                  _src[2].u64[_i];
+
+            uint64_t dst = MAX2(MIN2(MAX2(src0, src1), src2), MIN2(src0, src1));
+
+            _dst_val.u64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_umin(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -11996,7 +13125,103 @@ evaluate_umin(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_umin_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_umin3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
+                 MAYBE_UNUSED nir_const_value *_src)
+{
+   nir_const_value _dst_val = { {0, } };
+
+      switch (bit_size) {
+      case 8: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint8_t src0 =
+                  _src[0].u8[_i];
+               const uint8_t src1 =
+                  _src[1].u8[_i];
+               const uint8_t src2 =
+                  _src[2].u8[_i];
+
+            uint8_t dst = MIN2(src0, MIN2(src1, src2));
+
+            _dst_val.u8[_i] = dst;
+      }
+
+         break;
+      }
+      case 16: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint16_t src0 =
+                  _src[0].u16[_i];
+               const uint16_t src1 =
+                  _src[1].u16[_i];
+               const uint16_t src2 =
+                  _src[2].u16[_i];
+
+            uint16_t dst = MIN2(src0, MIN2(src1, src2));
+
+            _dst_val.u16[_i] = dst;
+      }
+
+         break;
+      }
+      case 32: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint32_t src0 =
+                  _src[0].u32[_i];
+               const uint32_t src1 =
+                  _src[1].u32[_i];
+               const uint32_t src2 =
+                  _src[2].u32[_i];
+
+            uint32_t dst = MIN2(src0, MIN2(src1, src2));
+
+            _dst_val.u32[_i] = dst;
+      }
+
+         break;
+      }
+      case 64: {
+         
+   
+
+                           
+      for (unsigned _i = 0; _i < num_components; _i++) {
+               const uint64_t src0 =
+                  _src[0].u64[_i];
+               const uint64_t src1 =
+                  _src[1].u64[_i];
+               const uint64_t src2 =
+                  _src[2].u64[_i];
+
+            uint64_t dst = MIN2(src0, MIN2(src1, src2));
+
+            _dst_val.u64[_i] = dst;
+      }
+
+         break;
+      }
+
+      default:
+         unreachable("unknown bit width");
+      }
+
+   return _dst_val;
+}
+static nir_const_value
+evaluate_umin_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12027,7 +13252,8 @@ for (int i = 0; i < 32; i += 8) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_umod(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_umod(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12113,7 +13339,8 @@ evaluate_umod(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_umul_high(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_umul_high(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12137,7 +13364,8 @@ evaluate_umul_high(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_umul_unorm_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_umul_unorm_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12170,7 +13398,8 @@ for (int i = 0; i < 32; i += 8) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_64_2x32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_64_2x32(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12197,7 +13426,8 @@ evaluate_unpack_64_2x32(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_64_2x32_split_x(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_64_2x32_split_x(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12219,7 +13449,8 @@ evaluate_unpack_64_2x32_split_x(MAYBE_UNUSED unsigned num_components, unsigned b
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_64_2x32_split_y(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_64_2x32_split_y(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12241,7 +13472,8 @@ evaluate_unpack_64_2x32_split_y(MAYBE_UNUSED unsigned num_components, unsigned b
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_half_2x16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_half_2x16(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12271,7 +13503,8 @@ dst.y = unpack_half_1x16((uint16_t)(src0.x << 16));
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_half_2x16_split_x(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_half_2x16_split_x(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12297,7 +13530,8 @@ evaluate_unpack_half_2x16_split_x(MAYBE_UNUSED unsigned num_components, unsigned
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_half_2x16_split_y(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_half_2x16_split_y(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12323,7 +13557,8 @@ evaluate_unpack_half_2x16_split_y(MAYBE_UNUSED unsigned num_components, unsigned
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_snorm_2x16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_snorm_2x16(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12353,7 +13588,8 @@ dst.y = unpack_snorm_1x16((uint16_t)(src0.x << 16));
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_snorm_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_snorm_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12387,7 +13623,8 @@ dst.w = unpack_snorm_1x8((uint8_t)(src0.x >> 24));
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_unorm_2x16(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_unorm_2x16(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12417,7 +13654,8 @@ dst.y = unpack_unorm_1x16((uint16_t)(src0.x << 16));
    return _dst_val;
 }
 static nir_const_value
-evaluate_unpack_unorm_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_unpack_unorm_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12451,7 +13689,8 @@ dst.w = unpack_unorm_1x8((uint8_t)(src0.x >> 24));
    return _dst_val;
 }
 static nir_const_value
-evaluate_usadd_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_usadd_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12482,7 +13721,8 @@ for (int i = 0; i < 32; i += 8) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_ushr(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ushr(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12568,7 +13808,8 @@ evaluate_ushr(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_ussub_4x8(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_ussub_4x8(MAYBE_UNUSED unsigned num_components,
+                 UNUSED unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12602,7 +13843,8 @@ for (int i = 0; i < 32; i += 8) {
    return _dst_val;
 }
 static nir_const_value
-evaluate_usub_borrow(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_usub_borrow(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12688,7 +13930,8 @@ evaluate_usub_borrow(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
    return _dst_val;
 }
 static nir_const_value
-evaluate_vec2(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_vec2(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -12826,7 +14069,8 @@ dst.y = src1.x;
    return _dst_val;
 }
 static nir_const_value
-evaluate_vec3(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_vec3(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -13000,7 +14244,8 @@ dst.z = src2.x;
    return _dst_val;
 }
 static nir_const_value
-evaluate_vec4(MAYBE_UNUSED unsigned num_components, unsigned bit_size,
+evaluate_vec4(MAYBE_UNUSED unsigned num_components,
+                  unsigned bit_size,
                  MAYBE_UNUSED nir_const_value *_src)
 {
    nir_const_value _dst_val = { {0, } };
@@ -13255,6 +14500,10 @@ nir_eval_const_opcode(nir_op op, unsigned num_components,
       return evaluate_bitfield_insert(num_components, bit_width, src);
    case nir_op_bitfield_reverse:
       return evaluate_bitfield_reverse(num_components, bit_width, src);
+   case nir_op_cube_face_coord:
+      return evaluate_cube_face_coord(num_components, bit_width, src);
+   case nir_op_cube_face_index:
+      return evaluate_cube_face_index(num_components, bit_width, src);
    case nir_op_extract_i16:
       return evaluate_extract_i16(num_components, bit_width, src);
    case nir_op_extract_i8:
@@ -13265,8 +14514,12 @@ nir_eval_const_opcode(nir_op op, unsigned num_components,
       return evaluate_extract_u8(num_components, bit_width, src);
    case nir_op_f2b:
       return evaluate_f2b(num_components, bit_width, src);
-   case nir_op_f2f16:
-      return evaluate_f2f16(num_components, bit_width, src);
+   case nir_op_f2f16_rtne:
+      return evaluate_f2f16_rtne(num_components, bit_width, src);
+   case nir_op_f2f16_rtz:
+      return evaluate_f2f16_rtz(num_components, bit_width, src);
+   case nir_op_f2f16_undef:
+      return evaluate_f2f16_undef(num_components, bit_width, src);
    case nir_op_f2f32:
       return evaluate_f2f32(num_components, bit_width, src);
    case nir_op_f2f64:
@@ -13363,8 +14616,14 @@ nir_eval_const_opcode(nir_op op, unsigned num_components,
       return evaluate_flt(num_components, bit_width, src);
    case nir_op_fmax:
       return evaluate_fmax(num_components, bit_width, src);
+   case nir_op_fmax3:
+      return evaluate_fmax3(num_components, bit_width, src);
+   case nir_op_fmed3:
+      return evaluate_fmed3(num_components, bit_width, src);
    case nir_op_fmin:
       return evaluate_fmin(num_components, bit_width, src);
+   case nir_op_fmin3:
+      return evaluate_fmin3(num_components, bit_width, src);
    case nir_op_fmod:
       return evaluate_fmod(num_components, bit_width, src);
    case nir_op_fmov:
@@ -13419,6 +14678,10 @@ nir_eval_const_opcode(nir_op op, unsigned num_components,
       return evaluate_frcp(num_components, bit_width, src);
    case nir_op_frem:
       return evaluate_frem(num_components, bit_width, src);
+   case nir_op_frexp_exp:
+      return evaluate_frexp_exp(num_components, bit_width, src);
+   case nir_op_frexp_sig:
+      return evaluate_frexp_sig(num_components, bit_width, src);
    case nir_op_fround_even:
       return evaluate_fround_even(num_components, bit_width, src);
    case nir_op_frsq:
@@ -13475,8 +14738,14 @@ nir_eval_const_opcode(nir_op op, unsigned num_components,
       return evaluate_ilt(num_components, bit_width, src);
    case nir_op_imax:
       return evaluate_imax(num_components, bit_width, src);
+   case nir_op_imax3:
+      return evaluate_imax3(num_components, bit_width, src);
+   case nir_op_imed3:
+      return evaluate_imed3(num_components, bit_width, src);
    case nir_op_imin:
       return evaluate_imin(num_components, bit_width, src);
+   case nir_op_imin3:
+      return evaluate_imin3(num_components, bit_width, src);
    case nir_op_imod:
       return evaluate_imod(num_components, bit_width, src);
    case nir_op_imov:
@@ -13565,10 +14834,16 @@ nir_eval_const_opcode(nir_op op, unsigned num_components,
       return evaluate_ult(num_components, bit_width, src);
    case nir_op_umax:
       return evaluate_umax(num_components, bit_width, src);
+   case nir_op_umax3:
+      return evaluate_umax3(num_components, bit_width, src);
    case nir_op_umax_4x8:
       return evaluate_umax_4x8(num_components, bit_width, src);
+   case nir_op_umed3:
+      return evaluate_umed3(num_components, bit_width, src);
    case nir_op_umin:
       return evaluate_umin(num_components, bit_width, src);
+   case nir_op_umin3:
+      return evaluate_umin3(num_components, bit_width, src);
    case nir_op_umin_4x8:
       return evaluate_umin_4x8(num_components, bit_width, src);
    case nir_op_umod:

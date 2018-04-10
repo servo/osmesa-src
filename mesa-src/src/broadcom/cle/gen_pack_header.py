@@ -82,6 +82,11 @@ def safe_name(name):
 
     return name
 
+def prefixed_upper_name(prefix, name):
+    if prefix:
+        name = prefix + "_" + name
+    return safe_name(name).upper()
+
 def num_from_str(num_str):
     if num_str.lower().startswith('0x'):
         return int(num_str, base=16)
@@ -161,18 +166,13 @@ class Field(object):
             return
         else:
             print("#error unhandled type: %s" % self.type)
+            type = "uint32_t"
 
         print("   %-36s %s%s;" % (type, self.name, dim))
 
-        if len(self.values) > 0 and self.default == None:
-            if self.prefix:
-                prefix = self.prefix + "_"
-            else:
-                prefix = ""
-
         for value in self.values:
-            print("#define %-40s %d" % ((prefix + value.name).replace("__", "_"),
-                                        value.value))
+            name = prefixed_upper_name(self.prefix, value.name)
+            print("#define %-40s %d" % (name, value.value))
 
     def overlaps(self, field):
         return self != field and max(self.start, field.start) <= min(self.end, field.end)
@@ -363,7 +363,7 @@ class Group(object):
                     args.append(str(field.fractional_size))
                     convert = "__gen_unpack_sfixed"
                 else:
-                    print("/* unhandled field %s, type %s */\n" % (name, field.type))
+                    print("/* unhandled field %s, type %s */\n" % (field.name, field.type))
                     s = None
 
                 print("   values->%s = %s(%s);" % \
@@ -371,7 +371,7 @@ class Group(object):
 
 class Value(object):
     def __init__(self, attrs):
-        self.name = safe_name(attrs["name"]).upper()
+        self.name = attrs["name"]
         self.value = int(attrs["value"])
 
 class Parser(object):
@@ -440,7 +440,7 @@ class Parser(object):
             self.enum = safe_name(attrs["name"])
             self.enums.add(attrs["name"])
             if "prefix" in attrs:
-                self.prefix = safe_name(attrs["prefix"])
+                self.prefix = attrs["prefix"]
             else:
                 self.prefix= None
         elif name == "value":
@@ -544,11 +544,11 @@ class Parser(object):
     def emit_enum(self):
         print('enum %s {' % self.gen_prefix(self.enum))
         for value in self.values:
+            name = value.name
             if self.prefix:
-                name = self.prefix + "_" + value.name
-            else:
-                name = value.name
-            print('        % -36s = %6d,' % (name.upper(), value.value))
+                name = self.prefix + "_" + name
+            name = safe_name(name).upper()
+            print('        % -36s = %6d,' % (name, value.value))
         print('};\n')
 
     def parse(self, filename):

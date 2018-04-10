@@ -2683,39 +2683,6 @@ Fake_glXAssociateDMPbufferSGIX(Display *dpy, GLXPbufferSGIX pbuffer, DMparams *p
 #endif
 
 
-/*** GLX_SGIX_swap_group ***/
-
-static void
-Fake_glXJoinSwapGroupSGIX(Display *dpy, GLXDrawable drawable, GLXDrawable member)
-{
-   (void) dpy;
-   (void) drawable;
-   (void) member;
-}
-
-
-
-/*** GLX_SGIX_swap_barrier ***/
-
-static void
-Fake_glXBindSwapBarrierSGIX(Display *dpy, GLXDrawable drawable, int barrier)
-{
-   (void) dpy;
-   (void) drawable;
-   (void) barrier;
-}
-
-static Bool
-Fake_glXQueryMaxSwapBarriersSGIX(Display *dpy, int screen, int *max)
-{
-   (void) dpy;
-   (void) screen;
-   (void) max;
-   return False;
-}
-
-
-
 /*** GLX_SUN_get_transparent_index ***/
 
 static Status
@@ -2747,38 +2714,6 @@ Fake_glXReleaseBuffersMESA( Display *dpy, GLXDrawable d )
    return False;
 }
 
-
-
-/*** GLX_MESA_set_3dfx_mode ***/
-
-static Bool
-Fake_glXSet3DfxModeMESA( int mode )
-{
-   return XMesaSetFXmode( mode );
-}
-
-
-
-/*** GLX_NV_vertex_array range ***/
-static void *
-Fake_glXAllocateMemoryNV( GLsizei size,
-                          GLfloat readFrequency,
-                          GLfloat writeFrequency,
-                          GLfloat priority )
-{
-   (void) size;
-   (void) readFrequency;
-   (void) writeFrequency;
-   (void) priority;
-   return NULL;
-}
-
-
-static void 
-Fake_glXFreeMemoryNV( GLvoid *pointer )
-{
-   (void) pointer;
-}
 
 
 /*** GLX_MESA_agp_offset ***/
@@ -2836,7 +2771,8 @@ Fake_glXCreateContextAttribs(Display *dpy, GLXFBConfig config,
          profileFlags = attrib_list[i + 1];
          break;
       default:
-         fprintf(stderr, "Bad attribute in glXCreateContextAttribs()\n");
+         _mesa_warning(NULL, "Unexpected attribute 0x%x in "
+                       "glXCreateContextAttribs()\n", attrib_list[i]);
          return 0;
       }
    }
@@ -2987,13 +2923,6 @@ _mesa_GetGLXDispatchTable(void)
    glx.AssociateDMPbufferSGIX = NULL;
 #endif
 
-   /*** GLX_SGIX_swap_group ***/
-   glx.JoinSwapGroupSGIX = Fake_glXJoinSwapGroupSGIX;
-
-   /*** GLX_SGIX_swap_barrier ***/
-   glx.BindSwapBarrierSGIX = Fake_glXBindSwapBarrierSGIX;
-   glx.QueryMaxSwapBarriersSGIX = Fake_glXQueryMaxSwapBarriersSGIX;
-
    /*** GLX_SUN_get_transparent_index ***/
    glx.GetTransparentIndexSUN = Fake_glXGetTransparentIndexSUN;
 
@@ -3005,16 +2934,6 @@ _mesa_GetGLXDispatchTable(void)
 
    /*** GLX_MESA_pixmap_colormap ***/
    glx.CreateGLXPixmapMESA = Fake_glXCreateGLXPixmapMESA;
-
-   /*** GLX_MESA_set_3dfx_mode ***/
-   glx.Set3DfxModeMESA = Fake_glXSet3DfxModeMESA;
-
-   /*** GLX_NV_vertex_array_range ***/
-   glx.AllocateMemoryNV = Fake_glXAllocateMemoryNV;
-   glx.FreeMemoryNV = Fake_glXFreeMemoryNV;
-
-   /*** GLX_MESA_agp_offset ***/
-   glx.GetAGPOffsetMESA = Fake_glXGetAGPOffsetMESA;
 
    /*** GLX_EXT_texture_from_pixmap ***/
    glx.BindTexImageEXT = Fake_glXBindTexImageEXT;

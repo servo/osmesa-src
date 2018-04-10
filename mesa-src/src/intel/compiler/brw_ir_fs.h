@@ -41,6 +41,7 @@ public:
    fs_reg(enum brw_reg_file file, int nr, enum brw_reg_type type);
 
    bool equals(const fs_reg &r) const;
+   bool negative_equals(const fs_reg &r) const;
    bool is_contiguous() const;
 
    /**
@@ -312,6 +313,13 @@ subscript(fs_reg reg, brw_reg_type type, unsigned i)
    return byte_offset(retype(reg, type), i * type_sz(type));
 }
 
+static inline fs_reg
+horiz_stride(fs_reg reg, unsigned s)
+{
+   reg.stride *= s;
+   return reg;
+}
+
 static const fs_reg reg_undef;
 
 class fs_inst : public backend_instruction {
@@ -465,9 +473,6 @@ get_exec_type(const fs_inst *inst)
    if (exec_type == BRW_REGISTER_TYPE_B)
       exec_type = inst->dst.type;
 
-   /* TODO: We need to handle half-float conversions. */
-   assert(exec_type != BRW_REGISTER_TYPE_HF ||
-          inst->dst.type == BRW_REGISTER_TYPE_HF);
    assert(exec_type != BRW_REGISTER_TYPE_B);
 
    return exec_type;

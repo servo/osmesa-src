@@ -165,10 +165,12 @@ process_xfb_layout_qualifiers(void *mem_ctx, const gl_linked_shader *sh,
 
          if (var->data.from_named_ifc_block) {
             type = var->get_interface_type();
+
             /* Find the member type before it was altered by lowering */
+            const glsl_type *type_wa = type->without_array();
             member_type =
-               type->fields.structure[type->field_index(var->name)].type;
-            name = ralloc_strdup(NULL, type->without_array()->name);
+               type_wa->fields.structure[type_wa->field_index(var->name)].type;
+            name = ralloc_strdup(NULL, type_wa->name);
          } else {
             type = var->type;
             member_type = NULL;
@@ -189,7 +191,8 @@ process_xfb_layout_qualifiers(void *mem_ctx, const gl_linked_shader *sh,
  * matching input to another stage.
  */
 static void
-cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
+cross_validate_types_and_qualifiers(struct gl_context *ctx,
+                                    struct gl_shader_program *prog,
                                     const ir_variable *input,
                                     const ir_variable *output,
                                     gl_shader_stage consumer_stage,
@@ -343,17 +346,30 @@ cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
    }
    if (input_interpolation != output_interpolation &&
        prog->data->Version < 440) {
-      linker_error(prog,
-                   "%s shader output `%s' specifies %s "
-                   "interpolation qualifier, "
-                   "but %s shader input specifies %s "
-                   "interpolation qualifier\n",
-                   _mesa_shader_stage_to_string(producer_stage),
-                   output->name,
-                   interpolation_string(output->data.interpolation),
-                   _mesa_shader_stage_to_string(consumer_stage),
-                   interpolation_string(input->data.interpolation));
-      return;
+      if (!ctx->Const.AllowGLSLCrossStageInterpolationMismatch) {
+         linker_error(prog,
+                      "%s shader output `%s' specifies %s "
+                      "interpolation qualifier, "
+                      "but %s shader input specifies %s "
+                      "interpolation qualifier\n",
+                      _mesa_shader_stage_to_string(producer_stage),
+                      output->name,
+                      interpolation_string(output->data.interpolation),
+                      _mesa_shader_stage_to_string(consumer_stage),
+                      interpolation_string(input->data.interpolation));
+         return;
+      } else {
+         linker_warning(prog,
+                        "%s shader output `%s' specifies %s "
+                        "interpolation qualifier, "
+                        "but %s shader input specifies %s "
+                        "interpolation qualifier\n",
+                        _mesa_shader_stage_to_string(producer_stage),
+                        output->name,
+                        interpolation_string(output->data.interpolation),
+                        _mesa_shader_stage_to_string(consumer_stage),
+                        interpolation_string(input->data.interpolation));
+      }
    }
 }
 
@@ -361,7 +377,8 @@ cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
  * Validate front and back color outputs against single color input
  */
 static void
-cross_validate_front_and_back_color(struct gl_shader_program *prog,
+cross_validate_front_and_back_color(struct gl_context *ctx,
+                                    struct gl_shader_program *prog,
                                     const ir_variable *input,
                                     const ir_variable *front_color,
                                     const ir_variable *back_color,
@@ -369,11 +386,11 @@ cross_validate_front_and_back_color(struct gl_shader_program *prog,
                                     gl_shader_stage producer_stage)
 {
    if (front_color != NULL && front_color->data.assigned)
-      cross_validate_types_and_qualifiers(prog, input, front_color,
+      cross_validate_types_and_qualifiers(ctx, prog, input, front_color,
                                           consumer_stage, producer_stage);
 
    if (back_color != NULL && back_color->data.assigned)
-      cross_validate_types_and_qualifiers(prog, input, back_color,
+      cross_validate_types_and_qualifiers(ctx, prog, input, back_color,
                                           consumer_stage, producer_stage);
 }
 
@@ -710,7 +727,7 @@ cross_validate_outputs_to_inputs(struct gl_context *ctx,
          const ir_variable *const back_color =
             parameters.get_variable("gl_BackColor");
 
-         cross_validate_front_and_back_color(prog, input,
+         cross_validate_front_and_back_color(ctx, prog, input,
                                              front_color, back_color,
                                              consumer->Stage, producer->Stage);
       } else if (strcmp(input->name, "gl_SecondaryColor") == 0 && input->data.used) {
@@ -720,7 +737,7 @@ cross_validate_outputs_to_inputs(struct gl_context *ctx,
          const ir_variable *const back_color =
             parameters.get_variable("gl_BackSecondaryColor");
 
-         cross_validate_front_and_back_color(prog, input,
+         cross_validate_front_and_back_color(ctx, prog, input,
                                              front_color, back_color,
                                              consumer->Stage, producer->Stage);
       } else {
@@ -770,7 +787,7 @@ cross_validate_outputs_to_inputs(struct gl_context *ctx,
              */
             if (!(input->get_interface_type() &&
                   output->get_interface_type()))
-               cross_validate_types_and_qualifiers(prog, input, output,
+               cross_validate_types_and_qualifiers(ctx, prog, input, output,
                                                    consumer->Stage,
                                                    producer->Stage);
          } else {
@@ -1260,13 +1277,12 @@ parse_tfeedback_decls(struct gl_context *ctx, struct gl_shader_program *prog,
        * feedback of arrays would be useless otherwise.
        */
       for (unsigned j = 0; j < i; ++j) {
-         if (!decls[j].is_varying())
-            continue;
-
-         if (tfeedback_decl::is_same(decls[i], decls[j])) {
-            linker_error(prog, "Transform feedback varying %s specified "
-                         "more than once.", varying_names[i]);
-            return false;
+         if (decls[j].is_varying()) {
+            if (tfeedback_decl::is_same(decls[i], decls[j])) {
+               linker_error(prog, "Transform feedback varying %s specified "
+                            "more than once.", varying_names[i]);
+               return false;
+            }
          }
       }
    }
@@ -1320,8 +1336,6 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
    if (has_xfb_qualifiers) {
       qsort(tfeedback_decls, num_tfeedback_decls, sizeof(*tfeedback_decls),
             cmp_xfb_offset);
-   } else {
-      xfb_prog->sh.LinkedTransformFeedback->api_enabled = true;
    }
 
    xfb_prog->sh.LinkedTransformFeedback->Varyings =
@@ -1452,13 +1466,13 @@ public:
    ~varying_matches();
    void record(ir_variable *producer_var, ir_variable *consumer_var);
    unsigned assign_locations(struct gl_shader_program *prog,
-                             uint8_t *components,
+                             uint8_t components[],
                              uint64_t reserved_slots);
    void store_locations() const;
 
 private:
    bool is_varying_packing_safe(const glsl_type *type,
-                                const ir_variable *var);
+                                const ir_variable *var) const;
 
    /**
     * If true, this driver disables varying packing, so all varyings need to
@@ -1591,7 +1605,7 @@ varying_matches::~varying_matches()
  */
 bool
 varying_matches::is_varying_packing_safe(const glsl_type *type,
-                                         const ir_variable *var)
+                                         const ir_variable *var) const
 {
    if (consumer_stage == MESA_SHADER_TESS_EVAL ||
        consumer_stage == MESA_SHADER_TESS_CTRL ||
@@ -1726,10 +1740,15 @@ varying_matches::record(ir_variable *producer_var, ir_variable *consumer_var)
 /**
  * Choose locations for all of the variable matches that were previously
  * passed to varying_matches::record().
+ * \param components  returns array[slot] of number of components used
+ *                    per slot (1, 2, 3 or 4)
+ * \param reserved_slots  bitmask indicating which varying slots are already
+ *                        allocated
+ * \return number of slots (4-element vectors) allocated
  */
 unsigned
 varying_matches::assign_locations(struct gl_shader_program *prog,
-                                  uint8_t *components,
+                                  uint8_t components[],
                                   uint64_t reserved_slots)
 {
    /* If packing has been disabled then we cannot safely sort the varyings by
@@ -1754,13 +1773,24 @@ varying_matches::assign_locations(struct gl_shader_program *prog,
    unsigned generic_location = 0;
    unsigned generic_patch_location = MAX_VARYING*4;
    bool previous_var_xfb_only = false;
+   unsigned previous_packing_class = ~0u;
+
+   /* For tranform feedback separate mode, we know the number of attributes
+    * is <= the number of buffers.  So packing isn't critical.  In fact,
+    * packing vec3 attributes can cause trouble because splitting a vec3
+    * effectively creates an additional transform feedback output.  The
+    * extra TFB output may exceed device driver limits.
+    */
+   const bool dont_pack_vec3 =
+      (prog->TransformFeedback.BufferMode == GL_SEPARATE_ATTRIBS &&
+       prog->TransformFeedback.NumVarying > 0);
 
    for (unsigned i = 0; i < this->num_matches; i++) {
       unsigned *location = &generic_location;
-
       const ir_variable *var;
       const glsl_type *type;
       bool is_vertex_input = false;
+
       if (matches[i].consumer_var) {
          var = matches[i].consumer_var;
          type = get_varying_type(var, consumer_stage);
@@ -1788,12 +1818,14 @@ varying_matches::assign_locations(struct gl_shader_program *prog,
       if (var->data.must_be_shader_input ||
           (this->disable_varying_packing &&
            !(previous_var_xfb_only && var->data.is_xfb_only)) ||
-          (i > 0 && this->matches[i - 1].packing_class
-          != this->matches[i].packing_class )) {
+          (previous_packing_class != this->matches[i].packing_class) ||
+          (this->matches[i].packing_order == PACKING_ORDER_VEC3 &&
+           dont_pack_vec3)) {
          *location = ALIGN(*location, 4);
       }
 
       previous_var_xfb_only = var->data.is_xfb_only;
+      previous_packing_class = this->matches[i].packing_class;
 
       /* The number of components taken up by this variable. For vertex shader
        * inputs, we use the number of slots * 4, as they have different
@@ -1817,13 +1849,13 @@ varying_matches::assign_locations(struct gl_shader_program *prog,
          const uint64_t slot_mask = ((1ull << slots) - 1) << (*location / 4u);
 
          assert(slots > 0);
-         if (reserved_slots & slot_mask) {
-            *location = ALIGN(*location + 1, 4);
-            slot_end = *location + num_components - 1;
-            continue;
+
+         if ((reserved_slots & slot_mask) == 0) {
+            break;
          }
 
-         break;
+         *location = ALIGN(*location + 1, 4);
+         slot_end = *location + num_components - 1;
       }
 
       if (!var->data.patch && slot_end >= MAX_VARYING * 4u) {
@@ -1965,12 +1997,17 @@ varying_matches::compute_packing_class(const ir_variable *var)
     *
     * Therefore, the packing class depends only on the interpolation type.
     */
-   unsigned packing_class = var->data.centroid | (var->data.sample << 1) |
-                            (var->data.patch << 2) |
-                            (var->data.must_be_shader_input << 3);
-   packing_class *= 8;
-   packing_class += var->is_interpolation_flat()
+   const unsigned interp = var->is_interpolation_flat()
       ? unsigned(INTERP_MODE_FLAT) : var->data.interpolation;
+
+   assert(interp < (1 << 3));
+
+   const unsigned packing_class = (interp << 0) |
+                                  (var->data.centroid << 3) |
+                                  (var->data.sample << 4) |
+                                  (var->data.patch << 5) |
+                                  (var->data.must_be_shader_input << 6);
+
    return packing_class;
 }
 
@@ -2027,7 +2064,7 @@ varying_matches::xfb_comparator(const void *x_generic, const void *y_generic)
    const match *x = (const match *) x_generic;
 
    if (x->producer_var != NULL && x->producer_var->data.is_xfb_only)
-         return match_comparator(x_generic, y_generic);
+      return match_comparator(x_generic, y_generic);
 
    /* FIXME: When the comparator returns 0 it means the elements being
     * compared are equivalent. However the qsort documentation says:
@@ -2497,11 +2534,9 @@ assign_varying_locations(struct gl_context *ctx,
        */
       foreach_in_list(ir_instruction, node, consumer->ir) {
          ir_variable *const input_var = node->as_variable();
-
-         if (input_var == NULL || input_var->data.mode != ir_var_shader_in)
-            continue;
-
-         matches.record(NULL, input_var);
+         if (input_var && input_var->data.mode == ir_var_shader_in) {
+            matches.record(NULL, input_var);
+         }
       }
    }
 
@@ -2551,12 +2586,11 @@ assign_varying_locations(struct gl_context *ctx,
    matches.store_locations();
 
    for (unsigned i = 0; i < num_tfeedback_decls; ++i) {
-      if (!tfeedback_decls[i].is_varying())
-         continue;
-
-      if (!tfeedback_decls[i].assign_location(ctx, prog)) {
-         _mesa_hash_table_destroy(tfeedback_candidates, NULL);
-         return false;
+      if (tfeedback_decls[i].is_varying()) {
+         if (!tfeedback_decls[i].assign_location(ctx, prog)) {
+            _mesa_hash_table_destroy(tfeedback_candidates, NULL);
+            return false;
+         }
       }
    }
    _mesa_hash_table_destroy(tfeedback_candidates, NULL);

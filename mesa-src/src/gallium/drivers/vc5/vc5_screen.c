@@ -82,6 +82,8 @@ vc5_screen_destroy(struct pipe_screen *pscreen)
 static int
 vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 {
+        struct vc5_screen *screen = vc5_screen(pscreen);
+
         switch (param) {
                 /* Supported features (boolean caps). */
         case PIPE_CAP_VERTEX_COLOR_CLAMPED:
@@ -90,17 +92,13 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
         case PIPE_CAP_NPOT_TEXTURES:
         case PIPE_CAP_SHAREABLE_SHADERS:
-        case PIPE_CAP_USER_CONSTANT_BUFFERS:
-        case PIPE_CAP_TEXTURE_SHADOW_MAP:
         case PIPE_CAP_BLEND_EQUATION_SEPARATE:
-        case PIPE_CAP_TWO_SIDED_STENCIL:
         case PIPE_CAP_TEXTURE_MULTISAMPLE:
         case PIPE_CAP_TEXTURE_SWIZZLE:
         case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
         case PIPE_CAP_START_INSTANCE:
         case PIPE_CAP_TGSI_INSTANCEID:
         case PIPE_CAP_SM3:
-        case PIPE_CAP_INDEP_BLEND_ENABLE: /* XXX */
         case PIPE_CAP_TEXTURE_QUERY_LOD:
         case PIPE_CAP_PRIMITIVE_RESTART:
         case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
@@ -113,6 +111,9 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
         case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
                 return 1;
+
+        case PIPE_CAP_INDEP_BLEND_ENABLE:
+                return screen->devinfo.ver >= 40;
 
         case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
                 return 256;
@@ -127,13 +128,22 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 return 1;
 
         case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
                 return 1;
         case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
-        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
                 return 0;
+        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
+                if (screen->devinfo.ver >= 40)
+                        return 0;
+                else
+                        return 1;
+        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+                if (screen->devinfo.ver >= 40)
+                        return 1;
+                else
+                        return 0;
 
         case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+        case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
         case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
                 return 1;
 
@@ -158,7 +168,6 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
         case PIPE_CAP_CUBE_MAP_ARRAY:
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-        case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
         case PIPE_CAP_SEAMLESS_CUBE_MAP:
         case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
         case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
@@ -240,6 +249,7 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_TGSI_CLOCK:
         case PIPE_CAP_TGSI_TEX_TXF_LZ:
         case PIPE_CAP_NATIVE_FENCE_FD:
+        case PIPE_CAP_FENCE_SIGNAL:
         case PIPE_CAP_TGSI_MUL_ZERO_WINS:
         case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
         case PIPE_CAP_QUERY_SO_OVERFLOW:
@@ -248,6 +258,9 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_TILE_RASTER_ORDER:
         case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
         case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
+        case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+	case PIPE_CAP_CONSTBUF0_FLAGS:
+        case PIPE_CAP_PACKED_UNIFORMS:
                 return 0;
 
                 /* Geometry shader output, unsupported. */
@@ -258,9 +271,8 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 /* Texturing. */
         case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
         case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-                return VC5_MAX_MIP_LEVELS;
         case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
-                return 256;
+                return VC5_MAX_MIP_LEVELS;
         case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
                 return 2048;
 
@@ -321,11 +333,6 @@ vc5_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
                 return 0.0f;
         case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
                 return 16.0f;
-        case PIPE_CAPF_GUARD_BAND_LEFT:
-        case PIPE_CAPF_GUARD_BAND_TOP:
-        case PIPE_CAPF_GUARD_BAND_RIGHT:
-        case PIPE_CAPF_GUARD_BAND_BOTTOM:
-                return 0.0f;
         default:
                 fprintf(stderr, "unknown paramf %d\n", param);
                 return 0;
@@ -418,7 +425,7 @@ vc5_screen_is_format_supported(struct pipe_screen *pscreen,
                                unsigned sample_count,
                                unsigned usage)
 {
-        unsigned retval = 0;
+        struct vc5_screen *screen = vc5_screen(pscreen);
 
         if (sample_count > 1 && sample_count != VC5_MAX_SAMPLES)
                 return FALSE;
@@ -474,49 +481,47 @@ vc5_screen_is_format_supported(struct pipe_screen *pscreen,
                 case PIPE_FORMAT_R8G8B8_SSCALED:
                 case PIPE_FORMAT_R8G8_SSCALED:
                 case PIPE_FORMAT_R8_SSCALED:
-                        retval |= PIPE_BIND_VERTEX_BUFFER;
+                case PIPE_FORMAT_R10G10B10A2_UNORM:
+                case PIPE_FORMAT_B10G10R10A2_UNORM:
+                case PIPE_FORMAT_R10G10B10A2_SNORM:
+                case PIPE_FORMAT_B10G10R10A2_SNORM:
+                case PIPE_FORMAT_R10G10B10A2_USCALED:
+                case PIPE_FORMAT_B10G10R10A2_USCALED:
+                case PIPE_FORMAT_R10G10B10A2_SSCALED:
+                case PIPE_FORMAT_B10G10R10A2_SSCALED:
                         break;
                 default:
-                        break;
+                        return FALSE;
                 }
         }
 
         if ((usage & PIPE_BIND_RENDER_TARGET) &&
-            vc5_rt_format_supported(format)) {
-                retval |= PIPE_BIND_RENDER_TARGET;
+            !vc5_rt_format_supported(&screen->devinfo, format)) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
-            vc5_tex_format_supported(format)) {
-                retval |= PIPE_BIND_SAMPLER_VIEW;
+            !vc5_tex_format_supported(&screen->devinfo, format)) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_DEPTH_STENCIL) &&
-            (format == PIPE_FORMAT_S8_UINT_Z24_UNORM ||
-             format == PIPE_FORMAT_X8Z24_UNORM ||
-             format == PIPE_FORMAT_Z16_UNORM ||
-             format == PIPE_FORMAT_Z32_FLOAT ||
-             format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT)) {
-                retval |= PIPE_BIND_DEPTH_STENCIL;
+            !(format == PIPE_FORMAT_S8_UINT_Z24_UNORM ||
+              format == PIPE_FORMAT_X8Z24_UNORM ||
+              format == PIPE_FORMAT_Z16_UNORM ||
+              format == PIPE_FORMAT_Z32_FLOAT ||
+              format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT)) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_INDEX_BUFFER) &&
-            (format == PIPE_FORMAT_I8_UINT ||
-             format == PIPE_FORMAT_I16_UINT ||
-             format == PIPE_FORMAT_I32_UINT)) {
-                retval |= PIPE_BIND_INDEX_BUFFER;
+            !(format == PIPE_FORMAT_I8_UINT ||
+              format == PIPE_FORMAT_I16_UINT ||
+              format == PIPE_FORMAT_I32_UINT)) {
+                return FALSE;
         }
 
-#if 0
-        if (retval != usage) {
-                fprintf(stderr,
-                        "not supported: format=%s, target=%d, sample_count=%d, "
-                        "usage=0x%x, retval=0x%x\n", util_format_name(format),
-                        target, sample_count, usage, retval);
-        }
-#endif
-
-        return retval == usage;
+        return TRUE;
 }
 
 #define PTR_TO_UINT(x) ((unsigned)((intptr_t)(x)))
@@ -559,7 +564,12 @@ vc5_get_device_info(struct vc5_screen *screen)
         uint32_t minor = (ident1.value >> 0) & 0xf;
         screen->devinfo.ver = major * 10 + minor;
 
-        if (screen->devinfo.ver != 33) {
+        switch (screen->devinfo.ver) {
+        case 33:
+        case 41:
+        case 42:
+                break;
+        default:
                 fprintf(stderr,
                         "V3D %d.%d not supported by this version of Mesa.\n",
                         screen->devinfo.ver / 10,

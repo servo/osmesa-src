@@ -135,6 +135,10 @@ DRI_CONF_OPT_BEGIN_B(glsl_correct_derivatives_after_discard, def) \
         DRI_CONF_DESC(en,gettext("Implicit and explicit derivatives after a discard behave as if the discard didn't happen")) \
 DRI_CONF_OPT_END
 
+#define DRI_CONF_ALLOW_GLSL_CROSS_STAGE_INTERPOLATION_MISMATCH(def) \
+DRI_CONF_OPT_BEGIN_B(allow_glsl_cross_stage_interpolation_mismatch, def) \
+        DRI_CONF_DESC(en,gettext("Allow interpolation qualifier mismatch across shader stages")) \
+DRI_CONF_OPT_END
 
 /**
  * \brief Image quality-related options
@@ -342,6 +346,11 @@ DRI_CONF_OPT_BEGIN_B(glx_disable_oml_sync_control, def) \
    DRI_CONF_DESC(en, gettext("Disable the GLX_OML_sync_control extension")) \
 DRI_CONF_OPT_END
 
+#define DRI_CONF_DISABLE_SGI_VIDEO_SYNC(def) \
+DRI_CONF_OPT_BEGIN_B(glx_disable_sgi_video_sync, def) \
+   DRI_CONF_DESC(en, gettext("Disable the GLX_SGI_video_sync extension")) \
+DRI_CONF_OPT_END
+
 
 /**
  * \brief Software-fallback options.  To allow using features (like
@@ -373,6 +382,11 @@ DRI_CONF_OPT_END
 #define DRI_CONF_GLSL_ZERO_INIT(def) \
 DRI_CONF_OPT_BEGIN_B(glsl_zero_init, def) \
         DRI_CONF_DESC(en,gettext("Force uninitialized variables to default to zero")) \
+DRI_CONF_OPT_END
+
+#define DRI_CONF_ALLOW_RGB10_CONFIGS(def) \
+DRI_CONF_OPT_BEGIN_B(allow_rgb10_configs, def) \
+DRI_CONF_DESC(en,gettext("Allow exposure of visuals and fbconfigs with rgb10a2 formats")) \
 DRI_CONF_OPT_END
 
 /**

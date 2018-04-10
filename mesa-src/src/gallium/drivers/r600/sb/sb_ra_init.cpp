@@ -708,7 +708,7 @@ void ra_split::split_vec(vvec &vv, vvec &v1, vvec &v2, bool allow_swz) {
 
 			assert(!o->is_dead());
 
-			if (o->is_undef() || o->is_geometry_emit())
+			if (o->is_undef() || o->is_geometry_emit() || o->is_scratch())
 				continue;
 
 			if (allow_swz && o->is_float_0_or_1())
@@ -744,6 +744,8 @@ void ra_split::split_vector_inst(node* n) {
 
 	no_src_swizzle |= n->is_fetch_op(FETCH_OP_VFETCH) ||
 			n->is_fetch_op(FETCH_OP_SEMFETCH);
+
+	no_src_swizzle |= n->is_fetch_inst() && (n->fetch_op_flags() & FF_GDS);
 
 	if (!n->src.empty() && !call_fs) {
 

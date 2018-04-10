@@ -224,6 +224,7 @@ number_to_human_readable(double num, enum pipe_driver_query_type type,
    static const char *volt_units[] = {" mV", " V"};
    static const char *amp_units[] = {" mA", " A"};
    static const char *watt_units[] = {" mW", " W"};
+   static const char *float_units[] = {""};
 
    const char **units;
    unsigned max_unit;
@@ -251,6 +252,10 @@ number_to_human_readable(double num, enum pipe_driver_query_type type,
    case PIPE_DRIVER_QUERY_TYPE_TEMPERATURE:
       max_unit = ARRAY_SIZE(temperature_units)-1;
       units = temperature_units;
+      break;
+   case PIPE_DRIVER_QUERY_TYPE_FLOAT:
+      max_unit = ARRAY_SIZE(float_units)-1;
+      units = float_units;
       break;
    case PIPE_DRIVER_QUERY_TYPE_PERCENTAGE:
       max_unit = ARRAY_SIZE(percent_units)-1;
@@ -1201,7 +1206,7 @@ hud_parse_env_var(struct hud_context *hud, struct pipe_screen *screen,
       }
 
       /* Add a graph. */
-#if HAVE_GALLIUM_EXTRA_HUD || HAVE_LIBSENSORS
+#if defined(HAVE_GALLIUM_EXTRA_HUD) || defined(HAVE_LIBSENSORS)
       char arg_name[64];
 #endif
       /* IF YOU CHANGE THIS, UPDATE print_help! */
@@ -1229,7 +1234,7 @@ hud_parse_env_var(struct hud_context *hud, struct pipe_screen *screen,
       else if (strcmp(name, "main-thread-busy") == 0) {
          hud_thread_busy_install(pane, name, true);
       }
-#if HAVE_GALLIUM_EXTRA_HUD
+#ifdef HAVE_GALLIUM_EXTRA_HUD
       else if (sscanf(name, "nic-rx-%s", arg_name) == 1) {
          hud_nic_graph_install(pane, arg_name, NIC_DIRECTION_RX);
       }
@@ -1261,7 +1266,7 @@ hud_parse_env_var(struct hud_context *hud, struct pipe_screen *screen,
          pane->type = PIPE_DRIVER_QUERY_TYPE_HZ;
       }
 #endif
-#if HAVE_LIBSENSORS
+#ifdef HAVE_LIBSENSORS
       else if (sscanf(name, "sensors_temp_cu-%s", arg_name) == 1) {
          hud_sensors_temp_graph_install(pane, arg_name,
                                         SENSORS_TEMP_CURRENT);
@@ -1536,12 +1541,12 @@ print_help(struct pipe_screen *screen)
       puts("    cs-invocations");
    }
 
-#if HAVE_GALLIUM_EXTRA_HUD
+#ifdef HAVE_GALLIUM_EXTRA_HUD
    hud_get_num_disks(1);
    hud_get_num_nics(1);
    hud_get_num_cpufreq(1);
 #endif
-#if HAVE_LIBSENSORS
+#ifdef HAVE_LIBSENSORS
    hud_get_num_sensors(1);
 #endif
 

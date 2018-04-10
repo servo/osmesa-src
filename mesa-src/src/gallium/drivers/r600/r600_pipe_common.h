@@ -564,8 +564,6 @@ struct r600_common_context {
 	unsigned			num_cs_flushes;
 	unsigned			num_cb_cache_flushes;
 	unsigned			num_db_cache_flushes;
-	unsigned			num_L2_invalidates;
-	unsigned			num_L2_writebacks;
 	unsigned			num_resident_handles;
 	uint64_t			num_alloc_tex_transfer_bytes;
 
@@ -681,6 +679,7 @@ void r600_gfx_write_event_eop(struct r600_common_context *ctx,
 			      uint32_t new_fence, unsigned query_type);
 unsigned r600_gfx_write_fence_dwords(struct r600_common_screen *screen);
 void r600_gfx_wait_fence(struct r600_common_context *ctx,
+			 struct r600_resource *buf,
 			 uint64_t va, uint32_t ref, uint32_t mask);
 void r600_draw_rectangle(struct blitter_context *blitter,
 			 void *vertex_elements_cso,
@@ -800,10 +799,8 @@ extern const unsigned eg_max_dist_4x;
 void cayman_get_sample_position(struct pipe_context *ctx, unsigned sample_count,
 				unsigned sample_index, float *out_value);
 void cayman_init_msaa(struct pipe_context *ctx);
-void cayman_emit_msaa_sample_locs(struct radeon_winsys_cs *cs, int nr_samples);
-void cayman_emit_msaa_config(struct radeon_winsys_cs *cs, int nr_samples,
-			     int ps_iter_samples, int overrast_samples,
-			     unsigned sc_mode_cntl_1);
+void cayman_emit_msaa_state(struct radeon_winsys_cs *cs, int nr_samples,
+			    int ps_iter_samples, int overrast_samples);
 
 
 /* Inline helpers. */

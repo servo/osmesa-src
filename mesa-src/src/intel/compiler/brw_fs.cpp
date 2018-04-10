@@ -191,14 +191,21 @@ fs_visitor::VARYING_PULL_CONSTANT_LOAD(const fs_builder &bld,
                             vec4_result, surf_index, vec4_offset);
    inst->size_written = 4 * vec4_result.component_size(inst->exec_size);
 
-   if (type_sz(dst.type) == 8) {
-      shuffle_32bit_load_result_to_64bit_data(
-         bld, retype(vec4_result, dst.type), vec4_result, 2);
+   fs_reg dw = offset(vec4_result, bld, (const_offset & 0xf) / 4);
+   switch (type_sz(dst.type)) {
+   case 2:
+      shuffle_32bit_load_result_to_16bit_data(bld, dst, dw, 0, 1);
+      bld.MOV(dst, subscript(dw, dst.type, (const_offset / 2) & 1));
+      break;
+   case 4:
+      bld.MOV(dst, retype(dw, dst.type));
+      break;
+   case 8:
+      shuffle_32bit_load_result_to_64bit_data(bld, dst, dw, 1);
+      break;
+   default:
+      unreachable("Unsupported bit_size");
    }
-
-   vec4_result.type = dst.type;
-   bld.MOV(dst, offset(vec4_result, bld,
-                       (const_offset & 0xf) / type_sz(vec4_result.type)));
 }
 
 /**
@@ -250,6 +257,8 @@ fs_inst::is_send_from_grf() const
    case SHADER_OPCODE_UNTYPED_ATOMIC:
    case SHADER_OPCODE_UNTYPED_SURFACE_READ:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
+   case SHADER_OPCODE_BYTE_SCATTERED_READ:
    case SHADER_OPCODE_TYPED_ATOMIC:
    case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_WRITE:
@@ -300,6 +309,22 @@ fs_inst::has_source_and_destination_hazard() const
    switch (opcode) {
    case FS_OPCODE_PACK_HALF_2x16_SPLIT:
       /* Multiple partial writes to the destination */
+      return true;
+   case SHADER_OPCODE_SHUFFLE:
+      /* This instruction returns an arbitrary channel from the source and
+       * gets split into smaller instructions in the generator.  It's possible
+       * that one of the instructions will read from a channel corresponding
+       * to an earlier instruction.
+       */
+   case SHADER_OPCODE_SEL_EXEC:
+      /* This is implemented as
+       *
+       * mov(16)      g4<1>D      0D            { align1 WE_all 1H };
+       * mov(16)      g4<1>D      g5<8,8,1>D    { align1 1H }
+       *
+       * Because the source is only read in the second instruction, the first
+       * may stomp all over it.
+       */
       return true;
    default:
       /* The SIMD16 compressed instruction
@@ -429,6 +454,13 @@ fs_reg::equals(const fs_reg &r) const
 }
 
 bool
+fs_reg::negative_equals(const fs_reg &r) const
+{
+   return (this->backend_reg::negative_equals(r) &&
+           stride == r.stride);
+}
+
+bool
 fs_reg::is_contiguous() const
 {
    return stride == 1;
@@ -454,6 +486,13 @@ type_size_scalar(const struct glsl_type *type)
    case GLSL_TYPE_FLOAT:
    case GLSL_TYPE_BOOL:
       return type->components();
+   case GLSL_TYPE_UINT16:
+   case GLSL_TYPE_INT16:
+   case GLSL_TYPE_FLOAT16:
+      return DIV_ROUND_UP(type->components(), 2);
+   case GLSL_TYPE_UINT8:
+   case GLSL_TYPE_INT8:
+      return DIV_ROUND_UP(type->components(), 4);
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_UINT64:
    case GLSL_TYPE_INT64:
@@ -745,6 +784,23 @@ fs_inst::components_read(unsigned i) const
       else
          return 1;
 
+   case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
+      /* Scattered logical opcodes use the following params:
+       * src[0] Surface coordinates
+       * src[1] Surface operation source (ignored for reads)
+       * src[2] Surface
+       * src[3] IMM with always 1 dimension.
+       * src[4] IMM with arg bitsize for scattered read/write 8, 16, 32
+       */
+      assert(src[3].file == IMM &&
+             src[4].file == IMM);
+      return i == 1 ? 0 : 1;
+
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
+      assert(src[3].file == IMM &&
+             src[4].file == IMM);
+      return 1;
+
    case SHADER_OPCODE_UNTYPED_ATOMIC_LOGICAL:
    case SHADER_OPCODE_TYPED_ATOMIC_LOGICAL: {
       assert(src[3].file == IMM &&
@@ -787,6 +843,8 @@ fs_inst::size_read(int arg) const
    case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_WRITE:
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
+   case SHADER_OPCODE_BYTE_SCATTERED_READ:
       if (arg == 0)
          return mlen * REG_SIZE;
       break;
@@ -897,9 +955,11 @@ unsigned
 fs_inst::flags_written() const
 {
    if ((conditional_mod && (opcode != BRW_OPCODE_SEL &&
+                            opcode != BRW_OPCODE_CSEL &&
                             opcode != BRW_OPCODE_IF &&
                             opcode != BRW_OPCODE_WHILE)) ||
-       opcode == FS_OPCODE_MOV_DISPATCH_TO_FLAGS) {
+       opcode == FS_OPCODE_MOV_DISPATCH_TO_FLAGS ||
+       opcode == SHADER_OPCODE_FIND_LIVE_CHANNEL) {
       return flag_mask(this);
    } else {
       return flag_mask(dst, size_written);
@@ -913,7 +973,7 @@ fs_inst::flags_written() const
  * instruction -- the FS opcodes often generate MOVs in addition.
  */
 int
-fs_visitor::implied_mrf_writes(fs_inst *inst)
+fs_visitor::implied_mrf_writes(fs_inst *inst) const
 {
    if (inst->mlen == 0)
       return 0;
@@ -1187,7 +1247,7 @@ fs_visitor::emit_sampleid_setup()
    assert(devinfo->gen >= 6);
 
    const fs_builder abld = bld.annotate("compute sample id");
-   fs_reg *reg = new(this->mem_ctx) fs_reg(vgrf(glsl_type::int_type));
+   fs_reg *reg = new(this->mem_ctx) fs_reg(vgrf(glsl_type::uint_type));
 
    if (!key->multisample_fbo) {
       /* As per GL_ARB_sample_shading specification:
@@ -1224,16 +1284,16 @@ fs_visitor::emit_sampleid_setup()
        * TODO: These payload bits exist on Gen7 too, but they appear to always
        *       be zero, so this code fails to work.  We should find out why.
        */
-      fs_reg tmp(VGRF, alloc.allocate(1), BRW_REGISTER_TYPE_W);
+      fs_reg tmp(VGRF, alloc.allocate(1), BRW_REGISTER_TYPE_UW);
 
       abld.SHR(tmp, fs_reg(stride(retype(brw_vec1_grf(1, 0),
-                                         BRW_REGISTER_TYPE_B), 1, 8, 0)),
+                                         BRW_REGISTER_TYPE_UB), 1, 8, 0)),
                     brw_imm_v(0x44440000));
       abld.AND(*reg, tmp, brw_imm_w(0xf));
    } else {
       const fs_reg t1 = component(fs_reg(VGRF, alloc.allocate(1),
-                                         BRW_REGISTER_TYPE_D), 0);
-      const fs_reg t2(VGRF, alloc.allocate(1), BRW_REGISTER_TYPE_W);
+                                         BRW_REGISTER_TYPE_UD), 0);
+      const fs_reg t2(VGRF, alloc.allocate(1), BRW_REGISTER_TYPE_UW);
 
       /* The PS will be run in MSDISPMODE_PERSAMPLE. For example with
        * 8x multisampling, subspan 0 will represent sample N (where N
@@ -1259,7 +1319,7 @@ fs_visitor::emit_sampleid_setup()
        * accomodate 16x MSAA.
        */
       abld.exec_all().group(1, 0)
-          .AND(t1, fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_D)),
+          .AND(t1, fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UD)),
                brw_imm_ud(0xc0));
       abld.exec_all().group(1, 0).SHR(t1, t1, brw_imm_d(5));
 
@@ -1874,62 +1934,6 @@ fs_visitor::compact_virtual_grfs()
    return progress;
 }
 
-static void
-set_push_pull_constant_loc(unsigned uniform, int *chunk_start,
-                           unsigned *max_chunk_bitsize,
-                           bool contiguous, unsigned bitsize,
-                           const unsigned target_bitsize,
-                           int *push_constant_loc, int *pull_constant_loc,
-                           unsigned *num_push_constants,
-                           unsigned *num_pull_constants,
-                           const unsigned max_push_components,
-                           const unsigned max_chunk_size,
-                           bool allow_pull_constants,
-                           struct brw_stage_prog_data *stage_prog_data)
-{
-   /* This is the first live uniform in the chunk */
-   if (*chunk_start < 0)
-      *chunk_start = uniform;
-
-   /* Keep track of the maximum bit size access in contiguous uniforms */
-   *max_chunk_bitsize = MAX2(*max_chunk_bitsize, bitsize);
-
-   /* If this element does not need to be contiguous with the next, we
-    * split at this point and everything between chunk_start and u forms a
-    * single chunk.
-    */
-   if (!contiguous) {
-      /* If bitsize doesn't match the target one, skip it */
-      if (*max_chunk_bitsize != target_bitsize) {
-         /* FIXME: right now we only support 32 and 64-bit accesses */
-         assert(*max_chunk_bitsize == 4 || *max_chunk_bitsize == 8);
-         *max_chunk_bitsize = 0;
-         *chunk_start = -1;
-         return;
-      }
-
-      unsigned chunk_size = uniform - *chunk_start + 1;
-
-      /* Decide whether we should push or pull this parameter.  In the
-       * Vulkan driver, push constants are explicitly exposed via the API
-       * so we push everything.  In GL, we only push small arrays.
-       */
-      if (!allow_pull_constants ||
-          (*num_push_constants + chunk_size <= max_push_components &&
-           chunk_size <= max_chunk_size)) {
-         assert(*num_push_constants + chunk_size <= max_push_components);
-         for (unsigned j = *chunk_start; j <= uniform; j++)
-            push_constant_loc[j] = (*num_push_constants)++;
-      } else {
-         for (unsigned j = *chunk_start; j <= uniform; j++)
-            pull_constant_loc[j] = (*num_pull_constants)++;
-      }
-
-      *max_chunk_bitsize = 0;
-      *chunk_start = -1;
-   }
-}
-
 static int
 get_subgroup_id_param_index(const brw_stage_prog_data *prog_data)
 {
@@ -1942,6 +1946,109 @@ get_subgroup_id_param_index(const brw_stage_prog_data *prog_data)
       return prog_data->nr_params - 1;
 
    return -1;
+}
+
+/**
+ * Struct for handling complex alignments.
+ *
+ * A complex alignment is stored as multiplier and an offset.  A value is
+ * considered to be aligned if it is {offset} larger than a multiple of {mul}.
+ * For instance, with an alignment of {8, 2}, cplx_align_apply would do the
+ * following:
+ *
+ *  N  | cplx_align_apply({8, 2}, N)
+ * ----+-----------------------------
+ *  4  | 6
+ *  6  | 6
+ *  8  | 14
+ *  10 | 14
+ *  12 | 14
+ *  14 | 14
+ *  16 | 22
+ */
+struct cplx_align {
+   unsigned mul:4;
+   unsigned offset:4;
+};
+
+#define CPLX_ALIGN_MAX_MUL 8
+
+static void
+cplx_align_assert_sane(struct cplx_align a)
+{
+   assert(a.mul > 0 && util_is_power_of_two_nonzero(a.mul));
+   assert(a.offset < a.mul);
+}
+
+/**
+ * Combines two alignments to produce a least multiple of sorts.
+ *
+ * The returned alignment is the smallest (in terms of multiplier) such that
+ * anything aligned to both a and b will be aligned to the new alignment.
+ * This function will assert-fail if a and b are not compatible, i.e. if the
+ * offset parameters are such that no common alignment is possible.
+ */
+static struct cplx_align
+cplx_align_combine(struct cplx_align a, struct cplx_align b)
+{
+   cplx_align_assert_sane(a);
+   cplx_align_assert_sane(b);
+
+   /* Assert that the alignments agree. */
+   assert((a.offset & (b.mul - 1)) == (b.offset & (a.mul - 1)));
+
+   return a.mul > b.mul ? a : b;
+}
+
+/**
+ * Apply a complex alignment
+ *
+ * This function will return the smallest number greater than or equal to
+ * offset that is aligned to align.
+ */
+static unsigned
+cplx_align_apply(struct cplx_align align, unsigned offset)
+{
+   return ALIGN(offset - align.offset, align.mul) + align.offset;
+}
+
+#define UNIFORM_SLOT_SIZE 4
+
+struct uniform_slot_info {
+   /** True if the given uniform slot is live */
+   unsigned is_live:1;
+
+   /** True if this slot and the next slot must remain contiguous */
+   unsigned contiguous:1;
+
+   struct cplx_align align;
+};
+
+static void
+mark_uniform_slots_read(struct uniform_slot_info *slots,
+                        unsigned num_slots, unsigned alignment)
+{
+   assert(alignment > 0 && util_is_power_of_two_nonzero(alignment));
+   assert(alignment <= CPLX_ALIGN_MAX_MUL);
+
+   /* We can't align a slot to anything less than the slot size */
+   alignment = MAX2(alignment, UNIFORM_SLOT_SIZE);
+
+   struct cplx_align align = {alignment, 0};
+   cplx_align_assert_sane(align);
+
+   for (unsigned i = 0; i < num_slots; i++) {
+      slots[i].is_live = true;
+      if (i < num_slots - 1)
+         slots[i].contiguous = true;
+
+      align.offset = (i * UNIFORM_SLOT_SIZE) & (align.mul - 1);
+      if (slots[i].align.mul == 0) {
+         slots[i].align = align;
+      } else {
+         slots[i].align = cplx_align_combine(slots[i].align, align);
+      }
+   }
 }
 
 /**
@@ -1962,60 +2069,44 @@ fs_visitor::assign_constant_locations()
       return;
    }
 
-   bool is_live[uniforms];
-   memset(is_live, 0, sizeof(is_live));
-   unsigned bitsize_access[uniforms];
-   memset(bitsize_access, 0, sizeof(bitsize_access));
+   struct uniform_slot_info slots[uniforms];
+   memset(slots, 0, sizeof(slots));
 
-   /* For each uniform slot, a value of true indicates that the given slot and
-    * the next slot must remain contiguous.  This is used to keep us from
-    * splitting arrays and 64-bit values apart.
-    */
-   bool contiguous[uniforms];
-   memset(contiguous, 0, sizeof(contiguous));
-
-   /* First, we walk through the instructions and do two things:
-    *
-    *  1) Figure out which uniforms are live.
-    *
-    *  2) Mark any indirectly used ranges of registers as contiguous.
-    *
-    * Note that we don't move constant-indexed accesses to arrays.  No
-    * testing has been done of the performance impact of this choice.
-    */
    foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
       for (int i = 0 ; i < inst->sources; i++) {
          if (inst->src[i].file != UNIFORM)
             continue;
 
-         int constant_nr = inst->src[i].nr + inst->src[i].offset / 4;
+         /* NIR tightly packs things so the uniform number might not be
+          * aligned (if we have a double right after a float, for instance).
+          * This is fine because the process of re-arranging them will ensure
+          * that things are properly aligned.  The offset into that uniform,
+          * however, must be aligned.
+          *
+          * In Vulkan, we have explicit offsets but everything is crammed
+          * into a single "variable" so inst->src[i].nr will always be 0.
+          * Everything will be properly aligned relative to that one base.
+          */
+         assert(inst->src[i].offset % type_sz(inst->src[i].type) == 0);
 
+         unsigned u = inst->src[i].nr +
+                      inst->src[i].offset / UNIFORM_SLOT_SIZE;
+
+         if (u >= uniforms)
+            continue;
+
+         unsigned slots_read;
          if (inst->opcode == SHADER_OPCODE_MOV_INDIRECT && i == 0) {
-            assert(inst->src[2].ud % 4 == 0);
-            unsigned last = constant_nr + (inst->src[2].ud / 4) - 1;
-            assert(last < uniforms);
-
-            for (unsigned j = constant_nr; j < last; j++) {
-               is_live[j] = true;
-               contiguous[j] = true;
-               bitsize_access[j] = MAX2(bitsize_access[j], type_sz(inst->src[i].type));
-            }
-            is_live[last] = true;
-            bitsize_access[last] = MAX2(bitsize_access[last], type_sz(inst->src[i].type));
+            slots_read = DIV_ROUND_UP(inst->src[2].ud, UNIFORM_SLOT_SIZE);
          } else {
-            if (constant_nr >= 0 && constant_nr < (int) uniforms) {
-               int regs_read = inst->components_read(i) *
-                  type_sz(inst->src[i].type) / 4;
-               assert(regs_read <= 2);
-               if (regs_read == 2)
-                  contiguous[constant_nr] = true;
-               for (int j = 0; j < regs_read; j++) {
-                  is_live[constant_nr + j] = true;
-                  bitsize_access[constant_nr + j] =
-                     MAX2(bitsize_access[constant_nr + j], type_sz(inst->src[i].type));
-               }
-            }
+            unsigned bytes_read = inst->components_read(i) *
+                                  type_sz(inst->src[i].type);
+            slots_read = DIV_ROUND_UP(bytes_read, UNIFORM_SLOT_SIZE);
          }
+
+         assert(u + slots_read <= uniforms);
+         mark_uniform_slots_read(&slots[u], slots_read,
+                                 type_sz(inst->src[i].type));
       }
    }
 
@@ -2050,43 +2141,64 @@ fs_visitor::assign_constant_locations()
    memset(pull_constant_loc, -1, uniforms * sizeof(*pull_constant_loc));
 
    int chunk_start = -1;
-   unsigned max_chunk_bitsize = 0;
-
-   /* First push 64-bit uniforms to ensure they are properly aligned */
-   const unsigned uniform_64_bit_size = type_sz(BRW_REGISTER_TYPE_DF);
+   struct cplx_align align;
    for (unsigned u = 0; u < uniforms; u++) {
-      if (!is_live[u])
+      if (!slots[u].is_live) {
+         assert(chunk_start == -1);
          continue;
-
-      set_push_pull_constant_loc(u, &chunk_start, &max_chunk_bitsize,
-                                 contiguous[u], bitsize_access[u],
-                                 uniform_64_bit_size,
-                                 push_constant_loc, pull_constant_loc,
-                                 &num_push_constants, &num_pull_constants,
-                                 max_push_components, max_chunk_size,
-                                 compiler->supports_pull_constants,
-                                 stage_prog_data);
-
-   }
-
-   /* Then push the rest of uniforms */
-   const unsigned uniform_32_bit_size = type_sz(BRW_REGISTER_TYPE_F);
-   for (unsigned u = 0; u < uniforms; u++) {
-      if (!is_live[u])
-         continue;
+      }
 
       /* Skip subgroup_id_index to put it in the last push register. */
       if (subgroup_id_index == (int)u)
          continue;
 
-      set_push_pull_constant_loc(u, &chunk_start, &max_chunk_bitsize,
-                                 contiguous[u], bitsize_access[u],
-                                 uniform_32_bit_size,
-                                 push_constant_loc, pull_constant_loc,
-                                 &num_push_constants, &num_pull_constants,
-                                 max_push_components, max_chunk_size,
-                                 compiler->supports_pull_constants,
-                                 stage_prog_data);
+      if (chunk_start == -1) {
+         chunk_start = u;
+         align = slots[u].align;
+      } else {
+         /* Offset into the chunk */
+         unsigned chunk_offset = (u - chunk_start) * UNIFORM_SLOT_SIZE;
+
+         /* Shift the slot alignment down by the chunk offset so it is
+          * comparable with the base chunk alignment.
+          */
+         struct cplx_align slot_align = slots[u].align;
+         slot_align.offset =
+            (slot_align.offset - chunk_offset) & (align.mul - 1);
+
+         align = cplx_align_combine(align, slot_align);
+      }
+
+      /* Sanity check the alignment */
+      cplx_align_assert_sane(align);
+
+      if (slots[u].contiguous)
+         continue;
+
+      /* Adjust the alignment to be in terms of slots, not bytes */
+      assert((align.mul & (UNIFORM_SLOT_SIZE - 1)) == 0);
+      assert((align.offset & (UNIFORM_SLOT_SIZE - 1)) == 0);
+      align.mul /= UNIFORM_SLOT_SIZE;
+      align.offset /= UNIFORM_SLOT_SIZE;
+
+      unsigned push_start_align = cplx_align_apply(align, num_push_constants);
+      unsigned chunk_size = u - chunk_start + 1;
+      if ((!compiler->supports_pull_constants && u < UBO_START) ||
+          (chunk_size < max_chunk_size &&
+           push_start_align + chunk_size <= max_push_components)) {
+         /* Align up the number of push constants */
+         num_push_constants = push_start_align;
+         for (unsigned i = 0; i < chunk_size; i++)
+            push_constant_loc[chunk_start + i] = num_push_constants++;
+      } else {
+         /* We need to pull this one */
+         num_pull_constants = cplx_align_apply(align, num_pull_constants);
+         for (unsigned i = 0; i < chunk_size; i++)
+            pull_constant_loc[chunk_start + i] = num_pull_constants++;
+      }
+
+      /* Reset the chunk and start again */
+      chunk_start = -1;
    }
 
    /* Add the CS local thread ID uniform at the end of the push constants */
@@ -2099,8 +2211,8 @@ fs_visitor::assign_constant_locations()
    uint32_t *param = stage_prog_data->param;
    stage_prog_data->nr_params = num_push_constants;
    if (num_push_constants) {
-      stage_prog_data->param = ralloc_array(mem_ctx, uint32_t,
-                                            num_push_constants);
+      stage_prog_data->param = rzalloc_array(mem_ctx, uint32_t,
+                                             num_push_constants);
    } else {
       stage_prog_data->param = NULL;
    }
@@ -2108,8 +2220,8 @@ fs_visitor::assign_constant_locations()
    assert(stage_prog_data->pull_param == NULL);
    if (num_pull_constants > 0) {
       stage_prog_data->nr_pull_params = num_pull_constants;
-      stage_prog_data->pull_param = ralloc_array(mem_ctx, uint32_t,
-                                                 num_pull_constants);
+      stage_prog_data->pull_param = rzalloc_array(mem_ctx, uint32_t,
+                                                  num_pull_constants);
    }
 
    /* Now that we know how many regular uniforms we'll push, reduce the
@@ -2446,6 +2558,20 @@ fs_visitor::opt_algebraic()
          }
          break;
 
+      case SHADER_OPCODE_SHUFFLE:
+         if (is_uniform(inst->src[0])) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->sources = 1;
+            progress = true;
+         } else if (inst->src[1].file == IMM) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[0] = component(inst->src[0],
+                                     inst->src[1].ud);
+            inst->sources = 1;
+            progress = true;
+         }
+         break;
+
       default:
 	 break;
       }
@@ -2728,6 +2854,106 @@ mask_relative_to(const fs_reg &r, const fs_reg &s, unsigned ds)
 }
 
 bool
+fs_visitor::opt_peephole_csel()
+{
+   if (devinfo->gen < 8)
+      return false;
+
+   bool progress = false;
+
+   foreach_block_reverse(block, cfg) {
+      int ip = block->end_ip + 1;
+
+      foreach_inst_in_block_reverse_safe(fs_inst, inst, block) {
+         ip--;
+
+         if (inst->opcode != BRW_OPCODE_SEL ||
+             inst->predicate != BRW_PREDICATE_NORMAL ||
+             (inst->dst.type != BRW_REGISTER_TYPE_F &&
+              inst->dst.type != BRW_REGISTER_TYPE_D &&
+              inst->dst.type != BRW_REGISTER_TYPE_UD))
+            continue;
+
+         /* Because it is a 3-src instruction, CSEL cannot have an immediate
+          * value as a source, but we can sometimes handle zero.
+          */
+         if ((inst->src[0].file != VGRF && inst->src[0].file != ATTR &&
+              inst->src[0].file != UNIFORM) ||
+             (inst->src[1].file != VGRF && inst->src[1].file != ATTR &&
+              inst->src[1].file != UNIFORM && !inst->src[1].is_zero()))
+            continue;
+
+         foreach_inst_in_block_reverse_starting_from(fs_inst, scan_inst, inst) {
+            if (!scan_inst->flags_written())
+               continue;
+
+            if ((scan_inst->opcode != BRW_OPCODE_CMP &&
+                 scan_inst->opcode != BRW_OPCODE_MOV) ||
+                scan_inst->predicate != BRW_PREDICATE_NONE ||
+                (scan_inst->src[0].file != VGRF &&
+                 scan_inst->src[0].file != ATTR &&
+                 scan_inst->src[0].file != UNIFORM) ||
+                scan_inst->src[0].type != BRW_REGISTER_TYPE_F)
+               break;
+
+            if (scan_inst->opcode == BRW_OPCODE_CMP && !scan_inst->src[1].is_zero())
+               break;
+
+            const brw::fs_builder ibld(this, block, inst);
+
+            const enum brw_conditional_mod cond =
+               inst->predicate_inverse
+               ? brw_negate_cmod(scan_inst->conditional_mod)
+               : scan_inst->conditional_mod;
+
+            fs_inst *csel_inst = NULL;
+
+            if (inst->src[1].file != IMM) {
+               csel_inst = ibld.CSEL(inst->dst,
+                                     inst->src[0],
+                                     inst->src[1],
+                                     scan_inst->src[0],
+                                     cond);
+            } else if (cond == BRW_CONDITIONAL_NZ) {
+               /* Consider the sequence
+                *
+                * cmp.nz.f0  null<1>F   g3<8,8,1>F   0F
+                * (+f0) sel  g124<1>UD  g2<8,8,1>UD  0x00000000UD
+                *
+                * The sel will pick the immediate value 0 if r0 is ±0.0.
+                * Therefore, this sequence is equivalent:
+                *
+                * cmp.nz.f0  null<1>F   g3<8,8,1>F   0F
+                * (+f0) sel  g124<1>F   g2<8,8,1>F   (abs)g3<8,8,1>F
+                *
+                * The abs is ensures that the result is 0UD when g3 is -0.0F.
+                * By normal cmp-sel merging, this is also equivalent:
+                *
+                * csel.nz    g124<1>F   g2<4,4,1>F   (abs)g3<4,4,1>F  g3<4,4,1>F
+                */
+               csel_inst = ibld.CSEL(inst->dst,
+                                     inst->src[0],
+                                     scan_inst->src[0],
+                                     scan_inst->src[0],
+                                     cond);
+
+               csel_inst->src[1].abs = true;
+            }
+
+            if (csel_inst != NULL) {
+               progress = true;
+               inst->remove(block);
+            }
+
+            break;
+         }
+      }
+   }
+
+   return progress;
+}
+
+bool
 fs_visitor::compute_to_mrf()
 {
    bool progress = false;
@@ -2986,7 +3212,7 @@ fs_visitor::emit_repclear_shader()
                .MOV(vec4(brw_message_reg(color_mrf)), fs_reg(reg));
    }
 
-   fs_inst *write;
+   fs_inst *write = NULL;
    if (key->nr_color_regions == 1) {
       write = bld.emit(FS_OPCODE_REP_FB_WRITE);
       write->saturate = key->clamp_fragment_color;
@@ -3079,6 +3305,42 @@ fs_visitor::remove_duplicate_mrf_writes()
 	  inst->src[0].file != ARF &&
 	  !inst->is_partial_write()) {
          last_mrf_move[inst->dst.nr] = inst;
+      }
+   }
+
+   if (progress)
+      invalidate_live_intervals();
+
+   return progress;
+}
+
+/**
+ * Rounding modes for conversion instructions are included for each
+ * conversion, but right now it is a state. So once it is set,
+ * we don't need to call it again for subsequent calls.
+ *
+ * This is useful for vector/matrices conversions, as setting the
+ * mode once is enough for the full vector/matrix
+ */
+bool
+fs_visitor::remove_extra_rounding_modes()
+{
+   bool progress = false;
+
+   foreach_block (block, cfg) {
+      brw_rnd_mode prev_mode = BRW_RND_MODE_UNSPECIFIED;
+
+      foreach_inst_in_block_safe (fs_inst, inst, block) {
+         if (inst->opcode == SHADER_OPCODE_RND_MODE) {
+            assert(inst->src[0].file == BRW_IMMEDIATE_VALUE);
+            const brw_rnd_mode mode = (brw_rnd_mode) inst->src[0].d;
+            if (mode == prev_mode) {
+               inst->remove(block);
+               progress = true;
+            } else {
+               prev_mode = mode;
+            }
+         }
       }
    }
 
@@ -3429,11 +3691,7 @@ fs_visitor::lower_integer_multiplication()
               inst->dst.type != BRW_REGISTER_TYPE_UD))
             continue;
 
-         /* Gen8's MUL instruction can do a 32-bit x 32-bit -> 32-bit
-          * operation directly, but CHV/BXT cannot.
-          */
-         if (devinfo->gen >= 8 &&
-             !devinfo->is_cherryview && !gen_device_info_is_9lp(devinfo))
+         if (devinfo->has_integer_dword_mul)
             continue;
 
          if (inst->src[1].file == IMM &&
@@ -3511,13 +3769,18 @@ fs_visitor::lower_integer_multiplication()
                 regions_overlap(inst->dst, inst->size_written,
                                 inst->src[1], inst->size_read(1))) {
                needs_mov = true;
-               low.nr = alloc.allocate(regs_written(inst));
-               low.offset = low.offset % REG_SIZE;
+               /* Get a new VGRF but keep the same stride as inst->dst */
+               low = fs_reg(VGRF, alloc.allocate(regs_written(inst)),
+                            inst->dst.type);
+               low.stride = inst->dst.stride;
+               low.offset = inst->dst.offset % REG_SIZE;
             }
 
-            fs_reg high = inst->dst;
-            high.nr = alloc.allocate(regs_written(inst));
-            high.offset = high.offset % REG_SIZE;
+            /* Get a new VGRF but keep the same stride as inst->dst */
+            fs_reg high(VGRF, alloc.allocate(regs_written(inst)),
+                        inst->dst.type);
+            high.stride = inst->dst.stride;
+            high.offset = inst->dst.offset % REG_SIZE;
 
             if (devinfo->gen >= 7) {
                if (inst->src[1].file == IMM) {
@@ -4071,17 +4334,15 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
        op == SHADER_OPCODE_SAMPLEINFO ||
        is_high_sampler(devinfo, sampler)) {
       /* For general texture offsets (no txf workaround), we need a header to
-       * put them in.  Note that we're only reserving space for it in the
-       * message payload as it will be initialized implicitly by the
-       * generator.
+       * put them in.
        *
        * TG4 needs to place its channel select in the header, for interaction
        * with ARB_texture_swizzle.  The sampler index is only 4-bits, so for
        * larger sampler numbers we need to offset the Sampler State Pointer in
        * the header.
        */
+      fs_reg header = retype(sources[0], BRW_REGISTER_TYPE_UD);
       header_size = 1;
-      sources[0] = fs_reg();
       length++;
 
       /* If we're requesting fewer than four channels worth of response,
@@ -4092,6 +4353,40 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
          assert(regs_written(inst) % reg_width == 0);
          unsigned mask = ~((1 << (regs_written(inst) / reg_width)) - 1) & 0xf;
          inst->offset |= mask << 12;
+      }
+
+      /* Build the actual header */
+      const fs_builder ubld = bld.exec_all().group(8, 0);
+      const fs_builder ubld1 = ubld.group(1, 0);
+      ubld.MOV(header, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
+      if (inst->offset) {
+         ubld1.MOV(component(header, 2), brw_imm_ud(inst->offset));
+      } else if (bld.shader->stage != MESA_SHADER_VERTEX &&
+                 bld.shader->stage != MESA_SHADER_FRAGMENT) {
+         /* The vertex and fragment stages have g0.2 set to 0, so
+          * header0.2 is 0 when g0 is copied. Other stages may not, so we
+          * must set it to 0 to avoid setting undesirable bits in the
+          * message.
+          */
+         ubld1.MOV(component(header, 2), brw_imm_ud(0));
+      }
+
+      if (is_high_sampler(devinfo, sampler)) {
+         if (sampler.file == BRW_IMMEDIATE_VALUE) {
+            assert(sampler.ud >= 16);
+            const int sampler_state_size = 16; /* 16 bytes */
+
+            ubld1.ADD(component(header, 3),
+                      retype(brw_vec1_grf(0, 3), BRW_REGISTER_TYPE_UD),
+                      brw_imm_ud(16 * (sampler.ud / 16) * sampler_state_size));
+         } else {
+            fs_reg tmp = ubld1.vgrf(BRW_REGISTER_TYPE_UD);
+            ubld1.AND(tmp, sampler, brw_imm_ud(0x0f0));
+            ubld1.SHL(tmp, tmp, brw_imm_ud(4));
+            ubld1.ADD(component(header, 3),
+                      retype(brw_vec1_grf(0, 3), BRW_REGISTER_TYPE_UD),
+                      tmp);
+         }
       }
    }
 
@@ -4306,6 +4601,8 @@ static void
 lower_surface_logical_send(const fs_builder &bld, fs_inst *inst, opcode op,
                            const fs_reg &sample_mask)
 {
+   const gen_device_info *devinfo = bld.shader->devinfo;
+
    /* Get the logical send arguments. */
    const fs_reg &addr = inst->src[0];
    const fs_reg &src = inst->src[1];
@@ -4316,7 +4613,20 @@ lower_surface_logical_send(const fs_builder &bld, fs_inst *inst, opcode op,
    /* Calculate the total number of components of the payload. */
    const unsigned addr_sz = inst->components_read(0);
    const unsigned src_sz = inst->components_read(1);
-   const unsigned header_sz = (sample_mask.file == BAD_FILE ? 0 : 1);
+   /* From the BDW PRM Volume 7, page 147:
+    *
+    *  "For the Data Cache Data Port*, the header must be present for the
+    *   following message types: [...] Typed read/write/atomics"
+    *
+    * Earlier generations have a similar wording.  Because of this restriction
+    * we don't attempt to implement sample masks via predication for such
+    * messages prior to Gen9, since we have to provide a header anyway.  On
+    * Gen11+ the header has been removed so we can only use predication.
+    */
+   const unsigned header_sz = devinfo->gen < 9 &&
+                              (op == SHADER_OPCODE_TYPED_SURFACE_READ ||
+                               op == SHADER_OPCODE_TYPED_SURFACE_WRITE ||
+                               op == SHADER_OPCODE_TYPED_ATOMIC) ? 1 : 0;
    const unsigned sz = header_sz + addr_sz + src_sz;
 
    /* Allocate space for the payload. */
@@ -4335,6 +4645,32 @@ lower_surface_logical_send(const fs_builder &bld, fs_inst *inst, opcode op,
       components[n++] = offset(src, bld, i);
 
    bld.LOAD_PAYLOAD(payload, components, sz, header_sz);
+
+   /* Predicate the instruction on the sample mask if no header is
+    * provided.
+    */
+   if (!header_sz && sample_mask.file != BAD_FILE &&
+       sample_mask.file != IMM) {
+      const fs_builder ubld = bld.group(1, 0).exec_all();
+      if (inst->predicate) {
+         assert(inst->predicate == BRW_PREDICATE_NORMAL);
+         assert(!inst->predicate_inverse);
+         assert(inst->flag_subreg < 2);
+         /* Combine the sample mask with the existing predicate by using a
+          * vertical predication mode.
+          */
+         inst->predicate = BRW_PREDICATE_ALIGN1_ALLV;
+         ubld.MOV(retype(brw_flag_subreg(inst->flag_subreg + 2),
+                         sample_mask.type),
+                  sample_mask);
+      } else {
+         inst->flag_subreg = 2;
+         inst->predicate = BRW_PREDICATE_NORMAL;
+         inst->predicate_inverse = false;
+         ubld.MOV(retype(brw_flag_subreg(inst->flag_subreg), sample_mask.type),
+                  sample_mask);
+      }
+   }
 
    /* Update the original instruction. */
    inst->opcode = op;
@@ -4495,6 +4831,18 @@ fs_visitor::lower_logical_sends()
       case SHADER_OPCODE_UNTYPED_SURFACE_WRITE_LOGICAL:
          lower_surface_logical_send(ibld, inst,
                                     SHADER_OPCODE_UNTYPED_SURFACE_WRITE,
+                                    ibld.sample_mask_reg());
+         break;
+
+      case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
+         lower_surface_logical_send(ibld, inst,
+                                    SHADER_OPCODE_BYTE_SCATTERED_READ,
+                                    fs_reg());
+         break;
+
+      case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
+         lower_surface_logical_send(ibld, inst,
+                                    SHADER_OPCODE_BYTE_SCATTERED_WRITE,
                                     ibld.sample_mask_reg());
          break;
 
@@ -4810,6 +5158,8 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
    case BRW_OPCODE_MAD:
    case BRW_OPCODE_LRP:
    case FS_OPCODE_PACK:
+   case SHADER_OPCODE_SEL_EXEC:
+   case SHADER_OPCODE_CLUSTER_BROADCAST:
       return get_fpu_lowered_simd_width(devinfo, inst);
 
    case BRW_OPCODE_CMP: {
@@ -4866,7 +5216,7 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
       return MIN2(8, inst->exec_size);
 
    case FS_OPCODE_LINTERP:
-   case FS_OPCODE_GET_BUFFER_SIZE:
+   case SHADER_OPCODE_GET_BUFFER_SIZE:
    case FS_OPCODE_DDX_COARSE:
    case FS_OPCODE_DDX_FINE:
    case FS_OPCODE_DDY_COARSE:
@@ -4982,6 +5332,8 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
    case SHADER_OPCODE_UNTYPED_ATOMIC_LOGICAL:
    case SHADER_OPCODE_UNTYPED_SURFACE_READ_LOGICAL:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE_LOGICAL:
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
+   case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
       return MIN2(16, inst->exec_size);
 
    case SHADER_OPCODE_URB_READ_SIMD8:
@@ -4991,6 +5343,9 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
    case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED:
    case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT:
       return MIN2(8, inst->exec_size);
+
+   case SHADER_OPCODE_QUAD_SWIZZLE:
+      return 8;
 
    case SHADER_OPCODE_MOV_INDIRECT: {
       /* From IVB and HSW PRMs:
@@ -5321,9 +5676,10 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
    fs_inst *inst = (fs_inst *)be_inst;
 
    if (inst->predicate) {
-      fprintf(file, "(%cf0.%d) ",
-             inst->predicate_inverse ? '-' : '+',
-             inst->flag_subreg);
+      fprintf(file, "(%cf%d.%d) ",
+              inst->predicate_inverse ? '-' : '+',
+              inst->flag_subreg / 2,
+              inst->flag_subreg % 2);
    }
 
    fprintf(file, "%s", brw_instruction_name(devinfo, inst->opcode));
@@ -5333,9 +5689,11 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
       fprintf(file, "%s", conditional_modifier[inst->conditional_mod]);
       if (!inst->predicate &&
           (devinfo->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
+                                inst->opcode != BRW_OPCODE_CSEL &&
                                 inst->opcode != BRW_OPCODE_IF &&
                                 inst->opcode != BRW_OPCODE_WHILE))) {
-         fprintf(file, ".f0.%d", inst->flag_subreg);
+         fprintf(file, ".f%d.%d", inst->flag_subreg / 2,
+                 inst->flag_subreg % 2);
       }
    }
    fprintf(file, "(%d) ", inst->exec_size);
@@ -5721,7 +6079,7 @@ fs_visitor::calculate_register_pressure()
 bool
 fs_visitor::opt_drop_redundant_mov_to_flags()
 {
-   bool flag_mov_found[2] = {false};
+   bool flag_mov_found[4] = {false};
    bool progress = false;
 
    /* Instructions removed by this pass can only be added if this were true */
@@ -5804,6 +6162,7 @@ fs_visitor::optimize()
    int pass_num = 0;
 
    OPT(opt_drop_redundant_mov_to_flags);
+   OPT(remove_extra_rounding_modes);
 
    do {
       progress = false;
@@ -5828,6 +6187,12 @@ fs_visitor::optimize()
 
       OPT(compact_virtual_grfs);
    } while (progress);
+
+   /* Do this after cmod propagation has had every possible opportunity to
+    * propagate results into SEL instructions.
+    */
+   if (OPT(opt_peephole_csel))
+      OPT(dead_code_eliminate);
 
    progress = false;
    pass_num = 0;
@@ -5981,6 +6346,8 @@ fs_visitor::allocate_registers(unsigned min_dispatch_width, bool allow_spilling)
 
    if (failed)
       return;
+
+   opt_bank_conflicts();
 
    schedule_instructions(SCHEDULE_POST);
 
@@ -6744,7 +7111,7 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
       prog_data->reg_blocks_0 = brw_register_blocks(simd16_grf_used);
    }
 
-   return g.get_assembly(&prog_data->base.program_size);
+   return g.get_assembly();
 }
 
 fs_reg *
@@ -6863,7 +7230,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
    fs_visitor *v8 = NULL, *v16 = NULL, *v32 = NULL;
    cfg_t *cfg = NULL;
    const char *fail_msg = NULL;
-   unsigned promoted_constants;
+   unsigned promoted_constants = 0;
 
    /* Now the main event: Visit the shader IR and generate our CS IR for it.
     */
@@ -6967,7 +7334,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
 
       g.generate_code(cfg, prog_data->simd_size);
 
-      ret = g.get_assembly(&prog_data->base.program_size);
+      ret = g.get_assembly();
    }
 
    delete v8;

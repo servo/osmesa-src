@@ -274,6 +274,12 @@ glsl_double_type(void)
 }
 
 const glsl_type *
+glsl_float16_t_type(void)
+{
+   return glsl_type::float16_t_type;
+}
+
+const glsl_type *
 glsl_vec_type(unsigned n)
 {
    return glsl_type::vec(n);
@@ -289,6 +295,12 @@ const glsl_type *
 glsl_vec4_type(void)
 {
    return glsl_type::vec4_type;
+}
+
+const glsl_type *
+glsl_uvec4_type(void)
+{
+   return glsl_type::uvec4_type;
 }
 
 const glsl_type *
@@ -316,6 +328,30 @@ glsl_uint64_t_type(void)
 }
 
 const glsl_type *
+glsl_int16_t_type(void)
+{
+   return glsl_type::int16_t_type;
+}
+
+const glsl_type *
+glsl_uint16_t_type(void)
+{
+   return glsl_type::uint16_t_type;
+}
+
+const glsl_type *
+glsl_int8_t_type(void)
+{
+   return glsl_type::int8_t_type;
+}
+
+const glsl_type *
+glsl_uint8_t_type(void)
+{
+   return glsl_type::uint8_t_type;
+}
+
+const glsl_type *
 glsl_bool_type(void)
 {
    return glsl_type::bool_type;
@@ -330,15 +366,17 @@ glsl_scalar_type(enum glsl_base_type base_type)
 const glsl_type *
 glsl_vector_type(enum glsl_base_type base_type, unsigned components)
 {
-   assert(components > 1 && components <= 4);
-   return glsl_type::get_instance(base_type, components, 1);
+   const glsl_type *t = glsl_type::get_instance(base_type, components, 1);
+   assert(t != glsl_type::error_type);
+   return t;
 }
 
 const glsl_type *
 glsl_matrix_type(enum glsl_base_type base_type, unsigned rows, unsigned columns)
 {
-   assert(rows > 1 && rows <= 4 && columns >= 1 && columns <= 4);
-   return glsl_type::get_instance(base_type, rows, columns);
+   const glsl_type *t = glsl_type::get_instance(base_type, rows, columns);
+   assert(t != glsl_type::error_type);
+   return t;
 }
 
 const glsl_type *

@@ -34,14 +34,24 @@ enum brw_reg_type
 brw_type_for_base_type(const struct glsl_type *type)
 {
    switch (type->base_type) {
+   case GLSL_TYPE_FLOAT16:
+      return BRW_REGISTER_TYPE_HF;
    case GLSL_TYPE_FLOAT:
       return BRW_REGISTER_TYPE_F;
    case GLSL_TYPE_INT:
    case GLSL_TYPE_BOOL:
    case GLSL_TYPE_SUBROUTINE:
       return BRW_REGISTER_TYPE_D;
+   case GLSL_TYPE_INT16:
+      return BRW_REGISTER_TYPE_W;
+   case GLSL_TYPE_INT8:
+      return BRW_REGISTER_TYPE_B;
    case GLSL_TYPE_UINT:
       return BRW_REGISTER_TYPE_UD;
+   case GLSL_TYPE_UINT16:
+      return BRW_REGISTER_TYPE_UW;
+   case GLSL_TYPE_UINT8:
+      return BRW_REGISTER_TYPE_UB;
    case GLSL_TYPE_ARRAY:
       return brw_type_for_base_type(type->fields.array);
    case GLSL_TYPE_STRUCT:
@@ -287,6 +297,15 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
    case SHADER_OPCODE_MEMORY_FENCE:
       return "memory_fence";
 
+   case SHADER_OPCODE_BYTE_SCATTERED_READ:
+      return "byte_scattered_read";
+   case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
+      return "byte_scattered_read_logical";
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
+      return "byte_scattered_write";
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
+      return "byte_scattered_write_logical";
+
    case SHADER_OPCODE_LOAD_PAYLOAD:
       return "load_payload";
    case FS_OPCODE_PACK:
@@ -315,6 +334,17 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "find_live_channel";
    case SHADER_OPCODE_BROADCAST:
       return "broadcast";
+   case SHADER_OPCODE_SHUFFLE:
+      return "shuffle";
+   case SHADER_OPCODE_SEL_EXEC:
+      return "sel_exec";
+   case SHADER_OPCODE_QUAD_SWIZZLE:
+      return "quad_swizzle";
+   case SHADER_OPCODE_CLUSTER_BROADCAST:
+      return "cluster_broadcast";
+
+   case SHADER_OPCODE_GET_BUFFER_SIZE:
+      return "get_buffer_size";
 
    case VEC4_OPCODE_MOV_BYTES:
       return "mov_bytes";
@@ -357,9 +387,6 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "pixel_x";
    case FS_OPCODE_PIXEL_Y:
       return "pixel_y";
-
-   case FS_OPCODE_GET_BUFFER_SIZE:
-      return "fs_get_buffer_size";
 
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
       return "uniform_pull_const";
@@ -406,9 +433,6 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
 
    case VS_OPCODE_SET_SIMD4X2_HEADER_GEN9:
       return "set_simd4x2_header_gen9";
-
-   case VS_OPCODE_GET_BUFFER_SIZE:
-      return "vs_get_buffer_size";
 
    case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
       return "unpack_flags_simd4x2";
@@ -476,6 +500,9 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "tes_add_indirect_urb_offset";
    case TES_OPCODE_GET_PRIMITIVE_ID:
       return "tes_get_primitive_id";
+
+   case SHADER_OPCODE_RND_MODE:
+      return "rnd_mode";
    }
 
    unreachable("not reached");
@@ -526,6 +553,8 @@ brw_saturate_immediate(enum brw_reg_type type, struct brw_reg *reg)
       unreachable("unimplemented: saturate vector immediate");
    case BRW_REGISTER_TYPE_HF:
       unreachable("unimplemented: saturate HF immediate");
+   case BRW_REGISTER_TYPE_NF:
+      unreachable("no NF immediates");
    }
 
    if (size < 8) {
@@ -575,6 +604,8 @@ brw_negate_immediate(enum brw_reg_type type, struct brw_reg *reg)
       assert(!"unimplemented: negate UV/V immediate");
    case BRW_REGISTER_TYPE_HF:
       assert(!"unimplemented: negate HF immediate");
+   case BRW_REGISTER_TYPE_NF:
+      unreachable("no NF immediates");
    }
 
    return false;
@@ -617,6 +648,8 @@ brw_abs_immediate(enum brw_reg_type type, struct brw_reg *reg)
       assert(!"unimplemented: abs V immediate");
    case BRW_REGISTER_TYPE_HF:
       assert(!"unimplemented: abs HF immediate");
+   case BRW_REGISTER_TYPE_NF:
+      unreachable("no NF immediates");
    }
 
    return false;
@@ -649,6 +682,12 @@ bool
 backend_reg::equals(const backend_reg &r) const
 {
    return brw_regs_equal(this, &r) && offset == r.offset;
+}
+
+bool
+backend_reg::negative_equals(const backend_reg &r) const
+{
+   return brw_regs_negative_equal(this, &r) && offset == r.offset;
 }
 
 bool
@@ -824,6 +863,7 @@ backend_instruction::can_do_source_mods() const
    case BRW_OPCODE_FBL:
    case BRW_OPCODE_SUBB:
    case SHADER_OPCODE_BROADCAST:
+   case SHADER_OPCODE_CLUSTER_BROADCAST:
    case SHADER_OPCODE_MOV_INDIRECT:
       return false;
    default:
@@ -954,6 +994,8 @@ backend_instruction::has_side_effects() const
    case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE_LOGICAL:
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
    case SHADER_OPCODE_TYPED_ATOMIC:
    case SHADER_OPCODE_TYPED_ATOMIC_LOGICAL:
    case SHADER_OPCODE_TYPED_SURFACE_WRITE:
@@ -968,6 +1010,7 @@ backend_instruction::has_side_effects() const
    case SHADER_OPCODE_BARRIER:
    case TCS_OPCODE_URB_WRITE:
    case TCS_OPCODE_RELEASE_INPUT:
+   case SHADER_OPCODE_RND_MODE:
       return true;
    default:
       return eot;
@@ -982,6 +1025,8 @@ backend_instruction::is_volatile() const
    case SHADER_OPCODE_UNTYPED_SURFACE_READ_LOGICAL:
    case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_READ_LOGICAL:
+   case SHADER_OPCODE_BYTE_SCATTERED_READ:
+   case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
    case SHADER_OPCODE_URB_READ_SIMD8:
    case SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT:
    case VEC4_OPCODE_URB_READ:
@@ -1244,7 +1289,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
 
       g.generate_code(v.cfg, 8);
 
-      assembly = g.get_assembly(&prog_data->base.base.program_size);
+      assembly = g.get_assembly();
    } else {
       brw::vec4_tes_visitor v(compiler, log_data, key, prog_data,
 			      nir, mem_ctx, shader_time_index);
@@ -1258,8 +1303,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
 	 v.dump_instructions();
 
       assembly = brw_vec4_generate_assembly(compiler, log_data, mem_ctx, nir,
-                                            &prog_data->base, v.cfg,
-                                            &prog_data->base.base.program_size);
+                                            &prog_data->base, v.cfg);
    }
 
    return assembly;

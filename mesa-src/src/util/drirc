@@ -160,6 +160,22 @@ TODO: document the other workarounds.
             <option name="glsl_correct_derivatives_after_discard" value="true"/>
         </application>
 
+        <application name="Unreal 4 Editor" executable="UE4Editor">
+            <option name="allow_glsl_cross_stage_interpolation_mismatch" value="true"/>
+        </application>
+
+        <application name="Observer" executable="TheObserver-Linux-Shipping">
+            <option name="allow_glsl_cross_stage_interpolation_mismatch" value="true"/>
+        </application>
+
+        <application name="Steamroll" executable="Steamroll-Linux-Shipping">
+            <option name="allow_glsl_cross_stage_interpolation_mismatch" value="true"/>
+        </application>
+
+        <application name="Refunct" executable="Refunct-Linux-Shipping">
+            <option name="allow_glsl_cross_stage_interpolation_mismatch" value="true"/>
+        </application>
+
         <!-- The GL thread whitelist is below, workarounds are above.
              Keep it that way. -->
 
@@ -250,16 +266,35 @@ TODO: document the other workarounds.
         <application name="Spec Ops: The Line (64-bit)" executable="specops">
             <option name="mesa_glthread" value="true"/>
         </application>
+        <application name="Mount and Blade Warband" executable="mb_warband_linux">
+            <option name="mesa_glthread" value="true"/>
+        </application>
+
+        <!-- around 18% performance increase in min and avg fps, max fps capped at 60fps. -->
+        <application name="Medieval II: Total War" executable="Medieval2">
+            <option name="mesa_glthread" value="true"/>
+        </application>
+
+        <!-- min fps ~21 ===> ~27 while standing still in game, also higher gpu load. -->
+        <application name="Carnivores: Dinosaur Hunter Reborn (wine)" executable="Carnivores-master.exe">
+            <option name="mesa_glthread" value="true"/>
+        </application>
+
+        <!-- around 30% increase in avg fps -->
+        <application name="Far Cry 2 (wine)" executable="farcry2.exe">
+            <option name="mesa_glthread" value="true"/>
+        </application>
     </device>
     <!-- vmwgfx doesn't like full buffer swaps and can't sync to vertical retraces.-->
     <device driver="vmwgfx">
         <application name="gnome-shell" executable="gnome-shell">
             <option name="glx_disable_ext_buffer_age" value="true" />
             <option name="glx_disable_oml_sync_control" value="true" />
+            <option name="glx_disable_sgi_video_sync" value="true" />
         </application>
-	<application name="Compiz" executable="Compiz">
+        <application name="Compiz" executable="Compiz">
             <option name="glx_disable_ext_buffer_age" value="true" />
-	    <option name="glx_disable_oml_sync_control" value="true" />
+            <option name="glx_disable_oml_sync_control" value="true" />
         </application>
     </device>
     <device driver="radeonsi">

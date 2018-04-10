@@ -60,7 +60,7 @@ blorp_emit_reloc(struct blorp_batch *batch,
    uint32_t offset;
 
    if (GEN_GEN < 6 && brw_ptr_in_state_buffer(&brw->batch, location)) {
-      offset = (char *)location - (char *)brw->batch.state_map;
+      offset = (char *)location - (char *)brw->batch.state.map;
       return brw_state_reloc(&brw->batch, offset,
                              address.buffer, address.offset + delta,
                              address.reloc_flags);
@@ -68,7 +68,7 @@ blorp_emit_reloc(struct blorp_batch *batch,
 
    assert(!brw_ptr_in_state_buffer(&brw->batch, location));
 
-   offset = (char *)location - (char *)brw->batch.map;
+   offset = (char *)location - (char *)brw->batch.batch.map;
    return brw_batch_reloc(&brw->batch, offset,
                           address.buffer, address.offset + delta,
                           address.reloc_flags);
@@ -86,13 +86,26 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
       brw_state_reloc(&brw->batch, ss_offset, bo, address.offset + delta,
                       address.reloc_flags);
 
-   void *reloc_ptr = (void *)brw->batch.state_map + ss_offset;
+   void *reloc_ptr = (void *)brw->batch.state.map + ss_offset;
 #if GEN_GEN >= 8
    *(uint64_t *)reloc_ptr = reloc_val;
 #else
    *(uint32_t *)reloc_ptr = reloc_val;
 #endif
 }
+
+#if GEN_GEN >= 7 && GEN_GEN <= 10
+static struct blorp_address
+blorp_get_surface_base_address(struct blorp_batch *batch)
+{
+   assert(batch->blorp->driver_ctx == batch->driver_batch);
+   struct brw_context *brw = batch->driver_batch;
+   return (struct blorp_address) {
+      .buffer = brw->batch.state.bo,
+      .offset = 0,
+   };
+}
+#endif
 
 static void *
 blorp_alloc_dynamic_state(struct blorp_batch *batch,
@@ -150,8 +163,17 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    void *data = brw_state_batch(brw, size, 64, &offset);
 
    *addr = (struct blorp_address) {
-      .buffer = brw->batch.state_bo,
+      .buffer = brw->batch.state.bo,
       .offset = offset,
+
+      /* The VF cache designers apparently cut corners, and made the cache
+       * only consider the bottom 32 bits of memory addresses.  If you happen
+       * to have two vertex buffers which get placed exactly 4 GiB apart and
+       * use them in back-to-back draw calls, you can get collisions.  To work
+       * around this problem, we restrict vertex buffers to the low 32 bits of
+       * the address space.
+       */
+      .reloc_flags = RELOC_32BIT,
 
 #if GEN_GEN == 10
       .mocs = CNL_MOCS_WB,
@@ -181,7 +203,8 @@ blorp_get_workaround_page(struct blorp_batch *batch)
 #endif
 
 static void
-blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
+blorp_flush_range(UNUSED struct blorp_batch *batch, UNUSED void *start,
+                  UNUSED size_t size)
 {
    /* All allocated states come from the batch which we will flush before we
     * submit it.  There's nothing for us to do here.
@@ -190,7 +213,8 @@ blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
 
 static void
 blorp_emit_urb_config(struct blorp_batch *batch,
-                      unsigned vs_entry_size, unsigned sf_entry_size)
+                      unsigned vs_entry_size,
+                      MAYBE_UNUSED unsigned sf_entry_size)
 {
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
@@ -226,8 +250,11 @@ genX(blorp_exec)(struct blorp_batch *batch,
     */
    if (params->src.enabled)
       brw_cache_flush_for_read(brw, params->src.addr.buffer);
-   if (params->dst.enabled)
-      brw_cache_flush_for_render(brw, params->dst.addr.buffer);
+   if (params->dst.enabled) {
+      brw_cache_flush_for_render(brw, params->dst.addr.buffer,
+                                 params->dst.view.format,
+                                 params->dst.aux_usage);
+   }
    if (params->depth.enabled)
       brw_cache_flush_for_depth(brw, params->depth.addr.buffer);
    if (params->stencil.enabled)
@@ -297,8 +324,11 @@ retry:
                               !params->stencil.enabled;
    brw->ib.index_size = -1;
 
-   if (params->dst.enabled)
-      brw_render_cache_add_bo(brw, params->dst.addr.buffer);
+   if (params->dst.enabled) {
+      brw_render_cache_add_bo(brw, params->dst.addr.buffer,
+                              params->dst.view.format,
+                              params->dst.aux_usage);
+   }
    if (params->depth.enabled)
       brw_depth_cache_add_bo(brw, params->depth.addr.buffer);
    if (params->stencil.enabled)

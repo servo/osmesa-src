@@ -25,6 +25,10 @@
 #ifndef VC5_CONTEXT_H
 #define VC5_CONTEXT_H
 
+#ifdef V3D_VERSION
+#include "broadcom/common/v3d_macros.h"
+#endif
+
 #include <stdio.h>
 
 #include "pipe/p_context.h"
@@ -89,6 +93,8 @@ struct vc5_sampler_view {
         uint8_t swizzle[4];
 
         uint8_t texture_shader_state[32];
+        /* V3D 4.x: Texture state struct. */
+        struct vc5_bo *bo;
 };
 
 struct vc5_sampler_state {
@@ -96,7 +102,10 @@ struct vc5_sampler_state {
         uint32_t p0;
         uint32_t p1;
 
+        /* V3D 3.x: Packed texture state. */
         uint8_t texture_shader_state[32];
+        /* V3D 4.x: Sampler state struct. */
+        struct vc5_bo *bo;
 };
 
 struct vc5_texture_stateobj {
@@ -121,8 +130,16 @@ struct vc5_uncompiled_shader {
         struct pipe_shader_state base;
         uint32_t num_tf_outputs;
         struct v3d_varying_slot *tf_outputs;
-        uint16_t tf_specs[PIPE_MAX_SO_BUFFERS];
+        uint16_t tf_specs[16];
+        uint16_t tf_specs_psiz[16];
         uint32_t num_tf_specs;
+
+        /**
+         * Flag for if the NIR in this shader originally came from TGSI.  If
+         * so, we need to do some fixups at compile time, due to missing
+         * information in TGSI that exists in NIR.
+         */
+        bool was_tgsi;
 };
 
 struct vc5_compiled_shader {
@@ -145,6 +162,9 @@ struct vc5_compiled_shader {
 struct vc5_program_stateobj {
         struct vc5_uncompiled_shader *bind_vs, *bind_fs;
         struct vc5_compiled_shader *cs, *vs, *fs;
+
+        struct vc5_bo *spill_bo;
+        int spill_size_per_thread;
 };
 
 struct vc5_constbuf_stateobj {
@@ -179,6 +199,13 @@ struct vc5_job_key {
         struct pipe_surface *zsbuf;
 };
 
+enum vc5_ez_state {
+        VC5_EZ_UNDECIDED = 0,
+        VC5_EZ_GT_GE,
+        VC5_EZ_LT_LE,
+        VC5_EZ_DISABLED,
+};
+
 /**
  * A complete bin/render job.
  *
@@ -194,6 +221,7 @@ struct vc5_job {
         struct vc5_cl rcl;
         struct vc5_cl indirect;
         struct vc5_bo *tile_alloc;
+        struct vc5_bo *tile_state;
         uint32_t shader_rec_count;
 
         struct drm_vc5_submit_cl submit;
@@ -273,7 +301,22 @@ struct vc5_job {
          */
         bool oq_enabled;
 
-        bool uses_early_z;
+        /**
+         * Set when a packet enabling TF on all further primitives has been
+         * emitted.
+         */
+        bool tf_enabled;
+
+        /**
+         * Current EZ state for drawing. Updated at the start of draw after
+         * we've decided on the shader being rendered.
+         */
+        enum vc5_ez_state ez_state;
+        /**
+         * The first EZ state that was used for drawing with a decided EZ
+         * direction (so either UNDECIDED, GT, or LT).
+         */
+        enum vc5_ez_state first_ez_state;
 
         /**
          * Number of draw calls (not counting full buffer clears) queued in
@@ -402,7 +445,7 @@ struct vc5_rasterizer_state {
 struct vc5_depth_stencil_alpha_state {
         struct pipe_depth_stencil_alpha_state base;
 
-        bool early_z_enable;
+        enum vc5_ez_state ez_state;
 
         /** Uniforms for stencil state.
          *
@@ -441,15 +484,11 @@ vc5_sampler_state(struct pipe_sampler_state *psampler)
 
 struct pipe_context *vc5_context_create(struct pipe_screen *pscreen,
                                         void *priv, unsigned flags);
-void vc5_draw_init(struct pipe_context *pctx);
-void vc5_state_init(struct pipe_context *pctx);
 void vc5_program_init(struct pipe_context *pctx);
 void vc5_program_fini(struct pipe_context *pctx);
 void vc5_query_init(struct pipe_context *pctx);
 
 void vc5_simulator_init(struct vc5_screen *screen);
-void vc5_simulator_init(struct vc5_screen *screen);
-void vc5_simulator_destroy(struct vc5_screen *screen);
 void vc5_simulator_destroy(struct vc5_screen *screen);
 int vc5_simulator_flush(struct vc5_context *vc5,
                         struct drm_vc5_submit_cl *args,
@@ -486,24 +525,40 @@ void vc5_flush_jobs_writing_resource(struct vc5_context *vc5,
                                      struct pipe_resource *prsc);
 void vc5_flush_jobs_reading_resource(struct vc5_context *vc5,
                                      struct pipe_resource *prsc);
-void vc5_emit_state(struct pipe_context *pctx);
 void vc5_update_compiled_shaders(struct vc5_context *vc5, uint8_t prim_mode);
 
-bool vc5_rt_format_supported(enum pipe_format f);
-bool vc5_tex_format_supported(enum pipe_format f);
-uint8_t vc5_get_rt_format(enum pipe_format f);
-uint8_t vc5_get_tex_format(enum pipe_format f);
-uint8_t vc5_get_tex_return_size(enum pipe_format f);
-uint8_t vc5_get_tex_return_channels(enum pipe_format f);
-const uint8_t *vc5_get_format_swizzle(enum pipe_format f);
-void vc5_get_internal_type_bpp_for_output_format(uint32_t format,
+bool vc5_rt_format_supported(const struct v3d_device_info *devinfo,
+                             enum pipe_format f);
+bool vc5_tex_format_supported(const struct v3d_device_info *devinfo,
+                              enum pipe_format f);
+uint8_t vc5_get_rt_format(const struct v3d_device_info *devinfo, enum pipe_format f);
+uint8_t vc5_get_tex_format(const struct v3d_device_info *devinfo, enum pipe_format f);
+uint8_t vc5_get_tex_return_size(const struct v3d_device_info *devinfo,
+                                enum pipe_format f,
+                                enum pipe_tex_compare compare);
+uint8_t vc5_get_tex_return_channels(const struct v3d_device_info *devinfo,
+                                    enum pipe_format f);
+const uint8_t *vc5_get_format_swizzle(const struct v3d_device_info *devinfo,
+                                      enum pipe_format f);
+void vc5_get_internal_type_bpp_for_output_format(const struct v3d_device_info *devinfo,
+                                                 uint32_t format,
                                                  uint32_t *type,
                                                  uint32_t *bpp);
 
 void vc5_init_query_functions(struct vc5_context *vc5);
 void vc5_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info);
 void vc5_blitter_save(struct vc5_context *vc5);
-void vc5_emit_rcl(struct vc5_job *job);
 
+#ifdef v3dX
+#  include "v3dx_context.h"
+#else
+#  define v3dX(x) v3d33_##x
+#  include "v3dx_context.h"
+#  undef v3dX
+
+#  define v3dX(x) v3d41_##x
+#  include "v3dx_context.h"
+#  undef v3dX
+#endif
 
 #endif /* VC5_CONTEXT_H */

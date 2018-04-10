@@ -101,6 +101,7 @@ enum value_type {
    TYPE_UINT_3,
    TYPE_UINT_4,
    TYPE_INT64,
+   TYPE_ENUM16,
    TYPE_ENUM,
    TYPE_ENUM_2,
    TYPE_BOOLEAN,
@@ -142,6 +143,7 @@ enum value_extra {
    EXTRA_VERSION_31,
    EXTRA_VERSION_32,
    EXTRA_VERSION_40,
+   EXTRA_VERSION_43,
    EXTRA_API_GL,
    EXTRA_API_GL_CORE,
    EXTRA_API_ES2,
@@ -206,12 +208,14 @@ union value {
 
 #define BUFFER_INT(field) BUFFER_FIELD(field, TYPE_INT)
 #define BUFFER_ENUM(field) BUFFER_FIELD(field, TYPE_ENUM)
+#define BUFFER_ENUM16(field) BUFFER_FIELD(field, TYPE_ENUM16)
 #define BUFFER_BOOL(field) BUFFER_FIELD(field, TYPE_BOOLEAN)
 
 #define CONTEXT_INT(field) CONTEXT_FIELD(field, TYPE_INT)
 #define CONTEXT_INT2(field) CONTEXT_FIELD(field, TYPE_INT_2)
 #define CONTEXT_INT64(field) CONTEXT_FIELD(field, TYPE_INT64)
 #define CONTEXT_UINT(field) CONTEXT_FIELD(field, TYPE_UINT)
+#define CONTEXT_ENUM16(field) CONTEXT_FIELD(field, TYPE_ENUM16)
 #define CONTEXT_ENUM(field) CONTEXT_FIELD(field, TYPE_ENUM)
 #define CONTEXT_ENUM2(field) CONTEXT_FIELD(field, TYPE_ENUM_2)
 #define CONTEXT_BOOL(field) CONTEXT_FIELD(field, TYPE_BOOLEAN)
@@ -233,6 +237,7 @@ union value {
 
 #define ARRAY_INT(field) ARRAY_FIELD(field, TYPE_INT)
 #define ARRAY_ENUM(field) ARRAY_FIELD(field, TYPE_ENUM)
+#define ARRAY_ENUM16(field) ARRAY_FIELD(field, TYPE_ENUM16)
 #define ARRAY_BOOL(field) ARRAY_FIELD(field, TYPE_BOOLEAN)
 
 #define EXT(f)					\
@@ -518,6 +523,7 @@ extra_NV_primitive_restart[] = {
 static const int extra_version_30[] = { EXTRA_VERSION_30, EXTRA_END };
 static const int extra_version_31[] = { EXTRA_VERSION_31, EXTRA_END };
 static const int extra_version_32[] = { EXTRA_VERSION_32, EXTRA_END };
+static const int extra_version_43[] = { EXTRA_VERSION_43, EXTRA_END };
 
 static const int extra_gl30_es3[] = {
     EXTRA_VERSION_30,
@@ -569,12 +575,19 @@ static const int extra_core_ARB_color_buffer_float_and_new_buffers[] = {
 static const int extra_EXT_shader_framebuffer_fetch[] = {
    EXTRA_API_ES2,
    EXTRA_API_ES3,
-   EXT(MESA_shader_framebuffer_fetch),
+   EXT(EXT_shader_framebuffer_fetch),
    EXTRA_END
 };
 
 static const int extra_EXT_provoking_vertex_32[] = {
    EXTRA_EXT_PROVOKING_VERTEX_32,
+   EXTRA_END
+};
+
+static const int extra_EXT_disjoint_timer_query[] = {
+   EXTRA_API_ES2,
+   EXTRA_API_ES3,
+   EXT(EXT_disjoint_timer_query),
    EXTRA_END
 };
 
@@ -666,10 +679,10 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       break;
 
    case GL_COLOR_WRITEMASK:
-      v->value_int_4[0] = ctx->Color.ColorMask[0][RCOMP] ? 1 : 0;
-      v->value_int_4[1] = ctx->Color.ColorMask[0][GCOMP] ? 1 : 0;
-      v->value_int_4[2] = ctx->Color.ColorMask[0][BCOMP] ? 1 : 0;
-      v->value_int_4[3] = ctx->Color.ColorMask[0][ACOMP] ? 1 : 0;
+      v->value_int_4[0] = GET_COLORMASK_BIT(ctx->Color.ColorMask, 0, 0);
+      v->value_int_4[1] = GET_COLORMASK_BIT(ctx->Color.ColorMask, 0, 1);
+      v->value_int_4[2] = GET_COLORMASK_BIT(ctx->Color.ColorMask, 0, 2);
+      v->value_int_4[3] = GET_COLORMASK_BIT(ctx->Color.ColorMask, 0, 3);
       break;
 
    case GL_EDGE_FLAG:
@@ -1073,6 +1086,10 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
          v->value_int = 0;
       }
       break;
+   /* GL 4.3 */
+   case GL_NUM_SHADING_LANGUAGE_VERSIONS:
+      v->value_int = _mesa_get_shading_language_version(ctx, -1, NULL);
+      break;
    /* GL_ARB_draw_indirect */
    case GL_DRAW_INDIRECT_BUFFER_BINDING:
       v->value_int = ctx->DrawIndirectBuffer->Name;
@@ -1151,6 +1168,25 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
          }
       }
       break;
+
+   /* GL_ARB_get_program_binary */
+   case GL_PROGRAM_BINARY_FORMATS:
+      assert(ctx->Const.NumProgramBinaryFormats <= 1);
+      v->value_int_n.n = MIN2(ctx->Const.NumProgramBinaryFormats, 1);
+      if (ctx->Const.NumProgramBinaryFormats > 0) {
+         v->value_int_n.ints[0] = GL_PROGRAM_BINARY_FORMAT_MESA;
+      }
+      break;
+   /* GL_EXT_disjoint_timer_query */
+   case GL_GPU_DISJOINT_EXT:
+      {
+         simple_mtx_lock(&ctx->Shared->Mutex);
+         v->value_int = ctx->Shared->DisjointOperation;
+         /* Reset state as expected by the spec. */
+         ctx->Shared->DisjointOperation = false;
+         simple_mtx_unlock(&ctx->Shared->Mutex);
+      }
+      break;
    }
 }
 
@@ -1192,6 +1228,16 @@ check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d
       case EXTRA_VERSION_32:
          api_check = GL_TRUE;
          if (version >= 32)
+            api_found = GL_TRUE;
+         break;
+      case EXTRA_VERSION_40:
+         api_check = GL_TRUE;
+         if (version >= 40)
+            api_found = GL_TRUE;
+         break;
+      case EXTRA_VERSION_43:
+         api_check = TRUE;
+         if (_mesa_is_desktop_gl(ctx) && version >= 43)
             api_found = GL_TRUE;
          break;
       case EXTRA_NEW_FRAG_CLAMP:
@@ -1360,7 +1406,6 @@ static const struct value_desc *
 find_value(const char *func, GLenum pname, void **p, union value *v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   struct gl_texture_unit *unit;
    int mask, hash;
    const struct value_desc *d;
    int api;
@@ -1415,8 +1460,10 @@ find_value(const char *func, GLenum pname, void **p, union value *v)
       *p = ((char *) ctx->Array.VAO + d->offset);
       return d;
    case LOC_TEXUNIT:
-      unit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      *p = ((char *) unit + d->offset);
+      if (ctx->Texture.CurrentUnit < ARRAY_SIZE(ctx->Texture.FixedFuncUnit)) {
+         unsigned index = ctx->Texture.CurrentUnit;
+         *p = ((char *)&ctx->Texture.FixedFuncUnit[index] + d->offset);
+      }
       return d;
    case LOC_CUSTOM:
       find_custom_value(ctx, d, v);
@@ -1462,6 +1509,8 @@ get_value_size(enum value_type type, const union value *v)
    case TYPE_INT64:
       return sizeof(GLint64);
       break;
+   case TYPE_ENUM16:
+      return sizeof(GLenum16);
    case TYPE_ENUM:
       return sizeof(GLenum);
    case TYPE_ENUM_2:
@@ -1562,6 +1611,10 @@ _mesa_GetBooleanv(GLenum pname, GLboolean *params)
       params[0] = INT_TO_BOOLEAN(((GLint *) p)[0]);
       break;
 
+   case TYPE_ENUM16:
+      params[0] = INT_TO_BOOLEAN(((GLenum16 *) p)[0]);
+      break;
+
    case TYPE_INT_N:
       for (i = 0; i < v.value_int_n.n; i++)
          params[i] = INT_TO_BOOLEAN(v.value_int_n.ints[i]);
@@ -1653,6 +1706,10 @@ _mesa_GetFloatv(GLenum pname, GLfloat *params)
    case TYPE_INT:
    case TYPE_ENUM:
       params[0] = (GLfloat) (((GLint *) p)[0]);
+      break;
+
+   case TYPE_ENUM16:
+      params[0] = (GLfloat) (((GLenum16 *) p)[0]);
       break;
 
    case TYPE_INT_N:
@@ -1768,6 +1825,10 @@ _mesa_GetIntegerv(GLenum pname, GLint *params)
       params[0] = ((GLint *) p)[0];
       break;
 
+   case TYPE_ENUM16:
+      params[0] = ((GLenum16 *) p)[0];
+      break;
+
    case TYPE_INT_N:
       for (i = 0; i < v.value_int_n.n; i++)
          params[i] = v.value_int_n.ints[i];
@@ -1865,6 +1926,10 @@ _mesa_GetInteger64v(GLenum pname, GLint64 *params)
    case TYPE_INT:
    case TYPE_ENUM:
       params[0] = ((GLint *) p)[0];
+      break;
+
+   case TYPE_ENUM16:
+      params[0] = ((GLenum16 *) p)[0];
       break;
 
    case TYPE_INT_N:
@@ -1970,6 +2035,10 @@ _mesa_GetDoublev(GLenum pname, GLdouble *params)
       params[0] = ((GLint *) p)[0];
       break;
 
+   case TYPE_ENUM16:
+      params[0] = ((GLenum16 *) p)[0];
+      break;
+
    case TYPE_INT_N:
       for (i = 0; i < v.value_int_n.n; i++)
          params[i] = v.value_int_n.ints[i];
@@ -2025,7 +2094,7 @@ _mesa_GetUnsignedBytevEXT(GLenum pname, GLubyte *data)
    const struct value_desc *d;
    union value v;
    int shift;
-   void *p;
+   void *p = NULL;
    GLsizei size;
    const char *func = "glGetUnsignedBytevEXT";
 
@@ -2038,7 +2107,7 @@ _mesa_GetUnsignedBytevEXT(GLenum pname, GLubyte *data)
 
    d = find_value(func, pname, &p, &v);
    size = get_value_size(d->type, &v);
-   if (size >= 0) {
+   if (size <= 0) {
       _mesa_problem(ctx, "invalid value type in GetUnsignedBytevEXT()");
    }
 
@@ -2087,6 +2156,11 @@ _mesa_GetUnsignedBytevEXT(GLenum pname, GLubyte *data)
    case TYPE_MATRIX_T:
       memcpy(data, p, size);
       break;
+   case TYPE_ENUM16: {
+      GLenum e = *(GLenum16 *)p;
+      memcpy(data, &e, sizeof(e));
+      break;
+   }
    default:
       break; /* nothing - GL error was recorded */
    }
@@ -2205,10 +2279,10 @@ find_value_indexed(const char *func, GLenum pname, GLuint index, union value *v)
          goto invalid_value;
       if (!ctx->Extensions.EXT_draw_buffers2)
          goto invalid_enum;
-      v->value_int_4[0] = ctx->Color.ColorMask[index][RCOMP] ? 1 : 0;
-      v->value_int_4[1] = ctx->Color.ColorMask[index][GCOMP] ? 1 : 0;
-      v->value_int_4[2] = ctx->Color.ColorMask[index][BCOMP] ? 1 : 0;
-      v->value_int_4[3] = ctx->Color.ColorMask[index][ACOMP] ? 1 : 0;
+      v->value_int_4[0] = GET_COLORMASK_BIT(ctx->Color.ColorMask, index, 0);
+      v->value_int_4[1] = GET_COLORMASK_BIT(ctx->Color.ColorMask, index, 1);
+      v->value_int_4[2] = GET_COLORMASK_BIT(ctx->Color.ColorMask, index, 2);
+      v->value_int_4[3] = GET_COLORMASK_BIT(ctx->Color.ColorMask, index, 3);
       return TYPE_INT_4;
 
    case GL_SCISSOR_BOX:
@@ -2481,7 +2555,7 @@ find_value_indexed(const char *func, GLenum pname, GLuint index, union value *v)
    case GL_SAMPLER_BINDING: {
       struct gl_sampler_object *samp;
 
-      if (ctx->API != API_OPENGL_CORE)
+      if (!_mesa_is_desktop_gl(ctx) || ctx->Version < 33)
          goto invalid_enum;
       if (index >= _mesa_max_tex_unit(ctx))
          goto invalid_value;
@@ -2517,10 +2591,17 @@ find_value_indexed(const char *func, GLenum pname, GLuint index, union value *v)
       return TYPE_INT;
 
    /* GL_EXT_external_objects */
+   case GL_NUM_DEVICE_UUIDS_EXT:
+      v->value_int = 1;
+      return TYPE_INT;
    case GL_DRIVER_UUID_EXT:
+      if (index >= 1)
+         goto invalid_value;
       _mesa_get_driver_uuid(ctx, v->value_int_4);
       return TYPE_INT_4;
    case GL_DEVICE_UUID_EXT:
+      if (index >= 1)
+         goto invalid_value;
       _mesa_get_device_uuid(ctx, v->value_int_4);
       return TYPE_INT_4;
    }
@@ -2682,6 +2763,7 @@ _mesa_GetFloati_v(GLenum pname, GLuint index, GLfloat *params)
       params[1] = (GLfloat) v.value_int_4[1];
    case TYPE_INT:
    case TYPE_ENUM:
+   case TYPE_ENUM16:
       params[0] = (GLfloat) v.value_int_4[0];
       break;
 
@@ -2764,6 +2846,7 @@ _mesa_GetDoublei_v(GLenum pname, GLuint index, GLdouble *params)
       params[1] = (GLdouble) v.value_int_4[1];
    case TYPE_INT:
    case TYPE_ENUM:
+   case TYPE_ENUM16:
       params[0] = (GLdouble) v.value_int_4[0];
       break;
 
@@ -2838,6 +2921,7 @@ _mesa_GetUnsignedBytei_vEXT(GLenum target, GLuint index, GLubyte *data)
    case TYPE_INT_4:
    case TYPE_UINT_4:
    case TYPE_INT64:
+   case TYPE_ENUM16:
    case TYPE_ENUM:
    case TYPE_ENUM_2:
    case TYPE_BOOLEAN:
@@ -2915,6 +2999,10 @@ _mesa_GetFixedv(GLenum pname, GLfixed *params)
    case TYPE_UINT:
    case TYPE_ENUM:
       params[0] = INT_TO_FIXED(((GLint *) p)[0]);
+      break;
+
+   case TYPE_ENUM16:
+      params[0] = INT_TO_FIXED(((GLenum16 *) p)[0]);
       break;
 
    case TYPE_INT_N:

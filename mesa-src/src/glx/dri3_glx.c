@@ -116,6 +116,16 @@ glx_dri3_get_dri_context(struct loader_dri3_drawable *draw)
    return (gc != &dummyContext) ? dri3Ctx->driContext : NULL;
 }
 
+static __DRIscreen *
+glx_dri3_get_dri_screen(void)
+{
+   struct glx_context *gc = __glXGetCurrentContext();
+   struct dri3_context *pcp = (struct dri3_context *) gc;
+   struct dri3_screen *psc = (struct dri3_screen *) pcp->base.psc;
+
+   return (gc != &dummyContext && psc) ? psc->driScreen : NULL;
+}
+
 static void
 glx_dri3_flush_drawable(struct loader_dri3_drawable *draw, unsigned flags)
 {
@@ -150,6 +160,7 @@ static const struct loader_dri3_vtable glx_dri3_vtable = {
    .set_drawable_size = glx_dri3_set_drawable_size,
    .in_current_context = glx_dri3_in_current_context,
    .get_dri_context = glx_dri3_get_dri_context,
+   .get_dri_screen = glx_dri3_get_dri_screen,
    .flush_drawable = glx_dri3_flush_drawable,
    .show_fps = glx_dri3_show_fps,
 };
@@ -347,6 +358,11 @@ dri3_create_drawable(struct glx_screen *base, XID xDrawable,
    struct dri3_drawable *pdraw;
    struct dri3_screen *psc = (struct dri3_screen *) base;
    __GLXDRIconfigPrivate *config = (__GLXDRIconfigPrivate *) config_base;
+   bool has_multibuffer = false;
+#ifdef HAVE_DRI3_MODIFIERS
+   const struct dri3_display *const pdp = (struct dri3_display *)
+      base->display->dri3Display;
+#endif
 
    pdraw = calloc(1, sizeof(*pdraw));
    if (!pdraw)
@@ -357,11 +373,20 @@ dri3_create_drawable(struct glx_screen *base, XID xDrawable,
    pdraw->base.drawable = drawable;
    pdraw->base.psc = &psc->base;
 
+#ifdef HAVE_DRI3_MODIFIERS
+   if ((psc->image && psc->image->base.version >= 15) &&
+       (pdp->dri3Major > 1 || (pdp->dri3Major == 1 && pdp->dri3Minor >= 2)) &&
+       (pdp->presentMajor > 1 ||
+        (pdp->presentMajor == 1 && pdp->presentMinor >= 2)))
+      has_multibuffer = true;
+#endif
+
    (void) __glXInitialize(psc->base.dpy);
 
    if (loader_dri3_drawable_init(XGetXCBConnection(base->dpy),
                                  xDrawable, psc->driScreen,
-                                 psc->is_different_gpu, config->driConfig,
+                                 psc->is_different_gpu, has_multibuffer,
+                                 config->driConfig,
                                  &psc->loader_dri3_ext, &glx_dri3_vtable,
                                  &pdraw->loader_drawable)) {
       free(pdraw);
@@ -710,7 +735,6 @@ dri3_bind_extensions(struct dri3_screen *psc, struct glx_display * priv,
 
    extensions = psc->core->getExtensions(psc->driScreen);
 
-   __glXEnableDirectExtension(&psc->base, "GLX_SGI_video_sync");
    __glXEnableDirectExtension(&psc->base, "GLX_SGI_swap_control");
    __glXEnableDirectExtension(&psc->base, "GLX_MESA_swap_control");
    __glXEnableDirectExtension(&psc->base, "GLX_SGI_make_current_read");
@@ -800,7 +824,7 @@ dri3_create_screen(int screen, struct glx_display * priv)
    struct dri3_screen *psc;
    __GLXDRIscreen *psp;
    struct glx_config *configs = NULL, *visuals = NULL;
-   char *driverName, *deviceName, *tmp;
+   char *driverName, *tmp;
    int i;
    unsigned char disable;
 
@@ -830,7 +854,6 @@ dri3_create_screen(int screen, struct glx_display * priv)
    }
 
    psc->fd = loader_get_user_preferred_fd(psc->fd, &psc->is_different_gpu);
-   deviceName = NULL;
 
    driverName = loader_get_driver_for_fd(psc->fd);
    if (!driverName) {
@@ -946,6 +969,11 @@ dri3_create_screen(int screen, struct glx_display * priv)
                                  &disable) || !disable)
       __glXEnableDirectExtension(&psc->base, "GLX_OML_sync_control");
 
+   if (psc->config->configQueryb(psc->driScreen,
+                                 "glx_disable_sgi_video_sync",
+                                 &disable) || !disable)
+      __glXEnableDirectExtension(&psc->base, "GLX_SGI_video_sync");
+
    psp->copySubBuffer = dri3_copy_sub_buffer;
    __glXEnableDirectExtension(&psc->base, "GLX_MESA_copy_sub_buffer");
 
@@ -956,7 +984,6 @@ dri3_create_screen(int screen, struct glx_display * priv)
       __glXEnableDirectExtension(&psc->base, "GLX_EXT_buffer_age");
 
    free(driverName);
-   free(deviceName);
 
    tmp = getenv("LIBGL_SHOW_FPS");
    psc->show_fps_interval = tmp ? atoi(tmp) : 0;
@@ -983,7 +1010,6 @@ handle_error:
       dlclose(psc->driver);
 
    free(driverName);
-   free(deviceName);
    glx_screen_cleanup(&psc->base);
    free(psc);
 
@@ -999,6 +1025,18 @@ dri3_destroy_display(__GLXDRIdisplay * dpy)
 {
    free(dpy);
 }
+
+/* Only request versions of these protocols which we actually support. */
+#define DRI3_SUPPORTED_MAJOR 1
+#define PRESENT_SUPPORTED_MAJOR 1
+
+#ifdef HAVE_DRI3_MODIFIERS
+#define DRI3_SUPPORTED_MINOR 2
+#define PRESENT_SUPPORTED_MINOR 2
+#else
+#define PRESENT_SUPPORTED_MINOR 0
+#define DRI3_SUPPORTED_MINOR 0
+#endif
 
 /** dri3_create_display
  *
@@ -1031,13 +1069,11 @@ dri3_create_display(Display * dpy)
       return NULL;
 
    dri3_cookie = xcb_dri3_query_version(c,
-                                        XCB_DRI3_MAJOR_VERSION,
-                                        XCB_DRI3_MINOR_VERSION);
-
-
+                                        DRI3_SUPPORTED_MAJOR,
+                                        DRI3_SUPPORTED_MINOR);
    present_cookie = xcb_present_query_version(c,
-                                   XCB_PRESENT_MAJOR_VERSION,
-                                   XCB_PRESENT_MINOR_VERSION);
+                                              PRESENT_SUPPORTED_MAJOR,
+                                              PRESENT_SUPPORTED_MINOR);
 
    pdp = malloc(sizeof *pdp);
    if (pdp == NULL)

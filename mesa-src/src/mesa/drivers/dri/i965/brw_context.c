@@ -46,7 +46,7 @@
 #include "main/stencil.h"
 #include "main/state.h"
 
-#include "vbo/vbo_context.h"
+#include "vbo/vbo.h"
 
 #include "drivers/common/driverfuncs.h"
 #include "drivers/common/meta.h"
@@ -73,8 +73,12 @@
 #include "tnl/t_pipeline.h"
 #include "util/ralloc.h"
 #include "util/debug.h"
+#include "util/disk_cache.h"
 #include "isl/isl.h"
 
+#include "common/gen_defines.h"
+
+#include "compiler/spirv/nir_spirv.h"
 /***************************************
  * Mesa's Driver Functions
  ***************************************/
@@ -280,6 +284,7 @@ brw_init_driver_functions(struct brw_context *brw,
    functions->GetString = intel_get_string;
    functions->UpdateState = intel_update_state;
 
+   brw_init_draw_functions(functions);
    intelInitTextureFuncs(functions);
    intelInitTextureImageFuncs(functions);
    intelInitTextureCopyImageFuncs(functions);
@@ -301,6 +306,8 @@ brw_init_driver_functions(struct brw_context *brw,
       gen4_init_queryobj_functions(functions);
    brw_init_compute_functions(functions);
    brw_init_conditional_render_functions(functions);
+
+   functions->GenerateMipmap = brw_generate_mipmap;
 
    functions->QueryInternalFormat = brw_query_internal_format;
 
@@ -329,6 +336,33 @@ brw_init_driver_functions(struct brw_context *brw,
 
    if (devinfo->gen >= 6)
       functions->GetSamplePosition = gen6_get_sample_position;
+
+   /* GL_ARB_get_program_binary */
+   brw_program_binary_init(brw->screen->deviceID);
+   functions->GetProgramBinaryDriverSHA1 = brw_get_program_binary_driver_sha1;
+   functions->ProgramBinarySerializeDriverBlob = brw_program_serialize_nir;
+   functions->ProgramBinaryDeserializeDriverBlob =
+      brw_deserialize_program_binary;
+}
+
+static void
+brw_initialize_spirv_supported_capabilities(struct brw_context *brw)
+{
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   struct gl_context *ctx = &brw->ctx;
+
+   /* The following SPIR-V capabilities are only supported on gen7+. In theory
+    * you should enable the extension only on gen7+, but just in case let's
+    * assert it.
+    */
+   assert(devinfo->gen >= 7);
+
+   ctx->Const.SpirVCapabilities.float64 = devinfo->gen >= 8;
+   ctx->Const.SpirVCapabilities.int64 = devinfo->gen >= 8;
+   ctx->Const.SpirVCapabilities.tessellation = true;
+   ctx->Const.SpirVCapabilities.draw_parameters = true;
+   ctx->Const.SpirVCapabilities.image_write_without_format = true;
+   ctx->Const.SpirVCapabilities.variable_pointers = true;
 }
 
 static void
@@ -530,8 +564,6 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.MaxClipPlanes = 8;
 
    ctx->Const.GLSLTessLevelsAsInputs = true;
-   ctx->Const.LowerTCSPatchVerticesIn = devinfo->gen >= 8;
-   ctx->Const.LowerTESPatchVerticesIn = true;
    ctx->Const.PrimitiveRestartForPatches = true;
 
    ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeInstructions = 16 * 1024;
@@ -585,7 +617,6 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.QuadsFollowProvokingVertexConvention = false;
 
    ctx->Const.NativeIntegers = true;
-   ctx->Const.VertexID_is_zero_based = true;
 
    /* Regarding the CMP instruction, the Ivybridge PRM says:
     *
@@ -696,6 +727,9 @@ brw_initialize_context_constants(struct brw_context *brw)
 
    if (!(ctx->Const.ContextFlags & GL_CONTEXT_FLAG_DEBUG_BIT))
       ctx->Const.AllowMappedBuffersDuringExecution = true;
+
+   /* GL_ARB_get_program_binary */
+   ctx->Const.NumProgramBinaryFormats = 1;
 }
 
 static void
@@ -816,6 +850,9 @@ brw_process_driconf_options(struct brw_context *brw)
    brw->dual_color_blend_by_location =
       driQueryOptionb(options, "dual_color_blend_by_location");
 
+   ctx->Const.AllowGLSLCrossStageInterpolationMismatch =
+      driQueryOptionb(options, "allow_glsl_cross_stage_interpolation_mismatch");
+
    ctx->Const.dri_config_options_sha1 = ralloc_array(brw, unsigned char, 20);
    driComputeOptionsSha1(&brw->screen->optionCache,
                          ctx->Const.dri_config_options_sha1);
@@ -851,7 +888,7 @@ brwCreateContext(gl_api api,
 
    if (ctx_config->attribute_mask &
        ~(__DRIVER_CONTEXT_ATTRIB_RESET_STRATEGY |
-         __DRIVER_CONTEXT_ATTRIB_RELEASE_BEHAVIOR)) {
+         __DRIVER_CONTEXT_ATTRIB_PRIORITY)) {
       *dri_ctx_error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
       return false;
    }
@@ -859,20 +896,6 @@ brwCreateContext(gl_api api,
    bool notify_reset =
       ((ctx_config->attribute_mask & __DRIVER_CONTEXT_ATTRIB_RESET_STRATEGY) &&
        ctx_config->reset_strategy != __DRI_CTX_RESET_NO_NOTIFICATION);
-
-   GLenum release_behavior = GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH;
-   if (ctx_config->attribute_mask & __DRIVER_CONTEXT_ATTRIB_RELEASE_BEHAVIOR) {
-      switch (ctx_config->release_behavior) {
-      case __DRI_CTX_RELEASE_BEHAVIOR_NONE:
-         release_behavior = GL_NONE;
-         break;
-      case __DRI_CTX_RELEASE_BEHAVIOR_FLUSH:
-         break;
-      default:
-         *dri_ctx_error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
-         return false;
-      }
-   }
 
    struct brw_context *brw = rzalloc(NULL, struct brw_context);
    if (!brw) {
@@ -982,14 +1005,14 @@ brwCreateContext(gl_api api,
          return false;
       }
 
-      int hw_priority = BRW_CONTEXT_MEDIUM_PRIORITY;
+      int hw_priority = GEN_CONTEXT_MEDIUM_PRIORITY;
       if (ctx_config->attribute_mask & __DRIVER_CONTEXT_ATTRIB_PRIORITY) {
          switch (ctx_config->priority) {
          case __DRI_CTX_PRIORITY_LOW:
-            hw_priority = BRW_CONTEXT_LOW_PRIORITY;
+            hw_priority = GEN_CONTEXT_LOW_PRIORITY;
             break;
          case __DRI_CTX_PRIORITY_HIGH:
-            hw_priority = BRW_CONTEXT_HIGH_PRIORITY;
+            hw_priority = GEN_CONTEXT_HIGH_PRIORITY;
             break;
          }
       }
@@ -1008,6 +1031,15 @@ brwCreateContext(gl_api api,
       intelDestroyContext(driContextPriv);
       return false;
    }
+
+   if (devinfo->gen == 11) {
+      fprintf(stderr,
+              "WARNING: i965 does not fully support Gen11 yet.\n"
+              "Instability or lower performance might occur.\n");
+
+   }
+
+   brw_upload_init(&brw->upload, brw->bufmgr, 65536);
 
    brw_init_state(brw);
 
@@ -1046,13 +1078,15 @@ brwCreateContext(gl_api api,
       ctx->Const.RobustAccess = GL_TRUE;
    }
 
-   ctx->Const.ContextReleaseBehavior = release_behavior;
-
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       brw_init_shader_time(brw);
 
    _mesa_override_extensions(ctx);
    _mesa_compute_version(ctx);
+
+   /* GL_ARB_gl_spirv */
+   if (ctx->Extensions.ARB_gl_spirv)
+      brw_initialize_spirv_supported_capabilities(brw);
 
    _mesa_initialize_dispatch_tables(ctx);
    _mesa_initialize_vbo_vtxfmt(ctx);
@@ -1063,7 +1097,7 @@ brwCreateContext(gl_api api,
    vbo_use_buffer_objects(ctx);
    vbo_always_unmap_buffers(ctx);
 
-   brw_disk_cache_init(brw);
+   brw->ctx.Cache = brw->screen->disk_cache;
 
    return true;
 }
@@ -1280,6 +1314,21 @@ intel_resolve_for_dri2_flush(struct brw_context *brw,
          intel_miptree_prepare_external(brw, rb->mt);
       } else {
          intel_renderbuffer_downsample(brw, rb);
+
+         /* Call prepare_external on the single-sample miptree to do any
+          * needed resolves prior to handing it off to the window system.
+          * This is needed in the case that rb->singlesample_mt is Y-tiled
+          * with CCS_E enabled but without I915_FORMAT_MOD_Y_TILED_CCS_E.  In
+          * this case, the MSAA resolve above will write compressed data into
+          * rb->singlesample_mt.
+          *
+          * TODO: Some day, if we decide to care about the tiny performance
+          * hit we're taking by doing the MSAA resolve and then a CCS resolve,
+          * we could detect this case and just allocate the single-sampled
+          * miptree without aux.  However, that would be a lot of plumbing and
+          * this is a rather exotic case so it's not really worth it.
+          */
+         intel_miptree_prepare_external(brw, rb->singlesample_mt);
       }
    }
 }
@@ -1564,6 +1613,9 @@ intel_process_dri2_buffer(struct brw_context *brw,
       return;
    }
 
+   uint32_t tiling, swizzle;
+   brw_bo_get_tiling(bo, &tiling, &swizzle);
+
    struct intel_mipmap_tree *mt =
       intel_miptree_create_for_bo(brw,
                                   bo,
@@ -1573,6 +1625,7 @@ intel_process_dri2_buffer(struct brw_context *brw,
                                   drawable->h,
                                   1,
                                   buffer->pitch,
+                                  isl_tiling_from_i915_tiling(tiling),
                                   MIPTREE_CREATE_DEFAULT);
    if (!mt) {
       brw_bo_unreference(bo);

@@ -1,6 +1,8 @@
 /*
  * Copyright 2008 Corbin Simpson <MostAwesomeDude@gmail.com>
  * Copyright 2010 Marek Olšák <maraeo@gmail.com>
+ * Copyright 2018 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -31,9 +33,6 @@
 #include "amd/common/ac_gpu_info.h"
 #include "amd/common/ac_surface.h"
 
-#define RADEON_FLUSH_ASYNC		(1 << 0)
-#define RADEON_FLUSH_END_OF_FRAME       (1 << 1)
-
 /* Tiling flags. */
 enum radeon_bo_layout {
     RADEON_LAYOUT_LINEAR = 0,
@@ -55,6 +54,8 @@ enum radeon_bo_flag { /* bitfield */
     RADEON_FLAG_NO_SUBALLOC =   (1 << 2),
     RADEON_FLAG_SPARSE =        (1 << 3),
     RADEON_FLAG_NO_INTERPROCESS_SHARING = (1 << 4),
+    RADEON_FLAG_READ_ONLY =     (1 << 5),
+    RADEON_FLAG_32BIT =    (1 << 6),
 };
 
 enum radeon_bo_usage { /* bitfield */
@@ -531,7 +532,7 @@ struct radeon_winsys {
      * Flush a command stream.
      *
      * \param cs          A command stream to flush.
-     * \param flags,      RADEON_FLUSH_ASYNC or 0.
+     * \param flags,      PIPE_FLUSH_* flags.
      * \param fence       Pointer to a fence. If non-NULL, a fence is inserted
      *                    after the CS and is returned through this parameter.
      * \return Negative POSIX error code or 0 for success.
@@ -585,6 +586,12 @@ struct radeon_winsys {
                                     struct pipe_fence_handle *fence);
 
     /**
+     * Signal a syncobj when the CS finishes execution.
+     */
+    void (*cs_add_syncobj_signal)(struct radeon_winsys_cs *cs,
+				  struct pipe_fence_handle *fence);
+
+    /**
      * Wait for the fence and return true if the fence has been signalled.
      * The timeout of 0 will only return the status.
      * The timeout of PIPE_TIMEOUT_INFINITE will always wait until the fence
@@ -601,6 +608,12 @@ struct radeon_winsys {
                             struct pipe_fence_handle *src);
 
     /**
+     * Create a new fence object corresponding to the given syncobj fd.
+     */
+    struct pipe_fence_handle *(*fence_import_syncobj)(struct radeon_winsys *ws,
+						      int fd);
+
+    /**
      * Create a new fence object corresponding to the given sync_file.
      */
     struct pipe_fence_handle *(*fence_import_sync_file)(struct radeon_winsys *ws,
@@ -611,6 +624,11 @@ struct radeon_winsys {
      */
     int (*fence_export_sync_file)(struct radeon_winsys *ws,
 				  struct pipe_fence_handle *fence);
+
+    /**
+     * Return a sync file FD that is already signalled.
+     */
+    int (*export_signalled_sync_file)(struct radeon_winsys *ws);
 
     /**
      * Initialize surface
@@ -656,9 +674,14 @@ static inline void radeon_emit_array(struct radeon_winsys_cs *cs,
 
 enum radeon_heap {
     RADEON_HEAP_VRAM_NO_CPU_ACCESS,
+    RADEON_HEAP_VRAM_READ_ONLY,
+    RADEON_HEAP_VRAM_READ_ONLY_32BIT,
+    RADEON_HEAP_VRAM_32BIT,
     RADEON_HEAP_VRAM,
-    RADEON_HEAP_VRAM_GTT, /* combined heaps */
     RADEON_HEAP_GTT_WC,
+    RADEON_HEAP_GTT_WC_READ_ONLY,
+    RADEON_HEAP_GTT_WC_READ_ONLY_32BIT,
+    RADEON_HEAP_GTT_WC_32BIT,
     RADEON_HEAP_GTT,
     RADEON_MAX_SLAB_HEAPS,
     RADEON_MAX_CACHED_HEAPS = RADEON_MAX_SLAB_HEAPS,
@@ -668,11 +691,15 @@ static inline enum radeon_bo_domain radeon_domain_from_heap(enum radeon_heap hea
 {
     switch (heap) {
     case RADEON_HEAP_VRAM_NO_CPU_ACCESS:
+    case RADEON_HEAP_VRAM_READ_ONLY:
+    case RADEON_HEAP_VRAM_READ_ONLY_32BIT:
+    case RADEON_HEAP_VRAM_32BIT:
     case RADEON_HEAP_VRAM:
         return RADEON_DOMAIN_VRAM;
-    case RADEON_HEAP_VRAM_GTT:
-        return RADEON_DOMAIN_VRAM_GTT;
     case RADEON_HEAP_GTT_WC:
+    case RADEON_HEAP_GTT_WC_READ_ONLY:
+    case RADEON_HEAP_GTT_WC_READ_ONLY_32BIT:
+    case RADEON_HEAP_GTT_WC_32BIT:
     case RADEON_HEAP_GTT:
         return RADEON_DOMAIN_GTT;
     default:
@@ -683,40 +710,35 @@ static inline enum radeon_bo_domain radeon_domain_from_heap(enum radeon_heap hea
 
 static inline unsigned radeon_flags_from_heap(enum radeon_heap heap)
 {
+    unsigned flags = RADEON_FLAG_NO_INTERPROCESS_SHARING |
+                     (heap != RADEON_HEAP_GTT ? RADEON_FLAG_GTT_WC : 0);
+
     switch (heap) {
     case RADEON_HEAP_VRAM_NO_CPU_ACCESS:
-        return RADEON_FLAG_GTT_WC |
-               RADEON_FLAG_NO_CPU_ACCESS |
-               RADEON_FLAG_NO_INTERPROCESS_SHARING;
+        return flags |
+               RADEON_FLAG_NO_CPU_ACCESS;
+
+    case RADEON_HEAP_VRAM_READ_ONLY:
+    case RADEON_HEAP_GTT_WC_READ_ONLY:
+        return flags |
+               RADEON_FLAG_READ_ONLY;
+
+    case RADEON_HEAP_VRAM_READ_ONLY_32BIT:
+    case RADEON_HEAP_GTT_WC_READ_ONLY_32BIT:
+        return flags |
+               RADEON_FLAG_READ_ONLY |
+               RADEON_FLAG_32BIT;
+
+    case RADEON_HEAP_VRAM_32BIT:
+    case RADEON_HEAP_GTT_WC_32BIT:
+        return flags |
+               RADEON_FLAG_32BIT;
 
     case RADEON_HEAP_VRAM:
-    case RADEON_HEAP_VRAM_GTT:
     case RADEON_HEAP_GTT_WC:
-        return RADEON_FLAG_GTT_WC |
-               RADEON_FLAG_NO_INTERPROCESS_SHARING;
-
     case RADEON_HEAP_GTT:
     default:
-        return RADEON_FLAG_NO_INTERPROCESS_SHARING;
-    }
-}
-
-/* The pb cache bucket is chosen to minimize pb_cache misses.
- * It must be between 0 and 3 inclusive.
- */
-static inline unsigned radeon_get_pb_cache_bucket_index(enum radeon_heap heap)
-{
-    switch (heap) {
-    case RADEON_HEAP_VRAM_NO_CPU_ACCESS:
-        return 0;
-    case RADEON_HEAP_VRAM:
-    case RADEON_HEAP_VRAM_GTT:
-        return 1;
-    case RADEON_HEAP_GTT_WC:
-        return 2;
-    case RADEON_HEAP_GTT:
-    default:
-        return 3;
+        return flags;
     }
 }
 
@@ -736,22 +758,60 @@ static inline int radeon_get_heap_index(enum radeon_bo_domain domain,
     /* Unsupported flags: NO_SUBALLOC, SPARSE. */
     if (flags & ~(RADEON_FLAG_GTT_WC |
                   RADEON_FLAG_NO_CPU_ACCESS |
-                  RADEON_FLAG_NO_INTERPROCESS_SHARING))
+                  RADEON_FLAG_NO_INTERPROCESS_SHARING |
+                  RADEON_FLAG_READ_ONLY |
+                  RADEON_FLAG_32BIT))
         return -1;
 
     switch (domain) {
     case RADEON_DOMAIN_VRAM:
-        if (flags & RADEON_FLAG_NO_CPU_ACCESS)
+        switch (flags & (RADEON_FLAG_NO_CPU_ACCESS |
+                         RADEON_FLAG_READ_ONLY |
+                         RADEON_FLAG_32BIT)) {
+        case RADEON_FLAG_NO_CPU_ACCESS | RADEON_FLAG_READ_ONLY | RADEON_FLAG_32BIT:
+        case RADEON_FLAG_NO_CPU_ACCESS | RADEON_FLAG_READ_ONLY:
+            assert(!"NO_CPU_ACCESS | READ_ONLY doesn't make sense");
+            return -1;
+        case RADEON_FLAG_NO_CPU_ACCESS | RADEON_FLAG_32BIT:
+            assert(!"NO_CPU_ACCESS with 32BIT is disallowed");
+            return -1;
+        case RADEON_FLAG_NO_CPU_ACCESS:
             return RADEON_HEAP_VRAM_NO_CPU_ACCESS;
-        else
+        case RADEON_FLAG_READ_ONLY | RADEON_FLAG_32BIT:
+            return RADEON_HEAP_VRAM_READ_ONLY_32BIT;
+        case RADEON_FLAG_READ_ONLY:
+            return RADEON_HEAP_VRAM_READ_ONLY;
+        case RADEON_FLAG_32BIT:
+            return RADEON_HEAP_VRAM_32BIT;
+        case 0:
             return RADEON_HEAP_VRAM;
-    case RADEON_DOMAIN_VRAM_GTT:
-        return RADEON_HEAP_VRAM_GTT;
+        }
+        break;
     case RADEON_DOMAIN_GTT:
-        if (flags & RADEON_FLAG_GTT_WC)
+        switch (flags & (RADEON_FLAG_GTT_WC |
+                         RADEON_FLAG_READ_ONLY |
+                         RADEON_FLAG_32BIT)) {
+        case RADEON_FLAG_GTT_WC | RADEON_FLAG_READ_ONLY | RADEON_FLAG_32BIT:
+            return RADEON_HEAP_GTT_WC_READ_ONLY_32BIT;
+        case RADEON_FLAG_GTT_WC | RADEON_FLAG_READ_ONLY:
+            return RADEON_HEAP_GTT_WC_READ_ONLY;
+        case RADEON_FLAG_GTT_WC | RADEON_FLAG_32BIT:
+            return RADEON_HEAP_GTT_WC_32BIT;
+        case RADEON_FLAG_GTT_WC:
             return RADEON_HEAP_GTT_WC;
-        else
+        case RADEON_FLAG_READ_ONLY | RADEON_FLAG_32BIT:
+        case RADEON_FLAG_READ_ONLY:
+            assert(!"READ_ONLY without WC is disallowed");
+            return -1;
+        case RADEON_FLAG_32BIT:
+            assert(!"32BIT without WC is disallowed");
+            return -1;
+        case 0:
             return RADEON_HEAP_GTT;
+        }
+        break;
+    default:
+        break;
     }
     return -1;
 }

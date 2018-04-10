@@ -99,7 +99,8 @@ process_glsl_ir(struct brw_context *brw,
 
    ralloc_adopt(mem_ctx, shader->ir);
 
-   lower_blend_equation_advanced(shader);
+   lower_blend_equation_advanced(
+      shader, ctx->Extensions.KHR_blend_equation_advanced_coherent);
 
    /* lower_packing_builtins() inserts arithmetic instructions, so it
     * must precede lower_instructions().
@@ -225,7 +226,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
    unsigned int stage;
    struct shader_info *infos[MESA_SHADER_STAGES] = { 0, };
 
-   if (shProg->data->LinkStatus == linking_skipped)
+   if (shProg->data->LinkStatus == LINKING_SKIPPED)
       return GL_TRUE;
 
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
@@ -236,7 +237,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       struct gl_program *prog = shader->Program;
       prog->Parameters = _mesa_new_parameter_list();
 
-      process_glsl_ir(brw, shProg, shader);
+      if (!shader->spirv_data)
+         process_glsl_ir(brw, shProg, shader);
 
       _mesa_copy_linked_program_data(shProg, shader);
 
@@ -298,18 +300,9 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       brw_shader_gather_info(prog->nir, prog);
 
       NIR_PASS_V(prog->nir, nir_lower_samplers, shProg);
-      NIR_PASS_V(prog->nir, nir_lower_atomics, shProg);
+      NIR_PASS_V(prog->nir, nir_lower_atomics, shProg, false);
       NIR_PASS_V(prog->nir, nir_lower_atomics_to_ssbo,
                  prog->nir->info.num_abos);
-
-      if (brw->ctx.Cache) {
-         struct blob writer;
-         blob_init(&writer);
-         nir_serialize(&writer, prog->nir);
-         prog->driver_cache_blob = ralloc_size(NULL, writer.size);
-         memcpy(prog->driver_cache_blob, writer.data, writer.size);
-         prog->driver_cache_blob_size = writer.size;
-      }
 
       infos[stage] = &prog->nir->info;
 
@@ -328,8 +321,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
             assert(var->state_slots != NULL);
 
             for (unsigned int i = 0; i < var->num_state_slots; i++) {
-               _mesa_add_state_reference(prog->Parameters,
-                                         (gl_state_index *)slots[i].tokens);
+               _mesa_add_state_reference(prog->Parameters, slots[i].tokens);
             }
          }
       }
@@ -354,6 +346,17 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
                  i, shProg->Name);
          fprintf(stderr, "%s", sh->Source);
          fprintf(stderr, "\n");
+      }
+   }
+
+   if (brw->ctx.Cache) {
+      for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
+         struct gl_linked_shader *shader = shProg->_LinkedShaders[stage];
+         if (!shader)
+            continue;
+
+         struct gl_program *prog = shader->Program;
+         brw_program_serialize_nir(ctx, prog);
       }
    }
 

@@ -154,6 +154,39 @@ static bool radv_amdgpu_fence_wait(struct radeon_winsys *_ws,
 	return false;
 }
 
+
+static bool radv_amdgpu_fences_wait(struct radeon_winsys *_ws,
+			      struct radeon_winsys_fence *const *_fences,
+			      uint32_t fence_count,
+			      bool wait_all,
+			      uint64_t timeout)
+{
+	struct amdgpu_cs_fence *fences = malloc(sizeof(struct amdgpu_cs_fence) * fence_count);
+	int r;
+	uint32_t expired = 0, first = 0;
+
+	if (!fences)
+		return false;
+
+	for (uint32_t i = 0; i < fence_count; ++i)
+		fences[i] = ((struct radv_amdgpu_fence *)_fences[i])->fence;
+
+	/* Now use the libdrm query. */
+	r = amdgpu_cs_wait_fences(fences, fence_count, wait_all,
+	                          timeout, &expired, &first);
+
+	free(fences);
+	if (r) {
+		fprintf(stderr, "amdgpu: amdgpu_cs_wait_fences failed.\n");
+		return false;
+	}
+
+	if (expired)
+		return true;
+
+	return false;
+}
+
 static void radv_amdgpu_cs_destroy(struct radeon_winsys_cs *rcs)
 {
 	struct radv_amdgpu_cs *cs = radv_amdgpu_cs(rcs);
@@ -175,14 +208,13 @@ static void radv_amdgpu_cs_destroy(struct radeon_winsys_cs *rcs)
 	free(cs);
 }
 
-static boolean radv_amdgpu_init_cs(struct radv_amdgpu_cs *cs,
-				   enum ring_type ring_type)
+static void radv_amdgpu_init_cs(struct radv_amdgpu_cs *cs,
+				enum ring_type ring_type)
 {
 	for (int i = 0; i < ARRAY_SIZE(cs->buffer_hash_table); ++i)
 		cs->buffer_hash_table[i] = -1;
 
 	cs->hw_ip = ring_to_hw_ip(ring_type);
-	return true;
 }
 
 static struct radeon_winsys_cs *
@@ -200,9 +232,10 @@ radv_amdgpu_cs_create(struct radeon_winsys *ws,
 
 	if (cs->ws->use_ib_bos) {
 		cs->ib_buffer = ws->buffer_create(ws, ib_size, 0,
-						RADEON_DOMAIN_GTT,
-						RADEON_FLAG_CPU_ACCESS|
-						  RADEON_FLAG_NO_INTERPROCESS_SHARING);
+						  RADEON_DOMAIN_GTT,
+						  RADEON_FLAG_CPU_ACCESS |
+						  RADEON_FLAG_NO_INTERPROCESS_SHARING |
+						  RADEON_FLAG_READ_ONLY);
 		if (!cs->ib_buffer) {
 			free(cs);
 			return NULL;
@@ -287,8 +320,9 @@ static void radv_amdgpu_cs_grow(struct radeon_winsys_cs *_cs, size_t min_size)
 
 	cs->ib_buffer = cs->ws->base.buffer_create(&cs->ws->base, ib_size, 0,
 						   RADEON_DOMAIN_GTT,
-						   RADEON_FLAG_CPU_ACCESS|
-						   RADEON_FLAG_NO_INTERPROCESS_SHARING);
+						   RADEON_FLAG_CPU_ACCESS |
+						   RADEON_FLAG_NO_INTERPROCESS_SHARING |
+						   RADEON_FLAG_READ_ONLY);
 
 	if (!cs->ib_buffer) {
 		cs->base.cdw = 0;
@@ -877,7 +911,10 @@ static int radv_amdgpu_winsys_cs_submit_sysmem(struct radeon_winsys_ctx *_ctx,
 		}
 		assert(cnt);
 
-		bo = ws->buffer_create(ws, 4 * size, 4096, RADEON_DOMAIN_GTT, RADEON_FLAG_CPU_ACCESS|RADEON_FLAG_NO_INTERPROCESS_SHARING);
+		bo = ws->buffer_create(ws, 4 * size, 4096, RADEON_DOMAIN_GTT,
+				       RADEON_FLAG_CPU_ACCESS |
+				       RADEON_FLAG_NO_INTERPROCESS_SHARING |
+				       RADEON_FLAG_READ_ONLY);
 		ptr = ws->buffer_map(bo);
 
 		if (preamble_cs) {
@@ -1281,6 +1318,43 @@ static void radv_amdgpu_destroy_syncobj(struct radeon_winsys *_ws,
 	amdgpu_cs_destroy_syncobj(ws->dev, handle);
 }
 
+static void radv_amdgpu_reset_syncobj(struct radeon_winsys *_ws,
+				    uint32_t handle)
+{
+	struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
+	amdgpu_cs_syncobj_reset(ws->dev, &handle, 1);
+}
+
+static void radv_amdgpu_signal_syncobj(struct radeon_winsys *_ws,
+				    uint32_t handle)
+{
+	struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
+	amdgpu_cs_syncobj_signal(ws->dev, &handle, 1);
+}
+
+static bool radv_amdgpu_wait_syncobj(struct radeon_winsys *_ws, const uint32_t *handles,
+                                     uint32_t handle_count, bool wait_all, uint64_t timeout)
+{
+	struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
+	uint32_t tmp;
+
+	/* The timeouts are signed, while vulkan timeouts are unsigned. */
+	timeout = MIN2(timeout, INT64_MAX);
+
+	int ret = amdgpu_cs_syncobj_wait(ws->dev, (uint32_t*)handles, handle_count, timeout,
+					 DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT |
+					 (wait_all ? DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL : 0),
+					 &tmp);
+	if (ret == 0) {
+		return true;
+	} else if (ret == -1 && errno == ETIME) {
+		return false;
+	} else {
+		fprintf(stderr, "amdgpu: radv_amdgpu_wait_syncobj failed!\nerrno: %d\n", errno);
+		return false;
+	}
+}
+
 static int radv_amdgpu_export_syncobj(struct radeon_winsys *_ws,
 				      uint32_t syncobj,
 				      int *fd)
@@ -1297,6 +1371,25 @@ static int radv_amdgpu_import_syncobj(struct radeon_winsys *_ws,
 	struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
 
 	return amdgpu_cs_import_syncobj(ws->dev, fd, syncobj);
+}
+
+
+static int radv_amdgpu_export_syncobj_to_sync_file(struct radeon_winsys *_ws,
+                                                   uint32_t syncobj,
+                                                   int *fd)
+{
+	struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
+
+	return amdgpu_cs_syncobj_export_sync_file(ws->dev, syncobj, fd);
+}
+
+static int radv_amdgpu_import_syncobj_from_sync_file(struct radeon_winsys *_ws,
+                                                     uint32_t syncobj,
+                                                     int fd)
+{
+	struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
+
+	return amdgpu_cs_syncobj_import_sync_file(ws->dev, syncobj, fd);
 }
 
 void radv_amdgpu_cs_init_functions(struct radv_amdgpu_winsys *ws)
@@ -1319,7 +1412,13 @@ void radv_amdgpu_cs_init_functions(struct radv_amdgpu_winsys *ws)
 	ws->base.destroy_sem = radv_amdgpu_destroy_sem;
 	ws->base.create_syncobj = radv_amdgpu_create_syncobj;
 	ws->base.destroy_syncobj = radv_amdgpu_destroy_syncobj;
+	ws->base.reset_syncobj = radv_amdgpu_reset_syncobj;
+	ws->base.signal_syncobj = radv_amdgpu_signal_syncobj;
+	ws->base.wait_syncobj = radv_amdgpu_wait_syncobj;
 	ws->base.export_syncobj = radv_amdgpu_export_syncobj;
 	ws->base.import_syncobj = radv_amdgpu_import_syncobj;
+	ws->base.export_syncobj_to_sync_file = radv_amdgpu_export_syncobj_to_sync_file;
+	ws->base.import_syncobj_from_sync_file = radv_amdgpu_import_syncobj_from_sync_file;
 	ws->base.fence_wait = radv_amdgpu_fence_wait;
+	ws->base.fences_wait = radv_amdgpu_fences_wait;
 }

@@ -29,7 +29,7 @@
 // Generation Command Line:
 //  ./rasterizer/codegen/gen_llvm_ir_macros.py
 //    --input
-//    /usr/lib64/llvm3.9/include/llvm/IR/IRBuilder.h
+//    /usr/lib/llvm-4.0/include/llvm/IR/IRBuilder.h
 //    --output
 //    rasterizer/jitter
 //    --gen_h
@@ -84,6 +84,11 @@ CallInst* LIFETIME_START(Value *Ptr, ConstantInt *Size = nullptr)
 CallInst* LIFETIME_END(Value *Ptr, ConstantInt *Size = nullptr)
 {
     return IRB()->CreateLifetimeEnd(Ptr, Size);
+}
+
+CallInst* INVARIANT_START(Value *Ptr, ConstantInt *Size = nullptr)
+{
+    return IRB()->CreateInvariantStart(Ptr, Size);
 }
 
 CallInst* MASKED_LOAD(Value *Ptr, unsigned Align, Value *Mask, Value *PassThru = nullptr, const Twine &Name = "")
@@ -174,6 +179,11 @@ BranchInst* BR(BasicBlock *Dest)
 BranchInst* COND_BR(Value *Cond, BasicBlock *True, BasicBlock *False, MDNode *BranchWeights = nullptr, MDNode *Unpredictable = nullptr)
 {
     return IRB()->CreateCondBr(Cond, True, False, BranchWeights, Unpredictable);
+}
+
+BranchInst* COND_BR(Value *Cond, BasicBlock *True, BasicBlock *False, Instruction *MDSrc)
+{
+    return IRB()->CreateCondBr(Cond, True, False, MDSrc);
 }
 
 SwitchInst* SWITCH(Value *V, BasicBlock *Dest, unsigned NumCases = 10, MDNode *BranchWeights = nullptr, MDNode *Unpredictable = nullptr)
@@ -454,26 +464,6 @@ Value* NOT(Value *V, const Twine &Name = "")
 AllocaInst* ALLOCA(Type *Ty, Value *ArraySize = nullptr, const Twine &Name = "")
 {
     return IRB()->CreateAlloca(Ty, ArraySize, Name);
-}
-
-LoadInst* LOAD(Value *Ptr, const char *Name)
-{
-    return IRB()->CreateLoad(Ptr, Name);
-}
-
-LoadInst* LOAD(Value *Ptr, const Twine &Name = "")
-{
-    return IRB()->CreateLoad(Ptr, Name);
-}
-
-LoadInst* LOAD(Type *Ty, Value *Ptr, const Twine &Name = "")
-{
-    return IRB()->CreateLoad(Ty, Ptr, Name);
-}
-
-LoadInst* LOAD(Value *Ptr, bool isVolatile, const Twine &Name = "")
-{
-    return IRB()->CreateLoad(Ptr, isVolatile, Name);
 }
 
 StoreInst* STORE(Value *Val, Value *Ptr, bool isVolatile = false)
@@ -851,7 +841,7 @@ CallInst* CALLA(Value *Callee, ArrayRef<Value *> Args = None, const Twine &Name 
     return IRB()->CreateCall(Callee, Args, Name, FPMathTag);
 }
 
-CallInst* CALLA(llvm::FunctionType *FTy, Value *Callee, ArrayRef<Value *> Args, const Twine &Name = "", MDNode *FPMathTag = nullptr)
+CallInst* CALLA(FunctionType *FTy, Value *Callee, ArrayRef<Value *> Args, const Twine &Name = "", MDNode *FPMathTag = nullptr)
 {
     return IRB()->CreateCall(FTy, Callee, Args, Name, FPMathTag);
 }

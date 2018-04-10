@@ -229,6 +229,9 @@ initialize_context(struct gl_context *ctx, gl_api api)
       ctx->Const.MaxLights = 8;
       ctx->Const.MaxTextureCoordUnits = 8;
       ctx->Const.MaxTextureUnits = 2;
+      ctx->Const.MaxUniformBufferBindings = 84;
+      ctx->Const.MaxVertexStreams = 4;
+      ctx->Const.MaxTransformFeedbackBuffers = 4;
 
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxAttribs = 16;
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxTextureImageUnits = 16;
@@ -262,6 +265,9 @@ initialize_context(struct gl_context *ctx, gl_api api)
       ctx->Const.MaxLights = 8;
       ctx->Const.MaxTextureCoordUnits = 8;
       ctx->Const.MaxTextureUnits = 2;
+      ctx->Const.MaxUniformBufferBindings = 84;
+      ctx->Const.MaxVertexStreams = 4;
+      ctx->Const.MaxTransformFeedbackBuffers = 4;
 
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxAttribs = 16;
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxTextureImageUnits = 16;
@@ -303,6 +309,9 @@ initialize_context(struct gl_context *ctx, gl_api api)
       ctx->Const.MaxLights = 0;
       ctx->Const.MaxTextureCoordUnits = 0;
       ctx->Const.MaxTextureUnits = 0;
+      ctx->Const.MaxUniformBufferBindings = 84;
+      ctx->Const.MaxVertexStreams = 4;
+      ctx->Const.MaxTransformFeedbackBuffers = 4;
 
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxAttribs = 16;
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxTextureImageUnits = 16;
@@ -511,7 +520,7 @@ standalone_compile_shader(const struct standalone_options *_options,
       } else {
          const gl_shader_stage stage = whole_program->Shaders[0]->Stage;
 
-         whole_program->data->LinkStatus = linking_success;
+         whole_program->data->LinkStatus = LINKING_SUCCESS;
          whole_program->_LinkedShaders[stage] =
             link_intrastage_shaders(whole_program /* mem_ctx */,
                                     ctx,

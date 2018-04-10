@@ -135,7 +135,7 @@ build_resolve_compute_shader(struct radv_device *dev, bool is_integer, bool is_s
 		outval = radv_meta_build_resolve_srgb_conversion(&b, outval);
 
 	nir_ssa_def *coord = nir_iadd(&b, global_id, &dst_offset->dest.ssa);
-	nir_intrinsic_instr *store = nir_intrinsic_instr_create(b.shader, nir_intrinsic_image_store);
+	nir_intrinsic_instr *store = nir_intrinsic_instr_create(b.shader, nir_intrinsic_image_var_store);
 	store->src[0] = nir_src_for_ssa(coord);
 	store->src[1] = nir_src_for_ssa(nir_ssa_undef(&b, 1, 32));
 	store->src[2] = nir_src_for_ssa(outval);
@@ -253,22 +253,31 @@ radv_device_init_meta_resolve_compute_state(struct radv_device *device)
 
 	res = create_layout(device);
 	if (res != VK_SUCCESS)
-		return res;
+		goto fail;
 
 	for (uint32_t i = 0; i < MAX_SAMPLES_LOG2; ++i) {
 		uint32_t samples = 1 << i;
 
 		res = create_resolve_pipeline(device, samples, false, false,
 					      &state->resolve_compute.rc[i].pipeline);
+		if (res != VK_SUCCESS)
+			goto fail;
 
 		res = create_resolve_pipeline(device, samples, true, false,
 					      &state->resolve_compute.rc[i].i_pipeline);
+		if (res != VK_SUCCESS)
+			goto fail;
 
 		res = create_resolve_pipeline(device, samples, false, true,
 					      &state->resolve_compute.rc[i].srgb_pipeline);
+		if (res != VK_SUCCESS)
+			goto fail;
 
 	}
 
+	return VK_SUCCESS;
+fail:
+	radv_device_finish_meta_resolve_compute_state(device);
 	return res;
 }
 
@@ -487,6 +496,14 @@ radv_cmd_buffer_resolve_subpass_cs(struct radv_cmd_buffer *cmd_buffer)
 	if (!subpass->has_resolve)
 		return;
 
+	/* Resolves happen before the end-of-subpass barriers get executed,
+	 * so we have to make the attachment shader-readable */
+	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_PS_PARTIAL_FLUSH |
+	                                RADV_CMD_FLAG_FLUSH_AND_INV_CB |
+	                                RADV_CMD_FLAG_FLUSH_AND_INV_CB_META |
+	                                RADV_CMD_FLAG_INV_GLOBAL_L2 |
+	                                RADV_CMD_FLAG_INV_VMEM_L1;
+
 	for (uint32_t i = 0; i < subpass->color_count; ++i) {
 		VkAttachmentReference src_att = subpass->color_attachments[i];
 		VkAttachmentReference dest_att = subpass->resolve_attachments[i];
@@ -495,13 +512,7 @@ radv_cmd_buffer_resolve_subpass_cs(struct radv_cmd_buffer *cmd_buffer)
 		    dest_att.attachment == VK_ATTACHMENT_UNUSED)
 			continue;
 
-		struct radv_image *dst_img = cmd_buffer->state.framebuffer->attachments[dest_att.attachment].attachment->image;
 		struct radv_image_view *src_iview = cmd_buffer->state.framebuffer->attachments[src_att.attachment].attachment;
-
-		if (dst_img->surface.dcc_size) {
-			radv_initialize_dcc(cmd_buffer, dst_img, 0xffffffff);
-			cmd_buffer->state.attachments[dest_att.attachment].current_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		}
 
 		VkImageSubresourceRange range;
 		range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;

@@ -476,6 +476,7 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
    char *exts = dpy->ExtensionsString;
 
    /* Please keep these sorted alphabetically. */
+   _EGL_CHECK_EXTENSION(ANDROID_blob_cache);
    _EGL_CHECK_EXTENSION(ANDROID_framebuffer_target);
    _EGL_CHECK_EXTENSION(ANDROID_image_native_buffer);
    _EGL_CHECK_EXTENSION(ANDROID_native_fence_sync);
@@ -504,7 +505,8 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
    _EGL_CHECK_EXTENSION(KHR_gl_texture_3D_image);
    _EGL_CHECK_EXTENSION(KHR_gl_texture_cubemap_image);
    if (dpy->Extensions.KHR_image_base && dpy->Extensions.KHR_image_pixmap)
-      _eglAppendExtension(&exts, "EGL_KHR_image");
+      dpy->Extensions.KHR_image = EGL_TRUE;
+   _EGL_CHECK_EXTENSION(KHR_image);
    _EGL_CHECK_EXTENSION(KHR_image_base);
    _EGL_CHECK_EXTENSION(KHR_image_pixmap);
    _EGL_CHECK_EXTENSION(KHR_no_config_context);
@@ -2519,6 +2521,49 @@ eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
                                           num_modifiers);
 
    RETURN_EGL_EVAL(disp, ret);
+}
+
+static void EGLAPIENTRY
+eglSetBlobCacheFuncsANDROID(EGLDisplay *dpy, EGLSetBlobFuncANDROID set,
+                            EGLGetBlobFuncANDROID get)
+{
+   /* This function does not return anything so we cannot
+    * utilize the helper macros _EGL_FUNC_START or _EGL_CHECK_DISPLAY.
+    */
+   _EGLDisplay *disp = _eglLockDisplay(dpy);
+   if (!_eglSetFuncName(__func__, disp, EGL_OBJECT_DISPLAY_KHR, NULL)) {
+      if (disp)
+         _eglUnlockDisplay(disp);
+      return;
+   }
+
+   _EGLDriver *drv = _eglCheckDisplay(disp, __func__);
+   if (!drv) {
+      if (disp)
+         _eglUnlockDisplay(disp);
+      return;
+   }
+
+   if (!set || !get) {
+      _eglError(EGL_BAD_PARAMETER,
+                "eglSetBlobCacheFuncsANDROID: NULL handler given");
+      _eglUnlockDisplay(disp);
+      return;
+   }
+
+   if (disp->BlobCacheSet) {
+      _eglError(EGL_BAD_PARAMETER,
+                "eglSetBlobCacheFuncsANDROID: functions already set");
+      _eglUnlockDisplay(disp);
+      return;
+   }
+
+   disp->BlobCacheSet = set;
+   disp->BlobCacheGet = get;
+
+   drv->API.SetBlobCacheFuncsANDROID(drv, disp, set, get);
+
+   _eglUnlockDisplay(disp);
 }
 
 __eglMustCastToProperFunctionPointerType EGLAPIENTRY

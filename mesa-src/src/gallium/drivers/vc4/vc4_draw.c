@@ -40,7 +40,7 @@ vc4_get_draw_cl_space(struct vc4_job *job, int vert_count)
         /* The SW-5891 workaround may cause us to emit multiple shader recs
          * and draw packets.
          */
-        int num_draws = DIV_ROUND_UP(vert_count, 65535) + 1;
+        int num_draws = DIV_ROUND_UP(vert_count, 65535 - 2) + 1;
 
         /* Binner gets our packet state -- vc4_emit.c contents,
          * and the primitive itself.
@@ -286,6 +286,7 @@ static void
 vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
+        struct pipe_draw_info local_info;
 
 	if (!info->count_from_stream_output && !info->indirect &&
 	    !info->primitive_restart &&
@@ -293,11 +294,19 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 		return;
 
         if (info->mode >= PIPE_PRIM_QUADS) {
-                util_primconvert_save_rasterizer_state(vc4->primconvert, &vc4->rasterizer->base);
-                util_primconvert_draw_vbo(vc4->primconvert, info);
-                perf_debug("Fallback conversion for %d %s vertices\n",
-                           info->count, u_prim_name(info->mode));
-                return;
+                if (info->mode == PIPE_PRIM_QUADS &&
+                    info->count == 4 &&
+                    !vc4->rasterizer->base.flatshade) {
+                        local_info = *info;
+                        local_info.mode = PIPE_PRIM_TRIANGLE_FAN;
+                        info = &local_info;
+                } else {
+                        util_primconvert_save_rasterizer_state(vc4->primconvert, &vc4->rasterizer->base);
+                        util_primconvert_draw_vbo(vc4->primconvert, info);
+                        perf_debug("Fallback conversion for %d %s vertices\n",
+                                   info->count, u_prim_name(info->mode));
+                        return;
+                }
         }
 
         /* Before setting up the draw, do any fixup blits necessary. */
@@ -331,6 +340,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
         vc4_emit_state(pctx);
 
+        bool needs_drawarrays_shader_state = false;
         if ((vc4->dirty & (VC4_DIRTY_VTXBUF |
                            VC4_DIRTY_VTXSTATE |
                            VC4_DIRTY_PRIM_MODE |
@@ -342,7 +352,10 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                            vc4->prog.vs->uniform_dirty_bits |
                            vc4->prog.fs->uniform_dirty_bits)) ||
             vc4->last_index_bias != info->index_bias) {
-                vc4_emit_gl_shader_state(vc4, info, 0);
+                if (info->index_size)
+                        vc4_emit_gl_shader_state(vc4, info, 0);
+                else
+                        needs_drawarrays_shader_state = true;
         }
 
         vc4->dirty = 0;
@@ -373,7 +386,25 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 struct vc4_resource *rsc = vc4_resource(prsc);
 
                 struct vc4_cl_out *bcl = cl_start(&job->bcl);
-                cl_start_reloc(&job->bcl, &bcl, 1);
+
+                /* The original design for the VC4 kernel UABI had multiple
+                 * packets that used relocations in the BCL (some of which
+                 * needed two BOs), but later modifications eliminated all but
+                 * this one usage.  We have an arbitrary 32-bit offset value,
+                 * and need to also supply an arbitrary 32-bit index buffer
+                 * GEM handle, so we have this fake packet we emit in our BCL
+                 * to be validated, which the kernel uses at validation time
+                 * to perform the relocation in the IB packet (without
+                 * emitting to the actual HW).
+                 */
+                uint32_t hindex = vc4_gem_hindex(job, rsc->bo);
+                if (job->last_gem_handle_hindex != hindex) {
+                        cl_u8(&bcl, VC4_PACKET_GEM_HANDLES);
+                        cl_u32(&bcl, hindex);
+                        cl_u32(&bcl, 0);
+                        job->last_gem_handle_hindex = hindex;
+                }
+
                 cl_u8(&bcl, VC4_PACKET_GL_INDEXED_PRIMITIVE);
                 cl_u8(&bcl,
                       info->mode |
@@ -381,8 +412,9 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                        VC4_INDEX_BUFFER_U16:
                        VC4_INDEX_BUFFER_U8));
                 cl_u32(&bcl, info->count);
-                cl_reloc(job, &job->bcl, &bcl, rsc->bo, offset);
+                cl_u32(&bcl, offset);
                 cl_u32(&bcl, vc4->max_index);
+
                 cl_end(&job->bcl, bcl);
                 job->draw_calls_queued++;
 
@@ -392,29 +424,35 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 uint32_t count = info->count;
                 uint32_t start = info->start;
                 uint32_t extra_index_bias = 0;
+                static const uint32_t max_verts = 65535;
+
+                /* GFXH-515 / SW-5891: The binner emits 16 bit indices for
+                 * drawarrays, which means that if start + count > 64k it
+                 * would truncate the top bits.  Work around this by emitting
+                 * a limited number of primitives at a time and reemitting the
+                 * shader state pointing farther down the vertex attribute
+                 * arrays.
+                 *
+                 * To do this properly for line loops or trifans, we'd need to
+                 * make a new VB containing the first vertex plus whatever
+                 * remainder.
+                 */
+                if (start + count > max_verts) {
+                        extra_index_bias = start;
+                        start = 0;
+                        needs_drawarrays_shader_state = true;
+                }
 
                 while (count) {
                         uint32_t this_count = count;
                         uint32_t step = count;
-                        static const uint32_t max_verts = 65535;
 
-                        /* GFXH-515 / SW-5891: The binner emits 16 bit indices
-                         * for drawarrays, which means that if start + count >
-                         * 64k it would truncate the top bits.  Work around
-                         * this by emitting a limited number of primitives at
-                         * a time and reemitting the shader state pointing
-                         * farther down the vertex attribute arrays.
-                         *
-                         * To do this properly for line loops or trifans, we'd
-                         * need to make a new VB containing the first vertex
-                         * plus whatever remainder.
-                         */
-                        if (extra_index_bias) {
+                        if (needs_drawarrays_shader_state) {
                                 vc4_emit_gl_shader_state(vc4, info,
                                                          extra_index_bias);
                         }
 
-                        if (start + count > max_verts) {
+                        if (count > max_verts) {
                                 switch (info->mode) {
                                 case PIPE_PRIM_POINTS:
                                         this_count = step = max_verts;
@@ -457,6 +495,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                         count -= step;
                         extra_index_bias += start + step;
                         start = 0;
+                        needs_drawarrays_shader_state = true;
                 }
         }
 

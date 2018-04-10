@@ -30,12 +30,12 @@
  */
 
 #include <stdio.h>
-#include "main/compiler.h"
 #include "main/macros.h"
 #include "main/mtypes.h"
 #include "main/shaderapi.h"
 #include "main/shaderobj.h"
 #include "main/uniforms.h"
+#include "main/glspirv.h"
 #include "compiler/glsl/ast.h"
 #include "compiler/glsl/ir.h"
 #include "compiler/glsl/ir_expression_flattening.h"
@@ -507,7 +507,12 @@ storage_type_size(const struct glsl_type *type, bool bindless)
    switch (type->base_type) {
    case GLSL_TYPE_UINT:
    case GLSL_TYPE_INT:
+   case GLSL_TYPE_UINT8:
+   case GLSL_TYPE_INT8:
+   case GLSL_TYPE_UINT16:
+   case GLSL_TYPE_INT16:
    case GLSL_TYPE_FLOAT:
+   case GLSL_TYPE_FLOAT16:
    case GLSL_TYPE_BOOL:
       if (type->is_matrix()) {
 	 return type->matrix_columns;
@@ -661,7 +666,7 @@ ir_to_mesa_visitor::visit(ir_variable *ir)
 
       for (unsigned int i = 0; i < ir->get_num_state_slots(); i++) {
 	 int index = _mesa_add_state_reference(this->prog->Parameters,
-					       (gl_state_index *)slots[i].tokens);
+					       slots[i].tokens);
 
 	 if (storage->file == PROGRAM_STATE_VAR) {
 	    if (storage->index == -1) {
@@ -2431,12 +2436,41 @@ add_uniform_to_shader::visit_field(const glsl_type *type, const char *name,
    if (type->contains_opaque() && !var->data.bindless)
       return;
 
+   /* Add the uniform to the param list */
    assert(_mesa_lookup_parameter_index(params, name) < 0);
+   int index = _mesa_lookup_parameter_index(params, name);
 
-   unsigned size = storage_type_size(type, var->data.bindless) * 4;
+   unsigned num_params = type->arrays_of_arrays_size();
+   num_params = MAX2(num_params, 1);
+   num_params *= type->without_array()->matrix_columns;
 
-   int index = _mesa_add_parameter(params, PROGRAM_UNIFORM, name, size,
-                                   type->gl_type, NULL, NULL);
+   bool is_dual_slot = type->without_array()->is_dual_slot();
+   if (is_dual_slot)
+      num_params *= 2;
+
+   _mesa_reserve_parameter_storage(params, num_params);
+   index = params->NumParameters;
+
+   if (ctx->Const.PackedDriverUniformStorage) {
+      for (unsigned i = 0; i < num_params; i++) {
+         unsigned dmul = type->without_array()->is_64bit() ? 2 : 1;
+         unsigned comps = type->without_array()->vector_elements * dmul;
+         if (is_dual_slot) {
+            if (i & 0x1)
+               comps -= 4;
+            else
+               comps = 4;
+         }
+
+         _mesa_add_parameter(params, PROGRAM_UNIFORM, name, comps,
+                             type->gl_type, NULL, NULL, false);
+      }
+   } else {
+      for (unsigned i = 0; i < num_params; i++) {
+         _mesa_add_parameter(params, PROGRAM_UNIFORM, name, 4,
+                             type->gl_type, NULL, NULL, true);
+      }
+   }
 
    /* The first part of the uniform that's processed determines the base
     * location of the whole uniform (for structures).
@@ -2510,7 +2544,13 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
       if (location != last_location) {
          enum gl_uniform_driver_format format = uniform_native;
          unsigned columns = 0;
-         int dmul = 4 * sizeof(float);
+
+         int dmul;
+         if (ctx->Const.PackedDriverUniformStorage && !prog->is_arb_asm) {
+            dmul = storage->type->vector_elements * sizeof(float);
+         } else {
+            dmul = 4 * sizeof(float);
+         }
 
          switch (storage->type->base_type) {
          case GLSL_TYPE_UINT64:
@@ -2518,6 +2558,8 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
                dmul *= 2;
             /* fallthrough */
          case GLSL_TYPE_UINT:
+         case GLSL_TYPE_UINT16:
+         case GLSL_TYPE_UINT8:
             assert(ctx->Const.NativeIntegers);
             format = uniform_native;
             columns = 1;
@@ -2527,6 +2569,8 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
                dmul *= 2;
             /* fallthrough */
          case GLSL_TYPE_INT:
+         case GLSL_TYPE_INT16:
+         case GLSL_TYPE_INT8:
             format =
                (ctx->Const.NativeIntegers) ? uniform_native : uniform_int_float;
             columns = 1;
@@ -2536,6 +2580,7 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
                dmul *= 2;
             /* fallthrough */
          case GLSL_TYPE_FLOAT:
+         case GLSL_TYPE_FLOAT16:
             format = uniform_native;
             columns = storage->type->matrix_columns;
             break;
@@ -2560,9 +2605,10 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
             break;
          }
 
+         unsigned pvo = params->ParameterValueOffset[i];
          _mesa_uniform_attach_driver_storage(storage, dmul * columns, dmul,
                                              format,
-                                             &params->ParameterValues[i]);
+                                             &params->ParameterValues[pvo]);
 
          /* When a bindless sampler/image is bound to a texture/image unit, we
           * have to overwrite the constant value by the resident handle
@@ -2579,11 +2625,11 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
                if (storage->type->without_array()->is_sampler()) {
                   assert(unit >= 0 && unit < prog->sh.NumBindlessSamplers);
                   prog->sh.BindlessSamplers[unit].data =
-                     &params->ParameterValues[i] + j;
+                     &params->ParameterValues[pvo] + 4 * j;
                } else if (storage->type->without_array()->is_image()) {
                   assert(unit >= 0 && unit < prog->sh.NumBindlessImages);
                   prog->sh.BindlessImages[unit].data =
-                     &params->ParameterValues[i] + j;
+                     &params->ParameterValues[pvo] + 4 * j;
                }
             }
          }
@@ -2594,8 +2640,24 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
           */
          if (propagate_to_storage) {
             unsigned array_elements = MAX2(1, storage->array_elements);
-            _mesa_propagate_uniforms_to_driver_storage(storage, 0,
-                                                       array_elements);
+            if (ctx->Const.PackedDriverUniformStorage && !prog->is_arb_asm &&
+                (storage->is_bindless || !storage->type->contains_opaque())) {
+               const int dmul = storage->type->is_64bit() ? 2 : 1;
+               const unsigned components =
+                  storage->type->vector_elements *
+                  storage->type->matrix_columns;
+
+               for (unsigned s = 0; s < storage->num_driver_storage; s++) {
+                  gl_constant_value *uni_storage = (gl_constant_value *)
+                     storage->driver_storage[s].data;
+                  memcpy(uni_storage, storage->storage,
+                         sizeof(storage->storage[0]) * components *
+                         array_elements * dmul);
+               }
+            } else {
+               _mesa_propagate_uniforms_to_driver_storage(storage, 0,
+                                                          array_elements);
+            }
          }
 
 	      last_location = location;
@@ -2948,7 +3010,7 @@ get_mesa_program(struct gl_context *ctx,
       prog->info.fs.depth_layout = shader_program->FragDepthLayout;
    }
 
-   _mesa_optimize_program(ctx, prog, prog);
+   _mesa_optimize_program(prog, prog);
 
    /* This has to be done last.  Any operation that can cause
     * prog->ParameterValues to get reallocated (e.g., anything that adds a
@@ -3064,36 +3126,56 @@ void
 _mesa_glsl_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 {
    unsigned int i;
+   bool spirv = false;
 
    _mesa_clear_shader_program_data(ctx, prog);
 
    prog->data = _mesa_create_shader_program_data();
 
-   prog->data->LinkStatus = linking_success;
+   prog->data->LinkStatus = LINKING_SUCCESS;
 
    for (i = 0; i < prog->NumShaders; i++) {
       if (!prog->Shaders[i]->CompileStatus) {
-	 linker_error(prog, "linking with uncompiled shader");
+	 linker_error(prog, "linking with uncompiled/unspecialized shader");
+      }
+
+      if (!i) {
+         spirv = (prog->Shaders[i]->spirv_data != NULL);
+      } else if (spirv && !prog->Shaders[i]->spirv_data) {
+         /* The GL_ARB_gl_spirv spec adds a new bullet point to the list of
+          * reasons LinkProgram can fail:
+          *
+          *    "All the shader objects attached to <program> do not have the
+          *     same value for the SPIR_V_BINARY_ARB state."
+          */
+         linker_error(prog,
+                      "not all attached shaders have the same "
+                      "SPIR_V_BINARY_ARB state");
       }
    }
 
    if (prog->data->LinkStatus) {
-      link_shaders(ctx, prog);
+      if (!spirv)
+         link_shaders(ctx, prog);
+      else
+         _mesa_spirv_link_shaders(ctx, prog);
    }
 
-   if (prog->data->LinkStatus) {
-      /* Reset sampler validated to true, validation happens via the
-       * LinkShader call below.
-       */
+   /* If LinkStatus is LINKING_SUCCESS, then reset sampler validated to true.
+    * Validation happens via the LinkShader call below. If LinkStatus is
+    * LINKING_SKIPPED, then SamplersValidated will have been restored from the
+    * shader cache.
+    */
+   if (prog->data->LinkStatus == LINKING_SUCCESS) {
       prog->SamplersValidated = GL_TRUE;
+   }
 
-      if (!ctx->Driver.LinkShader(ctx, prog)) {
-         prog->data->LinkStatus = linking_failure;
-      }
+   if (prog->data->LinkStatus && !ctx->Driver.LinkShader(ctx, prog)) {
+      prog->data->LinkStatus = LINKING_FAILURE;
    }
 
    /* Return early if we are loading the shader from on-disk cache */
-   if (prog->data->LinkStatus == linking_skipped)
+   if (prog->data->LinkStatus == LINKING_SKIPPED)
       return;
 
    if (ctx->_Shader->Flags & GLSL_DUMP) {

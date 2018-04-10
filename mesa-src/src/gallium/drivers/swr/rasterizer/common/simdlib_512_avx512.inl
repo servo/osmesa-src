@@ -366,7 +366,7 @@ static SIMDINLINE Float blend_ps(Float a, Float b) // return ImmT ? b : a  (floa
 }
 
 template <int ImmT>
-static SIMDINLINE Float blend_epi32(Integer a, Integer b) // return ImmT ? b : a  (int32)
+static SIMDINLINE Integer blend_epi32(Integer a, Integer b) // return ImmT ? b : a  (int32)
 {
     return _mm512_mask_blend_epi32(__mmask16(ImmT), a, b);
 }
@@ -540,7 +540,7 @@ static SIMDINLINE uint32_t SIMDCALL movemask_pd(Double a)
 }
 static SIMDINLINE uint32_t SIMDCALL movemask_ps(Float a)
 {
-    __mmask16 m = _mm512_test_epi32_mask(castps_si(a), set1_epi32(0x8000000));
+    __mmask16 m = _mm512_test_epi32_mask(castps_si(a), set1_epi32(0x80000000));
     return static_cast<uint32_t>(m);
 }
 

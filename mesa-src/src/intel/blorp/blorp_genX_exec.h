@@ -25,7 +25,7 @@
 #define BLORP_GENX_EXEC_H
 
 #include "blorp_priv.h"
-#include "common/gen_device_info.h"
+#include "dev/gen_device_info.h"
 #include "common/gen_sample_positions.h"
 #include "genxml/gen_macros.h"
 
@@ -77,6 +77,11 @@ blorp_flush_range(struct blorp_batch *batch, void *start, size_t size);
 static void
 blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
                     struct blorp_address address, uint32_t delta);
+
+#if GEN_GEN >= 7 && GEN_GEN <= 10
+static struct blorp_address
+blorp_get_surface_base_address(struct blorp_batch *batch);
+#endif
 
 static void
 blorp_emit_urb_config(struct blorp_batch *batch,
@@ -258,60 +263,66 @@ blorp_emit_input_varying_data(struct blorp_batch *batch,
 }
 
 static void
+blorp_fill_vertex_buffer_state(struct blorp_batch *batch,
+                               struct GENX(VERTEX_BUFFER_STATE) *vb,
+                               unsigned idx,
+                               struct blorp_address addr, uint32_t size,
+                               uint32_t stride)
+{
+   vb[idx].VertexBufferIndex = idx;
+   vb[idx].BufferStartingAddress = addr;
+   vb[idx].BufferPitch = stride;
+
+#if GEN_GEN >= 6
+   vb[idx].VertexBufferMOCS = addr.mocs;
+#endif
+
+#if GEN_GEN >= 7
+   vb[idx].AddressModifyEnable = true;
+#endif
+
+#if GEN_GEN >= 8
+   vb[idx].BufferSize = size;
+#elif GEN_GEN >= 5
+   vb[idx].BufferAccessType = stride > 0 ? VERTEXDATA : INSTANCEDATA;
+   vb[idx].EndAddress = vb[idx].BufferStartingAddress;
+   vb[idx].EndAddress.offset += size - 1;
+#elif GEN_GEN == 4
+   vb[idx].BufferAccessType = stride > 0 ? VERTEXDATA : INSTANCEDATA;
+   vb[idx].MaxIndex = stride > 0 ? size / stride : 0;
+#endif
+}
+
+static void
 blorp_emit_vertex_buffers(struct blorp_batch *batch,
                           const struct blorp_params *params)
 {
-   struct GENX(VERTEX_BUFFER_STATE) vb[2];
+   struct GENX(VERTEX_BUFFER_STATE) vb[3];
    memset(vb, 0, sizeof(vb));
 
+   struct blorp_address addr;
    uint32_t size;
-   blorp_emit_vertex_data(batch, params, &vb[0].BufferStartingAddress, &size);
-   vb[0].VertexBufferIndex = 0;
-   vb[0].BufferPitch = 3 * sizeof(float);
-#if GEN_GEN >= 6
-   vb[0].VertexBufferMOCS = vb[0].BufferStartingAddress.mocs;
-#endif
-#if GEN_GEN >= 7
-   vb[0].AddressModifyEnable = true;
-#endif
-#if GEN_GEN >= 8
-   vb[0].BufferSize = size;
-#elif GEN_GEN >= 5
-   vb[0].BufferAccessType = VERTEXDATA;
-   vb[0].EndAddress = vb[0].BufferStartingAddress;
-   vb[0].EndAddress.offset += size - 1;
-#elif GEN_GEN == 4
-   vb[0].BufferAccessType = VERTEXDATA;
-   vb[0].MaxIndex = 2;
-#endif
+   blorp_emit_vertex_data(batch, params, &addr, &size);
+   blorp_fill_vertex_buffer_state(batch, vb, 0, addr, size, 3 * sizeof(float));
 
-   blorp_emit_input_varying_data(batch, params,
-                                 &vb[1].BufferStartingAddress, &size);
-   vb[1].VertexBufferIndex = 1;
-   vb[1].BufferPitch = 0;
-#if GEN_GEN >= 6
-   vb[1].VertexBufferMOCS = vb[1].BufferStartingAddress.mocs;
-#endif
-#if GEN_GEN >= 7
-   vb[1].AddressModifyEnable = true;
-#endif
-#if GEN_GEN >= 8
-   vb[1].BufferSize = size;
-#elif GEN_GEN >= 5
-   vb[1].BufferAccessType = INSTANCEDATA;
-   vb[1].EndAddress = vb[1].BufferStartingAddress;
-   vb[1].EndAddress.offset += size - 1;
-#elif GEN_GEN == 4
-   vb[1].BufferAccessType = INSTANCEDATA;
-   vb[1].MaxIndex = 0;
-#endif
+   blorp_emit_input_varying_data(batch, params, &addr, &size);
+   blorp_fill_vertex_buffer_state(batch, vb, 1, addr, size, 0);
 
-   const unsigned num_dwords = 1 + GENX(VERTEX_BUFFER_STATE_length) * 2;
+   uint32_t num_vbs = 2;
+   if (params->dst_clear_color_as_input) {
+      const unsigned clear_color_size =
+         GEN_GEN < 10 ? batch->blorp->isl_dev->ss.clear_value_size : 4 * 4;
+      blorp_fill_vertex_buffer_state(batch, vb, num_vbs++,
+                                     params->dst.clear_color_addr,
+                                     clear_color_size, 0);
+   }
+
+   const unsigned num_dwords = 1 + num_vbs * GENX(VERTEX_BUFFER_STATE_length);
    uint32_t *dw = blorp_emitn(batch, GENX(3DSTATE_VERTEX_BUFFERS), num_dwords);
    if (!dw)
       return;
 
-   for (unsigned i = 0; i < 2; i++) {
+   for (unsigned i = 0; i < num_vbs; i++) {
       GENX(VERTEX_BUFFER_STATE_pack)(batch, dw, &vb[i]);
       dw += GENX(VERTEX_BUFFER_STATE_length);
    }
@@ -380,7 +391,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
       .VertexBufferIndex = 1,
       .Valid = true,
-      .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32A32_FLOAT,
+      .SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT,
       .SourceElementOffset = 0,
       .Component0Control = VFCOMP_STORE_SRC,
 
@@ -412,7 +423,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
       .VertexBufferIndex = 0,
       .Valid = true,
-      .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32_FLOAT,
+      .SourceElementFormat = ISL_FORMAT_R32G32B32_FLOAT,
       .SourceElementOffset = 0,
       .Component0Control = VFCOMP_STORE_SRC,
       .Component1Control = VFCOMP_STORE_SRC,
@@ -426,7 +437,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
       .VertexBufferIndex = 0,
       .Valid = true,
-      .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32_FLOAT,
+      .SourceElementFormat = ISL_FORMAT_R32G32B32_FLOAT,
       .SourceElementOffset = 0,
       .Component0Control = VFCOMP_STORE_SRC,
       .Component1Control = VFCOMP_STORE_SRC,
@@ -438,21 +449,49 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    };
    slot++;
 
-   for (unsigned i = 0; i < num_varyings; ++i) {
+   if (params->dst_clear_color_as_input) {
+      /* If the caller wants the destination indirect clear color, redirect
+       * to vertex buffer 2 where we stored it earlier.  The only users of
+       * an indirect clear color source have that as their only vertex
+       * attribute.
+       */
+      assert(num_varyings == 1);
       ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
-         .VertexBufferIndex = 1,
+         .VertexBufferIndex = 2,
          .Valid = true,
-         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32A32_FLOAT,
-         .SourceElementOffset = 16 + i * 4 * sizeof(float),
+         .SourceElementOffset = 0,
          .Component0Control = VFCOMP_STORE_SRC,
+#if GEN_GEN >= 9
+         .SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT,
          .Component1Control = VFCOMP_STORE_SRC,
          .Component2Control = VFCOMP_STORE_SRC,
          .Component3Control = VFCOMP_STORE_SRC,
-#if GEN_GEN <= 5
-         .DestinationElementOffset = slot * 4,
+#else
+         /* Clear colors on gen7-8 are for bits out of one dword */
+         .SourceElementFormat = ISL_FORMAT_R32_FLOAT,
+         .Component1Control = VFCOMP_STORE_0,
+         .Component2Control = VFCOMP_STORE_0,
+         .Component3Control = VFCOMP_STORE_0,
 #endif
       };
       slot++;
+   } else {
+      for (unsigned i = 0; i < num_varyings; ++i) {
+         ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
+            .VertexBufferIndex = 1,
+            .Valid = true,
+            .SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT,
+            .SourceElementOffset = 16 + i * 4 * sizeof(float),
+            .Component0Control = VFCOMP_STORE_SRC,
+            .Component1Control = VFCOMP_STORE_SRC,
+            .Component2Control = VFCOMP_STORE_SRC,
+            .Component3Control = VFCOMP_STORE_SRC,
+#if GEN_GEN <= 5
+            .DestinationElementOffset = slot * 4,
+#endif
+         };
+         slot++;
+      }
    }
 
    const unsigned num_dwords =
@@ -491,8 +530,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
 
 /* 3DSTATE_VIEWPORT_STATE_POINTERS */
 static uint32_t
-blorp_emit_cc_viewport(struct blorp_batch *batch,
-                       const struct blorp_params *params)
+blorp_emit_cc_viewport(struct blorp_batch *batch)
 {
    uint32_t cc_vp_offset;
    blorp_emit_dynamic(batch, GENX(CC_VIEWPORT), vp, 32, &cc_vp_offset) {
@@ -515,8 +553,7 @@ blorp_emit_cc_viewport(struct blorp_batch *batch,
 }
 
 static uint32_t
-blorp_emit_sampler_state(struct blorp_batch *batch,
-                         const struct blorp_params *params)
+blorp_emit_sampler_state(struct blorp_batch *batch)
 {
    uint32_t offset;
    blorp_emit_dynamic(batch, GENX(SAMPLER_STATE), sampler, 32, &offset) {
@@ -567,6 +604,8 @@ blorp_emit_vs_config(struct blorp_batch *batch,
                      const struct blorp_params *params)
 {
    struct brw_vs_prog_data *vs_prog_data = params->vs_prog_data;
+   assert(!vs_prog_data || GEN_GEN < 11 ||
+          vs_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8);
 
    blorp_emit(batch, GENX(3DSTATE_VS), vs) {
       if (vs_prog_data) {
@@ -733,11 +772,12 @@ blorp_emit_ps_config(struct blorp_batch *batch,
             params->wm_prog_kernel + prog_data->prog_offset_2;
       }
 
-      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64;
-       * it implicitly scales for different GT levels (which have some # of
-       * PSDs).
+      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64
+       * for pre Gen11 and 128 for gen11+; On gen11+ If a programmed value is
+       * k, it implies 2(k+1) threads. It implicitly scales for different GT
+       * levels (which have some # of PSDs).
        *
-       * In Gen8 the format is U8-2 whereas in Gen9 it is U8-1.
+       * In Gen8 the format is U8-2 whereas in Gen9+ it is U9-1.
        */
       if (GEN_GEN >= 9)
          ps.MaximumNumberofThreadsPerPSD = 64 - 1;
@@ -745,21 +785,21 @@ blorp_emit_ps_config(struct blorp_batch *batch,
          ps.MaximumNumberofThreadsPerPSD = 64 - 2;
 
       switch (params->fast_clear_op) {
-      case BLORP_FAST_CLEAR_OP_NONE:
+      case ISL_AUX_OP_NONE:
          break;
 #if GEN_GEN >= 9
-      case BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL:
+      case ISL_AUX_OP_PARTIAL_RESOLVE:
          ps.RenderTargetResolveType = RESOLVE_PARTIAL;
          break;
-      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+      case ISL_AUX_OP_FULL_RESOLVE:
          ps.RenderTargetResolveType = RESOLVE_FULL;
          break;
 #else
-      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+      case ISL_AUX_OP_FULL_RESOLVE:
          ps.RenderTargetResolveEnable = true;
          break;
 #endif
-      case BLORP_FAST_CLEAR_OP_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          ps.RenderTargetFastClearEnable = true;
          break;
       default:
@@ -782,16 +822,16 @@ blorp_emit_ps_config(struct blorp_batch *batch,
 
    blorp_emit(batch, GENX(3DSTATE_WM), wm) {
       switch (params->hiz_op) {
-      case BLORP_HIZ_OP_DEPTH_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          wm.DepthBufferClear = true;
          break;
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          wm.DepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_AMBIGUATE:
          wm.HierarchicalDepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_NONE:
+      case ISL_AUX_OP_NONE:
          break;
       default:
          unreachable("not reached");
@@ -847,12 +887,12 @@ blorp_emit_ps_config(struct blorp_batch *batch,
          ps.SamplerCount = 1; /* Up to 4 samplers */
 
       switch (params->fast_clear_op) {
-      case BLORP_FAST_CLEAR_OP_NONE:
+      case ISL_AUX_OP_NONE:
          break;
-      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+      case ISL_AUX_OP_FULL_RESOLVE:
          ps.RenderTargetResolveEnable = true;
          break;
-      case BLORP_FAST_CLEAR_OP_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          ps.RenderTargetFastClearEnable = true;
          break;
       default:
@@ -867,16 +907,16 @@ blorp_emit_ps_config(struct blorp_batch *batch,
          batch->blorp->isl_dev->info->max_wm_threads - 1;
 
       switch (params->hiz_op) {
-      case BLORP_HIZ_OP_DEPTH_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          wm.DepthBufferClear = true;
          break;
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          wm.DepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_AMBIGUATE:
          wm.HierarchicalDepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_NONE:
+      case ISL_AUX_OP_NONE:
          break;
       default:
          unreachable("not reached");
@@ -972,7 +1012,7 @@ blorp_emit_blend_state(struct blorp_batch *batch,
 
 static uint32_t
 blorp_emit_color_calc_state(struct blorp_batch *batch,
-                            const struct blorp_params *params)
+                            MAYBE_UNUSED const struct blorp_params *params)
 {
    uint32_t offset;
    blorp_emit_dynamic(batch, GENX(COLOR_CALC_STATE), cc, 64, &offset) {
@@ -1009,7 +1049,7 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
       ds.DepthBufferWriteEnable = true;
 
       switch (params->hiz_op) {
-      case BLORP_HIZ_OP_NONE:
+      case ISL_AUX_OP_NONE:
          ds.DepthTestEnable = true;
          ds.DepthTestFunction = COMPAREFUNCTION_ALWAYS;
          break;
@@ -1019,15 +1059,17 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
        *   - 7.5.3.2 Depth Buffer Resolve
        *   - 7.5.3.3 Hierarchical Depth Buffer Resolve
        */
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          ds.DepthTestEnable = true;
          ds.DepthTestFunction = COMPAREFUNCTION_NEVER;
          break;
 
-      case BLORP_HIZ_OP_DEPTH_CLEAR:
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_FAST_CLEAR:
+      case ISL_AUX_OP_AMBIGUATE:
          ds.DepthTestEnable = false;
          break;
+      case ISL_AUX_OP_PARTIAL_RESOLVE:
+         unreachable("Invalid HIZ op");
       }
    }
 
@@ -1161,7 +1203,7 @@ blorp_emit_pipeline(struct blorp_batch *batch,
    blorp_emit(batch, GENX(3DSTATE_CONSTANT_PS), ps);
 
    if (params->src.enabled)
-      blorp_emit_sampler_state(batch, params);
+      blorp_emit_sampler_state(batch);
 
    blorp_emit_3dstate_multisample(batch, params);
 
@@ -1195,16 +1237,53 @@ blorp_emit_pipeline(struct blorp_batch *batch,
    blorp_emit_sf_config(batch, params);
    blorp_emit_ps_config(batch, params);
 
-   blorp_emit_cc_viewport(batch, params);
+   blorp_emit_cc_viewport(batch);
 }
 
 /******** This is the end of the pipeline setup code ********/
 
 #endif /* GEN_GEN >= 6 */
 
+#if GEN_GEN >= 7 && GEN_GEN <= 10
+static void
+blorp_emit_memcpy(struct blorp_batch *batch,
+                  struct blorp_address dst,
+                  struct blorp_address src,
+                  uint32_t size)
+{
+   assert(size % 4 == 0);
+
+   for (unsigned dw = 0; dw < size; dw += 4) {
+#if GEN_GEN >= 8
+      blorp_emit(batch, GENX(MI_COPY_MEM_MEM), cp) {
+         cp.DestinationMemoryAddress = dst;
+         cp.SourceMemoryAddress = src;
+      }
+#else
+      /* IVB does not have a general purpose register for command streamer
+       * commands. Therefore, we use an alternate temporary register.
+       */
+#define BLORP_TEMP_REG 0x2440 /* GEN7_3DPRIM_BASE_VERTEX */
+      blorp_emit(batch, GENX(MI_LOAD_REGISTER_MEM), load) {
+         load.RegisterAddress = BLORP_TEMP_REG;
+         load.MemoryAddress = src;
+      }
+      blorp_emit(batch, GENX(MI_STORE_REGISTER_MEM), store) {
+         store.RegisterAddress = BLORP_TEMP_REG;
+         store.MemoryAddress = dst;
+      }
+#undef BLORP_TEMP_REG
+#endif
+      dst.offset += 4;
+      src.offset += 4;
+   }
+}
+#endif
+
 static void
 blorp_emit_surface_state(struct blorp_batch *batch,
                          const struct brw_blorp_surface_info *surface,
+                         enum isl_aux_op op,
                          void *state, uint32_t state_offset,
                          const bool color_write_disables[4],
                          bool is_render_target)
@@ -1235,11 +1314,15 @@ blorp_emit_surface_state(struct blorp_batch *batch,
          write_disable_mask |= ISL_CHANNEL_ALPHA_BIT;
    }
 
+   const bool use_clear_address =
+      GEN_GEN >= 10 && (surface->clear_color_addr.buffer != NULL);
+
    isl_surf_fill_state(batch->blorp->isl_dev, state,
                        .surf = &surf, .view = &surface->view,
                        .aux_surf = &surface->aux_surf, .aux_usage = aux_usage,
                        .mocs = surface->addr.mocs,
                        .clear_color = surface->clear_color,
+                       .use_clear_address = use_clear_address,
                        .write_disables = write_disable_mask);
 
    blorp_surface_reloc(batch, state_offset + isl_dev->ss.addr_offset,
@@ -1256,6 +1339,25 @@ blorp_emit_surface_state(struct blorp_batch *batch,
                           surface->aux_addr, *aux_addr);
    }
 
+   if (surface->clear_color_addr.buffer) {
+#if GEN_GEN >= 10
+      assert((surface->clear_color_addr.offset & 0x3f) == 0);
+      uint32_t *clear_addr = state + isl_dev->ss.clear_color_state_offset;
+      blorp_surface_reloc(batch, state_offset +
+                          isl_dev->ss.clear_color_state_offset,
+                          surface->clear_color_addr, *clear_addr);
+#elif GEN_GEN >= 7
+      if (op == ISL_AUX_OP_FULL_RESOLVE || op == ISL_AUX_OP_PARTIAL_RESOLVE) {
+         struct blorp_address dst_addr = blorp_get_surface_base_address(batch);
+         dst_addr.offset += state_offset + isl_dev->ss.clear_value_offset;
+         blorp_emit_memcpy(batch, dst_addr, surface->clear_color_addr,
+                           isl_dev->ss.clear_value_size);
+      }
+#else
+      unreachable("Fast clears are only supported on gen7+");
+#endif
+   }
+
    blorp_flush_range(batch, state, GENX(RENDER_SURFACE_STATE_length) * 4);
 }
 
@@ -1266,7 +1368,7 @@ blorp_emit_null_surface_state(struct blorp_batch *batch,
 {
    struct GENX(RENDER_SURFACE_STATE) ss = {
       .SurfaceType = SURFTYPE_NULL,
-      .SurfaceFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R8G8B8A8_UNORM,
+      .SurfaceFormat = ISL_FORMAT_R8G8B8A8_UNORM,
       .Width = surface->surf.logical_level0_px.width - 1,
       .Height = surface->surf.logical_level0_px.height - 1,
       .MIPCountLOD = surface->view.base_level,
@@ -1298,9 +1400,10 @@ blorp_emit_surface_states(struct blorp_batch *batch,
                           const struct blorp_params *params)
 {
    const struct isl_device *isl_dev = batch->blorp->isl_dev;
-   uint32_t bind_offset, surface_offsets[2];
+   uint32_t bind_offset = 0, surface_offsets[2];
    void *surface_maps[2];
 
+   MAYBE_UNUSED bool has_indirect_clear_color = false;
    if (params->use_pre_baked_binding_table) {
       bind_offset = params->pre_baked_binding_table_offset;
    } else {
@@ -1311,9 +1414,12 @@ blorp_emit_surface_states(struct blorp_batch *batch,
 
       if (params->dst.enabled) {
          blorp_emit_surface_state(batch, &params->dst,
+                                  params->fast_clear_op,
                                   surface_maps[BLORP_RENDERBUFFER_BT_INDEX],
                                   surface_offsets[BLORP_RENDERBUFFER_BT_INDEX],
                                   params->color_write_disable, true);
+         if (params->dst.clear_color_addr.buffer != NULL)
+            has_indirect_clear_color = true;
       } else {
          assert(params->depth.enabled || params->stencil.enabled);
          const struct brw_blorp_surface_info *surface =
@@ -1324,11 +1430,31 @@ blorp_emit_surface_states(struct blorp_batch *batch,
 
       if (params->src.enabled) {
          blorp_emit_surface_state(batch, &params->src,
+                                  params->fast_clear_op,
                                   surface_maps[BLORP_TEXTURE_BT_INDEX],
                                   surface_offsets[BLORP_TEXTURE_BT_INDEX],
                                   NULL, false);
+         if (params->src.clear_color_addr.buffer != NULL)
+            has_indirect_clear_color = true;
       }
    }
+
+#if GEN_GEN >= 7
+   if (has_indirect_clear_color) {
+      /* Updating a surface state object may require that the state cache be
+       * invalidated. From the SKL PRM, Shared Functions -> State -> State
+       * Caching:
+       *
+       *    Whenever the RENDER_SURFACE_STATE object in memory pointed to by
+       *    the Binding Table Pointer (BTP) and Binding Table Index (BTI) is
+       *    modified [...], the L1 state cache must be invalidated to ensure
+       *    the new surface or sampler state is fetched from system memory.
+       */
+      blorp_emit(batch, GENX(PIPE_CONTROL), pipe) {
+         pipe.StateCacheInvalidationEnable = true;
+      }
+   }
+#endif
 
 #if GEN_GEN >= 7
    blorp_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_VS), bt);
@@ -1446,7 +1572,7 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
     * requested.
     */
    if (params->stencil.enabled)
-      assert(params->hiz_op == BLORP_HIZ_OP_DEPTH_CLEAR);
+      assert(params->hiz_op == ISL_AUX_OP_FAST_CLEAR);
 
    /* From the BDW PRM Volume 2, 3DSTATE_WM_HZ_OP:
     *
@@ -1471,21 +1597,22 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
 
    blorp_emit(batch, GENX(3DSTATE_WM_HZ_OP), hzp) {
       switch (params->hiz_op) {
-      case BLORP_HIZ_OP_DEPTH_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          hzp.StencilBufferClearEnable = params->stencil.enabled;
          hzp.DepthBufferClearEnable = params->depth.enabled;
          hzp.StencilClearValue = params->stencil_ref;
          hzp.FullSurfaceDepthandStencilClear = params->full_surface_hiz_op;
          break;
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          assert(params->full_surface_hiz_op);
          hzp.DepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_AMBIGUATE:
          assert(params->full_surface_hiz_op);
          hzp.HierarchicalDepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_NONE:
+      case ISL_AUX_OP_PARTIAL_RESOLVE:
+      case ISL_AUX_OP_NONE:
          unreachable("Invalid HIZ op");
       }
 
@@ -1516,6 +1643,51 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
 }
 #endif
 
+static void
+blorp_update_clear_color(struct blorp_batch *batch,
+                         const struct brw_blorp_surface_info *info,
+                         enum isl_aux_op op)
+{
+   if (info->clear_color_addr.buffer && op == ISL_AUX_OP_FAST_CLEAR) {
+#if GEN_GEN >= 9
+      for (int i = 0; i < 4; i++) {
+         blorp_emit(batch, GENX(MI_STORE_DATA_IMM), sdi) {
+            sdi.Address = info->clear_color_addr;
+            sdi.Address.offset += i * 4;
+            sdi.ImmediateData = info->clear_color.u32[i];
+         }
+      }
+#elif GEN_GEN >= 7
+      blorp_emit(batch, GENX(MI_STORE_DATA_IMM), sdi) {
+         sdi.Address = info->clear_color_addr;
+         sdi.ImmediateData = ISL_CHANNEL_SELECT_RED   << 25 |
+                             ISL_CHANNEL_SELECT_GREEN << 22 |
+                             ISL_CHANNEL_SELECT_BLUE  << 19 |
+                             ISL_CHANNEL_SELECT_ALPHA << 16;
+         if (isl_format_has_int_channel(info->view.format)) {
+            for (unsigned i = 0; i < 4; i++) {
+               assert(info->clear_color.u32[i] == 0 ||
+                      info->clear_color.u32[i] == 1);
+            }
+            sdi.ImmediateData |= (info->clear_color.u32[0] != 0) << 31;
+            sdi.ImmediateData |= (info->clear_color.u32[1] != 0) << 30;
+            sdi.ImmediateData |= (info->clear_color.u32[2] != 0) << 29;
+            sdi.ImmediateData |= (info->clear_color.u32[3] != 0) << 28;
+         } else {
+            for (unsigned i = 0; i < 4; i++) {
+               assert(info->clear_color.f32[i] == 0.0f ||
+                      info->clear_color.f32[i] == 1.0f);
+            }
+            sdi.ImmediateData |= (info->clear_color.f32[0] != 0.0f) << 31;
+            sdi.ImmediateData |= (info->clear_color.f32[1] != 0.0f) << 30;
+            sdi.ImmediateData |= (info->clear_color.f32[2] != 0.0f) << 29;
+            sdi.ImmediateData |= (info->clear_color.f32[3] != 0.0f) << 28;
+         }
+      }
+#endif
+   }
+}
+
 /**
  * \brief Execute a blit or render pass operation.
  *
@@ -1528,8 +1700,11 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
 static void
 blorp_exec(struct blorp_batch *batch, const struct blorp_params *params)
 {
+   blorp_update_clear_color(batch, &params->dst, params->fast_clear_op);
+   blorp_update_clear_color(batch, &params->depth, params->hiz_op);
+
 #if GEN_GEN >= 8
-   if (params->hiz_op != BLORP_HIZ_OP_NONE) {
+   if (params->hiz_op != ISL_AUX_OP_NONE) {
       blorp_emit_gen8_hiz_op(batch, params);
       return;
    }

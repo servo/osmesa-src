@@ -40,7 +40,7 @@ brw_nir_setup_glsl_builtin_uniform(nir_variable *var,
        * get the same index back here.
        */
       int index = _mesa_add_state_reference(prog->Parameters,
-					    (gl_state_index *)slots[i].tokens);
+					    slots[i].tokens);
 
       /* Add each of the unique swizzles of the element as a parameter.
        * This'll end up matching the expected layout of the
@@ -241,5 +241,31 @@ brw_nir_setup_arb_uniforms(void *mem_ctx, nir_shader *shader,
          stage_prog_data->param[4 * p + i] = BRW_PARAM_PARAMETER(p, i);
       for (; i < 4; i++)
          stage_prog_data->param[4 * p + i] = BRW_PARAM_BUILTIN_ZERO;
+   }
+}
+
+void
+brw_nir_lower_patch_vertices_in_to_uniform(nir_shader *nir)
+{
+   nir_foreach_variable_safe(var, &nir->system_values) {
+      if (var->data.location != SYSTEM_VALUE_VERTICES_IN)
+         continue;
+
+      gl_state_index16 tokens[STATE_LENGTH] = {
+         STATE_INTERNAL,
+         nir->info.stage == MESA_SHADER_TESS_CTRL ?
+            (gl_state_index16)STATE_TCS_PATCH_VERTICES_IN :
+            (gl_state_index16)STATE_TES_PATCH_VERTICES_IN,
+      };
+      var->num_state_slots = 1;
+      var->state_slots =
+         ralloc_array(var, nir_state_slot, var->num_state_slots);
+      memcpy(var->state_slots[0].tokens, tokens, sizeof(tokens));
+      var->state_slots[0].swizzle = SWIZZLE_XXXX;
+
+      var->data.mode = nir_var_uniform;
+      var->data.location = -1;
+      exec_node_remove(&var->node);
+      exec_list_push_tail(&nir->uniforms, &var->node);
    }
 }

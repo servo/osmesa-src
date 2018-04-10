@@ -44,9 +44,9 @@ inst_aliases = {
 intrinsics = [
         ['VGATHERPD', 'x86_avx2_gather_d_pd_256', ['src', 'pBase', 'indices', 'mask', 'scale']],
         ['VGATHERPS', 'x86_avx2_gather_d_ps_256', ['src', 'pBase', 'indices', 'mask', 'scale']],
-        ['VGATHERPS2', 'x86_avx512_gather_dps_512', ['src', 'pBase', 'indices', 'mask', 'scale']],
+        ['VGATHERPS_16', 'x86_avx512_gather_dps_512', ['src', 'pBase', 'indices', 'mask', 'scale']],
         ['VGATHERDD', 'x86_avx2_gather_d_d_256', ['src', 'pBase', 'indices', 'mask', 'scale']],
-        ['VPSRLI', 'x86_avx2_psrli_d', ['src', 'imm']],
+        ['VGATHERDD_16', 'x86_avx512_gather_dpi_512', ['src', 'pBase', 'indices', 'mask', 'scale']],
         ['VSQRTPS', 'x86_avx_sqrt_ps_256', ['a']],
         ['VRSQRTPS', 'x86_avx_rsqrt_ps_256', ['a']],
         ['VRCPPS', 'x86_avx_rcp_ps_256', ['a']],
@@ -152,7 +152,8 @@ def parse_ir_builder(input_file):
                     # The following functions need to be ignored.
                     if (func_name == 'CreateInsertNUWNSWBinOp' or
                         func_name == 'CreateMaskedIntrinsic' or
-                        func_name == 'CreateAlignmentAssumptionHelper'):
+                        func_name == 'CreateAlignmentAssumptionHelper' or
+                        func_name == 'CreateLoad'):
                         ignore = True
 
                     # Convert CamelCase to CAMEL_CASE
@@ -223,7 +224,7 @@ def generate_x86_h(output_dir):
         declargs = 'Value* ' + ', Value* '.join(inst[2])
 
         functions.append({
-            'decl'      : 'Value* %s(%s)' % (inst[0], declargs),
+            'decl'      : 'Value* %s(%s, const llvm::Twine& name = "")' % (inst[0], declargs),
             'args'      : ', '.join(inst[2]),
             'intrin'    : inst[1],
         })

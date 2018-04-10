@@ -40,6 +40,17 @@ struct vc5_bo;
 #define VC5_MAX_DRAW_BUFFERS 4
 #define VC5_MAX_ATTRIBUTES 16
 
+/* These are tunable parameters in the HW design, but all the V3D
+ * implementations agree.
+ */
+#define VC5_UIFCFG_BANKS 8
+#define VC5_UIFCFG_PAGE_SIZE 4096
+#define VC5_UIFCFG_XOR_VALUE (1 << 4)
+#define VC5_PAGE_CACHE_SIZE (VC5_UIFCFG_PAGE_SIZE * VC5_UIFCFG_BANKS)
+#define VC5_UBLOCK_SIZE 64
+#define VC5_UIFBLOCK_SIZE (4 * VC5_UBLOCK_SIZE)
+#define VC5_UIFBLOCK_ROW_SIZE (4 * VC5_UIFBLOCK_SIZE)
+
 struct vc5_simulator_file;
 
 struct vc5_screen {

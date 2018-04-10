@@ -235,14 +235,14 @@ fd_set_framebuffer_state(struct pipe_context *pctx,
 			 * multiple times to the same surface), so we might as
 			 * well go ahead and flush this one:
 			 */
-			fd_batch_flush(old_batch, false);
+			fd_batch_flush(old_batch, false, false);
 		}
 
 		fd_batch_reference(&old_batch, NULL);
 	} else {
 		DBG("%d: cbufs[0]=%p, zsbuf=%p", ctx->batch->needs_flush,
 				framebuffer->cbufs[0], framebuffer->zsbuf);
-		fd_batch_flush(ctx->batch, false);
+		fd_batch_flush(ctx->batch, false, false);
 	}
 
 	cso = &ctx->batch->framebuffer;
@@ -432,7 +432,7 @@ fd_create_stream_output_target(struct pipe_context *pctx,
 	target->buffer_offset = buffer_offset;
 	target->buffer_size = buffer_size;
 
-	assert(rsc->base.b.target == PIPE_BUFFER);
+	assert(rsc->base.target == PIPE_BUFFER);
 	util_range_add(&rsc->valid_buffer_range,
 		buffer_offset, buffer_offset + buffer_size);
 
@@ -495,15 +495,53 @@ fd_set_compute_resources(struct pipe_context *pctx,
 	// TODO
 }
 
+/* used by clover to bind global objects, returning the bo address
+ * via handles[n]
+ */
 static void
 fd_set_global_binding(struct pipe_context *pctx,
 		unsigned first, unsigned count, struct pipe_resource **prscs,
 		uint32_t **handles)
 {
-	/* TODO only used by clover.. seems to need us to return the actual
-	 * gpuaddr of the buffer.. which isn't really exposed to mesa atm.
-	 * How is this used?
-	 */
+	struct fd_context *ctx = fd_context(pctx);
+	struct fd_global_bindings_stateobj *so = &ctx->global_bindings;
+	unsigned mask = 0;
+
+	if (prscs) {
+		for (unsigned i = 0; i < count; i++) {
+			unsigned n = i + first;
+
+			mask |= BIT(n);
+
+			pipe_resource_reference(&so->buf[n], prscs[i]);
+
+			if (so->buf[n]) {
+				struct fd_resource *rsc = fd_resource(so->buf[n]);
+				uint64_t iova = fd_bo_get_iova(rsc->bo);
+				// TODO need to scream if iova > 32b or fix gallium API..
+				*handles[i] += iova;
+			}
+
+			if (prscs[i])
+				so->enabled_mask |= BIT(n);
+			else
+				so->enabled_mask &= ~BIT(n);
+		}
+	} else {
+		mask = (BIT(count) - 1) << first;
+
+		for (unsigned i = 0; i < count; i++) {
+			unsigned n = i + first;
+			if (so->buf[n]) {
+				struct fd_resource *rsc = fd_resource(so->buf[n]);
+				fd_bo_put_iova(rsc->bo);
+			}
+			pipe_resource_reference(&so->buf[n], NULL);
+		}
+
+		so->enabled_mask &= ~mask;
+	}
+
 }
 
 void

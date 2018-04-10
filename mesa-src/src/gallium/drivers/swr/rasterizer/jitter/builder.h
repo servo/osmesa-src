@@ -32,26 +32,25 @@
 #include "JitManager.h"
 #include "common/formats.h"
 
-#define USE_SIMD16_BUILDER 0
-
 namespace SwrJit
 {
     using namespace llvm;
     struct Builder
     {
         Builder(JitManager *pJitMgr);
-        IRBuilder<>* IRB() { return mpIRBuilder; };
-        JitManager* JM() { return mpJitMgr; }
+        virtual ~Builder() {}
 
-        JitManager* mpJitMgr;
-        IRBuilder<>* mpIRBuilder;
+        IRBuilder<> *IRB() { return mpIRBuilder; };
+        JitManager *JM() { return mpJitMgr; }
 
-        uint32_t             mVWidth;
-#if USE_SIMD16_BUILDER
-        uint32_t             mVWidth2;
-#endif
+        JitManager *mpJitMgr;
+        IRBuilder<> *mpIRBuilder;
 
-        // Built in types.
+        uint32_t             mVWidth;   // vector width simd8
+        uint32_t             mVWidth16; // vector width simd16
+
+        // Built in types: scalar
+
         Type*                mVoidTy;
         Type*                mInt1Ty;
         Type*                mInt8Ty;
@@ -66,6 +65,9 @@ namespace SwrJit
         Type*                mInt8PtrTy;
         Type*                mInt16PtrTy;
         Type*                mInt32PtrTy;
+
+        // Built in types: simd8
+
         Type*                mSimdFP16Ty;
         Type*                mSimdFP32Ty;
         Type*                mSimdInt1Ty;
@@ -75,21 +77,37 @@ namespace SwrJit
         Type*                mSimdIntPtrTy;
         Type*                mSimdVectorTy;
         Type*                mSimdVectorTRTy;
-#if USE_SIMD16_BUILDER
-        Type*                mSimd2FP16Ty;
-        Type*                mSimd2FP32Ty;
-        Type*                mSimd2Int1Ty;
-        Type*                mSimd2Int16Ty;
-        Type*                mSimd2Int32Ty;
-        Type*                mSimd2Int64Ty;
-        Type*                mSimd2IntPtrTy;
-        Type*                mSimd2VectorTy;
-        Type*                mSimd2VectorTRTy;
-#endif
+
+        // Built in types: simd16
+
+        Type*                mSimd16FP16Ty;
+        Type*                mSimd16FP32Ty;
+        Type*                mSimd16Int1Ty;
+        Type*                mSimd16Int16Ty;
+        Type*                mSimd16Int32Ty;
+        Type*                mSimd16Int64Ty;
+        Type*                mSimd16IntPtrTy;
+        Type*                mSimd16VectorTy;
+        Type*                mSimd16VectorTRTy;
 
 #include "gen_builder.hpp"
 #include "gen_builder_x86.hpp"
 #include "builder_misc.h"
 #include "builder_math.h"
+#include "builder_mem.h"
+
+    protected:
+
+        void SetPrivateContext(Value* pPrivateContext) 
+        { 
+            mpPrivateContext = pPrivateContext; 
+            NotifyPrivateContextSet();
+        }
+        virtual void NotifyPrivateContextSet() {}
+        inline Value* GetPrivateContext() { return mpPrivateContext; }
+
+    private: 
+        Value* mpPrivateContext;
+
     };
 }

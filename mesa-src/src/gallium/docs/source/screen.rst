@@ -24,8 +24,6 @@ The integer capabilities:
 
 * ``PIPE_CAP_NPOT_TEXTURES``: Whether :term:`NPOT` textures may have repeat modes,
   normalized coordinates, and mipmaps.
-* ``PIPE_CAP_TWO_SIDED_STENCIL``: Whether the stencil test can also affect back-facing
-  polygons.
 * ``PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS``: How many dual-source blend RTs are support.
   :ref:`Blend` for more information.
 * ``PIPE_CAP_ANISOTROPIC_FILTER``: Whether textures can be filtered anisotropically.
@@ -34,9 +32,6 @@ The integer capabilities:
   bound.
 * ``PIPE_CAP_OCCLUSION_QUERY``: Whether occlusion queries are available.
 * ``PIPE_CAP_QUERY_TIME_ELAPSED``: Whether PIPE_QUERY_TIME_ELAPSED queries are available.
-* ``PIPE_CAP_TEXTURE_SHADOW_MAP``: indicates whether the fragment shader hardware
-  can do the depth texture / Z comparison operation in TEX instructions
-  for shadow testing.
 * ``PIPE_CAP_TEXTURE_SWIZZLE``: Whether swizzling through sampler views is
   supported.
 * ``PIPE_CAP_MAX_TEXTURE_2D_LEVELS``: The maximum number of mipmap levels available
@@ -115,10 +110,6 @@ The integer capabilities:
   aligned to 4.  If false, there are no restrictions on src_offset.
 * ``PIPE_CAP_COMPUTE``: Whether the implementation supports the
   compute entry points defined in pipe_context and pipe_screen.
-* ``PIPE_CAP_USER_CONSTANT_BUFFERS``: Whether user-space constant buffers
-  are supported.  If not, the state tracker must put constants into HW
-  resources/buffers.  If user-space constant buffers are supported, the
-  driver must still accept HW constant buffers also.
 * ``PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT``: Describes the required
   alignment of pipe_constant_buffer::buffer_offset.
 * ``PIPE_CAP_START_INSTANCE``: Whether the driver supports
@@ -417,6 +408,18 @@ The integer capabilities:
 * ``PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET``:
   Whether pipe_vertex_buffer::buffer_offset is treated as signed. The u_vbuf
   module needs this for optimal performance in workstation applications.
+* ``PIPE_CAP_CONTEXT_PRIORITY_MASK``: For drivers that support per-context
+  priorities, this returns a bitmask of PIPE_CONTEXT_PRIORITY_x for the
+  supported priority levels.  A driver that does not support prioritized
+  contexts can return 0.
+* ``PIPE_CAP_FENCE_SIGNAL``: True if the driver supports signaling semaphores
+  using fence_server_signal().
+* ``PIPE_CAP_CONSTBUF0_FLAGS``: The bits of pipe_resource::flags that must be
+  set when binding that buffer as constant buffer 0. If the buffer doesn't have
+  those bits set, pipe_context::set_constant_buffer(.., 0, ..) is ignored
+  by the driver, and the driver can throw assertion failures.
+* ``PIPE_CAP_PACKED_UNIFORMS``: True if the driver supports packed uniforms
+  as opposed to padding to vec4s.
 
 
 .. _pipe_capf:
@@ -434,10 +437,6 @@ The floating-point capabilities are:
   applied to anisotropically filtered textures.
 * ``PIPE_CAPF_MAX_TEXTURE_LOD_BIAS``: The maximum :term:`LOD` bias that may be applied
   to filtered textures.
-* ``PIPE_CAPF_GUARD_BAND_LEFT``,
-  ``PIPE_CAPF_GUARD_BAND_TOP``,
-  ``PIPE_CAPF_GUARD_BAND_RIGHT``,
-  ``PIPE_CAPF_GUARD_BAND_BOTTOM``: TODO
 
 
 .. _pipe_shader_cap:
@@ -534,8 +533,8 @@ pipe_screen::get_compute_param.
 
 * ``PIPE_COMPUTE_CAP_IR_TARGET``: A description of the target of the form
   ``processor-arch-manufacturer-os`` that will be passed on to the compiler.
-  This CAP is only relevant for drivers that specify PIPE_SHADER_IR_LLVM
-  or PIPE_SHADER_IR_NATIVE for their preferred IR.
+  This CAP is only relevant for drivers that specify PIPE_SHADER_IR_NATIVE for
+  their preferred IR.
   Value type: null-terminated string. Shader IR type dependent.
 * ``PIPE_COMPUTE_CAP_GRID_DIMENSION``: Number of supported dimensions
   for grid and block coordinates.  Value type: ``uint64_t``. Shader IR type dependent.

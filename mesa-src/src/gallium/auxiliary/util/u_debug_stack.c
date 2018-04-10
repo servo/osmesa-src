@@ -264,8 +264,11 @@ debug_backtrace_capture(struct debug_stack_frame *backtrace,
    }
 #endif
 
-#if defined(PIPE_CC_GCC)
+#if defined(PIPE_CC_GCC) && (PIPE_CC_GCC_VERSION > 404) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wframe-address"
    frame_pointer = ((const void **)__builtin_frame_address(1));
+#pragma GCC diagnostic pop
 #elif defined(PIPE_CC_MSVC) && defined(PIPE_ARCH_X86)
    __asm {
       mov frame_pointer, ebp

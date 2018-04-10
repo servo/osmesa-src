@@ -70,26 +70,35 @@ delete_variant(struct ir3_shader_variant *v)
 static void
 fixup_regfootprint(struct ir3_shader_variant *v)
 {
-	if (v->type == SHADER_VERTEX) {
-		unsigned i;
-		for (i = 0; i < v->inputs_count; i++) {
-			/* skip frag inputs fetch via bary.f since their reg's are
-			 * not written by gpu before shader starts (and in fact the
-			 * regid's might not even be valid)
-			 */
-			if (v->inputs[i].bary)
-				continue;
+	unsigned i;
 
-			if (v->inputs[i].compmask) {
-				int32_t regid = (v->inputs[i].regid + 3) >> 2;
-				v->info.max_reg = MAX2(v->info.max_reg, regid);
-			}
-		}
-		for (i = 0; i < v->outputs_count; i++) {
-			int32_t regid = (v->outputs[i].regid + 3) >> 2;
+	for (i = 0; i < v->inputs_count; i++) {
+		/* skip frag inputs fetch via bary.f since their reg's are
+		 * not written by gpu before shader starts (and in fact the
+		 * regid's might not even be valid)
+		 */
+		if (v->inputs[i].bary)
+			continue;
+
+		/* ignore high regs that are global to all threads in a warp
+		 * (they exist by default) (a5xx+)
+		 */
+		if (v->inputs[i].regid >= regid(48,0))
+			continue;
+
+		if (v->inputs[i].compmask) {
+			unsigned n = util_last_bit(v->inputs[i].compmask) - 1;
+			int32_t regid = (v->inputs[i].regid + n) >> 2;
 			v->info.max_reg = MAX2(v->info.max_reg, regid);
 		}
-	} else if (v->type == SHADER_FRAGMENT) {
+	}
+
+	for (i = 0; i < v->outputs_count; i++) {
+		int32_t regid = (v->outputs[i].regid + 3) >> 2;
+		v->info.max_reg = MAX2(v->info.max_reg, regid);
+	}
+
+	if (v->type == SHADER_FRAGMENT) {
 		/* NOTE: not sure how to turn pos_regid off..  but this could
 		 * be, for example, r1.x while max reg used by the shader is
 		 * r0.*, in which case we need to fixup the reg footprint:
@@ -169,7 +178,8 @@ dump_shader_info(struct ir3_shader_variant *v, struct pipe_debug_callback *debug
 	pipe_debug_message(debug, SHADER_INFO, "\n"
 			"SHADER-DB: %s prog %d/%d: %u instructions, %u dwords\n"
 			"SHADER-DB: %s prog %d/%d: %u half, %u full\n"
-			"SHADER-DB: %s prog %d/%d: %u const, %u constlen\n",
+			"SHADER-DB: %s prog %d/%d: %u const, %u constlen\n"
+			"SHADER-DB: %s prog %d/%d: %u (ss), %u (sy)\n",
 			ir3_shader_stage(v->shader),
 			v->shader->id, v->id,
 			v->info.instrs_count,
@@ -181,7 +191,10 @@ dump_shader_info(struct ir3_shader_variant *v, struct pipe_debug_callback *debug
 			ir3_shader_stage(v->shader),
 			v->shader->id, v->id,
 			v->info.max_const + 1,
-			v->constlen);
+			v->constlen,
+			ir3_shader_stage(v->shader),
+			v->shader->id, v->id,
+			v->info.ss, v->info.sy);
 }
 
 static struct ir3_shader_variant *
@@ -485,6 +498,8 @@ ir3_shader_disasm(struct ir3_shader_variant *so, uint32_t *bin)
 	debug_printf("; %d const, %u constlen\n",
 			so->info.max_const + 1,
 			so->constlen);
+
+	debug_printf("; %u (ss), %u (sy)\n", so->info.ss, so->info.sy);
 
 	/* print shader type specific info: */
 	switch (so->type) {
@@ -827,8 +842,47 @@ ir3_emit_vs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 			}
 
 			fd_wfi(ctx->batch, ring);
-			ctx->emit_const(ring, SHADER_VERTEX, offset * 4, 0,
-					vertex_params_size, vertex_params, NULL);
+
+			bool needs_vtxid_base =
+				ir3_find_sysval_regid(v, SYSTEM_VALUE_VERTEX_ID_ZERO_BASE) != regid(63, 0);
+
+			/* for indirect draw, we need to copy VTXID_BASE from
+			 * indirect-draw parameters buffer.. which is annoying
+			 * and means we can't easily emit these consts in cmd
+			 * stream so need to copy them to bo.
+			 */
+			if (info->indirect && needs_vtxid_base) {
+				struct pipe_draw_indirect_info *indirect = info->indirect;
+				struct pipe_resource *vertex_params_rsc =
+					pipe_buffer_create(&ctx->screen->base,
+						PIPE_BIND_CONSTANT_BUFFER, PIPE_USAGE_STREAM,
+						vertex_params_size * 4);
+				unsigned src_off = info->indirect->offset;;
+				void *ptr;
+
+				ptr = fd_bo_map(fd_resource(vertex_params_rsc)->bo);
+				memcpy(ptr, vertex_params, vertex_params_size * 4);
+
+				if (info->index_size) {
+					/* indexed draw, index_bias is 4th field: */
+					src_off += 3 * 4;
+				} else {
+					/* non-indexed draw, start is 3rd field: */
+					src_off += 2 * 4;
+				}
+
+				/* copy index_bias or start from draw params: */
+				ctx->mem_to_mem(ring, vertex_params_rsc, 0,
+						indirect->buffer, src_off, 1);
+
+				ctx->emit_const(ring, SHADER_VERTEX, offset * 4, 0,
+						vertex_params_size, NULL, vertex_params_rsc);
+
+				pipe_resource_reference(&vertex_params_rsc, NULL);
+			} else {
+				ctx->emit_const(ring, SHADER_VERTEX, offset * 4, 0,
+						vertex_params_size, vertex_params, NULL);
+			}
 
 			/* if needed, emit stream-out buffer addresses: */
 			if (vertex_params[IR3_DP_VTXCNT_MAX] > 0) {
@@ -879,20 +933,8 @@ ir3_emit_cs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 					0x1000);
 				indirect_offset = 0;
 
-				if (is_a5xx(ctx->screen)) {
-					struct fd_bo *src = fd_resource(info->indirect)->bo;
-					struct fd_bo *dst = fd_resource(indirect)->bo;
-					for (unsigned i = 0; i < 3; i++) {
-						unsigned dst_off = i * 4;
-						unsigned src_off = (i * 4) + info->indirect_offset;
-						OUT_PKT7(ring, CP_MEM_TO_MEM, 5);
-						OUT_RING(ring, 0x00000000);
-						OUT_RELOCW(ring, dst, dst_off, 0, 0);
-						OUT_RELOC (ring, src, src_off, 0, 0);
-					}
-				} else {
-					assert(0);
-				}
+				ctx->mem_to_mem(ring, indirect, 0, info->indirect,
+						info->indirect_offset, 3);
 			} else {
 				pipe_resource_reference(&indirect, info->indirect);
 				indirect_offset = info->indirect_offset;
@@ -907,7 +949,9 @@ ir3_emit_cs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 				[IR3_DP_NUM_WORK_GROUPS_X] = info->grid[0],
 				[IR3_DP_NUM_WORK_GROUPS_Y] = info->grid[1],
 				[IR3_DP_NUM_WORK_GROUPS_Z] = info->grid[2],
-				/* do we need work-group-size? */
+				[IR3_DP_LOCAL_GROUP_SIZE_X] = info->block[0],
+				[IR3_DP_LOCAL_GROUP_SIZE_Y] = info->block[1],
+				[IR3_DP_LOCAL_GROUP_SIZE_Z] = info->block[2],
 			};
 
 			ctx->emit_const(ring, SHADER_COMPUTE, offset * 4, 0,

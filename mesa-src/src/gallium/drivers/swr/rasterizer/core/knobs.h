@@ -41,7 +41,8 @@
 #define ENABLE_AVX512_SIMD16    1
 #define USE_8x2_TILE_BACKEND    1
 #define USE_SIMD16_FRONTEND     1
-#define USE_SIMD16_SHADERS      0   // requires USE_SIMD16_FRONTEND
+#define USE_SIMD16_SHADERS      1   // requires USE_SIMD16_FRONTEND
+#define USE_SIMD16_VS           1   // requires USE_SIMD16_SHADERS
 
 ///////////////////////////////////////////////////////////////////////////////
 // Architecture validation
@@ -163,6 +164,16 @@
 
 // enables cut-aware primitive assembler
 #define KNOB_ENABLE_CUT_AWARE_PA               TRUE
+
+// enables early rasterization (useful for small triangles)
+#if !defined(KNOB_ENABLE_EARLY_RAST)
+#define KNOB_ENABLE_EARLY_RAST                 1
+#endif
+
+#if KNOB_ENABLE_EARLY_RAST
+#define ER_SIMD_TILE_X_SHIFT 2
+#define ER_SIMD_TILE_Y_SHIFT 2
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 // Debug knobs

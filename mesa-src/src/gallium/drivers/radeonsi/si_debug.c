@@ -1,5 +1,6 @@
 /*
  * Copyright 2015 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -36,6 +37,64 @@ static void si_dump_bo_list(struct si_context *sctx,
 			    const struct radeon_saved_cs *saved, FILE *f);
 
 DEBUG_GET_ONCE_OPTION(replace_shaders, "RADEON_REPLACE_SHADERS", NULL)
+
+/**
+ * Store a linearized copy of all chunks of \p cs together with the buffer
+ * list in \p saved.
+ */
+void si_save_cs(struct radeon_winsys *ws, struct radeon_winsys_cs *cs,
+		struct radeon_saved_cs *saved, bool get_buffer_list)
+{
+	uint32_t *buf;
+	unsigned i;
+
+	/* Save the IB chunks. */
+	saved->num_dw = cs->prev_dw + cs->current.cdw;
+	saved->ib = MALLOC(4 * saved->num_dw);
+	if (!saved->ib)
+		goto oom;
+
+	buf = saved->ib;
+	for (i = 0; i < cs->num_prev; ++i) {
+		memcpy(buf, cs->prev[i].buf, cs->prev[i].cdw * 4);
+		buf += cs->prev[i].cdw;
+	}
+	memcpy(buf, cs->current.buf, cs->current.cdw * 4);
+
+	if (!get_buffer_list)
+		return;
+
+	/* Save the buffer list. */
+	saved->bo_count = ws->cs_get_buffer_list(cs, NULL);
+	saved->bo_list = CALLOC(saved->bo_count,
+				sizeof(saved->bo_list[0]));
+	if (!saved->bo_list) {
+		FREE(saved->ib);
+		goto oom;
+	}
+	ws->cs_get_buffer_list(cs, saved->bo_list);
+
+	return;
+
+oom:
+	fprintf(stderr, "%s: out of memory\n", __func__);
+	memset(saved, 0, sizeof(*saved));
+}
+
+void si_clear_saved_cs(struct radeon_saved_cs *saved)
+{
+	FREE(saved->ib);
+	FREE(saved->bo_list);
+
+	memset(saved, 0, sizeof(*saved));
+}
+
+void si_destroy_saved_cs(struct si_saved_cs *scs)
+{
+	si_clear_saved_cs(&scs->gfx);
+	r600_resource_reference(&scs->trace_buf, NULL);
+	free(scs);
+}
 
 static void si_dump_shader(struct si_screen *sscreen,
 			   enum pipe_shader_type processor,
@@ -225,25 +284,25 @@ file_error:
 static void si_dump_mmapped_reg(struct si_context *sctx, FILE *f,
 				unsigned offset)
 {
-	struct radeon_winsys *ws = sctx->b.ws;
+	struct radeon_winsys *ws = sctx->ws;
 	uint32_t value;
 
 	if (ws->read_registers(ws, offset, 1, &value))
-		ac_dump_reg(f, sctx->b.chip_class, offset, value, ~0);
+		ac_dump_reg(f, sctx->chip_class, offset, value, ~0);
 }
 
 static void si_dump_debug_registers(struct si_context *sctx, FILE *f)
 {
-	if (sctx->screen->b.info.drm_major == 2 &&
-	    sctx->screen->b.info.drm_minor < 42)
+	if (sctx->screen->info.drm_major == 2 &&
+	    sctx->screen->info.drm_minor < 42)
 		return; /* no radeon support */
 
 	fprintf(f, "Memory-mapped registers:\n");
 	si_dump_mmapped_reg(sctx, f, R_008010_GRBM_STATUS);
 
 	/* No other registers can be read on DRM < 3.1.0. */
-	if (sctx->screen->b.info.drm_major < 3 ||
-	    sctx->screen->b.info.drm_minor < 1) {
+	if (sctx->screen->info.drm_major < 3 ||
+	    sctx->screen->info.drm_minor < 1) {
 		fprintf(f, "\n");
 		return;
 	}
@@ -255,7 +314,7 @@ static void si_dump_debug_registers(struct si_context *sctx, FILE *f)
 	si_dump_mmapped_reg(sctx, f, R_00803C_GRBM_STATUS_SE3);
 	si_dump_mmapped_reg(sctx, f, R_00D034_SDMA0_STATUS_REG);
 	si_dump_mmapped_reg(sctx, f, R_00D834_SDMA1_STATUS_REG);
-	if (sctx->b.chip_class <= VI) {
+	if (sctx->chip_class <= VI) {
 		si_dump_mmapped_reg(sctx, f, R_000E50_SRBM_STATUS);
 		si_dump_mmapped_reg(sctx, f, R_000E4C_SRBM_STATUS2);
 		si_dump_mmapped_reg(sctx, f, R_000E54_SRBM_STATUS3);
@@ -340,7 +399,7 @@ static void si_log_chunk_type_cs_print(void *data, FILE *f)
 	 * waited for the context, so this buffer should be idle.
 	 * If the GPU is hung, there is no point in waiting for it.
 	 */
-	uint32_t *map = ctx->b.ws->buffer_map(scs->trace_buf->buf,
+	uint32_t *map = ctx->ws->buffer_map(scs->trace_buf->buf,
 					      NULL,
 					      PIPE_TRANSFER_UNSYNCHRONIZED |
 					      PIPE_TRANSFER_READ);
@@ -351,25 +410,25 @@ static void si_log_chunk_type_cs_print(void *data, FILE *f)
 		if (chunk->gfx_begin == 0) {
 			if (ctx->init_config)
 				ac_parse_ib(f, ctx->init_config->pm4, ctx->init_config->ndw,
-					    NULL, 0, "IB2: Init config", ctx->b.chip_class,
+					    NULL, 0, "IB2: Init config", ctx->chip_class,
 					    NULL, NULL);
 
 			if (ctx->init_config_gs_rings)
 				ac_parse_ib(f, ctx->init_config_gs_rings->pm4,
 					    ctx->init_config_gs_rings->ndw,
-					    NULL, 0, "IB2: Init GS rings", ctx->b.chip_class,
+					    NULL, 0, "IB2: Init GS rings", ctx->chip_class,
 					    NULL, NULL);
 		}
 
 		if (scs->flushed) {
 			ac_parse_ib(f, scs->gfx.ib + chunk->gfx_begin,
 				    chunk->gfx_end - chunk->gfx_begin,
-				    &last_trace_id, map ? 1 : 0, "IB", ctx->b.chip_class,
+				    &last_trace_id, map ? 1 : 0, "IB", ctx->chip_class,
 				    NULL, NULL);
 		} else {
-			si_parse_current_ib(f, ctx->b.gfx.cs, chunk->gfx_begin,
+			si_parse_current_ib(f, ctx->gfx_cs, chunk->gfx_begin,
 					    chunk->gfx_end, &last_trace_id, map ? 1 : 0,
-					    "IB", ctx->b.chip_class);
+					    "IB", ctx->chip_class);
 		}
 	}
 
@@ -392,7 +451,7 @@ static void si_log_cs(struct si_context *ctx, struct u_log_context *log,
 	assert(ctx->current_saved_cs);
 
 	struct si_saved_cs *scs = ctx->current_saved_cs;
-	unsigned gfx_cur = ctx->b.gfx.cs->prev_dw + ctx->b.gfx.cs->current.cdw;
+	unsigned gfx_cur = ctx->gfx_cs->prev_dw + ctx->gfx_cs->current.cdw;
 
 	if (!dump_bo_list &&
 	    gfx_cur == scs->gfx_last_dw)
@@ -419,10 +478,10 @@ void si_auto_log_cs(void *data, struct u_log_context *log)
 
 void si_log_hw_flush(struct si_context *sctx)
 {
-	if (!sctx->b.log)
+	if (!sctx->log)
 		return;
 
-	si_log_cs(sctx, sctx->b.log, true);
+	si_log_cs(sctx, sctx->log, true);
 }
 
 static const char *priority_to_string(enum radeon_bo_priority priority)
@@ -494,7 +553,7 @@ static void si_dump_bo_list(struct si_context *sctx,
 
 	for (i = 0; i < saved->bo_count; i++) {
 		/* Note: Buffer sizes are expected to be aligned to 4k by the winsys. */
-		const unsigned page_size = sctx->b.screen->info.gart_page_size;
+		const unsigned page_size = sctx->screen->info.gart_page_size;
 		uint64_t va = saved->bo_list[i].vm_address;
 		uint64_t size = saved->bo_list[i].bo_size;
 		bool hit = false;
@@ -540,14 +599,14 @@ static void si_dump_framebuffer(struct si_context *sctx, struct u_log_context *l
 
 		rtex = (struct r600_texture*)state->cbufs[i]->texture;
 		u_log_printf(log, COLOR_YELLOW "Color buffer %i:" COLOR_RESET "\n", i);
-		si_print_texture_info(sctx->b.screen, rtex, log);
+		si_print_texture_info(sctx->screen, rtex, log);
 		u_log_printf(log, "\n");
 	}
 
 	if (state->zsbuf) {
 		rtex = (struct r600_texture*)state->zsbuf->texture;
 		u_log_printf(log, COLOR_YELLOW "Depth-stencil buffer:" COLOR_RESET "\n");
-		si_print_texture_info(sctx->b.screen, rtex, log);
+		si_print_texture_info(sctx->screen, rtex, log);
 		u_log_printf(log, "\n");
 	}
 }
@@ -692,7 +751,7 @@ static void si_dump_descriptor_list(struct si_screen *screen,
 	chunk->element_dw_size = element_dw_size;
 	chunk->num_elements = num_elements;
 	chunk->slot_remap = slot_remap;
-	chunk->chip_class = screen->b.chip_class;
+	chunk->chip_class = screen->info.chip_class;
 
 	r600_resource_reference(&chunk->buf, desc->buffer);
 	chunk->gpu_list = desc->gpu_list;
@@ -740,10 +799,20 @@ static void si_dump_descriptors(struct si_context *sctx,
 		enabled_images = sctx->images[processor].enabled_mask;
 	}
 
-	if (processor == PIPE_SHADER_VERTEX) {
+	if (processor == PIPE_SHADER_VERTEX &&
+	    sctx->vb_descriptors_buffer &&
+	    sctx->vb_descriptors_gpu_list &&
+	    sctx->vertex_elements) {
 		assert(info); /* only CS may not have an info struct */
+		struct si_descriptors desc = {};
 
-		si_dump_descriptor_list(sctx->screen, &sctx->vertex_buffers, name,
+		desc.buffer = sctx->vb_descriptors_buffer;
+		desc.list = sctx->vb_descriptors_gpu_list;
+		desc.gpu_list = sctx->vb_descriptors_gpu_list;
+		desc.element_dw_size = 4;
+		desc.num_active_slots = sctx->vertex_elements->desc_list_byte_size / 16;
+
+		si_dump_descriptor_list(sctx->screen, &desc, name,
 					" - Vertex buffer", 4, info->num_inputs,
 					si_identity, log);
 	}
@@ -975,8 +1044,8 @@ static void si_dump_debug_state(struct pipe_context *ctx, FILE *f,
 {
 	struct si_context *sctx = (struct si_context*)ctx;
 
-	if (sctx->b.log)
-		u_log_flush(sctx->b.log);
+	if (sctx->log)
+		u_log_flush(sctx->log);
 
 	if (flags & PIPE_DUMP_DEVICE_STATUS_REGISTERS) {
 		si_dump_debug_registers(sctx, f);
@@ -1040,16 +1109,15 @@ static void si_dump_dma(struct si_context *sctx,
 	fprintf(f, "SDMA Dump Done.\n");
 }
 
-void si_check_vm_faults(struct r600_common_context *ctx,
+void si_check_vm_faults(struct si_context *sctx,
 			struct radeon_saved_cs *saved, enum ring_type ring)
 {
-	struct si_context *sctx = (struct si_context *)ctx;
-	struct pipe_screen *screen = sctx->b.b.screen;
+	struct pipe_screen *screen = sctx->b.screen;
 	FILE *f;
 	uint64_t addr;
 	char cmd_line[4096];
 
-	if (!ac_vm_fault_occured(sctx->b.chip_class,
+	if (!ac_vm_fault_occured(sctx->chip_class,
 				 &sctx->dmesg_timestamp, &addr))
 		return;
 
@@ -1076,6 +1144,7 @@ void si_check_vm_faults(struct r600_common_context *ctx,
 
 		si_log_draw_state(sctx, &log);
 		si_log_compute_state(sctx, &log);
+		si_log_cs(sctx, &log, true);
 
 		u_log_new_page_print(&log, f);
 		u_log_context_destroy(&log);
@@ -1097,13 +1166,12 @@ void si_check_vm_faults(struct r600_common_context *ctx,
 
 void si_init_debug_functions(struct si_context *sctx)
 {
-	sctx->b.b.dump_debug_state = si_dump_debug_state;
-	sctx->b.check_vm_faults = si_check_vm_faults;
+	sctx->b.dump_debug_state = si_dump_debug_state;
 
 	/* Set the initial dmesg timestamp for this context, so that
 	 * only new messages will be checked for VM faults.
 	 */
-	if (sctx->screen->b.debug_flags & DBG(CHECK_VM))
-		ac_vm_fault_occured(sctx->b.chip_class,
+	if (sctx->screen->debug_flags & DBG(CHECK_VM))
+		ac_vm_fault_occured(sctx->chip_class,
 				    &sctx->dmesg_timestamp, NULL);
 }

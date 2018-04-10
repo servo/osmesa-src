@@ -88,7 +88,7 @@ nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
                  PIPE_BIND_SHARED);
 
    if (bindings & PIPE_BIND_SHADER_IMAGE) {
-      if (sample_count > 1 &&
+      if (sample_count > 0 &&
           nouveau_screen(pscreen)->class_3d >= GM107_3D_CLASS) {
          /* MS images are currently unsupported on Maxwell because they have to
           * be handled explicitly. */
@@ -176,7 +176,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    /* supported caps */
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
    case PIPE_CAP_TEXTURE_SWIZZLE:
-   case PIPE_CAP_TEXTURE_SHADOW_MAP:
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
@@ -185,7 +184,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CUBE_MAP_ARRAY:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
-   case PIPE_CAP_TWO_SIDED_STENCIL:
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
    case PIPE_CAP_POINT_SPRITE:
    case PIPE_CAP_TGSI_TEXCOORD:
@@ -214,7 +212,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_START_INSTANCE:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_DRAW_INDIRECT:
-   case PIPE_CAP_USER_CONSTANT_BUFFERS:
    case PIPE_CAP_USER_VERTEX_BUFFERS:
    case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_SAMPLE_SHADING:
@@ -257,9 +254,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_COMPUTE:
    case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
+   case PIPE_CAP_QUERY_SO_OVERFLOW:
       return 1;
-   case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
-      return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return nouveau_screen(pscreen)->vram_domain & NOUVEAU_BO_VRAM ? 1 : 0;
    case PIPE_CAP_TGSI_FS_FBFETCH:
@@ -269,7 +265,9 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
    case PIPE_CAP_POST_DEPTH_COVERAGE:
       return class_3d >= GM200_3D_CLASS;
+   case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_TGSI_BALLOT:
+   case PIPE_CAP_BINDLESS_TEXTURE:
       return class_3d >= NVE4_3D_CLASS;
 
    /* unsupported caps */
@@ -300,15 +298,17 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_INT64_DIVMOD:
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
-   case PIPE_CAP_BINDLESS_TEXTURE:
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
-   case PIPE_CAP_QUERY_SO_OVERFLOW:
    case PIPE_CAP_MEMOBJ:
    case PIPE_CAP_LOAD_CONSTBUF:
    case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
    case PIPE_CAP_TILE_RASTER_ORDER:
    case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
    case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
+   case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+   case PIPE_CAP_FENCE_SIGNAL:
+   case PIPE_CAP_CONSTBUF0_FLAGS:
+   case PIPE_CAP_PACKED_UNIFORMS:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -450,12 +450,6 @@ nvc0_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
       return 16.0f;
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 15.0f;
-   case PIPE_CAPF_GUARD_BAND_LEFT:
-   case PIPE_CAPF_GUARD_BAND_TOP:
-      return 0.0f;
-   case PIPE_CAPF_GUARD_BAND_RIGHT:
-   case PIPE_CAPF_GUARD_BAND_BOTTOM:
-      return 0.0f; /* that or infinity */
    }
 
    NOUVEAU_ERR("unknown PIPE_CAPF %d\n", param);
@@ -740,6 +734,13 @@ nvc0_screen_resize_tls_area(struct nvc0_screen *screen,
                         NULL, &bo);
    if (ret)
       return ret;
+
+   /* Make sure that the pushbuf has acquired a reference to the old tls
+    * segment, as it may have commands that will reference it.
+    */
+   if (screen->tls)
+      PUSH_REFN(screen->base.pushbuf, screen->tls,
+                NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_RDWR);
    nouveau_bo_ref(NULL, &screen->tls);
    screen->tls = bo;
    return 0;
@@ -757,6 +758,12 @@ nvc0_screen_resize_text_area(struct nvc0_screen *screen, uint64_t size)
    if (ret)
       return ret;
 
+   /* Make sure that the pushbuf has acquired a reference to the old text
+    * segment, as it may have commands that will reference it.
+    */
+   if (screen->text)
+      PUSH_REFN(push, screen->text,
+                NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_RD);
    nouveau_bo_ref(NULL, &screen->text);
    screen->text = bo;
 
@@ -1043,7 +1050,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    if (ret)
       FAIL_SCREEN_INIT("Error allocating TEXT area: %d\n", ret);
 
-   ret = nouveau_bo_new(dev, NV_VRAM_DOMAIN(&screen->base), 1 << 12, 7 << 16, NULL,
+   /* 6 user uniform areas, 6 driver areas, and 1 for the runout */
+   ret = nouveau_bo_new(dev, NV_VRAM_DOMAIN(&screen->base), 1 << 12, 13 << 16, NULL,
                         &screen->uniform_bo);
    if (ret)
       FAIL_SCREEN_INIT("Error allocating uniform BO: %d\n", ret);
@@ -1265,8 +1273,11 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    PUSH_KICK (push);
 
-   screen->tic.entries = CALLOC(4096, sizeof(void *));
-   screen->tsc.entries = screen->tic.entries + 2048;
+   screen->tic.entries = CALLOC(
+         NVC0_TIC_MAX_ENTRIES + NVC0_TSC_MAX_ENTRIES + NVE4_IMG_MAX_HANDLES,
+         sizeof(void *));
+   screen->tsc.entries = screen->tic.entries + NVC0_TIC_MAX_ENTRIES;
+   screen->img.entries = (void *)(screen->tsc.entries + NVC0_TSC_MAX_ENTRIES);
 
    if (!nvc0_blitter_create(screen))
       goto fail;

@@ -391,6 +391,15 @@ enum pipe_flush_flags
  */
 #define PIPE_CONTEXT_PREFER_THREADED   (1 << 3)
 
+/**
+ * Create a high priority context.
+ */
+#define PIPE_CONTEXT_HIGH_PRIORITY     (1 << 4)
+
+/**
+ * Create a low priority context.
+ */
+#define PIPE_CONTEXT_LOW_PRIORITY      (1 << 5)
 
 /**
  * Flags for pipe_context::memory_barrier.
@@ -623,14 +632,12 @@ enum pipe_reset_status
 enum pipe_cap
 {
    PIPE_CAP_NPOT_TEXTURES,
-   PIPE_CAP_TWO_SIDED_STENCIL,
    PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS,
    PIPE_CAP_ANISOTROPIC_FILTER,
    PIPE_CAP_POINT_SPRITE,
    PIPE_CAP_MAX_RENDER_TARGETS,
    PIPE_CAP_OCCLUSION_QUERY,
    PIPE_CAP_QUERY_TIME_ELAPSED,
-   PIPE_CAP_TEXTURE_SHADOW_MAP,
    PIPE_CAP_TEXTURE_SWIZZLE,
    PIPE_CAP_MAX_TEXTURE_2D_LEVELS,
    PIPE_CAP_MAX_TEXTURE_3D_LEVELS,
@@ -674,7 +681,6 @@ enum pipe_cap
    PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY,
    PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY,
    PIPE_CAP_COMPUTE,
-   PIPE_CAP_USER_CONSTANT_BUFFERS,
    PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT,
    PIPE_CAP_START_INSTANCE,
    PIPE_CAP_QUERY_TIMESTAMP,
@@ -785,7 +791,22 @@ enum pipe_cap
    PIPE_CAP_TILE_RASTER_ORDER,
    PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES,
    PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET,
+   PIPE_CAP_CONTEXT_PRIORITY_MASK,
+   PIPE_CAP_FENCE_SIGNAL,
+   PIPE_CAP_CONSTBUF0_FLAGS,
+   PIPE_CAP_PACKED_UNIFORMS,
 };
+
+/**
+ * Possible bits for PIPE_CAP_CONTEXT_PRIORITY_MASK param, which should
+ * return a bitmask of the supported priorities.  If the driver does not
+ * support prioritized contexts, it can return 0.
+ *
+ * Note that these match __DRI2_RENDER_HAS_CONTEXT_PRIORITY_*
+ */
+#define PIPE_CONTEXT_PRIORITY_LOW     (1 << 0)
+#define PIPE_CONTEXT_PRIORITY_MEDIUM  (1 << 1)
+#define PIPE_CONTEXT_PRIORITY_HIGH    (1 << 2)
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600 (1 << 1)
@@ -813,10 +834,6 @@ enum pipe_capf
    PIPE_CAPF_MAX_POINT_WIDTH_AA,
    PIPE_CAPF_MAX_TEXTURE_ANISOTROPY,
    PIPE_CAPF_MAX_TEXTURE_LOD_BIAS,
-   PIPE_CAPF_GUARD_BAND_LEFT,
-   PIPE_CAPF_GUARD_BAND_TOP,
-   PIPE_CAPF_GUARD_BAND_RIGHT,
-   PIPE_CAPF_GUARD_BAND_BOTTOM
 };
 
 /** Shader caps not specific to any single stage */
@@ -875,7 +892,6 @@ enum pipe_shader_cap
 enum pipe_shader_ir
 {
    PIPE_SHADER_IR_TGSI = 0,
-   PIPE_SHADER_IR_LLVM,
    PIPE_SHADER_IR_NATIVE,
    PIPE_SHADER_IR_NIR,
 };
@@ -1064,6 +1080,12 @@ struct pipe_driver_query_group_info
    const char *name;
    unsigned max_active_queries;
    unsigned num_queries;
+};
+
+enum pipe_fd_type
+{
+   PIPE_FD_TYPE_NATIVE_SYNC,
+   PIPE_FD_TYPE_SYNCOBJ,
 };
 
 enum pipe_debug_type

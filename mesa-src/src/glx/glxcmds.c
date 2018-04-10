@@ -43,6 +43,7 @@
 #ifdef GLX_USE_APPLEGL
 #include "apple/apple_glx_context.h"
 #include "apple/apple_glx.h"
+#include "util/debug.h"
 #else
 #include <sys/time.h>
 #ifdef XF86VIDMODE
@@ -392,15 +393,7 @@ glXCreateContext(Display * dpy, XVisualInfo * vis,
       config = glx_config_find_visual(psc->visuals, vis->visualid);
 
    if (config == NULL) {
-      xError error;
-
-      error.errorCode = BadValue;
-      error.resourceID = vis->visualid;
-      error.sequenceNumber = dpy->request;
-      error.type = X_Error;
-      error.majorCode = __glXSetupForCommand(dpy);
-      error.minorCode = X_GLXCreateContext;
-      _XError(dpy, &error);
+      __glXSendError(dpy, BadValue, vis->visualid, X_GLXCreateContext, True);
       return None;
    }
 
@@ -528,7 +521,7 @@ glXWaitGL(void)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc != &dummyContext && gc->vtable->wait_gl)
+   if (gc->vtable->wait_gl)
       gc->vtable->wait_gl(gc);
 }
 
@@ -541,7 +534,7 @@ glXWaitX(void)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc != &dummyContext && gc->vtable->wait_x)
+   if (gc->vtable->wait_x)
       gc->vtable->wait_x(gc);
 }
 
@@ -550,7 +543,7 @@ glXUseXFont(Font font, int first, int count, int listBase)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc != &dummyContext && gc->vtable->use_x_font)
+   if (gc->vtable->use_x_font)
       gc->vtable->use_x_font(gc, font, first, count, listBase);
 }
 
@@ -2044,40 +2037,6 @@ glXGetFBConfigFromVisualSGIX(Display * dpy, XVisualInfo * vis)
 
 #ifndef GLX_USE_APPLEGL
 /*
-** GLX_SGIX_swap_group
-*/
-static void
-__glXJoinSwapGroupSGIX(Display * dpy, GLXDrawable drawable,
-                       GLXDrawable member)
-{
-   (void) dpy;
-   (void) drawable;
-   (void) member;
-}
-
-
-/*
-** GLX_SGIX_swap_barrier
-*/
-static void
-__glXBindSwapBarrierSGIX(Display * dpy, GLXDrawable drawable, int barrier)
-{
-   (void) dpy;
-   (void) drawable;
-   (void) barrier;
-}
-
-static Bool
-__glXQueryMaxSwapBarriersSGIX(Display * dpy, int screen, int *max)
-{
-   (void) dpy;
-   (void) screen;
-   (void) max;
-   return False;
-}
-
-
-/*
 ** GLX_OML_sync_control
 */
 static Bool
@@ -2431,7 +2390,7 @@ __glXBindTexImageEXT(Display * dpy,
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc == &dummyContext || gc->vtable->bind_tex_image == NULL)
+   if (gc->vtable->bind_tex_image == NULL)
       return;
 
    gc->vtable->bind_tex_image(dpy, drawable, buffer, attrib_list);
@@ -2442,7 +2401,7 @@ __glXReleaseTexImageEXT(Display * dpy, GLXDrawable drawable, int buffer)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc == &dummyContext || gc->vtable->release_tex_image == NULL)
+   if (gc->vtable->release_tex_image == NULL)
       return;
 
    gc->vtable->release_tex_image(dpy, drawable, buffer);
@@ -2547,13 +2506,6 @@ static const struct name_address_pair GLX_functions[] = {
    GLX_FUNCTION(glXQueryGLXPbufferSGIX),
    GLX_FUNCTION(glXSelectEventSGIX),
    GLX_FUNCTION(glXGetSelectedEventSGIX),
-
-   /*** GLX_SGIX_swap_group ***/
-   GLX_FUNCTION2(glXJoinSwapGroupSGIX, __glXJoinSwapGroupSGIX),
-
-   /*** GLX_SGIX_swap_barrier ***/
-   GLX_FUNCTION2(glXBindSwapBarrierSGIX, __glXBindSwapBarrierSGIX),
-   GLX_FUNCTION2(glXQueryMaxSwapBarriersSGIX, __glXQueryMaxSwapBarriersSGIX),
 
    /*** GLX_MESA_copy_sub_buffer ***/
    GLX_FUNCTION2(glXCopySubBufferMESA, __glXCopySubBufferMESA),

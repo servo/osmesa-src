@@ -42,11 +42,15 @@ enum {
 	RADV_DEBUG_ZERO_VRAM         = 0x1000,
 	RADV_DEBUG_SYNC_SHADERS      = 0x2000,
 	RADV_DEBUG_NO_SISCHED        = 0x4000,
+	RADV_DEBUG_PREOPTIR          = 0x8000,
 };
 
 enum {
 	RADV_PERFTEST_NO_BATCHCHAIN  =   0x1,
 	RADV_PERFTEST_SISCHED        =   0x2,
+	RADV_PERFTEST_LOCAL_BOS      =   0x4,
+	RADV_PERFTEST_BINNING     =   0x8,
+	RADV_PERFTEST_OUT_OF_ORDER   =  0x10,
 };
 
 bool
@@ -57,5 +61,8 @@ radv_check_gpu_hangs(struct radv_queue *queue, struct radeon_winsys_cs *cs);
 
 void
 radv_print_spirv(uint32_t *data, uint32_t size, FILE *fp);
+
+void
+radv_dump_enabled_options(struct radv_device *device, FILE *f);
 
 #endif

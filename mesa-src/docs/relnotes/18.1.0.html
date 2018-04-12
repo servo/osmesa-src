@@ -1,0 +1,73 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html lang="en">
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <title>Mesa Release Notes</title>
+  <link rel="stylesheet" type="text/css" href="../mesa.css">
+</head>
+<body>
+
+<div class="header">
+  <h1>The Mesa 3D Graphics Library</h1>
+</div>
+
+<iframe src="../contents.html"></iframe>
+<div class="content">
+
+<h1>Mesa 18.1.0 Release Notes / TBD</h1>
+
+<p>
+Mesa 18.1.0 is a new development release. People who are concerned
+with stability and reliability should stick with a previous release or
+wait for Mesa 18.1.1.
+</p>
+<p>
+Mesa 18.1.0 implements the OpenGL 4.5 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.5.  OpenGL
+4.5 is <strong>only</strong> available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+</p>
+
+
+<h2>SHA256 checksums</h2>
+<pre>
+TBD.
+</pre>
+
+
+<h2>New features</h2>
+
+<p>
+Note: some of the new features are only available with certain drivers.
+</p>
+
+<ul>
+<li>OpenGL 3.1 with ARB_compatibility on nv50, nvc0, r600, radeonsi, softpipe, llvmpipe, svga</li>
+<li>GL_ARB_bindless_texture on nvc0/maxwell+</li>
+<li>GL_ARB_transform_feedback_overflow_query on nvc0</li>
+<li>GL_EXT_semaphore on radeonsi</li>
+<li>GL_EXT_semaphore_fd on radeonsi</li>
+<li>GL_EXT_shader_framebuffer_fetch on i965 on desktop GL (GLES was already supported)</li>
+<li>GL_EXT_shader_framebuffer_fetch_non_coherent on i965</li>
+<li>GL_KHR_blend_equation_advanced on radeonsi</li>
+<li>Disk shader cache support for i965 enabled by default</li>
+</ul>
+
+<h2>Bug fixes</h2>
+
+<ul>
+TBD
+</ul>
+
+<h2>Changes</h2>
+
+<ul>
+<li>Remove incomplete GLX_SGIX_swap_barrier stubs from the Xlib libGL</li>
+<li>Remove incomplete GLX_SGIX_swap_group stubs from the Xlib libGL</li>
+</ul>
+
+</div>
+</body>
+</html>

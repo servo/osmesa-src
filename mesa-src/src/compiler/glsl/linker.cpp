@@ -456,7 +456,7 @@ linker_error(gl_shader_program *prog, const char *fmt, ...)
    ralloc_vasprintf_append(&prog->data->InfoLog, fmt, ap);
    va_end(ap);
 
-   prog->data->LinkStatus = linking_failure;
+   prog->data->LinkStatus = LINKING_FAILURE;
 }
 
 
@@ -1111,15 +1111,10 @@ cross_validate_globals(struct gl_shader_program *prog,
             return;
          }
 
-         /* Only in GLSL ES 3.10, the precision qualifier should not match
-          * between block members defined in matched block names within a
-          * shader interface.
-          *
-          * In GLSL ES 3.00 and ES 3.20, precision qualifier for each block
-          * member should match.
+         /* Check the precision qualifier matches for uniform variables on
+          * GLSL ES.
           */
-         if (prog->IsES && (prog->data->Version != 310 ||
-                            !var->get_interface_type()) &&
+         if (prog->IsES && !var->get_interface_type() &&
              existing->data.precision != var->data.precision) {
             if ((existing->data.used && var->data.used) || prog->data->Version >= 300) {
                linker_error(prog, "declarations for %s `%s` have "
@@ -1130,6 +1125,36 @@ cross_validate_globals(struct gl_shader_program *prog,
                linker_warning(prog, "declarations for %s `%s` have "
                               "mismatching precision qualifiers\n",
                               mode_string(var), var->name);
+            }
+         }
+
+         /* In OpenGL GLSL 3.20 spec, section 4.3.9:
+          *
+          *   "It is a link-time error if any particular shader interface
+          *    contains:
+          *
+          *    - two different blocks, each having no instance name, and each
+          *      having a member of the same name, or
+          *
+          *    - a variable outside a block, and a block with no instance name,
+          *      where the variable has the same name as a member in the block."
+          */
+         const glsl_type *var_itype = var->get_interface_type();
+         const glsl_type *existing_itype = existing->get_interface_type();
+         if (var_itype != existing_itype) {
+            if (!var_itype || !existing_itype) {
+               linker_error(prog, "declarations for %s `%s` are inside block "
+                            "`%s` and outside a block",
+                            mode_string(var), var->name,
+                            var_itype ? var_itype->name : existing_itype->name);
+               return;
+            } else if (strcmp(var_itype->name, existing_itype->name) != 0) {
+               linker_error(prog, "declarations for %s `%s` are inside blocks "
+                            "`%s` and `%s`",
+                            mode_string(var), var->name,
+                            existing_itype->name,
+                            var_itype->name);
+               return;
             }
          }
       } else
@@ -2259,7 +2284,7 @@ link_intrastage_shaders(void *mem_ctx,
                              _mesa_shader_stage_to_program(shader_list[0]->Stage),
                              prog->Name, false);
    if (!gl_prog) {
-      prog->data->LinkStatus = linking_failure;
+      prog->data->LinkStatus = LINKING_FAILURE;
       _mesa_delete_linked_shader(ctx, linked);
       return NULL;
    }
@@ -2502,7 +2527,7 @@ resize_tes_inputs(struct gl_context *ctx,
       ir->accept(&input_resize_visitor);
    }
 
-   if (tcs || ctx->Const.LowerTESPatchVerticesIn) {
+   if (tcs) {
       /* Convert the gl_PatchVerticesIn system value into a constant, since
        * the value is known at this point.
        */
@@ -2513,20 +2538,8 @@ resize_tes_inputs(struct gl_context *ctx,
             void *mem_ctx = ralloc_parent(var);
             var->data.location = 0;
             var->data.explicit_location = false;
-            if (tcs) {
-               var->data.mode = ir_var_auto;
-               var->constant_value = new(mem_ctx) ir_constant(num_vertices);
-            } else {
-               var->data.mode = ir_var_uniform;
-               var->data.how_declared = ir_var_hidden;
-               var->allocate_state_slots(1);
-               ir_state_slot *slot0 = &var->get_state_slots()[0];
-               slot0->swizzle = SWIZZLE_XXXX;
-               slot0->tokens[0] = STATE_INTERNAL;
-               slot0->tokens[1] = STATE_TES_PATCH_VERTICES_IN;
-               for (int i = 2; i < STATE_LENGTH; i++)
-                  slot0->tokens[i] = 0;
-            }
+            var->data.mode = ir_var_auto;
+            var->constant_value = new(mem_ctx) ir_constant(num_vertices);
          }
       }
    }
@@ -2564,6 +2577,8 @@ find_available_slots(unsigned used_mask, unsigned needed_count)
 }
 
 
+#define SAFE_MASK_FROM_INDEX(i) (((i) >= 32) ? ~0 : ((1 << (i)) - 1))
+
 /**
  * Assign locations for either VS inputs or FS outputs
  *
@@ -2594,8 +2609,7 @@ assign_attribute_or_color_locations(void *mem_ctx,
 
    /* Mark invalid locations as being used.
     */
-   unsigned used_locations = (max_index >= 32)
-      ? ~0 : ~((1 << max_index) - 1);
+   unsigned used_locations = ~SAFE_MASK_FROM_INDEX(max_index);
    unsigned double_storage_locations = 0;
 
    assert((target_index == MESA_SHADER_VERTEX)
@@ -2948,7 +2962,7 @@ assign_attribute_or_color_locations(void *mem_ctx,
 
    if (target_index == MESA_SHADER_VERTEX) {
       unsigned total_attribs_size =
-         _mesa_bitcount(used_locations & ((1 << max_index) - 1)) +
+         _mesa_bitcount(used_locations & SAFE_MASK_FROM_INDEX(max_index)) +
          _mesa_bitcount(double_storage_locations);
       if (total_attribs_size > max_index) {
          linker_error(prog,
@@ -3012,7 +3026,7 @@ assign_attribute_or_color_locations(void *mem_ctx,
     */
    if (target_index == MESA_SHADER_VERTEX) {
       unsigned total_attribs_size =
-         _mesa_bitcount(used_locations & ((1 << max_index) - 1)) +
+         _mesa_bitcount(used_locations & SAFE_MASK_FROM_INDEX(max_index)) +
          _mesa_bitcount(double_storage_locations);
       if (total_attribs_size > max_index) {
          linker_error(prog,
@@ -4736,7 +4750,7 @@ linker_optimisation_loop(struct gl_context *ctx, exec_list *ir,
 void
 link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 {
-   prog->data->LinkStatus = linking_success; /* All error paths will set this to false */
+   prog->data->LinkStatus = LINKING_SUCCESS; /* All error paths will set this to false */
    prog->data->Validated = false;
 
    /* Section 7.3 (Program Objects) of the OpenGL 4.5 Core Profile spec says:
@@ -4759,16 +4773,7 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
    }
 
 #ifdef ENABLE_SHADER_CACHE
-   /* If transform feedback used on the program then compile all shaders. */
-   bool skip_cache = false;
-   if (prog->TransformFeedback.NumVarying > 0) {
-      for (unsigned i = 0; i < prog->NumShaders; i++) {
-         _mesa_glsl_compile_shader(ctx, prog->Shaders[i], false, false, true);
-      }
-      skip_cache = true;
-   }
-
-   if (!skip_cache && shader_cache_read_program_metadata(ctx, prog))
+   if (shader_cache_read_program_metadata(ctx, prog))
       return;
 #endif
 

@@ -38,15 +38,19 @@
 
 
 #include <stdbool.h>
+#include <c99_alloca.h>
 #include "main/glheader.h"
 #include "main/context.h"
 #include "main/dispatch.h"
 #include "main/enums.h"
+#include "main/glspirv.h"
 #include "main/hash.h"
 #include "main/mtypes.h"
 #include "main/pipelineobj.h"
+#include "main/program_binary.h"
 #include "main/shaderapi.h"
 #include "main/shaderobj.h"
+#include "main/state.h"
 #include "main/transformfeedback.h"
 #include "main/uniforms.h"
 #include "compiler/glsl/glsl_parser_extras.h"
@@ -664,7 +668,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
    /* True if geometry shaders (of the form that was adopted into GLSL 1.50
     * and GL 3.2) are available in this context
     */
-   const bool has_core_gs = _mesa_has_geometry_shaders(ctx);
+   const bool has_gs = _mesa_has_geometry_shaders(ctx);
    const bool has_tess = _mesa_has_tessellation(ctx);
 
    /* Are uniform buffer objects available in this context?
@@ -765,7 +769,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
       *params = shProg->TransformFeedback.BufferMode;
       return;
    case GL_GEOMETRY_VERTICES_OUT:
-      if (!has_core_gs)
+      if (!has_gs)
          break;
       if (check_gs_query(ctx, shProg)) {
          *params = shProg->_LinkedShaders[MESA_SHADER_GEOMETRY]->
@@ -773,7 +777,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
       }
       return;
    case GL_GEOMETRY_SHADER_INVOCATIONS:
-      if (!has_core_gs || !ctx->Extensions.ARB_gpu_shader5)
+      if (!has_gs || !ctx->Extensions.ARB_gpu_shader5)
          break;
       if (check_gs_query(ctx, shProg)) {
          *params = shProg->_LinkedShaders[MESA_SHADER_GEOMETRY]->
@@ -781,7 +785,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
       }
       return;
    case GL_GEOMETRY_INPUT_TYPE:
-      if (!has_core_gs)
+      if (!has_gs)
          break;
       if (check_gs_query(ctx, shProg)) {
          *params = shProg->_LinkedShaders[MESA_SHADER_GEOMETRY]->
@@ -789,7 +793,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
       }
       return;
    case GL_GEOMETRY_OUTPUT_TYPE:
-      if (!has_core_gs)
+      if (!has_gs)
          break;
       if (check_gs_query(ctx, shProg)) {
          *params = shProg->_LinkedShaders[MESA_SHADER_GEOMETRY]->
@@ -834,7 +838,11 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
       *params = shProg->BinaryRetreivableHint;
       return;
    case GL_PROGRAM_BINARY_LENGTH:
-      *params = 0;
+      if (ctx->Const.NumProgramBinaryFormats == 0) {
+         *params = 0;
+      } else {
+         _mesa_get_program_binary_length(ctx, shProg, params);
+      }
       return;
    case GL_ACTIVE_ATOMIC_COUNTER_BUFFERS:
       if (!ctx->Extensions.ARB_shader_atomic_counters)
@@ -863,7 +871,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
    }
    case GL_PROGRAM_SEPARABLE:
       /* If the program has not been linked, return initial value 0. */
-      *params = (shProg->data->LinkStatus == linking_failure) ? 0 : shProg->SeparateShader;
+      *params = (shProg->data->LinkStatus == LINKING_FAILURE) ? 0 : shProg->SeparateShader;
       return;
 
    /* ARB_tessellation_shader */
@@ -960,6 +968,9 @@ get_shaderiv(struct gl_context *ctx, GLuint name, GLenum pname, GLint *params)
    case GL_SHADER_SOURCE_LENGTH:
       *params = shader->Source ? strlen((char *) shader->Source) + 1 : 0;
       break;
+   case GL_SPIR_V_BINARY_ARB:
+      *params = (shader->spirv_data != NULL);
+      break;
    default:
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetShaderiv(pname)");
       return;
@@ -1051,7 +1062,17 @@ set_shader_source(struct gl_shader *sh, const GLchar *source)
 {
    assert(sh);
 
-   if (sh->CompileStatus == compile_skipped && !sh->FallbackSource) {
+   /* The GL_ARB_gl_spirv spec adds the following to the end of the description
+    * of ShaderSource:
+    *
+    *   "If <shader> was previously associated with a SPIR-V module (via the
+    *    ShaderBinary command), that association is broken. Upon successful
+    *    completion of this command the SPIR_V_BINARY_ARB state of <shader>
+    *    is set to FALSE."
+    */
+   _mesa_shader_spirv_data_reference(&sh->spirv_data, NULL);
+
+   if (sh->CompileStatus == COMPILE_SKIPPED && !sh->FallbackSource) {
       /* If shader was previously compiled back-up the source in case of cache
        * fallback.
        */
@@ -1078,11 +1099,23 @@ _mesa_compile_shader(struct gl_context *ctx, struct gl_shader *sh)
    if (!sh)
       return;
 
+   /* The GL_ARB_gl_spirv spec says:
+    *
+    *    "Add a new error for the CompileShader command:
+    *
+    *      An INVALID_OPERATION error is generated if the SPIR_V_BINARY_ARB
+    *      state of <shader> is TRUE."
+    */
+   if (sh->spirv_data) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glCompileShader(SPIR-V)");
+      return;
+   }
+
    if (!sh->Source) {
       /* If the user called glCompileShader without first calling
        * glShaderSource, we should fail to compile, but not raise a GL_ERROR.
        */
-      sh->CompileStatus = compile_failure;
+      sh->CompileStatus = COMPILE_FAILURE;
    } else {
       if (ctx->_Shader->Flags & GLSL_DUMP) {
          _mesa_log("GLSL source for %s shader %d:\n",
@@ -1220,11 +1253,13 @@ link_program(struct gl_context *ctx, struct gl_shader_program *shProg,
       ralloc_free(filename);
    }
 
-   if (shProg->data->LinkStatus == linking_failure &&
+   if (shProg->data->LinkStatus == LINKING_FAILURE &&
        (ctx->_Shader->Flags & GLSL_REPORT_ERRORS)) {
       _mesa_debug(ctx, "Error linking program %u:\n%s\n",
                   shProg->Name, shProg->data->InfoLog);
    }
+
+   _mesa_update_vertex_processing_mode(ctx);
 
    /* debug code */
    if (0) {
@@ -2034,6 +2069,8 @@ use_program(GLuint program, bool no_error)
             _mesa_BindProgramPipeline(ctx->Pipeline.Current->Name);
       }
    }
+
+   _mesa_update_vertex_processing_mode(ctx);
 }
 
 
@@ -2132,9 +2169,7 @@ _mesa_ShaderBinary(GLint n, const GLuint* shaders, GLenum binaryformat,
                    const void* binary, GLint length)
 {
    GET_CURRENT_CONTEXT(ctx);
-   (void) shaders;
-   (void) binaryformat;
-   (void) binary;
+   struct gl_shader **sh;
 
    /* Page 68, section 7.2 'Shader Binaries" of the of the OpenGL ES 3.1, and
     * page 88 of the OpenGL 4.5 specs state:
@@ -2145,6 +2180,37 @@ _mesa_ShaderBinary(GLint n, const GLuint* shaders, GLenum binaryformat,
     */
    if (n < 0 || length < 0) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glShaderBinary(count or length < 0)");
+      return;
+   }
+
+   /* Get all shader objects at once so we can make the operation
+    * all-or-nothing.
+    */
+   if (n > SIZE_MAX / sizeof(*sh)) {
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glShaderBinary(count)");
+      return;
+   }
+
+   sh = alloca(sizeof(*sh) * (size_t)n);
+   if (!sh) {
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glShaderBinary");
+      return;
+   }
+
+   for (int i = 0; i < n; ++i) {
+      sh[i] = _mesa_lookup_shader_err(ctx, shaders[i], "glShaderBinary");
+      if (!sh[i])
+         return;
+   }
+
+   if (binaryformat == GL_SHADER_BINARY_FORMAT_SPIR_V_ARB) {
+      if (!ctx->Extensions.ARB_gl_spirv) {
+         _mesa_error(ctx, GL_INVALID_OPERATION, "glShaderBinary(SPIR-V)");
+      } else if (n > 0) {
+         _mesa_spirv_shader_binary(ctx, (unsigned) n, sh, binary,
+                                   (size_t) length);
+      }
+
       return;
    }
 
@@ -2194,12 +2260,15 @@ _mesa_GetProgramBinary(GLuint program, GLsizei bufSize, GLsizei *length,
       return;
    }
 
-   *length = 0;
-   _mesa_error(ctx, GL_INVALID_OPERATION,
-               "glGetProgramBinary(driver supports zero binary formats)");
-
-   (void) binaryFormat;
-   (void) binary;
+   if (ctx->Const.NumProgramBinaryFormats == 0) {
+      *length = 0;
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "glGetProgramBinary(driver supports zero binary formats)");
+   } else {
+      _mesa_get_program_binary(ctx, shProg, bufSize, length, binaryFormat,
+                               binary);
+      assert(*length == 0 || *binaryFormat == GL_PROGRAM_BINARY_FORMAT_MESA);
+   }
 }
 
 void GLAPIENTRY
@@ -2213,8 +2282,8 @@ _mesa_ProgramBinary(GLuint program, GLenum binaryFormat,
    if (!shProg)
       return;
 
-   (void) binaryFormat;
-   (void) binary;
+   _mesa_clear_shader_program_data(ctx, shProg);
+   shProg->data = _mesa_create_shader_program_data();
 
    /* Section 2.3.1 (Errors) of the OpenGL 4.5 spec says:
     *
@@ -2226,20 +2295,25 @@ _mesa_ProgramBinary(GLuint program, GLenum binaryFormat,
       return;
    }
 
-   /* The ARB_get_program_binary spec says:
-    *
-    *     "<binaryFormat> and <binary> must be those returned by a previous
-    *     call to GetProgramBinary, and <length> must be the length of the
-    *     program binary as returned by GetProgramBinary or GetProgramiv with
-    *     <pname> PROGRAM_BINARY_LENGTH. Loading the program binary will fail,
-    *     setting the LINK_STATUS of <program> to FALSE, if these conditions
-    *     are not met."
-    *
-    * Since any value of binaryFormat passed "is not one of those specified as
-    * allowable for [this] command, an INVALID_ENUM error is generated."
-    */
-   shProg->data->LinkStatus = linking_failure;
-   _mesa_error(ctx, GL_INVALID_ENUM, "glProgramBinary");
+   if (ctx->Const.NumProgramBinaryFormats == 0 ||
+       binaryFormat != GL_PROGRAM_BINARY_FORMAT_MESA) {
+      /* The ARB_get_program_binary spec says:
+       *
+       *     "<binaryFormat> and <binary> must be those returned by a previous
+       *     call to GetProgramBinary, and <length> must be the length of the
+       *     program binary as returned by GetProgramBinary or GetProgramiv with
+       *     <pname> PROGRAM_BINARY_LENGTH. Loading the program binary will fail,
+       *     setting the LINK_STATUS of <program> to FALSE, if these conditions
+       *     are not met."
+       *
+       * Since any value of binaryFormat passed "is not one of those specified as
+       * allowable for [this] command, an INVALID_ENUM error is generated."
+       */
+      shProg->data->LinkStatus = LINKING_FAILURE;
+      _mesa_error(ctx, GL_INVALID_ENUM, "glProgramBinary");
+   } else {
+      _mesa_program_binary(ctx, shProg, binaryFormat, binary, length);
+   }
 }
 
 
@@ -2363,6 +2437,8 @@ _mesa_use_program(struct gl_context *ctx, gl_shader_stage stage,
                                      &shTarget->ReferencedPrograms[stage],
                                      shProg);
       _mesa_reference_program(ctx, target, prog);
+      if (stage == MESA_SHADER_VERTEX)
+         _mesa_update_vertex_processing_mode(ctx);
       return;
    }
 
@@ -2452,7 +2528,7 @@ _mesa_CreateShaderProgramv(GLenum type, GLsizei count,
 	    /* Possibly... */
 	    if (active-user-defined-varyings-in-linked-program) {
 	       append-error-to-info-log;
-               shProg->data->LinkStatus = linking_failure;
+               shProg->data->LinkStatus = LINKING_FAILURE;
 	    }
 #endif
 	 }

@@ -32,14 +32,33 @@
 extern "C" {
 #endif
 
-bool
-st_load_tgsi_from_disk_cache(struct gl_context *ctx,
-                             struct gl_shader_program *prog);
+void
+st_get_program_binary_driver_sha1(struct gl_context *ctx, uint8_t *sha1);
 
 void
-st_store_tgsi_in_disk_cache(struct st_context *st, struct gl_program *prog,
-                            struct pipe_shader_state *out_state,
-                            unsigned num_tokens);
+st_serialise_tgsi_program(struct gl_context *ctx, struct gl_program *prog);
+
+void
+st_deserialise_tgsi_program(struct gl_context *ctx,
+                            struct gl_shader_program *shProg,
+                            struct gl_program *prog);
+
+void
+st_serialise_nir_program(struct gl_context *ctx, struct gl_program *prog);
+
+void
+st_deserialise_nir_program(struct gl_context *ctx,
+                           struct gl_shader_program *shProg,
+                           struct gl_program *prog);
+
+bool
+st_load_ir_from_disk_cache(struct gl_context *ctx,
+                           struct gl_shader_program *prog,
+                             bool nir);
+
+void
+st_store_ir_in_disk_cache(struct st_context *st, struct gl_program *prog,
+                          bool nir);
 
 #ifdef __cplusplus
 }

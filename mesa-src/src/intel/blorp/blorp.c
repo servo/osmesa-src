@@ -100,6 +100,7 @@ brw_blorp_surface_info_init(struct blorp_context *blorp,
    }
 
    info->clear_color = surf->clear_color;
+   info->clear_color_addr = surf->clear_color_addr;
 
    info->view = (struct isl_view) {
       .usage = is_render_target ? ISL_SURF_USAGE_RENDER_TARGET_BIT :
@@ -175,8 +176,10 @@ blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
    wm_prog_data->base.nr_params = 0;
    wm_prog_data->base.param = NULL;
 
-   /* BLORP always just uses the first two binding table entries */
-   wm_prog_data->binding_table.render_target_start = BLORP_RENDERBUFFER_BT_INDEX;
+   /* BLORP always uses the first two binding table entries:
+    * - Surface 0 is the render target (which always start from 0)
+    * - Surface 1 is the source texture
+    */
    wm_prog_data->base.binding_table.texture_start = BLORP_TEXTURE_BT_INDEX;
 
    nir = brw_preprocess_nir(compiler, nir);
@@ -222,8 +225,7 @@ blorp_compile_vs(struct blorp_context *blorp, void *mem_ctx,
 
    const unsigned *program =
       brw_compile_vs(compiler, blorp->driver_ctx, mem_ctx,
-                     &vs_key, vs_prog_data, nir,
-                     false, -1, NULL);
+                     &vs_key, vs_prog_data, nir, -1, NULL);
 
    return program;
 }
@@ -293,7 +295,7 @@ blorp_ensure_sf_program(struct blorp_context *blorp,
 void
 blorp_hiz_op(struct blorp_batch *batch, struct blorp_surf *surf,
              uint32_t level, uint32_t start_layer, uint32_t num_layers,
-             enum blorp_hiz_op op)
+             enum isl_aux_op op)
 {
    struct blorp_params params;
    blorp_params_init(&params);

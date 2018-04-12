@@ -1365,6 +1365,9 @@ link_assign_uniform_storage(struct gl_context *ctx,
                                                  prog->data->NumUniformStorage);
       data = rzalloc_array(prog->data->UniformStorage,
                            union gl_constant_value, num_data_slots);
+      prog->data->UniformDataDefaults =
+         rzalloc_array(prog->data->UniformStorage,
+                       union gl_constant_value, num_data_slots);
    } else {
       data = prog->data->UniformDataSlots;
    }
@@ -1420,11 +1423,10 @@ link_assign_uniform_storage(struct gl_context *ctx,
          }
       }
 
-      STATIC_ASSERT(sizeof(shader->Program->sh.SamplerTargets) ==
-                    sizeof(parcel.targets));
-      memcpy(shader->Program->sh.SamplerTargets,
-             parcel.targets,
-             sizeof(shader->Program->sh.SamplerTargets));
+      STATIC_ASSERT(ARRAY_SIZE(shader->Program->sh.SamplerTargets) ==
+                    ARRAY_SIZE(parcel.targets));
+      for (unsigned j = 0; j < ARRAY_SIZE(parcel.targets); j++)
+         shader->Program->sh.SamplerTargets[j] = parcel.targets[j];
    }
 
 #ifndef NDEBUG

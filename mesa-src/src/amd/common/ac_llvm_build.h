@@ -34,9 +34,16 @@
 extern "C" {
 #endif
 
+#define HAVE_32BIT_POINTERS (HAVE_LLVM >= 0x0700)
+
 enum {
+	/* CONST is the only address space that selects SMEM loads */
+	AC_CONST_ADDR_SPACE = HAVE_LLVM >= 0x700 ? 4 : 2,
 	AC_LOCAL_ADDR_SPACE = 3,
+	AC_CONST_32BIT_ADDR_SPACE = 6, /* same as CONST, but the pointer type has 32 bits */
 };
+
+struct ac_llvm_flow;
 
 struct ac_llvm_context {
 	LLVMContextRef context;
@@ -49,9 +56,11 @@ struct ac_llvm_context {
 	LLVMTypeRef i16;
 	LLVMTypeRef i32;
 	LLVMTypeRef i64;
+	LLVMTypeRef intptr;
 	LLVMTypeRef f16;
 	LLVMTypeRef f32;
 	LLVMTypeRef f64;
+	LLVMTypeRef v2i16;
 	LLVMTypeRef v2i32;
 	LLVMTypeRef v3i32;
 	LLVMTypeRef v4i32;
@@ -61,10 +70,18 @@ struct ac_llvm_context {
 
 	LLVMValueRef i32_0;
 	LLVMValueRef i32_1;
+	LLVMValueRef i64_0;
+	LLVMValueRef i64_1;
 	LLVMValueRef f32_0;
 	LLVMValueRef f32_1;
+	LLVMValueRef f64_0;
+	LLVMValueRef f64_1;
 	LLVMValueRef i1true;
 	LLVMValueRef i1false;
+
+	struct ac_llvm_flow *flow;
+	unsigned flow_depth;
+	unsigned flow_depth_max;
 
 	unsigned range_md_kind;
 	unsigned invariant_load_md_kind;
@@ -74,13 +91,28 @@ struct ac_llvm_context {
 	LLVMValueRef empty_md;
 
 	enum chip_class chip_class;
+	enum radeon_family family;
 
 	LLVMValueRef lds;
 };
 
 void
 ac_llvm_context_init(struct ac_llvm_context *ctx, LLVMContextRef context,
-		     enum chip_class chip_class);
+		     enum chip_class chip_class, enum radeon_family family);
+
+void
+ac_llvm_context_dispose(struct ac_llvm_context *ctx);
+
+int
+ac_get_llvm_num_components(LLVMValueRef value);
+
+int
+ac_get_elem_bits(struct ac_llvm_context *ctx, LLVMTypeRef type);
+
+LLVMValueRef
+ac_llvm_extract_elem(struct ac_llvm_context *ac,
+		     LLVMValueRef value,
+		     int index);
 
 unsigned ac_get_type_size(LLVMTypeRef type);
 
@@ -104,6 +136,8 @@ ac_build_phi(struct ac_llvm_context *ctx, LLVMTypeRef type,
 void ac_build_optimization_barrier(struct ac_llvm_context *ctx,
 				   LLVMValueRef *pvgpr);
 
+LLVMValueRef ac_build_shader_clock(struct ac_llvm_context *ctx);
+
 LLVMValueRef ac_build_ballot(struct ac_llvm_context *ctx, LLVMValueRef value);
 
 LLVMValueRef ac_build_vote_all(struct ac_llvm_context *ctx, LLVMValueRef value);
@@ -111,6 +145,10 @@ LLVMValueRef ac_build_vote_all(struct ac_llvm_context *ctx, LLVMValueRef value);
 LLVMValueRef ac_build_vote_any(struct ac_llvm_context *ctx, LLVMValueRef value);
 
 LLVMValueRef ac_build_vote_eq(struct ac_llvm_context *ctx, LLVMValueRef value);
+
+LLVMValueRef
+ac_build_varying_gather_values(struct ac_llvm_context *ctx, LLVMValueRef *values,
+			       unsigned value_count, unsigned component);
 
 LLVMValueRef
 ac_build_gather_values_extended(struct ac_llvm_context *ctx,
@@ -123,6 +161,9 @@ LLVMValueRef
 ac_build_gather_values(struct ac_llvm_context *ctx,
 		       LLVMValueRef *values,
 		       unsigned value_count);
+LLVMValueRef ac_build_expand_to_vec4(struct ac_llvm_context *ctx,
+				     LLVMValueRef value,
+				     unsigned num_channels);
 
 LLVMValueRef
 ac_build_fdiv(struct ac_llvm_context *ctx,
@@ -197,7 +238,19 @@ LLVMValueRef ac_build_buffer_load_format(struct ac_llvm_context *ctx,
 					 LLVMValueRef rsrc,
 					 LLVMValueRef vindex,
 					 LLVMValueRef voffset,
+					 unsigned num_channels,
+					 bool glc,
 					 bool can_speculate);
+
+/* load_format that handles the stride & element count better if idxen is
+ * disabled by LLVM. */
+LLVMValueRef ac_build_buffer_load_format_gfx9_safe(struct ac_llvm_context *ctx,
+                                                  LLVMValueRef rsrc,
+                                                  LLVMValueRef vindex,
+                                                  LLVMValueRef voffset,
+                                                  unsigned num_channels,
+                                                  bool glc,
+                                                  bool can_speculate);
 
 LLVMValueRef
 ac_get_thread_id(struct ac_llvm_context *ctx);
@@ -231,7 +284,14 @@ LLVMValueRef ac_build_imsb(struct ac_llvm_context *ctx,
 LLVMValueRef ac_build_umsb(struct ac_llvm_context *ctx,
 			  LLVMValueRef arg,
 			  LLVMTypeRef dst_type);
-
+LLVMValueRef ac_build_fmin(struct ac_llvm_context *ctx, LLVMValueRef a,
+			   LLVMValueRef b);
+LLVMValueRef ac_build_fmax(struct ac_llvm_context *ctx, LLVMValueRef a,
+			   LLVMValueRef b);
+LLVMValueRef ac_build_imin(struct ac_llvm_context *ctx, LLVMValueRef a,
+			   LLVMValueRef b);
+LLVMValueRef ac_build_imax(struct ac_llvm_context *ctx, LLVMValueRef a,
+			   LLVMValueRef b);
 LLVMValueRef ac_build_umin(struct ac_llvm_context *ctx, LLVMValueRef a, LLVMValueRef b);
 LLVMValueRef ac_build_clamp(struct ac_llvm_context *ctx, LLVMValueRef value);
 
@@ -245,6 +305,8 @@ struct ac_export_args {
 };
 
 void ac_build_export(struct ac_llvm_context *ctx, struct ac_export_args *a);
+
+void ac_build_export_null(struct ac_llvm_context *ctx);
 
 enum ac_image_opcode {
 	ac_image_sample,
@@ -276,11 +338,30 @@ LLVMValueRef ac_build_image_opcode(struct ac_llvm_context *ctx,
 				   struct ac_image_args *a);
 LLVMValueRef ac_build_cvt_pkrtz_f16(struct ac_llvm_context *ctx,
 				    LLVMValueRef args[2]);
+LLVMValueRef ac_build_cvt_pknorm_i16(struct ac_llvm_context *ctx,
+				     LLVMValueRef args[2]);
+LLVMValueRef ac_build_cvt_pknorm_u16(struct ac_llvm_context *ctx,
+				     LLVMValueRef args[2]);
+LLVMValueRef ac_build_cvt_pk_i16(struct ac_llvm_context *ctx,
+				 LLVMValueRef args[2], unsigned bits, bool hi);
+LLVMValueRef ac_build_cvt_pk_u16(struct ac_llvm_context *ctx,
+				 LLVMValueRef args[2], unsigned bits, bool hi);
 LLVMValueRef ac_build_wqm_vote(struct ac_llvm_context *ctx, LLVMValueRef i1);
 void ac_build_kill_if_false(struct ac_llvm_context *ctx, LLVMValueRef i1);
 LLVMValueRef ac_build_bfe(struct ac_llvm_context *ctx, LLVMValueRef input,
 			  LLVMValueRef offset, LLVMValueRef width,
 			  bool is_signed);
+
+void ac_build_waitcnt(struct ac_llvm_context *ctx, unsigned simm16);
+
+LLVMValueRef ac_build_fract(struct ac_llvm_context *ctx, LLVMValueRef src0,
+			   unsigned bitsize);
+
+LLVMValueRef ac_build_isign(struct ac_llvm_context *ctx, LLVMValueRef src0,
+			    unsigned bitsize);
+
+LLVMValueRef ac_build_fsign(struct ac_llvm_context *ctx, LLVMValueRef src0,
+			    unsigned bitsize);
 
 void ac_get_image_intr_name(const char *base_name,
 			    LLVMTypeRef data_type,
@@ -304,6 +385,38 @@ void ac_lds_store(struct ac_llvm_context *ctx,
 LLVMValueRef ac_find_lsb(struct ac_llvm_context *ctx,
 			 LLVMTypeRef dst_type,
 			 LLVMValueRef src0);
+
+LLVMTypeRef ac_array_in_const_addr_space(LLVMTypeRef elem_type);
+LLVMTypeRef ac_array_in_const32_addr_space(LLVMTypeRef elem_type);
+
+void ac_build_bgnloop(struct ac_llvm_context *ctx, int lable_id);
+void ac_build_break(struct ac_llvm_context *ctx);
+void ac_build_continue(struct ac_llvm_context *ctx);
+void ac_build_else(struct ac_llvm_context *ctx, int lable_id);
+void ac_build_endif(struct ac_llvm_context *ctx, int lable_id);
+void ac_build_endloop(struct ac_llvm_context *ctx, int lable_id);
+void ac_build_if(struct ac_llvm_context *ctx, LLVMValueRef value,
+		 int lable_id);
+void ac_build_uif(struct ac_llvm_context *ctx, LLVMValueRef value,
+		  int lable_id);
+
+LLVMValueRef ac_build_alloca(struct ac_llvm_context *ac, LLVMTypeRef type,
+			     const char *name);
+LLVMValueRef ac_build_alloca_undef(struct ac_llvm_context *ac, LLVMTypeRef type,
+				   const char *name);
+
+LLVMValueRef ac_cast_ptr(struct ac_llvm_context *ctx, LLVMValueRef ptr,
+			 LLVMTypeRef type);
+
+LLVMValueRef ac_trim_vector(struct ac_llvm_context *ctx, LLVMValueRef value,
+			    unsigned count);
+
+LLVMValueRef ac_unpack_param(struct ac_llvm_context *ctx, LLVMValueRef param,
+			     unsigned rshift, unsigned bitwidth);
+
+void ac_apply_fmask_to_sample(struct ac_llvm_context *ac, LLVMValueRef fmask,
+			      LLVMValueRef *addr, bool is_array_tex);
+
 #ifdef __cplusplus
 }
 #endif

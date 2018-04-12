@@ -40,9 +40,10 @@
 
 #include "util/os_time.h"
 
-#include <stdio.h>
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <sys/sysinfo.h>
 
 #include "freedreno_screen.h"
 #include "freedreno_resource.h"
@@ -79,6 +80,10 @@ static const struct debug_named_value debug_options[] = {
 		{"bstat",     FD_DBG_BSTAT,  "Print batch stats at context destroy"},
 		{"nogrow",    FD_DBG_NOGROW, "Disable \"growable\" cmdstream buffers, even if kernel supports it"},
 		{"lrz",       FD_DBG_LRZ,    "Enable experimental LRZ support (a5xx+)"},
+		{"noindirect",FD_DBG_NOINDR, "Disable hw indirect draws (emulate on CPU)"},
+		{"noblit",    FD_DBG_NOBLIT, "Disable blitter (fallback to generic blit path)"},
+		{"hiprio",    FD_DBG_HIPRIO, "Force high-priority context"},
+		{"ttile",     FD_DBG_TTILE,  "Enable texture tiling (a5xx)"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -163,10 +168,8 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	/* Supported features (boolean caps). */
 	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
-	case PIPE_CAP_TWO_SIDED_STENCIL:
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 	case PIPE_CAP_POINT_SPRITE:
-	case PIPE_CAP_TEXTURE_SHADOW_MAP:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
@@ -187,9 +190,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_VERTEXID_NOBASE:
 		return is_a3xx(screen) || is_a4xx(screen);
-
-	case PIPE_CAP_USER_CONSTANT_BUFFERS:
-		return is_a4xx(screen) ? 0 : 1;
 
 	case PIPE_CAP_COMPUTE:
 		return has_compute(screen);
@@ -245,10 +245,17 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
-	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 	case PIPE_CAP_TEXTURE_QUERY_LOD:
 		return is_a4xx(screen) || is_a5xx(screen);
+
+	case PIPE_CAP_START_INSTANCE:
+		/* Note that a5xx can do this, it just can't (at least with
+		 * current firmware) do draw_indirect with base_instance.
+		 * Since draw_indirect is needed sooner (gles31 and gl40 vs
+		 * gl42), hide base_instance on a5xx.  :-/
+		 */
+		return is_a4xx(screen);
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
 		return 64;
@@ -330,7 +337,13 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TILE_RASTER_ORDER:
 	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
+	case PIPE_CAP_FENCE_SIGNAL:
+	case PIPE_CAP_CONSTBUF0_FLAGS:
+	case PIPE_CAP_PACKED_UNIFORMS:
 		return 0;
+
+	case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+		return screen->priority_mask;
 
 	case PIPE_CAP_DRAW_INDIRECT:
 		if (is_a4xx(screen) || is_a5xx(screen))
@@ -466,11 +479,6 @@ fd_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 		return 16.0f;
 	case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
 		return 15.0f;
-	case PIPE_CAPF_GUARD_BAND_LEFT:
-	case PIPE_CAPF_GUARD_BAND_TOP:
-	case PIPE_CAPF_GUARD_BAND_RIGHT:
-	case PIPE_CAPF_GUARD_BAND_BOTTOM:
-		return 0.0f;
 	}
 	debug_printf("unknown paramf %d\n", param);
 	return 0;
@@ -627,16 +635,20 @@ fd_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
 	if (!has_compute(screen))
 		return 0;
 
+#define RET(x) do {                  \
+   if (ret)                          \
+      memcpy(ret, x, sizeof(x));     \
+   return sizeof(x);                 \
+} while (0)
+
 	switch (param) {
 	case PIPE_COMPUTE_CAP_ADDRESS_BITS:
-		if (ret) {
-			uint32_t *address_bits = ret;
-			address_bits[0] = 32;
-
-			if (is_a5xx(screen))
-				address_bits[0] = 64;
-		}
-		return 1 * sizeof(uint32_t);
+// don't expose 64b pointer support yet, until ir3 supports 64b
+// math, otherwise spir64 target is used and we get 64b pointer
+// calculations that we can't do yet
+//		if (is_a5xx(screen))
+//			RET((uint32_t []){ 64 });
+		RET((uint32_t []){ 32 });
 
 	case PIPE_COMPUTE_CAP_IR_TARGET:
 		if (ret)
@@ -644,59 +656,44 @@ fd_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
 		return strlen(ir) * sizeof(char);
 
 	case PIPE_COMPUTE_CAP_GRID_DIMENSION:
-		if (ret) {
-			uint64_t *grid_dimension = ret;
-			grid_dimension[0] = 3;
-		}
-		return 1 * sizeof(uint64_t);
+		RET((uint64_t []) { 3 });
 
 	case PIPE_COMPUTE_CAP_MAX_GRID_SIZE:
-		if (ret) {
-			uint64_t *grid_size = ret;
-			grid_size[0] = 65535;
-			grid_size[1] = 65535;
-			grid_size[2] = 65535;
-		}
-		return 3 * sizeof(uint64_t) ;
+		RET(((uint64_t []) { 65535, 65535, 65535 }));
 
 	case PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE:
-		if (ret) {
-			uint64_t *block_size = ret;
-			block_size[0] = 1024;
-			block_size[1] = 1024;
-			block_size[2] = 64;
-		}
-		return 3 * sizeof(uint64_t) ;
+		RET(((uint64_t []) { 1024, 1024, 64 }));
 
 	case PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK:
-		if (ret) {
-			uint64_t *max_threads_per_block = ret;
-			*max_threads_per_block = 1024;
-		}
-		return sizeof(uint64_t);
+		RET((uint64_t []) { 1024 });
 
 	case PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE:
+		RET((uint64_t []) { screen->ram_size });
+
 	case PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE:
-		if (ret) {
-			uint64_t *local_size = ret;
-			*local_size = 32768;
-		}
-		return sizeof(uint64_t);
+		RET((uint64_t []) { 32768 });
+
 	case PIPE_COMPUTE_CAP_MAX_PRIVATE_SIZE:
 	case PIPE_COMPUTE_CAP_MAX_INPUT_SIZE:
-		break;
+		RET((uint64_t []) { 4096 });
+
 	case PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE:
-		if (ret) {
-			uint64_t *max = ret;
-			*max = 32768;
-		}
-		return sizeof(uint64_t);
+		RET((uint64_t []) { screen->ram_size });
+
 	case PIPE_COMPUTE_CAP_MAX_CLOCK_FREQUENCY:
+		RET((uint32_t []) { screen->max_freq / 1000000 });
+
 	case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:
+		RET((uint32_t []) { 9999 });  // TODO
+
 	case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
+		RET((uint32_t []) { 1 });
+
 	case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
+		RET((uint32_t []) { 32 });  // TODO
+
 	case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
-		break;
+		RET((uint64_t []) { 1024 }); // TODO
 	}
 
 	return 0;
@@ -831,6 +828,18 @@ fd_screen_create(struct fd_device *dev)
 			((major & 0xff) << 16) | ((core & 0xff) << 24);
 	}
 	screen->chip_id = val;
+
+	if (fd_pipe_get_param(screen->pipe, FD_NR_RINGS, &val)) {
+		DBG("could not get # of rings");
+		screen->priority_mask = 0;
+	} else {
+		/* # of rings equates to number of unique priority values: */
+		screen->priority_mask = (1 << val) - 1;
+	}
+
+	struct sysinfo si;
+	sysinfo(&si);
+	screen->ram_size = si.totalram;
 
 	DBG("Pipe Info:");
 	DBG(" GPU-id:          %d", screen->gpu_id);

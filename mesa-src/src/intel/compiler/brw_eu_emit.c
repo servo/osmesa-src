@@ -536,6 +536,9 @@ brw_set_dp_write_message(struct brw_codegen *p,
    if (devinfo->gen < 7) {
       brw_inst_set_dp_write_commit(devinfo, insn, send_commit_msg);
    }
+
+   if (devinfo->gen >= 11)
+      brw_inst_set_null_rt(devinfo, insn, false);
 }
 
 void
@@ -673,6 +676,42 @@ get_3src_subreg_nr(struct brw_reg reg)
    return reg.subnr / 4;
 }
 
+static enum gen10_align1_3src_vertical_stride
+to_3src_align1_vstride(enum brw_vertical_stride vstride)
+{
+   switch (vstride) {
+   case BRW_VERTICAL_STRIDE_0:
+      return BRW_ALIGN1_3SRC_VERTICAL_STRIDE_0;
+   case BRW_VERTICAL_STRIDE_2:
+      return BRW_ALIGN1_3SRC_VERTICAL_STRIDE_2;
+   case BRW_VERTICAL_STRIDE_4:
+      return BRW_ALIGN1_3SRC_VERTICAL_STRIDE_4;
+   case BRW_VERTICAL_STRIDE_8:
+   case BRW_VERTICAL_STRIDE_16:
+      return BRW_ALIGN1_3SRC_VERTICAL_STRIDE_8;
+   default:
+      unreachable("invalid vstride");
+   }
+}
+
+
+static enum gen10_align1_3src_src_horizontal_stride
+to_3src_align1_hstride(enum brw_horizontal_stride hstride)
+{
+   switch (hstride) {
+   case BRW_HORIZONTAL_STRIDE_0:
+      return BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0;
+   case BRW_HORIZONTAL_STRIDE_1:
+      return BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_1;
+   case BRW_HORIZONTAL_STRIDE_2:
+      return BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_2;
+   case BRW_HORIZONTAL_STRIDE_4:
+      return BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_4;
+   default:
+      unreachable("invalid hstride");
+   }
+}
+
 static brw_inst *
 brw_alu3(struct brw_codegen *p, unsigned opcode, struct brw_reg dest,
          struct brw_reg src0, struct brw_reg src1, struct brw_reg src2)
@@ -721,44 +760,25 @@ brw_alu3(struct brw_codegen *p, unsigned opcode, struct brw_reg dest,
       brw_inst_set_3src_a1_src1_type(devinfo, inst, src1.type);
       brw_inst_set_3src_a1_src2_type(devinfo, inst, src2.type);
 
-      assert((src0.vstride == BRW_VERTICAL_STRIDE_0 &&
-              src0.hstride == BRW_HORIZONTAL_STRIDE_0) ||
-             (src0.vstride == BRW_VERTICAL_STRIDE_8 &&
-              src0.hstride == BRW_HORIZONTAL_STRIDE_1));
-      assert((src1.vstride == BRW_VERTICAL_STRIDE_0 &&
-              src1.hstride == BRW_HORIZONTAL_STRIDE_0) ||
-             (src1.vstride == BRW_VERTICAL_STRIDE_8 &&
-              src1.hstride == BRW_HORIZONTAL_STRIDE_1));
-      assert((src2.vstride == BRW_VERTICAL_STRIDE_0 &&
-              src2.hstride == BRW_HORIZONTAL_STRIDE_0) ||
-             (src2.vstride == BRW_VERTICAL_STRIDE_8 &&
-              src2.hstride == BRW_HORIZONTAL_STRIDE_1));
-
       brw_inst_set_3src_a1_src0_vstride(devinfo, inst,
-                                        src0.vstride == BRW_VERTICAL_STRIDE_0 ?
-                                        BRW_ALIGN1_3SRC_VERTICAL_STRIDE_0 :
-                                        BRW_ALIGN1_3SRC_VERTICAL_STRIDE_8);
+                                        to_3src_align1_vstride(src0.vstride));
       brw_inst_set_3src_a1_src1_vstride(devinfo, inst,
-                                        src1.vstride == BRW_VERTICAL_STRIDE_0 ?
-                                        BRW_ALIGN1_3SRC_VERTICAL_STRIDE_0 :
-                                        BRW_ALIGN1_3SRC_VERTICAL_STRIDE_8);
+                                        to_3src_align1_vstride(src1.vstride));
       /* no vstride on src2 */
 
       brw_inst_set_3src_a1_src0_hstride(devinfo, inst,
-                                        src0.hstride == BRW_HORIZONTAL_STRIDE_0 ?
-                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0 :
-                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_1);
+                                        to_3src_align1_hstride(src0.hstride));
       brw_inst_set_3src_a1_src1_hstride(devinfo, inst,
-                                        src1.hstride == BRW_HORIZONTAL_STRIDE_0 ?
-                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0 :
-                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_1);
+                                        to_3src_align1_hstride(src1.hstride));
       brw_inst_set_3src_a1_src2_hstride(devinfo, inst,
-                                        src2.hstride == BRW_HORIZONTAL_STRIDE_0 ?
-                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0 :
-                                        BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_1);
+                                        to_3src_align1_hstride(src2.hstride));
 
       brw_inst_set_3src_a1_src0_subreg_nr(devinfo, inst, src0.subnr);
-      brw_inst_set_3src_src0_reg_nr(devinfo, inst, src0.nr);
+      if (src0.type == BRW_REGISTER_TYPE_NF) {
+         brw_inst_set_3src_src0_reg_nr(devinfo, inst, BRW_ARF_ACCUMULATOR);
+      } else {
+         brw_inst_set_3src_src0_reg_nr(devinfo, inst, src0.nr);
+      }
       brw_inst_set_3src_src0_abs(devinfo, inst, src0.abs);
       brw_inst_set_3src_src0_negate(devinfo, inst, src0.negate);
 
@@ -777,7 +797,9 @@ brw_alu3(struct brw_codegen *p, unsigned opcode, struct brw_reg dest,
       brw_inst_set_3src_src2_negate(devinfo, inst, src2.negate);
 
       assert(src0.file == BRW_GENERAL_REGISTER_FILE ||
-             src0.file == BRW_IMMEDIATE_VALUE);
+             src0.file == BRW_IMMEDIATE_VALUE ||
+             (src0.file == BRW_ARCHITECTURE_REGISTER_FILE &&
+              src0.type == BRW_REGISTER_TYPE_NF));
       assert(src1.file == BRW_GENERAL_REGISTER_FILE ||
              src1.file == BRW_ARCHITECTURE_REGISTER_FILE);
       assert(src2.file == BRW_GENERAL_REGISTER_FILE ||
@@ -940,6 +962,7 @@ ALU2(SHR)
 ALU2(SHL)
 ALU1(DIM)
 ALU2(ASR)
+ALU3(CSEL)
 ALU1(FRC)
 ALU1(RNDD)
 ALU2(MAC)
@@ -949,7 +972,7 @@ ALU2(DP4)
 ALU2(DPH)
 ALU2(DP3)
 ALU2(DP2)
-ALU3F(MAD)
+ALU3(MAD)
 ALU3F(LRP)
 ALU1(BFREV)
 ALU3(BFE)
@@ -2864,7 +2887,8 @@ brw_untyped_atomic(struct brw_codegen *p,
                    struct brw_reg surface,
                    unsigned atomic_op,
                    unsigned msg_length,
-                   bool response_expected)
+                   bool response_expected,
+                   bool header_present)
 {
    const struct gen_device_info *devinfo = p->devinfo;
    const unsigned sfid = (devinfo->gen >= 8 || devinfo->is_haswell ?
@@ -2882,7 +2906,7 @@ brw_untyped_atomic(struct brw_codegen *p,
       p, sfid, brw_writemask(dst, mask), payload, surface, msg_length,
       brw_surface_payload_size(p, response_expected,
                                devinfo->gen >= 8 || devinfo->is_haswell, true),
-      align1);
+      header_present);
 
    brw_set_dp_untyped_atomic_message(
       p, insn, atomic_op, response_expected);
@@ -2965,7 +2989,8 @@ brw_untyped_surface_write(struct brw_codegen *p,
                           struct brw_reg payload,
                           struct brw_reg surface,
                           unsigned msg_length,
-                          unsigned num_channels)
+                          unsigned num_channels,
+                          bool header_present)
 {
    const struct gen_device_info *devinfo = p->devinfo;
    const unsigned sfid = (devinfo->gen >= 8 || devinfo->is_haswell ?
@@ -2977,10 +3002,87 @@ brw_untyped_surface_write(struct brw_codegen *p,
                           WRITEMASK_X : WRITEMASK_XYZW;
    struct brw_inst *insn = brw_send_indirect_surface_message(
       p, sfid, brw_writemask(brw_null_reg(), mask),
-      payload, surface, msg_length, 0, align1);
+      payload, surface, msg_length, 0, header_present);
 
    brw_set_dp_untyped_surface_write_message(
       p, insn, num_channels);
+}
+
+static unsigned
+brw_byte_scattered_data_element_from_bit_size(unsigned bit_size)
+{
+   switch (bit_size) {
+   case 8:
+      return GEN7_BYTE_SCATTERED_DATA_ELEMENT_BYTE;
+   case 16:
+      return GEN7_BYTE_SCATTERED_DATA_ELEMENT_WORD;
+   case 32:
+      return GEN7_BYTE_SCATTERED_DATA_ELEMENT_DWORD;
+   default:
+      unreachable("Unsupported bit_size for byte scattered messages");
+   }
+}
+
+
+void
+brw_byte_scattered_read(struct brw_codegen *p,
+                        struct brw_reg dst,
+                        struct brw_reg payload,
+                        struct brw_reg surface,
+                        unsigned msg_length,
+                        unsigned bit_size)
+{
+   const struct gen_device_info *devinfo = p->devinfo;
+   assert(devinfo->gen > 7 || devinfo->is_haswell);
+   assert(brw_inst_access_mode(devinfo, p->current) == BRW_ALIGN_1);
+   const unsigned sfid =  GEN7_SFID_DATAPORT_DATA_CACHE;
+
+   struct brw_inst *insn = brw_send_indirect_surface_message(
+      p, sfid, dst, payload, surface, msg_length,
+      brw_surface_payload_size(p, 1, true, true),
+      false);
+
+   unsigned msg_control =
+      brw_byte_scattered_data_element_from_bit_size(bit_size) << 2;
+
+   if (brw_inst_exec_size(devinfo, p->current) == BRW_EXECUTE_16)
+      msg_control |= 1; /* SIMD16 mode */
+   else
+      msg_control |= 0; /* SIMD8 mode */
+
+   brw_inst_set_dp_msg_type(devinfo, insn,
+                            HSW_DATAPORT_DC_PORT0_BYTE_SCATTERED_READ);
+   brw_inst_set_dp_msg_control(devinfo, insn, msg_control);
+}
+
+void
+brw_byte_scattered_write(struct brw_codegen *p,
+                         struct brw_reg payload,
+                         struct brw_reg surface,
+                         unsigned msg_length,
+                         unsigned bit_size,
+                         bool header_present)
+{
+   const struct gen_device_info *devinfo = p->devinfo;
+   assert(devinfo->gen > 7 || devinfo->is_haswell);
+   assert(brw_inst_access_mode(devinfo, p->current) == BRW_ALIGN_1);
+   const unsigned sfid = GEN7_SFID_DATAPORT_DATA_CACHE;
+
+   struct brw_inst *insn = brw_send_indirect_surface_message(
+      p, sfid, brw_writemask(brw_null_reg(), WRITEMASK_XYZW),
+      payload, surface, msg_length, 0, header_present);
+
+   unsigned msg_control =
+      brw_byte_scattered_data_element_from_bit_size(bit_size) << 2;
+
+   if (brw_inst_exec_size(devinfo, p->current) == BRW_EXECUTE_16)
+      msg_control |= 1;
+   else
+      msg_control |= 0;
+
+   brw_inst_set_dp_msg_type(devinfo, insn,
+                            HSW_DATAPORT_DC_PORT0_BYTE_SCATTERED_WRITE);
+   brw_inst_set_dp_msg_control(devinfo, insn, msg_control);
 }
 
 static void
@@ -3024,7 +3126,8 @@ brw_typed_atomic(struct brw_codegen *p,
                  struct brw_reg surface,
                  unsigned atomic_op,
                  unsigned msg_length,
-                 bool response_expected) {
+                 bool response_expected,
+                 bool header_present) {
    const struct gen_device_info *devinfo = p->devinfo;
    const unsigned sfid = (devinfo->gen >= 8 || devinfo->is_haswell ?
                           HSW_SFID_DATAPORT_DATA_CACHE_1 :
@@ -3036,7 +3139,7 @@ brw_typed_atomic(struct brw_codegen *p,
       p, sfid, brw_writemask(dst, mask), payload, surface, msg_length,
       brw_surface_payload_size(p, response_expected,
                                devinfo->gen >= 8 || devinfo->is_haswell, false),
-      true);
+      header_present);
 
    brw_set_dp_typed_atomic_message(
       p, insn, atomic_op, response_expected);
@@ -3080,7 +3183,8 @@ brw_typed_surface_read(struct brw_codegen *p,
                        struct brw_reg payload,
                        struct brw_reg surface,
                        unsigned msg_length,
-                       unsigned num_channels)
+                       unsigned num_channels,
+                       bool header_present)
 {
    const struct gen_device_info *devinfo = p->devinfo;
    const unsigned sfid = (devinfo->gen >= 8 || devinfo->is_haswell ?
@@ -3090,7 +3194,7 @@ brw_typed_surface_read(struct brw_codegen *p,
       p, sfid, dst, payload, surface, msg_length,
       brw_surface_payload_size(p, num_channels,
                                devinfo->gen >= 8 || devinfo->is_haswell, false),
-      true);
+      header_present);
 
    brw_set_dp_typed_surface_read_message(
       p, insn, num_channels);
@@ -3134,7 +3238,8 @@ brw_typed_surface_write(struct brw_codegen *p,
                         struct brw_reg payload,
                         struct brw_reg surface,
                         unsigned msg_length,
-                        unsigned num_channels)
+                        unsigned num_channels,
+                        bool header_present)
 {
    const struct gen_device_info *devinfo = p->devinfo;
    const unsigned sfid = (devinfo->gen >= 8 || devinfo->is_haswell ?
@@ -3146,7 +3251,7 @@ brw_typed_surface_write(struct brw_codegen *p,
                           WRITEMASK_X : WRITEMASK_XYZW);
    struct brw_inst *insn = brw_send_indirect_surface_message(
       p, sfid, brw_writemask(brw_null_reg(), mask),
-      payload, surface, msg_length, 0, true);
+      payload, surface, msg_length, 0, header_present);
 
    brw_set_dp_typed_surface_write_message(
       p, insn, num_channels);
@@ -3186,7 +3291,9 @@ brw_memory_fence(struct brw_codegen *p,
                  struct brw_reg dst)
 {
    const struct gen_device_info *devinfo = p->devinfo;
-   const bool commit_enable = devinfo->gen == 7 && !devinfo->is_haswell;
+   const bool commit_enable =
+      devinfo->gen >= 10 || /* HSD ES # 1404612949 */
+      (devinfo->gen == 7 && !devinfo->is_haswell);
    struct brw_inst *insn;
 
    brw_push_insn_state(p);
@@ -3304,7 +3411,9 @@ brw_find_live_channel(struct brw_codegen *p, struct brw_reg dst,
           */
          inst = brw_FBL(p, vec1(dst), exec_mask);
       } else {
-         const struct brw_reg flag = brw_flag_reg(1, 0);
+         const struct brw_reg flag = brw_flag_reg(
+            brw_inst_flag_reg_nr(devinfo, p->current),
+            brw_inst_flag_subreg_nr(devinfo, p->current));
 
          brw_set_default_exec_size(p, BRW_EXECUTE_1);
          brw_MOV(p, retype(flag, BRW_REGISTER_TYPE_UD), brw_imm_ud(0));
@@ -3323,7 +3432,6 @@ brw_find_live_channel(struct brw_codegen *p, struct brw_reg dst,
             brw_inst_set_mask_control(devinfo, inst, BRW_MASK_ENABLE);
             brw_inst_set_group(devinfo, inst, lower_size * i + 8 * qtr_control);
             brw_inst_set_cond_modifier(devinfo, inst, BRW_CONDITIONAL_Z);
-            brw_inst_set_flag_reg_nr(devinfo, inst, 1);
             brw_inst_set_exec_size(devinfo, inst, cvt(lower_size) - 1);
          }
 
@@ -3588,4 +3696,37 @@ brw_WAIT(struct brw_codegen *p)
 
    brw_inst_set_exec_size(devinfo, insn, BRW_EXECUTE_1);
    brw_inst_set_mask_control(devinfo, insn, BRW_MASK_DISABLE);
+}
+
+/**
+ * Changes the floating point rounding mode updating the control register
+ * field defined at cr0.0[5-6] bits. This function supports the changes to
+ * RTNE (00), RU (01), RD (10) and RTZ (11) rounding using bitwise operations.
+ * Only RTNE and RTZ rounding are enabled at nir.
+ */
+void
+brw_rounding_mode(struct brw_codegen *p,
+                  enum brw_rnd_mode mode)
+{
+   const unsigned bits = mode << BRW_CR0_RND_MODE_SHIFT;
+
+   if (bits != BRW_CR0_RND_MODE_MASK) {
+      brw_inst *inst = brw_AND(p, brw_cr0_reg(0), brw_cr0_reg(0),
+                               brw_imm_ud(~BRW_CR0_RND_MODE_MASK));
+
+      /* From the Skylake PRM, Volume 7, page 760:
+       *  "Implementation Restriction on Register Access: When the control
+       *   register is used as an explicit source and/or destination, hardware
+       *   does not ensure execution pipeline coherency. Software must set the
+       *   thread control field to ‘switch’ for an instruction that uses
+       *   control register as an explicit operand."
+       */
+      brw_inst_set_thread_control(p->devinfo, inst, BRW_THREAD_SWITCH);
+    }
+
+   if (bits) {
+      brw_inst *inst = brw_OR(p, brw_cr0_reg(0), brw_cr0_reg(0),
+                              brw_imm_ud(bits));
+      brw_inst_set_thread_control(p->devinfo, inst, BRW_THREAD_SWITCH);
+   }
 }

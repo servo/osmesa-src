@@ -24,13 +24,15 @@
 #include "compiler/blob.h"
 #include "compiler/glsl/ir_uniform.h"
 #include "compiler/glsl/shader_cache.h"
-#include "compiler/nir/nir_serialize.h"
 #include "main/mtypes.h"
 #include "util/build_id.h"
 #include "util/debug.h"
 #include "util/disk_cache.h"
 #include "util/macros.h"
 #include "util/mesa-sha1.h"
+
+#include "compiler/brw_eu.h"
+#include "common/gen_debug.h"
 
 #include "brw_context.h"
 #include "brw_program.h"
@@ -39,6 +41,16 @@
 #include "brw_state.h"
 #include "brw_vs.h"
 #include "brw_wm.h"
+
+static bool
+debug_enabled_for_stage(gl_shader_stage stage)
+{
+   static const uint64_t stage_debug_flags[] = {
+      DEBUG_VS, DEBUG_TCS, DEBUG_TES, DEBUG_GS, DEBUG_WM, DEBUG_CS,
+   };
+   assert((int)stage >= 0 && stage < ARRAY_SIZE(stage_debug_flags));
+   return (INTEL_DEBUG & stage_debug_flags[stage]) != 0;
+}
 
 static void
 gen_shader_sha1(struct brw_context *brw, struct gl_program *prog,
@@ -59,27 +71,6 @@ gen_shader_sha1(struct brw_context *brw, struct gl_program *prog,
                       sha1_buf);
 
    _mesa_sha1_compute(manifest, strlen(manifest), out_sha1);
-}
-
-static void
-restore_serialized_nir_shader(struct brw_context *brw, struct gl_program *prog,
-                              gl_shader_stage stage)
-{
-   prog->program_written_to_cache = false;
-   if (brw->ctx._Shader->Flags & GLSL_CACHE_INFO) {
-      fprintf(stderr, "falling back to nir %s.\n",
-              _mesa_shader_stage_to_abbrev(prog->info.stage));
-   }
-
-   if (!prog->nir) {
-      assert(prog->driver_cache_blob && prog->driver_cache_blob_size > 0);
-      const struct nir_shader_compiler_options *options =
-         brw->ctx.Const.ShaderCompilerOptions[stage].NirOptions;
-      struct blob_reader reader;
-      blob_reader_init(&reader, prog->driver_cache_blob,
-                       prog->driver_cache_blob_size);
-      prog->nir = nir_deserialize(NULL, options, &reader);
-   }
 }
 
 static void
@@ -207,6 +198,7 @@ read_and_upload(struct brw_context *brw, struct disk_cache *cache,
       }
 
       disk_cache_remove(cache, binary_sha1);
+      ralloc_free(prog_data);
       free(buffer);
       return false;
    }
@@ -251,6 +243,19 @@ read_and_upload(struct brw_context *brw, struct disk_cache *cache,
 
    brw_alloc_stage_scratch(brw, stage_state, prog_data->total_scratch);
 
+   if (unlikely(debug_enabled_for_stage(stage))) {
+      fprintf(stderr, "NIR for %s program %d loaded from disk shader cache:\n",
+              _mesa_shader_stage_to_abbrev(stage), brw_program(prog)->id);
+      brw_program_deserialize_nir(&brw->ctx, prog, stage);
+      nir_shader *nir = prog->nir;
+      nir_print_shader(nir, stderr);
+      fprintf(stderr, "Native code for %s %s shader %s from disk cache:\n",
+              nir->info.label ? nir->info.label : "unnamed",
+              _mesa_shader_stage_to_string(nir->info.stage), nir->info.name);
+      brw_disassemble(&brw->screen->devinfo, program, 0,
+                      prog_data->program_size, stderr);
+   }
+
    brw_upload_cache(&brw->cache, cache_id, &prog_key, brw_prog_key_size(stage),
                     program, prog_data->program_size, prog_data,
                     brw_prog_data_size(stage), &stage_state->prog_offset,
@@ -258,6 +263,7 @@ read_and_upload(struct brw_context *brw, struct disk_cache *cache,
 
    prog->program_written_to_cache = true;
 
+   ralloc_free(prog_data);
    free(buffer);
 
    return true;
@@ -274,18 +280,7 @@ brw_disk_cache_upload_program(struct brw_context *brw, gl_shader_stage stage)
    if (prog == NULL)
       return false;
 
-   /* FIXME: For now we don't read from the cache if transform feedback is
-    * enabled via the API. However the shader cache does support transform
-    * feedback when enabled via in shader xfb qualifiers.
-    */
-   if (prog->sh.LinkedTransformFeedback &&
-       prog->sh.LinkedTransformFeedback->api_enabled)
-      return false;
-
    if (brw->ctx._Shader->Flags & GLSL_CACHE_FALLBACK)
-      goto fail;
-
-   if (prog->sh.data->LinkStatus != linking_skipped)
       goto fail;
 
    if (!read_and_upload(brw, cache, prog, stage))
@@ -298,7 +293,14 @@ brw_disk_cache_upload_program(struct brw_context *brw, gl_shader_stage stage)
    return true;
 
 fail:
-   restore_serialized_nir_shader(brw, prog, stage);
+   prog->program_written_to_cache = false;
+   if (brw->ctx._Shader->Flags & GLSL_CACHE_INFO) {
+      fprintf(stderr, "falling back to nir %s.\n",
+              _mesa_shader_stage_to_abbrev(prog->info.stage));
+   }
+
+   brw_program_deserialize_nir(&brw->ctx, prog, stage);
+
    return false;
 }
 
@@ -417,15 +419,12 @@ brw_disk_cache_write_compute_program(struct brw_context *brw)
 }
 
 void
-brw_disk_cache_init(struct brw_context *brw)
+brw_disk_cache_init(struct intel_screen *screen)
 {
 #ifdef ENABLE_SHADER_CACHE
-   if (env_var_as_boolean("MESA_GLSL_CACHE_DISABLE", true))
-      return;
-
    char renderer[10];
    MAYBE_UNUSED int len = snprintf(renderer, sizeof(renderer), "i965_%04x",
-                                   brw->screen->deviceID);
+                                   screen->deviceID);
    assert(len == sizeof(renderer) - 1);
 
    const struct build_id_note *note =
@@ -438,6 +437,6 @@ brw_disk_cache_init(struct brw_context *brw)
    char timestamp[41];
    _mesa_sha1_format(timestamp, id_sha1);
 
-   brw->ctx.Cache = disk_cache_create(renderer, timestamp, 0);
+   screen->disk_cache = disk_cache_create(renderer, timestamp, 0);
 #endif
 }

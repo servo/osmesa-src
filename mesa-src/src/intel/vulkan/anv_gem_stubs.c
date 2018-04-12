@@ -27,11 +27,13 @@
 
 #include "anv_private.h"
 
+#ifndef HAVE_MEMFD_CREATE
 static inline int
 memfd_create(const char *name, unsigned int flags)
 {
    return syscall(SYS_memfd_create, name, flags);
 }
+#endif
 
 uint32_t
 anv_gem_create(struct anv_device *device, uint64_t size)
@@ -145,7 +147,19 @@ anv_gem_destroy_context(struct anv_device *device, int context)
 }
 
 int
+anv_gem_set_context_param(int fd, int context, uint32_t param, uint64_t value)
+{
+   unreachable("Unused");
+}
+
+int
 anv_gem_get_context_param(int fd, int context, uint32_t param, uint64_t *value)
+{
+   unreachable("Unused");
+}
+
+bool
+anv_gem_has_context_priority(int fd)
 {
    unreachable("Unused");
 }

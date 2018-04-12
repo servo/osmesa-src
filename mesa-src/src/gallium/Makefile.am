@@ -42,11 +42,6 @@ if HAVE_GALLIUM_R300
 SUBDIRS += drivers/r300
 endif
 
-## radeon - linked into radeonsi
-if HAVE_GALLIUM_RADEON_COMMON
-SUBDIRS += drivers/radeon
-endif
-
 ## r600
 if HAVE_GALLIUM_R600
 SUBDIRS += drivers/r600
@@ -87,6 +82,11 @@ endif
 
 if HAVE_GALLIUM_SWR
 SUBDIRS += drivers/swr
+endif
+
+## tegra
+if HAVE_GALLIUM_TEGRA
+SUBDIRS += drivers/tegra winsys/tegra/drm
 endif
 
 ## vc4/rpi
@@ -155,7 +155,11 @@ SUBDIRS += state_trackers/glx/xlib targets/libgl-xlib
 endif
 
 if HAVE_ST_OMX_BELLAGIO
-SUBDIRS += state_trackers/omx_bellagio targets/omx-bellagio
+SUBDIRS += state_trackers/omx targets/omx
+endif
+
+if HAVE_ST_OMX_TIZONIA
+SUBDIRS += state_trackers/omx targets/omx
 endif
 
 if HAVE_GALLIUM_OSMESA
@@ -207,4 +211,5 @@ endif
 
 EXTRA_DIST += \
 	tests/graw \
-	tests/python
+	tests/python \
+	meson.build

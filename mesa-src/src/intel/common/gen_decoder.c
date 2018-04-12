@@ -35,6 +35,7 @@
 
 #include "gen_decoder.h"
 
+#include "isl/isl.h"
 #include "genxml/genX_xml.h"
 
 #define XML_BUFFER_SIZE 4096
@@ -840,41 +841,45 @@ iter_advance_field(struct gen_field_iterator *iter)
 
    int group_member_offset = iter_group_offset_bits(iter, iter->group_iter);
 
-   iter->start = group_member_offset + iter->field->start;
-   iter->end = group_member_offset + iter->field->end;
-   iter->dword = iter->start / 32;
+   iter->start_bit = group_member_offset + iter->field->start;
+   iter->end_bit = group_member_offset + iter->field->end;
    iter->struct_desc = NULL;
 
    return true;
 }
 
-static uint64_t
-iter_decode_field_raw(struct gen_field *field,
-                      const uint32_t *p,
-                      const uint32_t *end)
+static bool
+iter_decode_field_raw(struct gen_field_iterator *iter, uint64_t *qw)
 {
-   uint64_t qw = 0;
+   *qw = 0;
 
-   if ((field->end - field->start) > 32) {
-      if ((p + 1) < end)
-         qw = ((uint64_t) p[1]) << 32;
-      qw |= p[0];
+   int field_start = iter->p_bit + iter->start_bit;
+   int field_end = iter->p_bit + iter->end_bit;
+
+   const uint32_t *p = iter->p + (iter->start_bit / 32);
+   if (iter->p_end && p >= iter->p_end)
+      return false;
+
+   if ((field_end - field_start) > 32) {
+      if (!iter->p_end || (p + 1) < iter->p_end)
+         *qw = ((uint64_t) p[1]) << 32;
+      *qw |= p[0];
    } else
-      qw = p[0];
+      *qw = p[0];
 
-   qw = field_value(qw, field->start, field->end);
+   *qw = field_value(*qw, field_start, field_end);
 
    /* Address & offset types have to be aligned to dwords, their start bit is
     * a reminder of the alignment requirement.
     */
-   if (field->type.kind == GEN_TYPE_ADDRESS ||
-       field->type.kind == GEN_TYPE_OFFSET)
-      qw <<= field->start % 32;
+   if (iter->field->type.kind == GEN_TYPE_ADDRESS ||
+       iter->field->type.kind == GEN_TYPE_OFFSET)
+      *qw <<= field_start % 32;
 
-   return qw;
+   return true;
 }
 
-static void
+static bool
 iter_decode_field(struct gen_field_iterator *iter)
 {
    union {
@@ -889,11 +894,12 @@ iter_decode_field(struct gen_field_iterator *iter)
 
    memset(&v, 0, sizeof(v));
 
-   v.qw = iter_decode_field_raw(iter->field,
-                                &iter->p[iter->dword], iter->p_end);
+   if (!iter_decode_field_raw(iter, &iter->raw_value))
+      return false;
 
    const char *enum_name = NULL;
 
+   v.qw = iter->raw_value;
    switch (iter->field->type.kind) {
    case GEN_TYPE_UNKNOWN:
    case GEN_TYPE_INT: {
@@ -954,13 +960,22 @@ iter_decode_field(struct gen_field_iterator *iter)
       int length = strlen(iter->value);
       snprintf(iter->value + length, sizeof(iter->value) - length,
                " (%s)", enum_name);
+   } else if (strcmp(iter->name, "Surface Format") == 0) {
+      if (isl_format_is_valid((enum isl_format)v.qw)) {
+         const char *fmt_name = isl_format_get_name((enum isl_format)v.qw);
+         int length = strlen(iter->value);
+         snprintf(iter->value + length, sizeof(iter->value) - length,
+                  " (%s)", fmt_name);
+      }
    }
+
+   return true;
 }
 
 void
 gen_field_iterator_init(struct gen_field_iterator *iter,
                         struct gen_group *group,
-                        const uint32_t *p,
+                        const uint32_t *p, int p_bit,
                         bool print_colors)
 {
    memset(iter, 0, sizeof(*iter));
@@ -971,10 +986,15 @@ gen_field_iterator_init(struct gen_field_iterator *iter,
    else
       iter->field = group->next->fields;
    iter->p = p;
-   iter->p_end = &p[gen_group_get_length(iter->group, iter->p)];
+   iter->p_bit = p_bit;
+
+   int length = gen_group_get_length(iter->group, iter->p);
+   iter->p_end = length > 0 ? &p[length] : NULL;
    iter->print_colors = print_colors;
 
-   iter_decode_field(iter);
+   bool result = iter_decode_field(iter);
+   if (length >= 0)
+      assert(result);
 }
 
 bool
@@ -983,7 +1003,8 @@ gen_field_iterator_next(struct gen_field_iterator *iter)
    if (!iter_advance_field(iter))
       return false;
 
-   iter_decode_field(iter);
+   if (!iter_decode_field(iter))
+      return false;
 
    return true;
 }
@@ -1011,34 +1032,27 @@ gen_field_is_header(struct gen_field *field)
    return (field->parent->opcode_mask & bits) != 0;
 }
 
-void gen_field_decode(struct gen_field *field,
-                      const uint32_t *p, const uint32_t *end,
-                      union gen_field_value *value)
-{
-   uint32_t dword = field->start / 32;
-   value->u64 = iter_decode_field_raw(field, &p[dword], end);
-}
-
 void
-gen_print_group(FILE *outfile, struct gen_group *group,
-                uint64_t offset, const uint32_t *p, bool color)
+gen_print_group(FILE *outfile, struct gen_group *group, uint64_t offset,
+                const uint32_t *p, int p_bit, bool color)
 {
    struct gen_field_iterator iter;
    int last_dword = -1;
 
-   gen_field_iterator_init(&iter, group, p, color);
+   gen_field_iterator_init(&iter, group, p, p_bit, color);
    do {
-      if (last_dword != iter.dword) {
-         for (int i = last_dword + 1; i <= iter.dword; i++)
+      int iter_dword = iter.end_bit / 32;
+      if (last_dword != iter_dword) {
+         for (int i = last_dword + 1; i <= iter_dword; i++)
             print_dword_header(outfile, &iter, offset, i);
-         last_dword = iter.dword;
+         last_dword = iter_dword;
       }
       if (!gen_field_is_header(iter.field)) {
          fprintf(outfile, "    %s: %s\n", iter.name, iter.value);
          if (iter.struct_desc) {
-            uint64_t struct_offset = offset + 4 * iter.dword;
+            uint64_t struct_offset = offset + 4 * iter_dword;
             gen_print_group(outfile, iter.struct_desc, struct_offset,
-                            &p[iter.dword], color);
+                            &p[iter_dword], iter.start_bit % 32, color);
          }
       }
    } while (gen_field_iterator_next(&iter));

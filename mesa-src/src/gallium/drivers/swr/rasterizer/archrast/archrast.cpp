@@ -50,7 +50,9 @@ namespace ArchRast
 
     struct CStats
     {
-        uint32_t clippedVerts = 0;
+        uint32_t trivialRejectCount;
+        uint32_t trivialAcceptCount;
+        uint32_t mustClipCount;
     };
 
     struct TEStats
@@ -66,17 +68,48 @@ namespace ArchRast
         uint32_t vertsInput;
     };
 
+    struct RastStats
+    {
+        uint32_t rasterTiles = 0;
+    };
+
     //////////////////////////////////////////////////////////////////////////
-    /// @brief Event handler that saves stat events to event files. This
-    ///        handler filters out unwanted events.
-    class EventHandlerStatsFile : public EventHandlerFile
+    /// @brief Event handler that handles API thread events. This is shared
+    ///        between the API and its caller (e.g. driver shim) but typically
+    ///        there is only a single API thread per context. So you can save
+    ///        information in the class to be used for other events.
+    class EventHandlerApiStats : public EventHandlerFile
     {
     public:
-        EventHandlerStatsFile(uint32_t id) : EventHandlerFile(id), mNeedFlush(false) {}
+        EventHandlerApiStats(uint32_t id) : EventHandlerFile(id) {}
 
-        // These are events that we're not interested in saving in stats event files.
-        virtual void Handle(const Start& event) {}
-        virtual void Handle(const End& event) {}
+        virtual void Handle(const DrawInstancedEvent& event)
+        {
+            DrawInfoEvent e(event.data.drawId, ArchRast::Instanced, event.data.topology, 
+                event.data.numVertices, 0, 0, event.data.startVertex, event.data.numInstances, 
+                event.data.startInstance, event.data.tsEnable, event.data.gsEnable, event.data.soEnable, event.data.soTopology, event.data.splitId);
+            
+            EventHandlerFile::Handle(e);
+        }
+
+        virtual void Handle(const DrawIndexedInstancedEvent& event)
+        {
+            DrawInfoEvent e(event.data.drawId, ArchRast::IndexedInstanced, event.data.topology, 0,
+                event.data.numIndices, event.data.indexOffset, event.data.baseVertex, event.data.numInstances,
+                event.data.startInstance, event.data.tsEnable, event.data.gsEnable, event.data.soEnable, event.data.soTopology, event.data.splitId);
+
+            EventHandlerFile::Handle(e);
+        }
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// @brief Event handler that handles worker thread events. There is one
+    ///        event handler per thread. The python script will need to sum
+    ///        up counters across all of the threads.
+    class EventHandlerWorkerStats : public EventHandlerFile
+    {
+    public:
+        EventHandlerWorkerStats(uint32_t id) : EventHandlerFile(id), mNeedFlush(false) {}
 
         virtual void Handle(const EarlyDepthStencilInfoSingleSample& event)
         {
@@ -87,6 +120,15 @@ namespace ArchRast
             //earlyStencil test compute
             mDSSingleSample.earlyStencilTestPassCount += _mm_popcnt_u32(event.data.stencilPassMask);
             mDSSingleSample.earlyStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
+
+            //earlyZ test single and multi sample
+            mDSCombined.earlyZTestPassCount += _mm_popcnt_u32(event.data.depthPassMask);
+            mDSCombined.earlyZTestFailCount += _mm_popcnt_u32((!event.data.depthPassMask) & event.data.coverageMask);
+
+            //earlyStencil test single and multi sample
+            mDSCombined.earlyStencilTestPassCount += _mm_popcnt_u32(event.data.stencilPassMask);
+            mDSCombined.earlyStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
+
             mNeedFlush = true;
         }
 
@@ -99,6 +141,15 @@ namespace ArchRast
             //earlyStencil test compute
             mDSSampleRate.earlyStencilTestPassCount += _mm_popcnt_u32(event.data.stencilPassMask);
             mDSSampleRate.earlyStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
+
+            //earlyZ test single and multi sample
+            mDSCombined.earlyZTestPassCount  += _mm_popcnt_u32(event.data.depthPassMask);
+            mDSCombined.earlyZTestFailCount += _mm_popcnt_u32((!event.data.depthPassMask) & event.data.coverageMask);
+
+            //earlyStencil test single and multi sample
+            mDSCombined.earlyStencilTestPassCount += _mm_popcnt_u32(event.data.stencilPassMask);
+            mDSCombined.earlyStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
+
             mNeedFlush = true;
         }
 
@@ -123,6 +174,15 @@ namespace ArchRast
             //lateStencil test compute
             mDSSingleSample.lateStencilTestPassCount += _mm_popcnt_u32(event.data.stencilPassMask);
             mDSSingleSample.lateStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
+
+            //lateZ test single and multi sample
+            mDSCombined.lateZTestPassCount += _mm_popcnt_u32(event.data.depthPassMask);
+            mDSCombined.lateZTestFailCount += _mm_popcnt_u32((!event.data.depthPassMask) & event.data.coverageMask);
+
+            //lateStencil test single and multi sample
+            mDSCombined.lateStencilTestPassCount += _mm_popcnt_u32(event.data.stencilPassMask);
+            mDSCombined.lateStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
+
             mNeedFlush = true;
         }
 
@@ -135,6 +195,16 @@ namespace ArchRast
             //lateStencil test compute
             mDSSampleRate.lateStencilTestPassCount += _mm_popcnt_u32(event.data.stencilPassMask);
             mDSSampleRate.lateStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
+
+
+            //lateZ test single and multi sample
+            mDSCombined.lateZTestPassCount += _mm_popcnt_u32(event.data.depthPassMask);
+            mDSCombined.lateZTestFailCount += _mm_popcnt_u32((!event.data.depthPassMask) & event.data.coverageMask);
+
+            //lateStencil test single and multi sample
+            mDSCombined.lateStencilTestPassCount += _mm_popcnt_u32(event.data.stencilPassMask);
+            mDSCombined.lateStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
+
             mNeedFlush = true;
         }
 
@@ -168,6 +238,13 @@ namespace ArchRast
         }
 
 
+        virtual void Handle(const ClipInfoEvent& event)
+        {
+            mClipper.mustClipCount += _mm_popcnt_u32(event.data.clipMask);
+            mClipper.trivialRejectCount += event.data.numInvocations - _mm_popcnt_u32(event.data.validMask);
+            mClipper.trivialAcceptCount += _mm_popcnt_u32(event.data.validMask & ~event.data.clipMask);
+        }
+
         // Flush cached events for this draw
         virtual void FlushDraw(uint32_t drawId)
         {
@@ -185,6 +262,12 @@ namespace ArchRast
             EventHandlerFile::Handle(EarlyStencilSampleRate(drawId, mDSSampleRate.earlyStencilTestPassCount, mDSSampleRate.earlyStencilTestFailCount));
             EventHandlerFile::Handle(LateStencilSampleRate(drawId, mDSSampleRate.lateStencilTestPassCount, mDSSampleRate.lateStencilTestFailCount));
 
+            //combined
+            EventHandlerFile::Handle(EarlyZ(drawId, mDSCombined.earlyZTestPassCount, mDSCombined.earlyZTestFailCount));
+            EventHandlerFile::Handle(LateZ(drawId, mDSCombined.lateZTestPassCount, mDSCombined.lateZTestFailCount));
+            EventHandlerFile::Handle(EarlyStencil(drawId, mDSCombined.earlyStencilTestPassCount, mDSCombined.earlyStencilTestFailCount));
+            EventHandlerFile::Handle(LateStencil(drawId, mDSCombined.lateStencilTestPassCount, mDSCombined.lateStencilTestFailCount));
+
             //pixelRate
             EventHandlerFile::Handle(EarlyZPixelRate(drawId, mDSPixelRate.earlyZTestPassCount, mDSPixelRate.earlyZTestFailCount));
             EventHandlerFile::Handle(LateZPixelRate(drawId, mDSPixelRate.lateZTestPassCount, mDSPixelRate.lateZTestFailCount));
@@ -194,19 +277,24 @@ namespace ArchRast
             EventHandlerFile::Handle(EarlyZNullPS(drawId, mDSNullPS.earlyZTestPassCount, mDSNullPS.earlyZTestFailCount));
             EventHandlerFile::Handle(EarlyStencilNullPS(drawId, mDSNullPS.earlyStencilTestPassCount, mDSNullPS.earlyStencilTestFailCount));
 
+            // Rasterized Subspans
+            EventHandlerFile::Handle(RasterTiles(drawId, rastStats.rasterTiles));
+
             //Reset Internal Counters
             mDSSingleSample = {};
             mDSSampleRate = {};
+            mDSCombined = {};
             mDSPixelRate = {};
             mDSNullPS = {};
 
+            rastStats = {};
             mNeedFlush = false;
         }
 
         virtual void Handle(const FrontendDrawEndEvent& event)
         {
             //Clipper
-            EventHandlerFile::Handle(VertsClipped(event.data.drawId, mClipper.clippedVerts));
+            EventHandlerFile::Handle(ClipperEvent(event.data.drawId, mClipper.trivialRejectCount, mClipper.trivialAcceptCount, mClipper.mustClipCount));
 
             //Tesselator
             EventHandlerFile::Handle(TessPrims(event.data.drawId, mTS.inputPrims));
@@ -229,14 +317,14 @@ namespace ArchRast
             mGS.vertsInput += event.data.vertsInput;
         }
 
-        virtual void Handle(const ClipVertexCount& event)
-        {
-            mClipper.clippedVerts += (_mm_popcnt_u32(event.data.primMask) * event.data.vertsPerPrim);
-        }
-
         virtual void Handle(const TessPrimCount& event)
         {
             mTS.inputPrims += event.data.primCount;
+        }
+
+        virtual void Handle(const RasterTileCount& event)
+        {
+            rastStats.rasterTiles += event.data.rasterTiles;
         }
 
     protected:
@@ -245,11 +333,13 @@ namespace ArchRast
         DepthStencilStats mDSSingleSample = {};
         DepthStencilStats mDSSampleRate = {};
         DepthStencilStats mDSPixelRate = {};
+        DepthStencilStats mDSCombined = {};
         DepthStencilStats mDSNullPS = {};
         DepthStencilStats mDSOmZ = {};
         CStats mClipper = {};
         TEStats mTS = {};
         GSStats mGS = {};
+        RastStats rastStats = {};
 
     };
 
@@ -266,20 +356,24 @@ namespace ArchRast
         uint32_t id = counter.fetch_add(1);
 
         EventManager* pManager = new EventManager();
-        EventHandlerFile* pHandler = new EventHandlerStatsFile(id);
 
-        if (pManager && pHandler)
+        if (pManager)
         {
-            pManager->Attach(pHandler);
+            EventHandlerFile* pHandler = nullptr;
 
             if (type == AR_THREAD::API)
             {
+                pHandler = new EventHandlerApiStats(id);
+                pManager->Attach(pHandler);
                 pHandler->Handle(ThreadStartApiEvent());
             }
             else
             {
+                pHandler = new EventHandlerWorkerStats(id);
+                pManager->Attach(pHandler);
                 pHandler->Handle(ThreadStartWorkerEvent());
             }
+
             pHandler->MarkHeader();
 
             return pManager;

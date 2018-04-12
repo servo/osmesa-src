@@ -284,6 +284,27 @@ pipe_buffer_create( struct pipe_screen *screen,
 }
 
 
+static inline struct pipe_resource *
+pipe_buffer_create_const0(struct pipe_screen *screen,
+                          unsigned bind,
+                          enum pipe_resource_usage usage,
+                          unsigned size)
+{
+   struct pipe_resource buffer;
+   memset(&buffer, 0, sizeof buffer);
+   buffer.target = PIPE_BUFFER;
+   buffer.format = PIPE_FORMAT_R8_UNORM;
+   buffer.bind = bind;
+   buffer.usage = usage;
+   buffer.flags = screen->get_param(screen, PIPE_CAP_CONSTBUF0_FLAGS);
+   buffer.width0 = size;
+   buffer.height0 = 1;
+   buffer.depth0 = 1;
+   buffer.array_size = 1;
+   return screen->resource_create(screen, &buffer);
+}
+
+
 /**
  * Map a range of a resource.
  * \param offset  start of region, in bytes 
@@ -666,6 +687,12 @@ util_max_layer(const struct pipe_resource *r, unsigned level)
    }
 }
 
+static inline unsigned
+util_num_layers(const struct pipe_resource *r, unsigned level)
+{
+   return util_max_layer(r, level) + 1;
+}
+
 static inline bool
 util_texrange_covers_whole_level(const struct pipe_resource *tex,
                                  unsigned level, unsigned x, unsigned y,
@@ -675,7 +702,7 @@ util_texrange_covers_whole_level(const struct pipe_resource *tex,
    return x == 0 && y == 0 && z == 0 &&
           width == u_minify(tex->width0, level) &&
           height == u_minify(tex->height0, level) &&
-          depth == util_max_layer(tex, level) + 1;
+          depth == util_num_layers(tex, level);
 }
 
 #ifdef __cplusplus

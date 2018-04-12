@@ -30,9 +30,11 @@
 *  ./rasterizer/codegen/gen_archrast.py
 *    --proto
 *    ./rasterizer/archrast/events.proto
+*    --proto_private
+*    ./rasterizer/archrast/events_private.proto
 *    --output
 *    rasterizer/archrast/gen_ar_event.hpp
-*    --gen_event_h
+*    --gen_event_hpp
 * 
 ******************************************************************************/
 #pragma once
@@ -42,68 +44,12 @@
 
 namespace ArchRast
 {
-    enum GroupType
+    enum AR_DRAW_TYPE
     {
-        APIClearRenderTarget,
-        APIDraw,
-        APIDrawWakeAllThreads,
-        APIDrawIndexed,
-        APIDispatch,
-        APIStoreTiles,
-        APIGetDrawContext,
-        APISync,
-        APIWaitForIdle,
-        FEProcessDraw,
-        FEProcessDrawIndexed,
-        FEFetchShader,
-        FEVertexShader,
-        FEHullShader,
-        FETessellation,
-        FEDomainShader,
-        FEGeometryShader,
-        FEStreamout,
-        FEPAAssemble,
-        FEBinPoints,
-        FEBinLines,
-        FEBinTriangles,
-        FETriangleSetup,
-        FEViewportCull,
-        FEGuardbandClip,
-        FEClipPoints,
-        FEClipLines,
-        FEClipTriangles,
-        FECullZeroAreaAndBackface,
-        FECullBetweenCenters,
-        FEProcessStoreTiles,
-        FEProcessInvalidateTiles,
-        WorkerWorkOnFifoBE,
-        WorkerFoundWork,
-        BELoadTiles,
-        BEDispatch,
-        BEClear,
-        BERasterizeLine,
-        BERasterizeTriangle,
-        BETriangleSetup,
-        BEStepSetup,
-        BECullZeroArea,
-        BEEmptyTriangle,
-        BETrivialAccept,
-        BETrivialReject,
-        BERasterizePartial,
-        BEPixelBackend,
-        BESetup,
-        BEBarycentric,
-        BEEarlyDepthTest,
-        BEPixelShader,
-        BESingleSampleBackend,
-        BEPixelRateBackend,
-        BESampleRateBackend,
-        BENullBackend,
-        BELateDepthTest,
-        BEOutputMerger,
-        BEStoreTiles,
-        BEEndTile,
-        WorkerWaitForThreadEvent,
+        Instanced = 0,
+        IndexedInstanced = 1,
+        InstancedSplit = 2,
+        IndexedInstancedSplit = 3
     };
 
     //Forward decl
@@ -118,70 +64,6 @@ namespace ArchRast
         virtual ~Event() {}
 
         virtual void Accept(EventHandler* pHandler) const = 0;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// StartData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct StartData
-    {
-        // Fields
-        GroupType type;
-        uint32_t id;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// Start
-    //////////////////////////////////////////////////////////////////////////
-    struct Start : Event
-    {
-        StartData data;
-
-        // Constructor
-        Start(
-            GroupType type,
-            uint32_t id
-        )
-        {
-            data.type = type;
-            data.id = id;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EndData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EndData
-    {
-        // Fields
-        GroupType type;
-        uint32_t count;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// End
-    //////////////////////////////////////////////////////////////////////////
-    struct End : Event
-    {
-        EndData data;
-
-        // Constructor
-        End(
-            GroupType type,
-            uint32_t count
-        )
-        {
-            data.type = type;
-            data.count = count;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
     };
 
     //////////////////////////////////////////////////////////////////////////
@@ -237,91 +119,68 @@ namespace ArchRast
     };
 
     //////////////////////////////////////////////////////////////////////////
-    /// DrawInstancedEventData
+    /// DrawInfoEventData
     //////////////////////////////////////////////////////////////////////////
 #pragma pack(push, 1)
-    struct DrawInstancedEventData
+    struct DrawInfoEventData
     {
         // Fields
         uint32_t drawId;
+        AR_DRAW_TYPE type;
         uint32_t topology;
         uint32_t numVertices;
-        int32_t startVertex;
-        uint32_t numInstances;
-        uint32_t startInstance;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// DrawInstancedEvent
-    //////////////////////////////////////////////////////////////////////////
-    struct DrawInstancedEvent : Event
-    {
-        DrawInstancedEventData data;
-
-        // Constructor
-        DrawInstancedEvent(
-            uint32_t drawId,
-            uint32_t topology,
-            uint32_t numVertices,
-            int32_t startVertex,
-            uint32_t numInstances,
-            uint32_t startInstance
-        )
-        {
-            data.drawId = drawId;
-            data.topology = topology;
-            data.numVertices = numVertices;
-            data.startVertex = startVertex;
-            data.numInstances = numInstances;
-            data.startInstance = startInstance;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// DrawIndexedInstancedEventData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct DrawIndexedInstancedEventData
-    {
-        // Fields
-        uint32_t drawId;
-        uint32_t topology;
         uint32_t numIndices;
         int32_t indexOffset;
         int32_t baseVertex;
         uint32_t numInstances;
         uint32_t startInstance;
+        uint32_t tsEnable;
+        uint32_t gsEnable;
+        uint32_t soEnable;
+        uint32_t soTopology;
+        uint32_t splitId;
     };
 #pragma pack(pop)
 
     //////////////////////////////////////////////////////////////////////////
-    /// DrawIndexedInstancedEvent
+    /// DrawInfoEvent
     //////////////////////////////////////////////////////////////////////////
-    struct DrawIndexedInstancedEvent : Event
+    struct DrawInfoEvent : Event
     {
-        DrawIndexedInstancedEventData data;
+        DrawInfoEventData data;
 
         // Constructor
-        DrawIndexedInstancedEvent(
+        DrawInfoEvent(
             uint32_t drawId,
+            AR_DRAW_TYPE type,
             uint32_t topology,
+            uint32_t numVertices,
             uint32_t numIndices,
             int32_t indexOffset,
             int32_t baseVertex,
             uint32_t numInstances,
-            uint32_t startInstance
+            uint32_t startInstance,
+            uint32_t tsEnable,
+            uint32_t gsEnable,
+            uint32_t soEnable,
+            uint32_t soTopology,
+            uint32_t splitId
         )
         {
             data.drawId = drawId;
+            data.type = type;
             data.topology = topology;
+            data.numVertices = numVertices;
             data.numIndices = numIndices;
             data.indexOffset = indexOffset;
             data.baseVertex = baseVertex;
             data.numInstances = numInstances;
             data.startInstance = startInstance;
+            data.tsEnable = tsEnable;
+            data.gsEnable = gsEnable;
+            data.soEnable = soEnable;
+            data.soTopology = soTopology;
+            data.splitId = splitId;
         }
 
         virtual void Accept(EventHandler* pHandler) const;
@@ -392,64 +251,6 @@ namespace ArchRast
         {
             data.frameId = frameId;
             data.nextDrawId = nextDrawId;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// DrawInstancedSplitEventData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct DrawInstancedSplitEventData
-    {
-        // Fields
-        uint32_t drawId;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// DrawInstancedSplitEvent
-    //////////////////////////////////////////////////////////////////////////
-    struct DrawInstancedSplitEvent : Event
-    {
-        DrawInstancedSplitEventData data;
-
-        // Constructor
-        DrawInstancedSplitEvent(
-            uint32_t drawId
-        )
-        {
-            data.drawId = drawId;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// DrawIndexedInstancedSplitEventData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct DrawIndexedInstancedSplitEventData
-    {
-        // Fields
-        uint32_t drawId;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// DrawIndexedInstancedSplitEvent
-    //////////////////////////////////////////////////////////////////////////
-    struct DrawIndexedInstancedSplitEvent : Event
-    {
-        DrawIndexedInstancedSplitEventData data;
-
-        // Constructor
-        DrawIndexedInstancedSplitEvent(
-            uint32_t drawId
-        )
-        {
-            data.drawId = drawId;
         }
 
         virtual void Accept(EventHandler* pHandler) const;
@@ -684,6 +485,904 @@ namespace ArchRast
             data.DepthPassCount = DepthPassCount;
             data.PsInvocations = PsInvocations;
             data.CsInvocations = CsInvocations;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZSingleSampleData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyZSingleSampleData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZSingleSample
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyZSingleSample : Event
+    {
+        EarlyZSingleSampleData data;
+
+        // Constructor
+        EarlyZSingleSample(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateZSingleSampleData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateZSingleSampleData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateZSingleSample
+    //////////////////////////////////////////////////////////////////////////
+    struct LateZSingleSample : Event
+    {
+        LateZSingleSampleData data;
+
+        // Constructor
+        LateZSingleSample(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyStencilSingleSampleData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyStencilSingleSampleData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyStencilSingleSample
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyStencilSingleSample : Event
+    {
+        EarlyStencilSingleSampleData data;
+
+        // Constructor
+        EarlyStencilSingleSample(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateStencilSingleSampleData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateStencilSingleSampleData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateStencilSingleSample
+    //////////////////////////////////////////////////////////////////////////
+    struct LateStencilSingleSample : Event
+    {
+        LateStencilSingleSampleData data;
+
+        // Constructor
+        LateStencilSingleSample(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZSampleRateData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyZSampleRateData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZSampleRate
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyZSampleRate : Event
+    {
+        EarlyZSampleRateData data;
+
+        // Constructor
+        EarlyZSampleRate(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateZSampleRateData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateZSampleRateData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateZSampleRate
+    //////////////////////////////////////////////////////////////////////////
+    struct LateZSampleRate : Event
+    {
+        LateZSampleRateData data;
+
+        // Constructor
+        LateZSampleRate(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyStencilSampleRateData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyStencilSampleRateData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyStencilSampleRate
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyStencilSampleRate : Event
+    {
+        EarlyStencilSampleRateData data;
+
+        // Constructor
+        EarlyStencilSampleRate(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateStencilSampleRateData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateStencilSampleRateData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateStencilSampleRate
+    //////////////////////////////////////////////////////////////////////////
+    struct LateStencilSampleRate : Event
+    {
+        LateStencilSampleRateData data;
+
+        // Constructor
+        LateStencilSampleRate(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyZData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZ
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyZ : Event
+    {
+        EarlyZData data;
+
+        // Constructor
+        EarlyZ(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateZData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateZData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateZ
+    //////////////////////////////////////////////////////////////////////////
+    struct LateZ : Event
+    {
+        LateZData data;
+
+        // Constructor
+        LateZ(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyStencilData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyStencilData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyStencil
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyStencil : Event
+    {
+        EarlyStencilData data;
+
+        // Constructor
+        EarlyStencil(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateStencilData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateStencilData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateStencil
+    //////////////////////////////////////////////////////////////////////////
+    struct LateStencil : Event
+    {
+        LateStencilData data;
+
+        // Constructor
+        LateStencil(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZNullPSData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyZNullPSData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZNullPS
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyZNullPS : Event
+    {
+        EarlyZNullPSData data;
+
+        // Constructor
+        EarlyZNullPS(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyStencilNullPSData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyStencilNullPSData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyStencilNullPS
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyStencilNullPS : Event
+    {
+        EarlyStencilNullPSData data;
+
+        // Constructor
+        EarlyStencilNullPS(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZPixelRateData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyZPixelRateData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyZPixelRate
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyZPixelRate : Event
+    {
+        EarlyZPixelRateData data;
+
+        // Constructor
+        EarlyZPixelRate(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateZPixelRateData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateZPixelRateData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateZPixelRate
+    //////////////////////////////////////////////////////////////////////////
+    struct LateZPixelRate : Event
+    {
+        LateZPixelRateData data;
+
+        // Constructor
+        LateZPixelRate(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyOmZData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyOmZData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyOmZ
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyOmZ : Event
+    {
+        EarlyOmZData data;
+
+        // Constructor
+        EarlyOmZ(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyOmStencilData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct EarlyOmStencilData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// EarlyOmStencil
+    //////////////////////////////////////////////////////////////////////////
+    struct EarlyOmStencil : Event
+    {
+        EarlyOmStencilData data;
+
+        // Constructor
+        EarlyOmStencil(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateOmZData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateOmZData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateOmZ
+    //////////////////////////////////////////////////////////////////////////
+    struct LateOmZ : Event
+    {
+        LateOmZData data;
+
+        // Constructor
+        LateOmZ(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateOmStencilData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct LateOmStencilData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t passCount;
+        uint64_t failCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// LateOmStencil
+    //////////////////////////////////////////////////////////////////////////
+    struct LateOmStencil : Event
+    {
+        LateOmStencilData data;
+
+        // Constructor
+        LateOmStencil(
+            uint32_t drawId,
+            uint64_t passCount,
+            uint64_t failCount
+        )
+        {
+            data.drawId = drawId;
+            data.passCount = passCount;
+            data.failCount = failCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSInputPrimsData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct GSInputPrimsData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t inputPrimCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSInputPrims
+    //////////////////////////////////////////////////////////////////////////
+    struct GSInputPrims : Event
+    {
+        GSInputPrimsData data;
+
+        // Constructor
+        GSInputPrims(
+            uint32_t drawId,
+            uint64_t inputPrimCount
+        )
+        {
+            data.drawId = drawId;
+            data.inputPrimCount = inputPrimCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSPrimsGenData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct GSPrimsGenData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t primGeneratedCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSPrimsGen
+    //////////////////////////////////////////////////////////////////////////
+    struct GSPrimsGen : Event
+    {
+        GSPrimsGenData data;
+
+        // Constructor
+        GSPrimsGen(
+            uint32_t drawId,
+            uint64_t primGeneratedCount
+        )
+        {
+            data.drawId = drawId;
+            data.primGeneratedCount = primGeneratedCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSVertsInputData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct GSVertsInputData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t vertsInput;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSVertsInput
+    //////////////////////////////////////////////////////////////////////////
+    struct GSVertsInput : Event
+    {
+        GSVertsInputData data;
+
+        // Constructor
+        GSVertsInput(
+            uint32_t drawId,
+            uint64_t vertsInput
+        )
+        {
+            data.drawId = drawId;
+            data.vertsInput = vertsInput;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// TessPrimsData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct TessPrimsData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t primCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// TessPrims
+    //////////////////////////////////////////////////////////////////////////
+    struct TessPrims : Event
+    {
+        TessPrimsData data;
+
+        // Constructor
+        TessPrims(
+            uint32_t drawId,
+            uint64_t primCount
+        )
+        {
+            data.drawId = drawId;
+            data.primCount = primCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// RasterTilesData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct RasterTilesData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t rastTileCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// RasterTiles
+    //////////////////////////////////////////////////////////////////////////
+    struct RasterTiles : Event
+    {
+        RasterTilesData data;
+
+        // Constructor
+        RasterTiles(
+            uint32_t drawId,
+            uint32_t rastTileCount
+        )
+        {
+            data.drawId = drawId;
+            data.rastTileCount = rastTileCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// ClipperEventData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct ClipperEventData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t trivialRejectCount;
+        uint32_t trivialAcceptCount;
+        uint32_t mustClipCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// ClipperEvent
+    //////////////////////////////////////////////////////////////////////////
+    struct ClipperEvent : Event
+    {
+        ClipperEventData data;
+
+        // Constructor
+        ClipperEvent(
+            uint32_t drawId,
+            uint32_t trivialRejectCount,
+            uint32_t trivialAcceptCount,
+            uint32_t mustClipCount
+        )
+        {
+            data.drawId = drawId;
+            data.trivialRejectCount = trivialRejectCount;
+            data.trivialAcceptCount = trivialAcceptCount;
+            data.mustClipCount = mustClipCount;
         }
 
         virtual void Accept(EventHandler* pHandler) const;
@@ -1022,560 +1721,61 @@ namespace ArchRast
     };
 
     //////////////////////////////////////////////////////////////////////////
-    /// EarlyZSingleSampleData
+    /// TessPrimCountData
     //////////////////////////////////////////////////////////////////////////
 #pragma pack(push, 1)
-    struct EarlyZSingleSampleData
+    struct TessPrimCountData
     {
         // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
+        uint64_t primCount;
     };
 #pragma pack(pop)
 
     //////////////////////////////////////////////////////////////////////////
-    /// EarlyZSingleSample
+    /// TessPrimCount
     //////////////////////////////////////////////////////////////////////////
-    struct EarlyZSingleSample : Event
+    struct TessPrimCount : Event
     {
-        EarlyZSingleSampleData data;
+        TessPrimCountData data;
 
         // Constructor
-        EarlyZSingleSample(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
+        TessPrimCount(
+            uint64_t primCount
         )
         {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
+            data.primCount = primCount;
         }
 
         virtual void Accept(EventHandler* pHandler) const;
     };
 
     //////////////////////////////////////////////////////////////////////////
-    /// LateZSingleSampleData
+    /// RasterTileCountData
     //////////////////////////////////////////////////////////////////////////
 #pragma pack(push, 1)
-    struct LateZSingleSampleData
+    struct RasterTileCountData
     {
         // Fields
         uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
+        uint64_t rasterTiles;
     };
 #pragma pack(pop)
 
     //////////////////////////////////////////////////////////////////////////
-    /// LateZSingleSample
+    /// RasterTileCount
     //////////////////////////////////////////////////////////////////////////
-    struct LateZSingleSample : Event
+    struct RasterTileCount : Event
     {
-        LateZSingleSampleData data;
+        RasterTileCountData data;
 
         // Constructor
-        LateZSingleSample(
+        RasterTileCount(
             uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
+            uint64_t rasterTiles
         )
         {
             data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyStencilSingleSampleData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EarlyStencilSingleSampleData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyStencilSingleSample
-    //////////////////////////////////////////////////////////////////////////
-    struct EarlyStencilSingleSample : Event
-    {
-        EarlyStencilSingleSampleData data;
-
-        // Constructor
-        EarlyStencilSingleSample(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateStencilSingleSampleData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct LateStencilSingleSampleData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateStencilSingleSample
-    //////////////////////////////////////////////////////////////////////////
-    struct LateStencilSingleSample : Event
-    {
-        LateStencilSingleSampleData data;
-
-        // Constructor
-        LateStencilSingleSample(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyZSampleRateData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EarlyZSampleRateData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyZSampleRate
-    //////////////////////////////////////////////////////////////////////////
-    struct EarlyZSampleRate : Event
-    {
-        EarlyZSampleRateData data;
-
-        // Constructor
-        EarlyZSampleRate(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateZSampleRateData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct LateZSampleRateData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateZSampleRate
-    //////////////////////////////////////////////////////////////////////////
-    struct LateZSampleRate : Event
-    {
-        LateZSampleRateData data;
-
-        // Constructor
-        LateZSampleRate(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyStencilSampleRateData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EarlyStencilSampleRateData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyStencilSampleRate
-    //////////////////////////////////////////////////////////////////////////
-    struct EarlyStencilSampleRate : Event
-    {
-        EarlyStencilSampleRateData data;
-
-        // Constructor
-        EarlyStencilSampleRate(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateStencilSampleRateData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct LateStencilSampleRateData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateStencilSampleRate
-    //////////////////////////////////////////////////////////////////////////
-    struct LateStencilSampleRate : Event
-    {
-        LateStencilSampleRateData data;
-
-        // Constructor
-        LateStencilSampleRate(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyZNullPSData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EarlyZNullPSData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyZNullPS
-    //////////////////////////////////////////////////////////////////////////
-    struct EarlyZNullPS : Event
-    {
-        EarlyZNullPSData data;
-
-        // Constructor
-        EarlyZNullPS(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyStencilNullPSData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EarlyStencilNullPSData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyStencilNullPS
-    //////////////////////////////////////////////////////////////////////////
-    struct EarlyStencilNullPS : Event
-    {
-        EarlyStencilNullPSData data;
-
-        // Constructor
-        EarlyStencilNullPS(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyZPixelRateData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EarlyZPixelRateData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyZPixelRate
-    //////////////////////////////////////////////////////////////////////////
-    struct EarlyZPixelRate : Event
-    {
-        EarlyZPixelRateData data;
-
-        // Constructor
-        EarlyZPixelRate(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateZPixelRateData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct LateZPixelRateData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateZPixelRate
-    //////////////////////////////////////////////////////////////////////////
-    struct LateZPixelRate : Event
-    {
-        LateZPixelRateData data;
-
-        // Constructor
-        LateZPixelRate(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyOmZData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EarlyOmZData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyOmZ
-    //////////////////////////////////////////////////////////////////////////
-    struct EarlyOmZ : Event
-    {
-        EarlyOmZData data;
-
-        // Constructor
-        EarlyOmZ(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyOmStencilData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct EarlyOmStencilData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// EarlyOmStencil
-    //////////////////////////////////////////////////////////////////////////
-    struct EarlyOmStencil : Event
-    {
-        EarlyOmStencilData data;
-
-        // Constructor
-        EarlyOmStencil(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateOmZData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct LateOmZData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateOmZ
-    //////////////////////////////////////////////////////////////////////////
-    struct LateOmZ : Event
-    {
-        LateOmZData data;
-
-        // Constructor
-        LateOmZ(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateOmStencilData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct LateOmStencilData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t passCount;
-        uint64_t failCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// LateOmStencil
-    //////////////////////////////////////////////////////////////////////////
-    struct LateOmStencil : Event
-    {
-        LateOmStencilData data;
-
-        // Constructor
-        LateOmStencil(
-            uint32_t drawId,
-            uint64_t passCount,
-            uint64_t failCount
-        )
-        {
-            data.drawId = drawId;
-            data.passCount = passCount;
-            data.failCount = failCount;
+            data.rasterTiles = rasterTiles;
         }
 
         virtual void Accept(EventHandler* pHandler) const;
@@ -1617,279 +1817,156 @@ namespace ArchRast
     };
 
     //////////////////////////////////////////////////////////////////////////
-    /// GSInputPrimsData
+    /// ClipInfoEventData
     //////////////////////////////////////////////////////////////////////////
 #pragma pack(push, 1)
-    struct GSInputPrimsData
+    struct ClipInfoEventData
     {
         // Fields
-        uint32_t drawId;
-        uint64_t inputPrimCount;
+        uint32_t numInvocations;
+        uint32_t validMask;
+        uint32_t clipMask;
     };
 #pragma pack(pop)
 
     //////////////////////////////////////////////////////////////////////////
-    /// GSInputPrims
+    /// ClipInfoEvent
     //////////////////////////////////////////////////////////////////////////
-    struct GSInputPrims : Event
+    struct ClipInfoEvent : Event
     {
-        GSInputPrimsData data;
+        ClipInfoEventData data;
 
         // Constructor
-        GSInputPrims(
+        ClipInfoEvent(
+            uint32_t numInvocations,
+            uint32_t validMask,
+            uint32_t clipMask
+        )
+        {
+            data.numInvocations = numInvocations;
+            data.validMask = validMask;
+            data.clipMask = clipMask;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// DrawInstancedEventData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct DrawInstancedEventData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t topology;
+        uint32_t numVertices;
+        int32_t startVertex;
+        uint32_t numInstances;
+        uint32_t startInstance;
+        uint32_t tsEnable;
+        uint32_t gsEnable;
+        uint32_t soEnable;
+        uint32_t soTopology;
+        uint32_t splitId;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// DrawInstancedEvent
+    //////////////////////////////////////////////////////////////////////////
+    struct DrawInstancedEvent : Event
+    {
+        DrawInstancedEventData data;
+
+        // Constructor
+        DrawInstancedEvent(
             uint32_t drawId,
-            uint64_t inputPrimCount
+            uint32_t topology,
+            uint32_t numVertices,
+            int32_t startVertex,
+            uint32_t numInstances,
+            uint32_t startInstance,
+            uint32_t tsEnable,
+            uint32_t gsEnable,
+            uint32_t soEnable,
+            uint32_t soTopology,
+            uint32_t splitId
         )
         {
             data.drawId = drawId;
-            data.inputPrimCount = inputPrimCount;
+            data.topology = topology;
+            data.numVertices = numVertices;
+            data.startVertex = startVertex;
+            data.numInstances = numInstances;
+            data.startInstance = startInstance;
+            data.tsEnable = tsEnable;
+            data.gsEnable = gsEnable;
+            data.soEnable = soEnable;
+            data.soTopology = soTopology;
+            data.splitId = splitId;
         }
 
         virtual void Accept(EventHandler* pHandler) const;
     };
 
     //////////////////////////////////////////////////////////////////////////
-    /// GSPrimsGenData
+    /// DrawIndexedInstancedEventData
     //////////////////////////////////////////////////////////////////////////
 #pragma pack(push, 1)
-    struct GSPrimsGenData
+    struct DrawIndexedInstancedEventData
     {
         // Fields
         uint32_t drawId;
-        uint64_t primGeneratedCount;
+        uint32_t topology;
+        uint32_t numIndices;
+        int32_t indexOffset;
+        int32_t baseVertex;
+        uint32_t numInstances;
+        uint32_t startInstance;
+        uint32_t tsEnable;
+        uint32_t gsEnable;
+        uint32_t soEnable;
+        uint32_t soTopology;
+        uint32_t splitId;
     };
 #pragma pack(pop)
 
     //////////////////////////////////////////////////////////////////////////
-    /// GSPrimsGen
+    /// DrawIndexedInstancedEvent
     //////////////////////////////////////////////////////////////////////////
-    struct GSPrimsGen : Event
+    struct DrawIndexedInstancedEvent : Event
     {
-        GSPrimsGenData data;
+        DrawIndexedInstancedEventData data;
 
         // Constructor
-        GSPrimsGen(
+        DrawIndexedInstancedEvent(
             uint32_t drawId,
-            uint64_t primGeneratedCount
+            uint32_t topology,
+            uint32_t numIndices,
+            int32_t indexOffset,
+            int32_t baseVertex,
+            uint32_t numInstances,
+            uint32_t startInstance,
+            uint32_t tsEnable,
+            uint32_t gsEnable,
+            uint32_t soEnable,
+            uint32_t soTopology,
+            uint32_t splitId
         )
         {
             data.drawId = drawId;
-            data.primGeneratedCount = primGeneratedCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// GSVertsInputData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct GSVertsInputData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t vertsInput;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// GSVertsInput
-    //////////////////////////////////////////////////////////////////////////
-    struct GSVertsInput : Event
-    {
-        GSVertsInputData data;
-
-        // Constructor
-        GSVertsInput(
-            uint32_t drawId,
-            uint64_t vertsInput
-        )
-        {
-            data.drawId = drawId;
-            data.vertsInput = vertsInput;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// ClipVertexCountData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct ClipVertexCountData
-    {
-        // Fields
-        uint64_t vertsPerPrim;
-        uint64_t primMask;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// ClipVertexCount
-    //////////////////////////////////////////////////////////////////////////
-    struct ClipVertexCount : Event
-    {
-        ClipVertexCountData data;
-
-        // Constructor
-        ClipVertexCount(
-            uint64_t vertsPerPrim,
-            uint64_t primMask
-        )
-        {
-            data.vertsPerPrim = vertsPerPrim;
-            data.primMask = primMask;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// FlushVertClipData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct FlushVertClipData
-    {
-        // Fields
-        uint32_t drawId;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// FlushVertClip
-    //////////////////////////////////////////////////////////////////////////
-    struct FlushVertClip : Event
-    {
-        FlushVertClipData data;
-
-        // Constructor
-        FlushVertClip(
-            uint32_t drawId
-        )
-        {
-            data.drawId = drawId;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// VertsClippedData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct VertsClippedData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t clipCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// VertsClipped
-    //////////////////////////////////////////////////////////////////////////
-    struct VertsClipped : Event
-    {
-        VertsClippedData data;
-
-        // Constructor
-        VertsClipped(
-            uint32_t drawId,
-            uint64_t clipCount
-        )
-        {
-            data.drawId = drawId;
-            data.clipCount = clipCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// TessPrimCountData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct TessPrimCountData
-    {
-        // Fields
-        uint64_t primCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// TessPrimCount
-    //////////////////////////////////////////////////////////////////////////
-    struct TessPrimCount : Event
-    {
-        TessPrimCountData data;
-
-        // Constructor
-        TessPrimCount(
-            uint64_t primCount
-        )
-        {
-            data.primCount = primCount;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// TessPrimFlushData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct TessPrimFlushData
-    {
-        // Fields
-        uint32_t drawId;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// TessPrimFlush
-    //////////////////////////////////////////////////////////////////////////
-    struct TessPrimFlush : Event
-    {
-        TessPrimFlushData data;
-
-        // Constructor
-        TessPrimFlush(
-            uint32_t drawId
-        )
-        {
-            data.drawId = drawId;
-        }
-
-        virtual void Accept(EventHandler* pHandler) const;
-    };
-
-    //////////////////////////////////////////////////////////////////////////
-    /// TessPrimsData
-    //////////////////////////////////////////////////////////////////////////
-#pragma pack(push, 1)
-    struct TessPrimsData
-    {
-        // Fields
-        uint32_t drawId;
-        uint64_t primCount;
-    };
-#pragma pack(pop)
-
-    //////////////////////////////////////////////////////////////////////////
-    /// TessPrims
-    //////////////////////////////////////////////////////////////////////////
-    struct TessPrims : Event
-    {
-        TessPrimsData data;
-
-        // Constructor
-        TessPrims(
-            uint32_t drawId,
-            uint64_t primCount
-        )
-        {
-            data.drawId = drawId;
-            data.primCount = primCount;
+            data.topology = topology;
+            data.numIndices = numIndices;
+            data.indexOffset = indexOffset;
+            data.baseVertex = baseVertex;
+            data.numInstances = numInstances;
+            data.startInstance = startInstance;
+            data.tsEnable = tsEnable;
+            data.gsEnable = gsEnable;
+            data.soEnable = soEnable;
+            data.soTopology = soTopology;
+            data.splitId = splitId;
         }
 
         virtual void Accept(EventHandler* pHandler) const;

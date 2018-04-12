@@ -32,8 +32,9 @@
 #include "vc5_context.h"
 #include "vc5_resource.h"
 #include "vc5_cl.h"
-#include "broadcom/cle/v3d_packet_v33_pack.h"
 #include "broadcom/compiler/v3d_compiler.h"
+#include "broadcom/common/v3d_macros.h"
+#include "broadcom/cle/v3dx_pack.h"
 
 /**
  * Does the initial bining command list setup for drawing to a given FBO.
@@ -55,12 +56,14 @@ vc5_start_draw(struct vc5_context *vc5)
         vc5_job_add_bo(job, job->bcl.bo);
 
         job->tile_alloc = vc5_bo_alloc(vc5->screen, 1024 * 1024, "tile alloc");
-        struct vc5_bo *tsda = vc5_bo_alloc(vc5->screen,
-                                           job->draw_tiles_y *
-                                           job->draw_tiles_x *
-                                           64,
-                                           "TSDA");
+        uint32_t tsda_per_tile_size = vc5->screen->devinfo.ver >= 40 ? 256 : 64;
+        job->tile_state = vc5_bo_alloc(vc5->screen,
+                                       job->draw_tiles_y *
+                                       job->draw_tiles_x *
+                                       tsda_per_tile_size,
+                                       "TSDA");
 
+#if V3D_VERSION < 40
         /* "Binning mode lists start with a Tile Binning Mode Configuration
          * item (120)"
          *
@@ -71,24 +74,29 @@ vc5_start_draw(struct vc5_context *vc5)
                         cl_address(job->tile_alloc, 0);
                 config.tile_allocation_memory_size = job->tile_alloc->size;
         }
+#endif
 
         cl_emit(&job->bcl, TILE_BINNING_MODE_CONFIGURATION_PART1, config) {
+#if V3D_VERSION >= 40
+                config.width_in_pixels_minus_1 = vc5->framebuffer.width - 1;
+                config.height_in_pixels_minus_1 = vc5->framebuffer.height - 1;
+                config.number_of_render_targets_minus_1 =
+                        MAX2(vc5->framebuffer.nr_cbufs, 1) - 1;
+#else /* V3D_VERSION < 40 */
                 config.tile_state_data_array_base_address =
-                        cl_address(tsda, 0);
+                        cl_address(job->tile_state, 0);
 
                 config.width_in_tiles = job->draw_tiles_x;
                 config.height_in_tiles = job->draw_tiles_y;
-
                 /* Must be >= 1 */
                 config.number_of_render_targets =
                         MAX2(vc5->framebuffer.nr_cbufs, 1);
+#endif /* V3D_VERSION < 40 */
 
                 config.multisample_mode_4x = job->msaa;
 
                 config.maximum_bpp_of_all_render_targets = job->internal_bpp;
         }
-
-        vc5_bo_unreference(&tsda);
 
         /* There's definitely nothing in the VCD cache we want. */
         cl_emit(&job->bcl, FLUSH_VCD_CACHE, bin);
@@ -100,11 +108,6 @@ vc5_start_draw(struct vc5_context *vc5)
          *  any prefix state data before the binning list proper starts."
          */
         cl_emit(&job->bcl, START_TILE_BINNING, bin);
-
-        cl_emit(&job->bcl, PRIMITIVE_LIST_FORMAT, fmt) {
-                fmt.data_type = LIST_INDEXED;
-                fmt.primitive_type = LIST_TRIANGLES;
-        }
 
         job->needs_flush = true;
         job->draw_width = vc5->framebuffer.width;
@@ -205,6 +208,35 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 shader.vertex_shader_uniforms_address = vs_uniforms;
                 shader.fragment_shader_uniforms_address = fs_uniforms;
 
+#if V3D_VERSION >= 41
+                shader.coordinate_shader_4_way_threadable =
+                        vc5->prog.cs->prog_data.vs->base.threads == 4;
+                shader.vertex_shader_4_way_threadable =
+                        vc5->prog.vs->prog_data.vs->base.threads == 4;
+                shader.fragment_shader_4_way_threadable =
+                        vc5->prog.fs->prog_data.fs->base.threads == 4;
+
+                shader.coordinate_shader_start_in_final_thread_section =
+                        vc5->prog.cs->prog_data.vs->base.single_seg;
+                shader.vertex_shader_start_in_final_thread_section =
+                        vc5->prog.vs->prog_data.vs->base.single_seg;
+                shader.fragment_shader_start_in_final_thread_section =
+                        vc5->prog.fs->prog_data.fs->base.single_seg;
+#else
+                shader.coordinate_shader_4_way_threadable =
+                        vc5->prog.cs->prog_data.vs->base.threads == 4;
+                shader.coordinate_shader_2_way_threadable =
+                        vc5->prog.cs->prog_data.vs->base.threads == 2;
+                shader.vertex_shader_4_way_threadable =
+                        vc5->prog.vs->prog_data.vs->base.threads == 4;
+                shader.vertex_shader_2_way_threadable =
+                        vc5->prog.vs->prog_data.vs->base.threads == 2;
+                shader.fragment_shader_4_way_threadable =
+                        vc5->prog.fs->prog_data.fs->base.threads == 4;
+                shader.fragment_shader_2_way_threadable =
+                        vc5->prog.fs->prog_data.fs->base.threads == 2;
+#endif
+
                 shader.vertex_id_read_by_coordinate_shader =
                         vc5->prog.cs->prog_data.vs->uses_vid;
                 shader.instance_id_read_by_coordinate_shader =
@@ -237,6 +269,9 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                                 vc5->prog.cs->prog_data.vs->vattr_sizes[i];
                         attr.number_of_values_read_by_vertex_shader =
                                 vc5->prog.vs->prog_data.vs->vattr_sizes[i];
+#if V3D_VERSION >= 41
+                        attr.maximum_index = 0xffffff;
+#endif
                 }
         }
 
@@ -289,6 +324,49 @@ vc5_tf_statistics_record(struct vc5_context *vc5,
                 /* XXX: Only count if we didn't overflow. */
                 vc5->tf_prims_generated += prims;
         }
+}
+
+static void
+vc5_update_job_ez(struct vc5_context *vc5, struct vc5_job *job)
+{
+        switch (vc5->zsa->ez_state) {
+        case VC5_EZ_UNDECIDED:
+                /* If the Z/S state didn't pick a direction but didn't
+                 * disable, then go along with the current EZ state.  This
+                 * allows EZ optimization for Z func == EQUAL or NEVER.
+                 */
+                break;
+
+        case VC5_EZ_LT_LE:
+        case VC5_EZ_GT_GE:
+                /* If the Z/S state picked a direction, then it needs to match
+                 * the current direction if we've decided on one.
+                 */
+                if (job->ez_state == VC5_EZ_UNDECIDED)
+                        job->ez_state = vc5->zsa->ez_state;
+                else if (job->ez_state != vc5->zsa->ez_state)
+                        job->ez_state = VC5_EZ_DISABLED;
+                break;
+
+        case VC5_EZ_DISABLED:
+                /* If the current Z/S state disables EZ because of a bad Z
+                 * func or stencil operation, then we can't do any more EZ in
+                 * this frame.
+                 */
+                job->ez_state = VC5_EZ_DISABLED;
+                break;
+        }
+
+        /* If the FS affects the Z of the pixels, then it may update against
+         * the chosen EZ direction (though we could use
+         * ARB_conservative_depth's hints to avoid this)
+         */
+        if (vc5->prog.fs->prog_data.fs->writes_z) {
+                job->ez_state = VC5_EZ_DISABLED;
+        }
+
+        if (job->first_ez_state == VC5_EZ_UNDECIDED)
+                job->first_ez_state = job->ez_state;
 }
 
 static void
@@ -349,8 +427,13 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
         vc5_start_draw(vc5);
         vc5_update_compiled_shaders(vc5, info->mode);
+        vc5_update_job_ez(vc5, job);
 
-        vc5_emit_state(pctx);
+#if V3D_VERSION >= 41
+        v3d41_emit_state(pctx);
+#else
+        v3d33_emit_state(pctx);
+#endif
 
         if (vc5->dirty & (VC5_DIRTY_VTXBUF |
                           VC5_DIRTY_VTXSTATE |
@@ -377,14 +460,16 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 }
         }
 
-        /* The HW only processes transform feedback on primitives with the
-         * flag set.
-         */
         uint32_t prim_tf_enable = 0;
+#if V3D_VERSION < 40
+        /* V3D 3.x: The HW only processes transform feedback on primitives
+         * with the flag set.
+         */
         if (vc5->streamout.num_targets)
                 prim_tf_enable = (V3D_PRIM_POINTS_TF - V3D_PRIM_POINTS);
+#endif
 
-        vc5_tf_statistics_record(vc5, info, prim_tf_enable);
+        vc5_tf_statistics_record(vc5, info, vc5->streamout.num_targets);
 
         /* Note that the primitive type fields match with OpenGL/gallium
          * definitions, up to but not including QUADS.
@@ -404,12 +489,23 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 }
                 struct vc5_resource *rsc = vc5_resource(prsc);
 
+#if V3D_VERSION >= 40
+                cl_emit(&job->bcl, INDEX_BUFFER_SETUP, ib) {
+                        ib.address = cl_address(rsc->bo, 0);
+                        ib.size = rsc->bo->size;
+                }
+#endif
+
                 if (info->instance_count > 1) {
                         cl_emit(&job->bcl, INDEXED_INSTANCED_PRIMITIVE_LIST, prim) {
                                 prim.index_type = ffs(info->index_size) - 1;
+#if V3D_VERSION >= 40
+                                prim.index_offset = offset;
+#else /* V3D_VERSION < 40 */
                                 prim.maximum_index = (1u << 31) - 1; /* XXX */
                                 prim.address_of_indices_list =
                                         cl_address(rsc->bo, offset);
+#endif /* V3D_VERSION < 40 */
                                 prim.mode = info->mode | prim_tf_enable;
                                 prim.enable_primitive_restarts = info->primitive_restart;
 
@@ -420,9 +516,13 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                         cl_emit(&job->bcl, INDEXED_PRIMITIVE_LIST, prim) {
                                 prim.index_type = ffs(info->index_size) - 1;
                                 prim.length = info->count;
+#if V3D_VERSION >= 40
+                                prim.index_offset = offset;
+#else /* V3D_VERSION < 40 */
                                 prim.maximum_index = (1u << 31) - 1; /* XXX */
                                 prim.address_of_indices_list =
                                         cl_address(rsc->bo, offset);
+#endif /* V3D_VERSION < 40 */
                                 prim.mode = info->mode | prim_tf_enable;
                                 prim.enable_primitive_restarts = info->primitive_restart;
                         }
@@ -459,9 +559,6 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 if (vc5->zsa->base.depth.enabled) {
                         job->resolve |= PIPE_CLEAR_DEPTH;
                         rsc->initialized_buffers = PIPE_CLEAR_DEPTH;
-
-                        if (vc5->zsa->early_z_enable)
-                                job->uses_early_z = true;
                 }
 
                 if (vc5->zsa->base.stencil[0].enabled) {
@@ -529,43 +626,33 @@ vc5_clear(struct pipe_context *pctx, unsigned buffers,
                 }
 
                 switch (surf->internal_type) {
-                case INTERNAL_TYPE_8:
-                        if (surf->format == PIPE_FORMAT_B4G4R4A4_UNORM ||
-                            surf->format == PIPE_FORMAT_B4G4R4A4_UNORM) {
-                                /* Our actual hardware layout is ABGR4444, but
-                                 * we apply a swizzle when texturing to flip
-                                 * things back around.
-                                 */
-                                util_pack_color(color->f, PIPE_FORMAT_A8R8G8B8_UNORM,
-                                                &uc);
-                        } else {
-                                util_pack_color(color->f, PIPE_FORMAT_R8G8B8A8_UNORM,
-                                                &uc);
-                        }
+                case V3D_INTERNAL_TYPE_8:
+                        util_pack_color(color->f, PIPE_FORMAT_R8G8B8A8_UNORM,
+                                        &uc);
                         memcpy(job->clear_color[i], uc.ui, internal_size);
                         break;
-                case INTERNAL_TYPE_8I:
-                case INTERNAL_TYPE_8UI:
-                        job->clear_color[i][0] = ((uc.ui[0] & 0xff) |
-                                                  (uc.ui[1] & 0xff) << 8 |
-                                                  (uc.ui[2] & 0xff) << 16 |
-                                                  (uc.ui[3] & 0xff) << 24);
+                case V3D_INTERNAL_TYPE_8I:
+                case V3D_INTERNAL_TYPE_8UI:
+                        job->clear_color[i][0] = ((color->ui[0] & 0xff) |
+                                                  (color->ui[1] & 0xff) << 8 |
+                                                  (color->ui[2] & 0xff) << 16 |
+                                                  (color->ui[3] & 0xff) << 24);
                         break;
-                case INTERNAL_TYPE_16F:
+                case V3D_INTERNAL_TYPE_16F:
                         util_pack_color(color->f, PIPE_FORMAT_R16G16B16A16_FLOAT,
                                         &uc);
                         memcpy(job->clear_color[i], uc.ui, internal_size);
                         break;
-                case INTERNAL_TYPE_16I:
-                case INTERNAL_TYPE_16UI:
-                        job->clear_color[i][0] = ((uc.ui[0] & 0xffff) |
-                                                  uc.ui[1] << 16);
-                        job->clear_color[i][1] = ((uc.ui[2] & 0xffff) |
-                                                  uc.ui[3] << 16);
+                case V3D_INTERNAL_TYPE_16I:
+                case V3D_INTERNAL_TYPE_16UI:
+                        job->clear_color[i][0] = ((color->ui[0] & 0xffff) |
+                                                  color->ui[1] << 16);
+                        job->clear_color[i][1] = ((color->ui[2] & 0xffff) |
+                                                  color->ui[3] << 16);
                         break;
-                case INTERNAL_TYPE_32F:
-                case INTERNAL_TYPE_32I:
-                case INTERNAL_TYPE_32UI:
+                case V3D_INTERNAL_TYPE_32F:
+                case V3D_INTERNAL_TYPE_32I:
+                case V3D_INTERNAL_TYPE_32UI:
                         memcpy(job->clear_color[i], color->ui, internal_size);
                         break;
                 }
@@ -615,7 +702,7 @@ vc5_clear_depth_stencil(struct pipe_context *pctx, struct pipe_surface *ps,
 }
 
 void
-vc5_draw_init(struct pipe_context *pctx)
+v3dX(draw_init)(struct pipe_context *pctx)
 {
         pctx->draw_vbo = vc5_draw_vbo;
         pctx->clear = vc5_clear;

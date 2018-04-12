@@ -217,7 +217,7 @@ static int r600_init_surface(struct r600_common_screen *rscreen,
 		bpe = 4; /* stencil is allocated separately on evergreen */
 	} else {
 		bpe = util_format_get_blocksize(ptex->format);
-		assert(util_is_power_of_two(bpe));
+		assert(util_is_power_of_two_or_zero(bpe));
 	}
 
 	if (!is_flushed_depth && is_depth) {
@@ -393,7 +393,7 @@ static void r600_reallocate_texture_inplace(struct r600_common_context *rctx,
 
 			u_box_3d(0, 0, 0,
 				 u_minify(templ.width0, i), u_minify(templ.height0, i),
-				 util_max_layer(&templ, i) + 1, &box);
+				 util_num_layers(&templ, i), &box);
 
 			rctx->dma_copy(&rctx->b, &new_tex->resource.b.b, i, 0, 0, 0,
 				       &rtex->resource.b.b, i, &box);
@@ -676,7 +676,7 @@ void r600_texture_get_cmask_info(struct r600_common_screen *rscreen,
 
 	out->slice_tile_max = ((pitch_elements * height) / (128*128)) - 1;
 	out->alignment = MAX2(256, base_align);
-	out->size = (util_max_layer(&rtex->resource.b.b, 0) + 1) *
+	out->size = util_num_layers(&rtex->resource.b.b, 0) *
 		    align(slice_bytes, base_align);
 }
 
@@ -785,7 +785,7 @@ static void r600_texture_get_htile_size(struct r600_common_screen *rscreen,
 
 	rtex->surface.htile_alignment = base_align;
 	rtex->surface.htile_size =
-		(util_max_layer(&rtex->resource.b.b, 0) + 1) *
+		util_num_layers(&rtex->resource.b.b, 0) *
 		align(slice_bytes, base_align);
 }
 
@@ -953,10 +953,6 @@ r600_texture_create_object(struct pipe_screen *screen,
 		r600_init_resource_fields(rscreen, resource, rtex->size,
 					  rtex->surface.surf_alignment);
 
-		/* Displayable surfaces are not suballocated. */
-		if (resource->b.b.bind & PIPE_BIND_SCANOUT)
-			resource->flags |= RADEON_FLAG_NO_SUBALLOC;
-
 		if (!r600_alloc_resource(rscreen, resource)) {
 			FREE(rtex);
 			return NULL;
@@ -996,7 +992,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 		fprintf(stderr, "VM start=0x%"PRIX64"  end=0x%"PRIX64" | Texture %ix%ix%i, %i levels, %i samples, %s\n",
 			rtex->resource.gpu_address,
 			rtex->resource.gpu_address + rtex->resource.buf->size,
-			base->width0, base->height0, util_max_layer(base, 0)+1, base->last_level+1,
+			base->width0, base->height0, util_num_layers(base, 0), base->last_level+1,
 			base->nr_samples ? base->nr_samples : 1, util_format_short_name(base->format));
 	}
 
@@ -1053,12 +1049,9 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 		if (templ->bind & PIPE_BIND_LINEAR)
 			return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
-		/* Textures with a very small height are recommended to be linear. */
+		/* 1D textures should be linear - fixes image operations on 1d */
 		if (templ->target == PIPE_TEXTURE_1D ||
-		    templ->target == PIPE_TEXTURE_1D_ARRAY ||
-		    /* Only very thin and long 2D textures should benefit from
-		     * linear_aligned. */
-		    (templ->width0 > 8 && templ->height0 <= 2))
+		    templ->target == PIPE_TEXTURE_1D_ARRAY)
 			return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
 		/* Textures likely to be mapped often. */
@@ -1500,7 +1493,7 @@ static void r600_texture_transfer_unmap(struct pipe_context *ctx,
 	 * The result is that the kernel memory manager is never a bottleneck.
 	 */
 	if (rctx->num_alloc_tex_transfer_bytes > rctx->screen->info.gart_size / 4) {
-		rctx->gfx.flush(rctx, RADEON_FLUSH_ASYNC, NULL);
+		rctx->gfx.flush(rctx, PIPE_FLUSH_ASYNC, NULL);
 		rctx->num_alloc_tex_transfer_bytes = 0;
 	}
 

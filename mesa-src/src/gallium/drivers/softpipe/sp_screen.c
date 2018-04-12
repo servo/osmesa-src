@@ -69,8 +69,6 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
       return 1;
-   case PIPE_CAP_TWO_SIDED_STENCIL:
-      return 1;
    case PIPE_CAP_SM3:
       return 1;
    case PIPE_CAP_ANISOTROPIC_FILTER:
@@ -88,8 +86,6 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
       return 1;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-      return 1;
-   case PIPE_CAP_TEXTURE_SHADOW_MAP:
       return 1;
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
@@ -161,7 +157,6 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_COMPUTE:
       return 1;
    case PIPE_CAP_USER_VERTEX_BUFFERS:
-   case PIPE_CAP_USER_CONSTANT_BUFFERS:
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
    case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
    case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
@@ -315,6 +310,10 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TILE_RASTER_ORDER:
    case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
    case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
+   case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+   case PIPE_CAP_FENCE_SIGNAL:
+   case PIPE_CAP_CONSTBUF0_FLAGS:
+   case PIPE_CAP_PACKED_UNIFORMS:
       return 0;
    case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
       return 4;
@@ -363,11 +362,6 @@ softpipe_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
       return 16.0;
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 16.0; /* arbitrary */
-   case PIPE_CAPF_GUARD_BAND_LEFT:
-   case PIPE_CAPF_GUARD_BAND_TOP:
-   case PIPE_CAPF_GUARD_BAND_RIGHT:
-   case PIPE_CAPF_GUARD_BAND_BOTTOM:
-      return 0.0;
    }
    /* should only get here on unhandled cases */
    debug_printf("Unexpected PIPE_CAPF %d query\n", param);

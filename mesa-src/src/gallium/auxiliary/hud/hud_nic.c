@@ -26,7 +26,7 @@
  *
  **************************************************************************/
 
-#if HAVE_GALLIUM_EXTRA_HUD
+#ifdef HAVE_GALLIUM_EXTRA_HUD
 
 /* Purpose: Reading network interface RX/TX throughput per second,
  * displaying on the HUD.
@@ -171,7 +171,7 @@ query_nic_rssi(const struct nic_info *nic, uint64_t *leveldBm)
 }
 
 static void
-query_nic_load(struct hud_graph *gr)
+query_nic_load(struct hud_graph *gr, struct pipe_context *pipe)
 {
    /* The framework calls us at a regular but indefined period,
     * not once per second, compensate the statistics accordingly.

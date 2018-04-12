@@ -245,7 +245,7 @@ static unsigned radeon_lookup_or_add_real_buffer(struct radeon_drm_cs *cs,
          * This doesn't have to be done if virtual memory is enabled,
          * because there is no offset patching with virtual memory.
          */
-        if (cs->ring_type != RING_DMA || cs->ws->info.has_virtual_memory) {
+        if (cs->ring_type != RING_DMA || cs->ws->info.r600_has_virtual_memory) {
             return i;
         }
     }
@@ -338,6 +338,14 @@ static unsigned radeon_drm_cs_add_buffer(struct radeon_winsys_cs *rcs,
     struct radeon_drm_cs *cs = radeon_drm_cs(rcs);
     struct radeon_bo *bo = (struct radeon_bo*)buf;
     enum radeon_bo_domain added_domains;
+
+    /* If VRAM is just stolen system memory, allow both VRAM and
+     * GTT, whichever has free space. If a buffer is evicted from
+     * VRAM to GTT, it will stay there.
+     */
+    if (!cs->ws->info.has_dedicated_vram)
+        domains |= RADEON_DOMAIN_GTT;
+
     enum radeon_bo_domain rd = usage & RADEON_USAGE_READ ? domains : 0;
     enum radeon_bo_domain wd = usage & RADEON_USAGE_WRITE ? domains : 0;
     struct drm_radeon_cs_reloc *reloc;
@@ -399,7 +407,7 @@ static bool radeon_drm_cs_validate(struct radeon_winsys_cs *rcs)
 
         /* Flush if there are any relocs. Clean up otherwise. */
         if (cs->csc->num_relocs) {
-            cs->flush_cs(cs->flush_data, RADEON_FLUSH_ASYNC, NULL);
+            cs->flush_cs(cs->flush_data, PIPE_FLUSH_ASYNC, NULL);
         } else {
             radeon_cs_context_cleanup(cs->csc);
             cs->base.used_vram = 0;
@@ -627,7 +635,7 @@ static int radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
             cs->cst->flags[0] = 0;
             cs->cst->flags[1] = RADEON_CS_RING_DMA;
             cs->cst->cs.num_chunks = 3;
-            if (cs->ws->info.has_virtual_memory) {
+            if (cs->ws->info.r600_has_virtual_memory) {
                 cs->cst->flags[0] |= RADEON_CS_USE_VM;
             }
             break;
@@ -651,11 +659,11 @@ static int radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
             cs->cst->flags[1] = RADEON_CS_RING_GFX;
             cs->cst->cs.num_chunks = 3;
 
-            if (cs->ws->info.has_virtual_memory) {
+            if (cs->ws->info.r600_has_virtual_memory) {
                 cs->cst->flags[0] |= RADEON_CS_USE_VM;
                 cs->cst->cs.num_chunks = 3;
             }
-            if (flags & RADEON_FLUSH_END_OF_FRAME) {
+            if (flags & PIPE_FLUSH_END_OF_FRAME) {
                 cs->cst->flags[0] |= RADEON_CS_END_OF_FRAME;
                 cs->cst->cs.num_chunks = 3;
             }
@@ -669,7 +677,7 @@ static int radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
         if (util_queue_is_initialized(&cs->ws->cs_queue)) {
             util_queue_add_job(&cs->ws->cs_queue, cs, &cs->flush_completed,
                                radeon_drm_cs_emit_ioctl_oneshot, NULL);
-            if (!(flags & RADEON_FLUSH_ASYNC))
+            if (!(flags & PIPE_FLUSH_ASYNC))
                 radeon_drm_cs_sync_flush(rcs);
         } else {
             radeon_drm_cs_emit_ioctl_oneshot(cs, 0);

@@ -138,7 +138,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = desc->binding,
          .Valid = true,
-         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) format,
+         .SourceElementFormat = format,
          .EdgeFlagEnable = false,
          .SourceElementOffset = desc->offset,
          .Component0Control = vertex_element_comp_control(format, 0),
@@ -156,7 +156,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VF_INSTANCING), vfi) {
          vfi.InstancingEnable = pipeline->instancing_enable[desc->binding];
          vfi.VertexElementIndex = slot;
-         /* Our implementation of VK_KHX_multiview uses instancing to draw
+         /* Our implementation of VK_KHR_multiview uses instancing to draw
           * the different views.  If the client asks for instancing, we
           * need to use the Instance Data Step Rate to ensure that we
           * repeat the client's per-instance data once for each view.
@@ -184,7 +184,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = ANV_SVGS_VB_INDEX,
          .Valid = true,
-         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32_UINT,
+         .SourceElementFormat = ISL_FORMAT_R32G32_UINT,
          .Component0Control = base_ctrl,
          .Component1Control = base_ctrl,
 #if GEN_GEN >= 8
@@ -214,7 +214,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = ANV_DRAWID_VB_INDEX,
          .Valid = true,
-         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32_UINT,
+         .SourceElementFormat = ISL_FORMAT_R32_UINT,
          .Component0Control = VFCOMP_STORE_SRC,
          .Component1Control = VFCOMP_STORE_0,
          .Component2Control = VFCOMP_STORE_0,
@@ -1081,7 +1081,13 @@ emit_3dstate_streamout(struct anv_pipeline *pipeline,
 static uint32_t
 get_sampler_count(const struct anv_shader_bin *bin)
 {
-   return DIV_ROUND_UP(bin->bind_map.sampler_count, 4);
+   uint32_t count_by_4 = DIV_ROUND_UP(bin->bind_map.sampler_count, 4);
+
+   /* We can potentially have way more than 32 samplers and that's ok.
+    * However, the 3DSTATE_XS packets only have 3 bits to specify how
+    * many to pre-fetch and all values above 4 are marked reserved.
+    */
+   return MIN2(count_by_4, 4);
 }
 
 static uint32_t
@@ -1129,7 +1135,9 @@ emit_3dstate_vs(struct anv_pipeline *pipeline)
 #endif
 
       assert(!vs_prog_data->base.base.use_alt_mode);
+#if GEN_GEN < 11
       vs.SingleVertexDispatch       = false;
+#endif
       vs.VectorMaskEnable           = false;
       vs.SamplerCount               = get_sampler_count(vs_bin);
       vs.BindingTableEntryCount     = get_binding_table_entry_count(vs_bin);
@@ -1245,10 +1253,15 @@ emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline,
          tes_prog_data->base.base.dispatch_grf_start_reg;
 
 #if GEN_GEN >= 8
+#if GEN_GEN < 11
       ds.DispatchMode =
          tes_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8 ?
             DISPATCH_MODE_SIMD8_SINGLE_PATCH :
             DISPATCH_MODE_SIMD4X2;
+#else
+      assert(tes_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8);
+      ds.DispatchMode = DISPATCH_MODE_SIMD8_SINGLE_PATCH;
+#endif
 
       ds.UserClipDistanceClipTestEnableBitmask =
          tes_prog_data->base.clip_distance_mask;
@@ -1330,7 +1343,8 @@ emit_3dstate_gs(struct anv_pipeline *pipeline)
 }
 
 static bool
-has_color_buffer_write_enabled(const struct anv_pipeline *pipeline)
+has_color_buffer_write_enabled(const struct anv_pipeline *pipeline,
+                               const VkPipelineColorBlendStateCreateInfo *blend)
 {
    const struct anv_shader_bin *shader_bin =
       pipeline->shaders[MESA_SHADER_FRAGMENT];
@@ -1339,10 +1353,15 @@ has_color_buffer_write_enabled(const struct anv_pipeline *pipeline)
 
    const struct anv_pipeline_bind_map *bind_map = &shader_bin->bind_map;
    for (int i = 0; i < bind_map->surface_count; i++) {
-      if (bind_map->surface_to_descriptor[i].set !=
-          ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS)
+      struct anv_pipeline_binding *binding = &bind_map->surface_to_descriptor[i];
+
+      if (binding->set != ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS)
          continue;
-      if (bind_map->surface_to_descriptor[i].index != UINT32_MAX)
+
+      if (binding->index == UINT32_MAX)
+         continue;
+
+      if (blend->pAttachments[binding->index].colorWriteMask != 0)
          return true;
    }
 
@@ -1351,6 +1370,7 @@ has_color_buffer_write_enabled(const struct anv_pipeline *pipeline)
 
 static void
 emit_3dstate_wm(struct anv_pipeline *pipeline, struct anv_subpass *subpass,
+                const VkPipelineColorBlendStateCreateInfo *blend,
                 const VkPipelineMultisampleStateCreateInfo *multisample)
 {
    const struct brw_wm_prog_data *wm_prog_data = get_wm_prog_data(pipeline);
@@ -1395,7 +1415,7 @@ emit_3dstate_wm(struct anv_pipeline *pipeline, struct anv_subpass *subpass,
          if (wm.PixelShaderComputedDepthMode != PSCDEPTH_OFF ||
              wm_prog_data->has_side_effects ||
              wm.PixelShaderKillsPixel ||
-             has_color_buffer_write_enabled(pipeline))
+             has_color_buffer_write_enabled(pipeline, blend))
             wm.ThreadDispatchEnable = true;
 
          if (samples > 1) {
@@ -1480,7 +1500,8 @@ emit_3dstate_ps(struct anv_pipeline *pipeline,
       ps.VectorMaskEnable           = true;
       ps.SamplerCount               = get_sampler_count(fs_bin);
       ps.BindingTableEntryCount     = get_binding_table_entry_count(fs_bin);
-      ps.PushConstantEnable         = wm_prog_data->base.nr_params > 0;
+      ps.PushConstantEnable         = wm_prog_data->base.nr_params > 0 ||
+                                      wm_prog_data->base.ubo_ranges[0].length;
       ps.PositionXYOffsetSelect     = wm_prog_data->uses_pos_offset ?
                                       POSOFFSET_SAMPLE: POSOFFSET_NONE;
 #if GEN_GEN < 8
@@ -1519,7 +1540,8 @@ emit_3dstate_ps(struct anv_pipeline *pipeline,
 #if GEN_GEN >= 8
 static void
 emit_3dstate_ps_extra(struct anv_pipeline *pipeline,
-                      struct anv_subpass *subpass)
+                      struct anv_subpass *subpass,
+                      const VkPipelineColorBlendStateCreateInfo *blend)
 {
    const struct brw_wm_prog_data *wm_prog_data = get_wm_prog_data(pipeline);
 
@@ -1574,7 +1596,7 @@ emit_3dstate_ps_extra(struct anv_pipeline *pipeline,
        * attachments, we need to force-enable here.
        */
       if ((wm_prog_data->has_side_effects || wm_prog_data->uses_kill) &&
-          !has_color_buffer_write_enabled(pipeline))
+          !has_color_buffer_write_enabled(pipeline, blend))
          ps.PixelShaderHasUAV = true;
 
 #if GEN_GEN >= 9
@@ -1704,10 +1726,11 @@ genX(graphics_pipeline_create)(
    emit_3dstate_hs_te_ds(pipeline, pCreateInfo->pTessellationState);
    emit_3dstate_gs(pipeline);
    emit_3dstate_sbe(pipeline);
-   emit_3dstate_wm(pipeline, subpass, pCreateInfo->pMultisampleState);
+   emit_3dstate_wm(pipeline, subpass, pCreateInfo->pColorBlendState,
+                   pCreateInfo->pMultisampleState);
    emit_3dstate_ps(pipeline, pCreateInfo->pColorBlendState);
 #if GEN_GEN >= 8
-   emit_3dstate_ps_extra(pipeline, subpass);
+   emit_3dstate_ps_extra(pipeline, subpass, pCreateInfo->pColorBlendState);
    emit_3dstate_vf_topology(pipeline);
 #endif
    emit_3dstate_vf_statistics(pipeline);
@@ -1740,7 +1763,6 @@ compute_pipeline_create(
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
    pipeline->device = device;
-   pipeline->layout = anv_pipeline_layout_from_handle(pCreateInfo->layout);
 
    pipeline->blend_state.map = NULL;
 
@@ -1765,6 +1787,7 @@ compute_pipeline_create(
    pipeline->needs_data_cache = false;
 
    assert(pCreateInfo->stage.stage == VK_SHADER_STAGE_COMPUTE_BIT);
+   pipeline->active_stages |= VK_SHADER_STAGE_COMPUTE_BIT;
    ANV_FROM_HANDLE(anv_shader_module, module,  pCreateInfo->stage.module);
    result = anv_pipeline_compile_cs(pipeline, cache, pCreateInfo, module,
                                     pCreateInfo->stage.pName,
@@ -1805,7 +1828,9 @@ compute_pipeline_create(
       vfe.MaximumNumberofThreads =
          devinfo->max_cs_threads * subslices - 1;
       vfe.NumberofURBEntries     = GEN_GEN <= 7 ? 0 : 2;
+#if GEN_GEN < 11
       vfe.ResetGatewayTimer      = true;
+#endif
 #if GEN_GEN <= 8
       vfe.BypassGatewayControl   = true;
 #endif

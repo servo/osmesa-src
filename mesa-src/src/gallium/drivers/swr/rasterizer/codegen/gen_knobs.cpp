@@ -1,5 +1,5 @@
 /******************************************************************************
-* Copyright (C) 2015-2017 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2015-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -113,6 +113,9 @@ GlobalKnobs::GlobalKnobs()
     InitKnob(MAX_CORES_PER_NUMA_NODE);
     InitKnob(MAX_THREADS_PER_CORE);
     InitKnob(MAX_WORKER_THREADS);
+    InitKnob(BASE_NUMA_NODE);
+    InitKnob(BASE_CORE);
+    InitKnob(BASE_THREAD);
     InitKnob(BUCKETS_START_FRAME);
     InitKnob(BUCKETS_END_FRAME);
     InitKnob(WORKER_SPIN_LOOP_COUNT);
@@ -130,6 +133,7 @@ GlobalKnobs::GlobalKnobs()
     InitKnob(TOSS_SETUP_TRIS);
     InitKnob(TOSS_BIN_TRIS);
     InitKnob(TOSS_RS);
+    InitKnob(DISABLE_SPLIT_DRAW);
 }
 
 //========================================================
@@ -164,6 +168,15 @@ std::string GlobalKnobs::ToString(const char* optPerLinePrefix)
     str << optPerLinePrefix << "KNOB_MAX_WORKER_THREADS:         ";
     str << std::hex << std::setw(11) << std::left << KNOB_MAX_WORKER_THREADS;
     str << std::dec << KNOB_MAX_WORKER_THREADS << "\n";
+    str << optPerLinePrefix << "KNOB_BASE_NUMA_NODE:             ";
+    str << std::hex << std::setw(11) << std::left << KNOB_BASE_NUMA_NODE;
+    str << std::dec << KNOB_BASE_NUMA_NODE << "\n";
+    str << optPerLinePrefix << "KNOB_BASE_CORE:                  ";
+    str << std::hex << std::setw(11) << std::left << KNOB_BASE_CORE;
+    str << std::dec << KNOB_BASE_CORE << "\n";
+    str << optPerLinePrefix << "KNOB_BASE_THREAD:                ";
+    str << std::hex << std::setw(11) << std::left << KNOB_BASE_THREAD;
+    str << std::dec << KNOB_BASE_THREAD << "\n";
     str << optPerLinePrefix << "KNOB_BUCKETS_START_FRAME:        ";
     str << std::hex << std::setw(11) << std::left << KNOB_BUCKETS_START_FRAME;
     str << std::dec << KNOB_BUCKETS_START_FRAME << "\n";
@@ -204,6 +217,8 @@ std::string GlobalKnobs::ToString(const char* optPerLinePrefix)
     str << (KNOB_TOSS_BIN_TRIS ? "+\n" : "-\n");
     str << optPerLinePrefix << "KNOB_TOSS_RS:                    ";
     str << (KNOB_TOSS_RS ? "+\n" : "-\n");
+    str << optPerLinePrefix << "KNOB_DISABLE_SPLIT_DRAW:         ";
+    str << (KNOB_DISABLE_SPLIT_DRAW ? "+\n" : "-\n");
     str << std::ends;
 
     return str.str();

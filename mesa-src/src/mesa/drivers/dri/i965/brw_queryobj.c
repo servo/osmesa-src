@@ -287,7 +287,7 @@ brw_begin_query(struct gl_context *ctx, struct gl_query_object *q)
        * the system was doing other work, such as running other applications.
        */
       brw_bo_unreference(query->bo);
-      query->bo = brw_bo_alloc(brw->bufmgr, "timer query", 4096, 4096);
+      query->bo = brw_bo_alloc(brw->bufmgr, "timer query", 4096);
       brw_write_timestamp(brw, query->bo, 0);
       break;
 
@@ -449,7 +449,7 @@ ensure_bo_has_space(struct gl_context *ctx, struct brw_query_object *query)
          brw_queryobj_get_results(ctx, query);
       }
 
-      query->bo = brw_bo_alloc(brw->bufmgr, "query", 4096, 1);
+      query->bo = brw_bo_alloc(brw->bufmgr, "query", 4096);
       query->last_index = 0;
    }
 }
@@ -480,9 +480,6 @@ brw_emit_query_begin(struct brw_context *brw)
    struct gl_context *ctx = &brw->ctx;
    struct brw_query_object *query = brw->query.obj;
 
-   if (brw->hw_ctx)
-      return;
-
    /* Skip if we're not doing any queries, or we've already recorded the
     * initial query value for this batchbuffer.
     */
@@ -506,9 +503,6 @@ void
 brw_emit_query_end(struct brw_context *brw)
 {
    struct brw_query_object *query = brw->query.obj;
-
-   if (brw->hw_ctx)
-      return;
 
    if (!brw->query.begin_emitted)
       return;
@@ -535,7 +529,7 @@ brw_query_counter(struct gl_context *ctx, struct gl_query_object *q)
    assert(q->Target == GL_TIMESTAMP);
 
    brw_bo_unreference(query->bo);
-   query->bo = brw_bo_alloc(brw->bufmgr, "timestamp query", 4096, 4096);
+   query->bo = brw_bo_alloc(brw->bufmgr, "timestamp query", 4096);
    brw_write_timestamp(brw, query->bo, 0);
 
    query->flushed = false;

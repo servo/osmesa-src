@@ -45,7 +45,7 @@ AM_DISTCHECK_CONFIGURE_FLAGS = \
 	--enable-libunwind \
 	--with-platforms=x11,wayland,drm,surfaceless \
 	--with-dri-drivers=i915,i965,nouveau,radeon,r200,swrast \
-	--with-gallium-drivers=i915,nouveau,r300,pl111,r600,radeonsi,freedreno,svga,swrast,vc4,virgl,swr,etnaviv,imx \
+	--with-gallium-drivers=i915,nouveau,r300,pl111,r600,radeonsi,freedreno,svga,swrast,vc4,tegra,virgl,swr,etnaviv,imx \
 	--with-vulkan-drivers=intel,radeon
 
 ACLOCAL_AMFLAGS = -I m4
@@ -59,7 +59,13 @@ EXTRA_DIST = \
 	scons \
 	SConstruct \
 	build-support/conftest.dyn \
-	build-support/conftest.map
+	build-support/conftest.map \
+	meson.build \
+	meson_options.txt \
+	bin/meson.build \
+	include/meson.build \
+	bin/install_megadrivers.py \
+	bin/meson_get_version.py
 
 noinst_HEADERS = \
 	include/c99_alloca.h \
@@ -70,6 +76,7 @@ noinst_HEADERS = \
 	include/drm-uapi/drm_fourcc.h \
 	include/drm-uapi/drm_mode.h \
 	include/drm-uapi/i915_drm.h \
+	include/drm-uapi/tegra_drm.h \
 	include/drm-uapi/vc4_drm.h \
 	include/D3D9 \
 	include/GL/wglext.h \

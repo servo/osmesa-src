@@ -221,11 +221,10 @@ brw_codegen_vs_prog(struct brw_context *brw,
    char *error_str;
    program = brw_compile_vs(compiler, brw, mem_ctx, key, &prog_data,
                             vp->program.nir,
-                            !_mesa_is_gles3(&brw->ctx),
                             st_index, &error_str);
    if (program == NULL) {
       if (!vp->program.is_arb_asm) {
-         vp->program.sh.data->LinkStatus = linking_failure;
+         vp->program.sh.data->LinkStatus = LINKING_FAILURE;
          ralloc_strcat(&vp->program.sh.data->InfoLog, error_str);
       }
 

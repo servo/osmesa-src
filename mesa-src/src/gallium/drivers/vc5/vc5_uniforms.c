@@ -170,7 +170,7 @@ vc5_upload_ubo(struct vc5_context *vc5,
 }
 
 /**
- *  Writes the P0 (CFG_MODE=1) texture parameter.
+ *  Writes the V3D 3.x P0 (CFG_MODE=1) texture parameter.
  *
  * Some bits of this field are dependent on the type of sample being done by
  * the shader, while other bits are dependent on the sampler state.  We OR the
@@ -189,12 +189,19 @@ write_texture_p0(struct vc5_job *job,
         cl_aligned_u32(uniforms, shader_data | sampler->p0);
 }
 
+/** Writes the V3D 3.x P1 (CFG_MODE=1) texture parameter. */
 static void
 write_texture_p1(struct vc5_job *job,
                  struct vc5_cl_out **uniforms,
                  struct vc5_texture_stateobj *texstate,
-                 uint32_t unit)
+                 uint32_t data)
 {
+        /* Extract the texture unit from the top bits, and the compiler's
+         * packed p1 from the bottom.
+         */
+        uint32_t unit = data >> 5;
+        uint32_t p1 = data & 0x1f;
+
         struct pipe_sampler_view *psview = texstate->textures[unit];
         struct vc5_sampler_view *sview = vc5_sampler_view(psview);
 
@@ -207,7 +214,47 @@ write_texture_p1(struct vc5_job *job,
                                                          (uint8_t *)&packed,
                                                          &unpacked);
 
-        cl_aligned_u32(uniforms, packed | sview->p1);
+        cl_aligned_u32(uniforms, p1 | packed | sview->p1);
+}
+
+/** Writes the V3D 4.x TMU configuration parameter 0. */
+static void
+write_tmu_p0(struct vc5_job *job,
+             struct vc5_cl_out **uniforms,
+             struct vc5_texture_stateobj *texstate,
+             uint32_t data)
+{
+        /* Extract the texture unit from the top bits, and the compiler's
+         * packed p0 from the bottom.
+         */
+        uint32_t unit = data >> 24;
+        uint32_t p0 = data & 0x00ffffff;
+
+        struct pipe_sampler_view *psview = texstate->textures[unit];
+        struct vc5_sampler_view *sview = vc5_sampler_view(psview);
+        struct vc5_resource *rsc = vc5_resource(psview->texture);
+
+        cl_aligned_reloc(&job->indirect, uniforms, sview->bo, p0);
+        vc5_job_add_bo(job, rsc->bo);
+}
+
+/** Writes the V3D 4.x TMU configuration parameter 1. */
+static void
+write_tmu_p1(struct vc5_job *job,
+             struct vc5_cl_out **uniforms,
+             struct vc5_texture_stateobj *texstate,
+             uint32_t data)
+{
+        /* Extract the texture unit from the top bits, and the compiler's
+         * packed p1 from the bottom.
+         */
+        uint32_t unit = data >> 24;
+        uint32_t p0 = data & 0x00ffffff;
+
+        struct pipe_sampler_state *psampler = texstate->samplers[unit];
+        struct vc5_sampler_state *sampler = vc5_sampler_state(psampler);
+
+        cl_aligned_reloc(&job->indirect, uniforms, sampler->bo, p0);
 }
 
 struct vc5_cl_reloc
@@ -258,6 +305,16 @@ vc5_write_uniforms(struct vc5_context *vc5, struct vc5_compiled_shader *shader,
                 case QUNIFORM_USER_CLIP_PLANE:
                         cl_aligned_f(&uniforms,
                                      vc5->clip.ucp[uinfo->data[i] / 4][uinfo->data[i] % 4]);
+                        break;
+
+                case QUNIFORM_TMU_CONFIG_P0:
+                        write_tmu_p0(job, &uniforms, texstate,
+                                         uinfo->data[i]);
+                        break;
+
+                case QUNIFORM_TMU_CONFIG_P1:
+                        write_tmu_p1(job, &uniforms, texstate,
+                                         uinfo->data[i]);
                         break;
 
                 case QUNIFORM_TEXTURE_CONFIG_P1:
@@ -332,6 +389,16 @@ vc5_write_uniforms(struct vc5_context *vc5, struct vc5_compiled_shader *shader,
                         /* XXX */
                         break;
 
+                case QUNIFORM_SPILL_OFFSET:
+                        cl_aligned_reloc(&job->indirect, &uniforms,
+                                         vc5->prog.spill_bo, 0);
+                        break;
+
+                case QUNIFORM_SPILL_SIZE_PER_THREAD:
+                        cl_aligned_u32(&uniforms,
+                                       vc5->prog.spill_size_per_thread);
+                        break;
+
                 default:
                         assert(quniform_contents_is_texture_p0(uinfo->contents[i]));
 
@@ -382,6 +449,8 @@ vc5_set_shader_uniform_dirty_flags(struct vc5_compiled_shader *shader)
                         dirty |= VC5_DIRTY_CLIP;
                         break;
 
+                case QUNIFORM_TMU_CONFIG_P0:
+                case QUNIFORM_TMU_CONFIG_P1:
                 case QUNIFORM_TEXTURE_CONFIG_P1:
                 case QUNIFORM_TEXTURE_BORDER_COLOR:
                 case QUNIFORM_TEXTURE_FIRST_LEVEL:
@@ -392,6 +461,8 @@ vc5_set_shader_uniform_dirty_flags(struct vc5_compiled_shader *shader)
                 case QUNIFORM_TEXTURE_DEPTH:
                 case QUNIFORM_TEXTURE_ARRAY_SIZE:
                 case QUNIFORM_TEXTURE_LEVELS:
+                case QUNIFORM_SPILL_OFFSET:
+                case QUNIFORM_SPILL_SIZE_PER_THREAD:
                         /* We could flag this on just the stage we're
                          * compiling for, but it's not passed in.
                          */

@@ -56,6 +56,7 @@ struct brw_blorp_surface_info
    enum isl_aux_usage aux_usage;
 
    union isl_color_value clear_color;
+   struct blorp_address clear_color_addr;
 
    struct isl_view view;
 
@@ -189,12 +190,13 @@ struct blorp_params
    uint32_t depth_format;
    struct brw_blorp_surface_info src;
    struct brw_blorp_surface_info dst;
-   enum blorp_hiz_op hiz_op;
+   enum isl_aux_op hiz_op;
    bool full_surface_hiz_op;
-   enum blorp_fast_clear_op fast_clear_op;
+   enum isl_aux_op fast_clear_op;
    bool color_write_disable[4];
    struct brw_blorp_wm_inputs wm_inputs;
    struct blorp_vs_inputs vs_inputs;
+   bool dst_clear_color_as_input;
    unsigned num_samples;
    unsigned num_draw_buffers;
    unsigned num_layers;

@@ -28,8 +28,11 @@
 #include "util/u_format.h"
 
 #include "fd5_screen.h"
+#include "fd5_blitter.h"
 #include "fd5_context.h"
 #include "fd5_format.h"
+#include "fd5_resource.h"
+
 #include "ir3_compiler.h"
 
 static boolean
@@ -64,13 +67,15 @@ fd5_screen_is_format_supported(struct pipe_screen *pscreen,
 	if ((usage & (PIPE_BIND_RENDER_TARGET |
 				PIPE_BIND_DISPLAY_TARGET |
 				PIPE_BIND_SCANOUT |
-				PIPE_BIND_SHARED)) &&
+				PIPE_BIND_SHARED |
+				PIPE_BIND_COMPUTE_RESOURCE)) &&
 			(fd5_pipe2color(format) != (enum a5xx_color_fmt)~0) &&
 			(fd5_pipe2tex(format) != (enum a5xx_tex_fmt)~0)) {
 		retval |= usage & (PIPE_BIND_RENDER_TARGET |
 				PIPE_BIND_DISPLAY_TARGET |
 				PIPE_BIND_SCANOUT |
-				PIPE_BIND_SHARED);
+				PIPE_BIND_SHARED |
+				PIPE_BIND_COMPUTE_RESOURCE);
 	}
 
 	/* For ARB_framebuffer_no_attachments: */
@@ -106,4 +111,8 @@ fd5_screen_init(struct pipe_screen *pscreen)
 	screen->compiler = ir3_compiler_create(screen->dev, screen->gpu_id);
 	pscreen->context_create = fd5_context_create;
 	pscreen->is_format_supported = fd5_screen_is_format_supported;
+
+	screen->setup_slices = fd5_setup_slices;
+	if (fd_mesa_debug & FD_DBG_TTILE)
+		screen->tile_mode = fd5_tile_mode;
 }

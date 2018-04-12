@@ -26,6 +26,7 @@ noinst_PROGRAMS += \
 tools_aubinator_SOURCES = \
 	tools/aubinator.c \
 	tools/disasm.c \
+	tools/gen_batch_decoder.c \
 	tools/gen_disasm.h \
 	tools/intel_aub.h
 
@@ -36,6 +37,8 @@ tools_aubinator_CFLAGS = \
 tools_aubinator_LDADD = \
 	common/libintel_common.la \
 	compiler/libintel_compiler.la \
+	dev/libintel_dev.la \
+	isl/libisl.la \
 	$(top_builddir)/src/util/libmesautil.la \
 	$(PER_GEN_LIBS) \
 	$(PTHREAD_LIBS) \
@@ -47,11 +50,14 @@ tools_aubinator_LDADD = \
 tools_aubinator_error_decode_SOURCES = \
 	tools/aubinator_error_decode.c \
 	tools/disasm.c \
+	tools/gen_batch_decoder.c \
 	tools/gen_disasm.h
 
 tools_aubinator_error_decode_LDADD = \
 	common/libintel_common.la \
 	compiler/libintel_compiler.la \
+	dev/libintel_dev.la \
+	isl/libisl.la \
 	$(top_builddir)/src/util/libmesautil.la \
 	$(PTHREAD_LIBS) \
 	$(ZLIB_LIBS)

@@ -179,29 +179,6 @@ add_surface_state_reloc(struct anv_cmd_buffer *cmd_buffer,
 }
 
 static void
-add_image_relocs(struct anv_cmd_buffer *cmd_buffer,
-                 const struct anv_image *image,
-                 const uint32_t plane,
-                 struct anv_surface_state state)
-{
-   const struct isl_device *isl_dev = &cmd_buffer->device->isl_dev;
-
-   add_surface_state_reloc(cmd_buffer, state.state,
-                           image->planes[plane].bo, state.address);
-
-   if (state.aux_address) {
-      VkResult result =
-         anv_reloc_list_add(&cmd_buffer->surface_relocs,
-                            &cmd_buffer->pool->alloc,
-                            state.state.offset + isl_dev->ss.aux_addr_offset,
-                            image->planes[plane].bo,
-                            state.aux_address);
-      if (result != VK_SUCCESS)
-         anv_batch_set_error(&cmd_buffer->batch, result);
-   }
-}
-
-static void
 add_image_view_relocs(struct anv_cmd_buffer *cmd_buffer,
                       const struct anv_image_view *image_view,
                       const uint32_t plane,
@@ -223,24 +200,17 @@ add_image_view_relocs(struct anv_cmd_buffer *cmd_buffer,
       if (result != VK_SUCCESS)
          anv_batch_set_error(&cmd_buffer->batch, result);
    }
-}
 
-static bool
-color_is_zero_one(VkClearColorValue value, enum isl_format format)
-{
-   if (isl_format_has_int_channel(format)) {
-      for (unsigned i = 0; i < 4; i++) {
-         if (value.int32[i] != 0 && value.int32[i] != 1)
-            return false;
-      }
-   } else {
-      for (unsigned i = 0; i < 4; i++) {
-         if (value.float32[i] != 0.0f && value.float32[i] != 1.0f)
-            return false;
-      }
+   if (state.clear_address) {
+      VkResult result =
+         anv_reloc_list_add(&cmd_buffer->surface_relocs,
+                            &cmd_buffer->pool->alloc,
+                            state.state.offset +
+                            isl_dev->ss.clear_color_state_offset,
+                            image->planes[image_plane].bo, state.clear_address);
+      if (result != VK_SUCCESS)
+         anv_batch_set_error(&cmd_buffer->batch, result);
    }
-
-   return true;
 }
 
 static void
@@ -264,16 +234,22 @@ color_attachment_compute_aux_usage(struct anv_device * device,
       att_state->input_aux_usage = ISL_AUX_USAGE_NONE;
       att_state->fast_clear = false;
       return;
-   } else if (iview->image->planes[0].aux_usage == ISL_AUX_USAGE_MCS) {
-      att_state->aux_usage = ISL_AUX_USAGE_MCS;
-      att_state->input_aux_usage = ISL_AUX_USAGE_MCS;
-      att_state->fast_clear = false;
-      return;
-   } else if (iview->image->planes[0].aux_usage == ISL_AUX_USAGE_CCS_E) {
-      att_state->aux_usage = ISL_AUX_USAGE_CCS_E;
-      att_state->input_aux_usage = ISL_AUX_USAGE_CCS_E;
+   }
+
+   att_state->aux_usage =
+      anv_layout_to_aux_usage(&device->info, iview->image,
+                              VK_IMAGE_ASPECT_COLOR_BIT,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+   /* If we don't have aux, then we should have returned early in the layer
+    * check above.  If we got here, we must have something.
+    */
+   assert(att_state->aux_usage != ISL_AUX_USAGE_NONE);
+
+   if (att_state->aux_usage == ISL_AUX_USAGE_CCS_E ||
+       att_state->aux_usage == ISL_AUX_USAGE_MCS) {
+      att_state->input_aux_usage = att_state->aux_usage;
    } else {
-      att_state->aux_usage = ISL_AUX_USAGE_CCS_D;
       /* From the Sky Lake PRM, RENDER_SURFACE_STATE::AuxiliarySurfaceMode:
        *
        *    "If Number of Multisamples is MULTISAMPLECOUNT_1, AUX_CCS_D
@@ -304,19 +280,37 @@ color_attachment_compute_aux_usage(struct anv_device * device,
       }
    }
 
-   assert(iview->image->planes[0].aux_surface.isl.usage & ISL_SURF_USAGE_CCS_BIT);
+   assert(iview->image->planes[0].aux_surface.isl.usage &
+          (ISL_SURF_USAGE_CCS_BIT | ISL_SURF_USAGE_MCS_BIT));
+
+   union isl_color_value clear_color = {};
+   anv_clear_color_from_att_state(&clear_color, att_state, iview);
 
    att_state->clear_color_is_zero_one =
-      color_is_zero_one(att_state->clear_value.color, iview->planes[0].isl.format);
+      isl_color_value_is_zero_one(clear_color, iview->planes[0].isl.format);
    att_state->clear_color_is_zero =
-      att_state->clear_value.color.uint32[0] == 0 &&
-      att_state->clear_value.color.uint32[1] == 0 &&
-      att_state->clear_value.color.uint32[2] == 0 &&
-      att_state->clear_value.color.uint32[3] == 0;
+      isl_color_value_is_zero(clear_color, iview->planes[0].isl.format);
 
    if (att_state->pending_clear_aspects == VK_IMAGE_ASPECT_COLOR_BIT) {
-      /* Start off assuming fast clears are possible */
-      att_state->fast_clear = true;
+      /* Start by getting the fast clear type.  We use the first subpass
+       * layout here because we don't want to fast-clear if the first subpass
+       * to use the attachment can't handle fast-clears.
+       */
+      enum anv_fast_clear_type fast_clear_type =
+         anv_layout_to_fast_clear_type(&device->info, iview->image,
+                                       VK_IMAGE_ASPECT_COLOR_BIT,
+                                       cmd_state->pass->attachments[att].first_subpass_layout);
+      switch (fast_clear_type) {
+      case ANV_FAST_CLEAR_NONE:
+         att_state->fast_clear = false;
+         break;
+      case ANV_FAST_CLEAR_DEFAULT_VALUE:
+         att_state->fast_clear = att_state->clear_color_is_zero;
+         break;
+      case ANV_FAST_CLEAR_ANY:
+         att_state->fast_clear = true;
+         break;
+      }
 
       /* Potentially, we could do partial fast-clears but doing so has crazy
        * alignment restrictions.  It's easier to just restrict to full size
@@ -332,41 +326,99 @@ color_attachment_compute_aux_usage(struct anv_device * device,
       if (GEN_GEN <= 8 && !att_state->clear_color_is_zero_one)
          att_state->fast_clear = false;
 
-      /* We allow fast clears when all aux layers of the miplevel are targeted.
-       * See add_fast_clear_state_buffer() for more information. Also, because
-       * we only either do a fast clear or a normal clear and not both, this
-       * complies with the gen7 restriction of not fast-clearing multiple
-       * layers.
+      /* We only allow fast clears to the first slice of an image (level 0,
+       * layer 0) and only for the entire slice.  This guarantees us that, at
+       * any given time, there is only one clear color on any given image at
+       * any given time.  At the time of our testing (Jan 17, 2018), there
+       * were no known applications which would benefit from fast-clearing
+       * more than just the first slice.
        */
-      if (cmd_state->framebuffer->layers !=
-          anv_image_aux_layers(iview->image, VK_IMAGE_ASPECT_COLOR_BIT,
-                               iview->planes[0].isl.base_level)) {
+      if (att_state->fast_clear &&
+          (iview->planes[0].isl.base_level > 0 ||
+           iview->planes[0].isl.base_array_layer > 0)) {
+         anv_perf_warn(device->instance, iview->image,
+                       "Rendering with multi-lod or multi-layer framebuffer "
+                       "with LOAD_OP_LOAD and baseMipLevel > 0 or "
+                       "baseArrayLayer > 0.  Not fast clearing.");
          att_state->fast_clear = false;
-         if (GEN_GEN == 7) {
-            anv_perf_warn(device->instance, iview->image,
-                          "Not fast-clearing the first layer in "
-                          "a multi-layer fast clear.");
-         }
+      } else if (att_state->fast_clear && cmd_state->framebuffer->layers > 1) {
+         anv_perf_warn(device->instance, iview->image,
+                       "Rendering to a multi-layer framebuffer with "
+                       "LOAD_OP_CLEAR.  Only fast-clearing the first slice");
       }
 
-      /* We only allow fast clears in the GENERAL layout if the auxiliary
-       * buffer is always enabled and the fast-clear value is all 0's. See
-       * add_fast_clear_state_buffer() for more information.
-       */
-      if (cmd_state->pass->attachments[att].first_subpass_layout ==
-          VK_IMAGE_LAYOUT_GENERAL &&
-          (!att_state->clear_color_is_zero ||
-           iview->image->planes[0].aux_usage == ISL_AUX_USAGE_NONE)) {
-         att_state->fast_clear = false;
-      }
-
-      if (att_state->fast_clear) {
-         memcpy(fast_clear_color->u32, att_state->clear_value.color.uint32,
-                sizeof(fast_clear_color->u32));
-      }
+      if (att_state->fast_clear)
+         *fast_clear_color = clear_color;
    } else {
       att_state->fast_clear = false;
    }
+}
+
+static void
+depth_stencil_attachment_compute_aux_usage(struct anv_device *device,
+                                           struct anv_cmd_state *cmd_state,
+                                           uint32_t att, VkRect2D render_area)
+{
+   struct anv_render_pass_attachment *pass_att =
+      &cmd_state->pass->attachments[att];
+   struct anv_attachment_state *att_state = &cmd_state->attachments[att];
+   struct anv_image_view *iview = cmd_state->framebuffer->attachments[att];
+
+   /* These will be initialized after the first subpass transition. */
+   att_state->aux_usage = ISL_AUX_USAGE_NONE;
+   att_state->input_aux_usage = ISL_AUX_USAGE_NONE;
+
+   if (GEN_GEN == 7) {
+      /* We don't do any HiZ or depth fast-clears on gen7 yet */
+      att_state->fast_clear = false;
+      return;
+   }
+
+   if (!(att_state->pending_clear_aspects & VK_IMAGE_ASPECT_DEPTH_BIT)) {
+      /* If we're just clearing stencil, we can always HiZ clear */
+      att_state->fast_clear = true;
+      return;
+   }
+
+   /* Default to false for now */
+   att_state->fast_clear = false;
+
+   /* We must have depth in order to have HiZ */
+   if (!(iview->image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT))
+      return;
+
+   const enum isl_aux_usage first_subpass_aux_usage =
+      anv_layout_to_aux_usage(&device->info, iview->image,
+                              VK_IMAGE_ASPECT_DEPTH_BIT,
+                              pass_att->first_subpass_layout);
+   if (first_subpass_aux_usage != ISL_AUX_USAGE_HIZ)
+      return;
+
+   if (!blorp_can_hiz_clear_depth(GEN_GEN,
+                                  iview->planes[0].isl.format,
+                                  iview->image->samples,
+                                  render_area.offset.x,
+                                  render_area.offset.y,
+                                  render_area.offset.x +
+                                  render_area.extent.width,
+                                  render_area.offset.y +
+                                  render_area.extent.height))
+      return;
+
+   if (att_state->clear_value.depthStencil.depth != ANV_HZ_FC_VAL)
+      return;
+
+   if (GEN_GEN == 8 && anv_can_sample_with_hiz(&device->info, iview->image)) {
+      /* Only gen9+ supports returning ANV_HZ_FC_VAL when sampling a
+       * fast-cleared portion of a HiZ buffer. Testing has revealed that Gen8
+       * only supports returning 0.0f. Gens prior to gen8 do not support this
+       * feature at all.
+       */
+      return;
+   }
+
+   /* If we got here, then we can fast clear */
+   att_state->fast_clear = true;
 }
 
 static bool
@@ -392,18 +444,6 @@ transition_depth_buffer(struct anv_cmd_buffer *cmd_buffer,
                         VkImageLayout initial_layout,
                         VkImageLayout final_layout)
 {
-   assert(image);
-
-   /* A transition is a no-op if HiZ is not enabled, or if the initial and
-    * final layouts are equal.
-    *
-    * The undefined layout indicates that the user doesn't care about the data
-    * that's currently in the buffer. Therefore, a data-preserving resolve
-    * operation is not needed.
-    */
-   if (image->planes[0].aux_usage != ISL_AUX_USAGE_HIZ || initial_layout == final_layout)
-      return;
-
    const bool hiz_enabled = ISL_AUX_USAGE_HIZ ==
       anv_layout_to_aux_usage(&cmd_buffer->device->info, image,
                               VK_IMAGE_ASPECT_DEPTH_BIT, initial_layout);
@@ -411,140 +451,366 @@ transition_depth_buffer(struct anv_cmd_buffer *cmd_buffer,
       anv_layout_to_aux_usage(&cmd_buffer->device->info, image,
                               VK_IMAGE_ASPECT_DEPTH_BIT, final_layout);
 
-   enum blorp_hiz_op hiz_op;
+   enum isl_aux_op hiz_op;
    if (hiz_enabled && !enable_hiz) {
-      hiz_op = BLORP_HIZ_OP_DEPTH_RESOLVE;
+      hiz_op = ISL_AUX_OP_FULL_RESOLVE;
    } else if (!hiz_enabled && enable_hiz) {
-      hiz_op = BLORP_HIZ_OP_HIZ_RESOLVE;
+      hiz_op = ISL_AUX_OP_AMBIGUATE;
    } else {
       assert(hiz_enabled == enable_hiz);
       /* If the same buffer will be used, no resolves are necessary. */
-      hiz_op = BLORP_HIZ_OP_NONE;
+      hiz_op = ISL_AUX_OP_NONE;
    }
 
-   if (hiz_op != BLORP_HIZ_OP_NONE)
-      anv_gen8_hiz_op_resolve(cmd_buffer, image, hiz_op);
-}
-
-enum fast_clear_state_field {
-   FAST_CLEAR_STATE_FIELD_CLEAR_COLOR,
-   FAST_CLEAR_STATE_FIELD_NEEDS_RESOLVE,
-};
-
-static inline struct anv_address
-get_fast_clear_state_address(const struct anv_device *device,
-                             const struct anv_image *image,
-                             VkImageAspectFlagBits aspect,
-                             unsigned level,
-                             enum fast_clear_state_field field)
-{
-   assert(device && image);
-   assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
-   assert(level < anv_image_aux_levels(image, aspect));
-
-   uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
-
-   /* Refer to the definition of anv_image for the memory layout. */
-   uint32_t offset = image->planes[plane].fast_clear_state_offset;
-
-   offset += anv_fast_clear_state_entry_size(device) * level;
-
-   switch (field) {
-   case FAST_CLEAR_STATE_FIELD_NEEDS_RESOLVE:
-      offset += device->isl_dev.ss.clear_value_size;
-      /* Fall-through */
-   case FAST_CLEAR_STATE_FIELD_CLEAR_COLOR:
-      break;
-   }
-
-   assert(offset < image->planes[plane].surface.offset + image->planes[plane].size);
-
-   return (struct anv_address) {
-      .bo = image->planes[plane].bo,
-      .offset = image->planes[plane].bo_offset + offset,
-   };
+   if (hiz_op != ISL_AUX_OP_NONE)
+      anv_image_hiz_op(cmd_buffer, image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                       0, 0, 1, hiz_op);
 }
 
 #define MI_PREDICATE_SRC0  0x2400
 #define MI_PREDICATE_SRC1  0x2408
 
-/* Manages the state of an color image subresource to ensure resolves are
- * performed properly.
- */
 static void
-genX(set_image_needs_resolve)(struct anv_cmd_buffer *cmd_buffer,
-                        const struct anv_image *image,
-                        VkImageAspectFlagBits aspect,
-                        unsigned level, bool needs_resolve)
+set_image_compressed_bit(struct anv_cmd_buffer *cmd_buffer,
+                         const struct anv_image *image,
+                         VkImageAspectFlagBits aspect,
+                         uint32_t level,
+                         uint32_t base_layer, uint32_t layer_count,
+                         bool compressed)
 {
-   assert(cmd_buffer && image);
-   assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
-   assert(level < anv_image_aux_levels(image, aspect));
+   uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
 
-   const struct anv_address resolve_flag_addr =
-      get_fast_clear_state_address(cmd_buffer->device, image, aspect, level,
-                                   FAST_CLEAR_STATE_FIELD_NEEDS_RESOLVE);
+   /* We only have compression tracking for CCS_E */
+   if (image->planes[plane].aux_usage != ISL_AUX_USAGE_CCS_E)
+      return;
 
-   /* The HW docs say that there is no way to guarantee the completion of
-    * the following command. We use it nevertheless because it shows no
-    * issues in testing is currently being used in the GL driver.
-    */
-   anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
-      sdi.Address = resolve_flag_addr;
-      sdi.ImmediateData = needs_resolve;
+   for (uint32_t a = 0; a < layer_count; a++) {
+      uint32_t layer = base_layer + a;
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+         sdi.Address = anv_image_get_compression_state_addr(cmd_buffer->device,
+                                                            image, aspect,
+                                                            level, layer);
+         sdi.ImmediateData = compressed ? UINT32_MAX : 0;
+      }
    }
 }
 
 static void
-genX(load_needs_resolve_predicate)(struct anv_cmd_buffer *cmd_buffer,
-                                   const struct anv_image *image,
-                                   VkImageAspectFlagBits aspect,
-                                   unsigned level)
+set_image_fast_clear_state(struct anv_cmd_buffer *cmd_buffer,
+                           const struct anv_image *image,
+                           VkImageAspectFlagBits aspect,
+                           enum anv_fast_clear_type fast_clear)
 {
-   assert(cmd_buffer && image);
-   assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
-   assert(level < anv_image_aux_levels(image, aspect));
+   anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+      sdi.Address = anv_image_get_fast_clear_type_addr(cmd_buffer->device,
+                                                       image, aspect);
+      sdi.ImmediateData = fast_clear;
+   }
 
-   const struct anv_address resolve_flag_addr =
-      get_fast_clear_state_address(cmd_buffer->device, image, aspect, level,
-                                   FAST_CLEAR_STATE_FIELD_NEEDS_RESOLVE);
-
-   /* Make the pending predicated resolve a no-op if one is not needed.
-    * predicate = do_resolve = resolve_flag != 0;
+   /* Whenever we have fast-clear, we consider that slice to be compressed.
+    * This makes building predicates much easier.
     */
+   if (fast_clear != ANV_FAST_CLEAR_NONE)
+      set_image_compressed_bit(cmd_buffer, image, aspect, 0, 0, 1, true);
+}
+
+#if GEN_IS_HASWELL || GEN_GEN >= 8
+static inline uint32_t
+mi_alu(uint32_t opcode, uint32_t operand1, uint32_t operand2)
+{
+   struct GENX(MI_MATH_ALU_INSTRUCTION) instr = {
+      .ALUOpcode = opcode,
+      .Operand1 = operand1,
+      .Operand2 = operand2,
+   };
+
+   uint32_t dw;
+   GENX(MI_MATH_ALU_INSTRUCTION_pack)(NULL, &dw, &instr);
+
+   return dw;
+}
+#endif
+
+#define CS_GPR(n) (0x2600 + (n) * 8)
+
+/* This is only really practical on haswell and above because it requires
+ * MI math in order to get it correct.
+ */
+#if GEN_GEN >= 8 || GEN_IS_HASWELL
+static void
+anv_cmd_compute_resolve_predicate(struct anv_cmd_buffer *cmd_buffer,
+                                  const struct anv_image *image,
+                                  VkImageAspectFlagBits aspect,
+                                  uint32_t level, uint32_t array_layer,
+                                  enum isl_aux_op resolve_op,
+                                  enum anv_fast_clear_type fast_clear_supported)
+{
+   struct anv_address fast_clear_type_addr =
+      anv_image_get_fast_clear_type_addr(cmd_buffer->device, image, aspect);
+
+   /* Name some registers */
+   const int image_fc_reg = MI_ALU_REG0;
+   const int fc_imm_reg = MI_ALU_REG1;
+   const int pred_reg = MI_ALU_REG2;
+
+   uint32_t *dw;
+
+   if (resolve_op == ISL_AUX_OP_FULL_RESOLVE) {
+      /* In this case, we're doing a full resolve which means we want the
+       * resolve to happen if any compression (including fast-clears) is
+       * present.
+       *
+       * In order to simplify the logic a bit, we make the assumption that,
+       * if the first slice has been fast-cleared, it is also marked as
+       * compressed.  See also set_image_fast_clear_state.
+       */
+      struct anv_address compression_state_addr =
+         anv_image_get_compression_state_addr(cmd_buffer->device, image,
+                                              aspect, level, array_layer);
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
+         lrm.RegisterAddress  = MI_PREDICATE_SRC0;
+         lrm.MemoryAddress    = compression_state_addr;
+      }
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+         sdi.Address       = compression_state_addr;
+         sdi.ImmediateData = 0;
+      }
+
+      if (level == 0 && array_layer == 0) {
+         /* If the predicate is true, we want to write 0 to the fast clear type
+          * and, if it's false, leave it alone.  We can do this by writing
+          *
+          * clear_type = clear_type & ~predicate;
+          */
+         anv_batch_emit(&cmd_buffer->batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
+            lrm.RegisterAddress  = CS_GPR(image_fc_reg);
+            lrm.MemoryAddress    = fast_clear_type_addr;
+         }
+         anv_batch_emit(&cmd_buffer->batch, GENX(MI_LOAD_REGISTER_REG), lrr) {
+            lrr.DestinationRegisterAddress   = CS_GPR(pred_reg);
+            lrr.SourceRegisterAddress        = MI_PREDICATE_SRC0;
+         }
+
+         dw = anv_batch_emitn(&cmd_buffer->batch, 5, GENX(MI_MATH));
+         dw[1] = mi_alu(MI_ALU_LOAD, MI_ALU_SRCA, image_fc_reg);
+         dw[2] = mi_alu(MI_ALU_LOADINV, MI_ALU_SRCB, pred_reg);
+         dw[3] = mi_alu(MI_ALU_AND, 0, 0);
+         dw[4] = mi_alu(MI_ALU_STORE, image_fc_reg, MI_ALU_ACCU);
+
+         anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_REGISTER_MEM), srm) {
+            srm.MemoryAddress    = fast_clear_type_addr;
+            srm.RegisterAddress  = CS_GPR(image_fc_reg);
+         }
+      }
+   } else if (level == 0 && array_layer == 0) {
+      /* In this case, we are doing a partial resolve to get rid of fast-clear
+       * colors.  We don't care about the compression state but we do care
+       * about how much fast clear is allowed by the final layout.
+       */
+      assert(resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE);
+      assert(fast_clear_supported < ANV_FAST_CLEAR_ANY);
+
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
+         lrm.RegisterAddress  = CS_GPR(image_fc_reg);
+         lrm.MemoryAddress    = fast_clear_type_addr;
+      }
+      emit_lri(&cmd_buffer->batch, CS_GPR(image_fc_reg) + 4, 0);
+
+      emit_lri(&cmd_buffer->batch, CS_GPR(fc_imm_reg), fast_clear_supported);
+      emit_lri(&cmd_buffer->batch, CS_GPR(fc_imm_reg) + 4, 0);
+
+      /* We need to compute (fast_clear_supported < image->fast_clear).
+       * We do this by subtracting and storing the carry bit.
+       */
+      dw = anv_batch_emitn(&cmd_buffer->batch, 5, GENX(MI_MATH));
+      dw[1] = mi_alu(MI_ALU_LOAD, MI_ALU_SRCA, fc_imm_reg);
+      dw[2] = mi_alu(MI_ALU_LOAD, MI_ALU_SRCB, image_fc_reg);
+      dw[3] = mi_alu(MI_ALU_SUB, 0, 0);
+      dw[4] = mi_alu(MI_ALU_STORE, pred_reg, MI_ALU_CF);
+
+      /* Store the predicate */
+      emit_lrr(&cmd_buffer->batch, MI_PREDICATE_SRC0, CS_GPR(pred_reg));
+
+      /* If the predicate is true, we want to write 0 to the fast clear type
+       * and, if it's false, leave it alone.  We can do this by writing
+       *
+       * clear_type = clear_type & ~predicate;
+       */
+      dw = anv_batch_emitn(&cmd_buffer->batch, 5, GENX(MI_MATH));
+      dw[1] = mi_alu(MI_ALU_LOAD, MI_ALU_SRCA, image_fc_reg);
+      dw[2] = mi_alu(MI_ALU_LOADINV, MI_ALU_SRCB, pred_reg);
+      dw[3] = mi_alu(MI_ALU_AND, 0, 0);
+      dw[4] = mi_alu(MI_ALU_STORE, image_fc_reg, MI_ALU_ACCU);
+
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_REGISTER_MEM), srm) {
+         srm.RegisterAddress  = CS_GPR(image_fc_reg);
+         srm.MemoryAddress    = fast_clear_type_addr;
+      }
+   } else {
+      /* In this case, we're trying to do a partial resolve on a slice that
+       * doesn't have clear color.  There's nothing to do.
+       */
+      assert(resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE);
+      return;
+   }
+
+   /* We use the first half of src0 for the actual predicate.  Set the second
+    * half of src0 and all of src1 to 0 as the predicate operation will be
+    * doing an implicit src0 != src1.
+    */
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC0 + 4, 0);
    emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC1    , 0);
    emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC1 + 4, 0);
-   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC0    , 0);
-   emit_lrm(&cmd_buffer->batch, MI_PREDICATE_SRC0 + 4,
-            resolve_flag_addr.bo, resolve_flag_addr.offset);
+
    anv_batch_emit(&cmd_buffer->batch, GENX(MI_PREDICATE), mip) {
       mip.LoadOperation    = LOAD_LOADINV;
       mip.CombineOperation = COMBINE_SET;
       mip.CompareOperation = COMPARE_SRCS_EQUAL;
    }
 }
+#endif /* GEN_GEN >= 8 || GEN_IS_HASWELL */
+
+#if GEN_GEN <= 8
+static void
+anv_cmd_simple_resolve_predicate(struct anv_cmd_buffer *cmd_buffer,
+                                 const struct anv_image *image,
+                                 VkImageAspectFlagBits aspect,
+                                 uint32_t level, uint32_t array_layer,
+                                 enum isl_aux_op resolve_op,
+                                 enum anv_fast_clear_type fast_clear_supported)
+{
+   struct anv_address fast_clear_type_addr =
+      anv_image_get_fast_clear_type_addr(cmd_buffer->device, image, aspect);
+
+   /* This only works for partial resolves and only when the clear color is
+    * all or nothing.  On the upside, this emits less command streamer code
+    * and works on Ivybridge and Bay Trail.
+    */
+   assert(resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE);
+   assert(fast_clear_supported != ANV_FAST_CLEAR_ANY);
+
+   /* We don't support fast clears on anything other than the first slice. */
+   if (level > 0 || array_layer > 0)
+      return;
+
+   /* On gen8, we don't have a concept of default clear colors because we
+    * can't sample from CCS surfaces.  It's enough to just load the fast clear
+    * state into the predicate register.
+    */
+   anv_batch_emit(&cmd_buffer->batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
+      lrm.RegisterAddress  = MI_PREDICATE_SRC0;
+      lrm.MemoryAddress    = fast_clear_type_addr;
+   }
+   anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+      sdi.Address          = fast_clear_type_addr;
+      sdi.ImmediateData    = 0;
+   }
+
+   /* We use the first half of src0 for the actual predicate.  Set the second
+    * half of src0 and all of src1 to 0 as the predicate operation will be
+    * doing an implicit src0 != src1.
+    */
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC0 + 4, 0);
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC1    , 0);
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC1 + 4, 0);
+
+   anv_batch_emit(&cmd_buffer->batch, GENX(MI_PREDICATE), mip) {
+      mip.LoadOperation    = LOAD_LOADINV;
+      mip.CombineOperation = COMBINE_SET;
+      mip.CompareOperation = COMPARE_SRCS_EQUAL;
+   }
+}
+#endif /* GEN_GEN <= 8 */
 
 static void
-init_fast_clear_state_entry(struct anv_cmd_buffer *cmd_buffer,
-                            const struct anv_image *image,
-                            VkImageAspectFlagBits aspect,
-                            unsigned level)
+anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
+                               const struct anv_image *image,
+                               VkImageAspectFlagBits aspect,
+                               uint32_t level, uint32_t array_layer,
+                               enum isl_aux_op resolve_op,
+                               enum anv_fast_clear_type fast_clear_supported)
+{
+   const uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
+
+#if GEN_GEN >= 9
+   anv_cmd_compute_resolve_predicate(cmd_buffer, image,
+                                     aspect, level, array_layer,
+                                     resolve_op, fast_clear_supported);
+#else /* GEN_GEN <= 8 */
+   anv_cmd_simple_resolve_predicate(cmd_buffer, image,
+                                    aspect, level, array_layer,
+                                    resolve_op, fast_clear_supported);
+#endif
+
+   /* CCS_D only supports full resolves and BLORP will assert on us if we try
+    * to do a partial resolve on a CCS_D surface.
+    */
+   if (resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE &&
+       image->planes[plane].aux_usage == ISL_AUX_USAGE_NONE)
+      resolve_op = ISL_AUX_OP_FULL_RESOLVE;
+
+   anv_image_ccs_op(cmd_buffer, image, aspect, level,
+                    array_layer, 1, resolve_op, NULL, true);
+}
+
+static void
+anv_cmd_predicated_mcs_resolve(struct anv_cmd_buffer *cmd_buffer,
+                               const struct anv_image *image,
+                               VkImageAspectFlagBits aspect,
+                               uint32_t array_layer,
+                               enum isl_aux_op resolve_op,
+                               enum anv_fast_clear_type fast_clear_supported)
+{
+   assert(aspect == VK_IMAGE_ASPECT_COLOR_BIT);
+   assert(resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE);
+
+#if GEN_GEN >= 8 || GEN_IS_HASWELL
+   anv_cmd_compute_resolve_predicate(cmd_buffer, image,
+                                     aspect, 0, array_layer,
+                                     resolve_op, fast_clear_supported);
+
+   anv_image_mcs_op(cmd_buffer, image, aspect,
+                    array_layer, 1, resolve_op, NULL, true);
+#else
+   unreachable("MCS resolves are unsupported on Ivybridge and Bay Trail");
+#endif
+}
+
+void
+genX(cmd_buffer_mark_image_written)(struct anv_cmd_buffer *cmd_buffer,
+                                    const struct anv_image *image,
+                                    VkImageAspectFlagBits aspect,
+                                    enum isl_aux_usage aux_usage,
+                                    uint32_t level,
+                                    uint32_t base_layer,
+                                    uint32_t layer_count)
+{
+   /* The aspect must be exactly one of the image aspects. */
+   assert(_mesa_bitcount(aspect) == 1 && (aspect & image->aspects));
+
+   /* The only compression types with more than just fast-clears are MCS,
+    * CCS_E, and HiZ.  With HiZ we just trust the layout and don't actually
+    * track the current fast-clear and compression state.  This leaves us
+    * with just MCS and CCS_E.
+    */
+   if (aux_usage != ISL_AUX_USAGE_CCS_E &&
+       aux_usage != ISL_AUX_USAGE_MCS)
+      return;
+
+   set_image_compressed_bit(cmd_buffer, image, aspect,
+                            level, base_layer, layer_count, true);
+}
+
+static void
+init_fast_clear_color(struct anv_cmd_buffer *cmd_buffer,
+                      const struct anv_image *image,
+                      VkImageAspectFlagBits aspect)
 {
    assert(cmd_buffer && image);
    assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
-   assert(level < anv_image_aux_levels(image, aspect));
 
-   uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
-   enum isl_aux_usage aux_usage = image->planes[plane].aux_usage;
-
-   /* The resolve flag should updated to signify that fast-clear/compression
-    * data needs to be removed when leaving the undefined layout. Such data
-    * may need to be removed if it would cause accesses to the color buffer
-    * to return incorrect data. The fast clear data in CCS_D buffers should
-    * be removed because CCS_D isn't enabled all the time.
-    */
-   genX(set_image_needs_resolve)(cmd_buffer, image, aspect, level,
-                                 aux_usage == ISL_AUX_USAGE_NONE);
+   set_image_fast_clear_state(cmd_buffer, image, aspect,
+                              ANV_FAST_CLEAR_NONE);
 
    /* The fast clear value dword(s) will be copied into a surface state object.
     * Ensure that the restrictions of the fields in the dword(s) are followed.
@@ -558,37 +824,37 @@ init_fast_clear_state_entry(struct anv_cmd_buffer *cmd_buffer,
     * values in the clear value dword(s).
     */
    struct anv_address addr =
-      get_fast_clear_state_address(cmd_buffer->device, image, aspect, level,
-                                   FAST_CLEAR_STATE_FIELD_CLEAR_COLOR);
-   unsigned i = 0;
-   for (; i < cmd_buffer->device->isl_dev.ss.clear_value_size; i += 4) {
+      anv_image_get_clear_color_addr(cmd_buffer->device, image, aspect);
+
+   if (GEN_GEN >= 9) {
+      for (unsigned i = 0; i < 4; i++) {
+         anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+            sdi.Address = addr;
+            sdi.Address.offset += i * 4;
+            /* MCS buffers on SKL+ can only have 1/0 clear colors. */
+            assert(image->samples > 1);
+            sdi.ImmediateData = 0;
+         }
+      }
+   } else {
       anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
          sdi.Address = addr;
-
-         if (GEN_GEN >= 9) {
-            /* MCS buffers on SKL+ can only have 1/0 clear colors. */
-            assert(aux_usage == ISL_AUX_USAGE_MCS);
-            sdi.ImmediateData = 0;
-         } else if (GEN_VERSIONx10 >= 75) {
+         if (GEN_GEN >= 8 || GEN_IS_HASWELL) {
             /* Pre-SKL, the dword containing the clear values also contains
              * other fields, so we need to initialize those fields to match the
              * values that would be in a color attachment.
              */
-            assert(i == 0);
             sdi.ImmediateData = ISL_CHANNEL_SELECT_RED   << 25 |
                                 ISL_CHANNEL_SELECT_GREEN << 22 |
                                 ISL_CHANNEL_SELECT_BLUE  << 19 |
                                 ISL_CHANNEL_SELECT_ALPHA << 16;
-         }  else if (GEN_VERSIONx10 == 70) {
+         } else if (GEN_GEN == 7) {
             /* On IVB, the dword containing the clear values also contains
              * other fields that must be zero or can be zero.
              */
-            assert(i == 0);
             sdi.ImmediateData = 0;
          }
       }
-
-      addr.offset += 4;
    }
 }
 
@@ -600,20 +866,17 @@ genX(copy_fast_clear_dwords)(struct anv_cmd_buffer *cmd_buffer,
                              struct anv_state surface_state,
                              const struct anv_image *image,
                              VkImageAspectFlagBits aspect,
-                             unsigned level,
                              bool copy_from_surface_state)
 {
    assert(cmd_buffer && image);
    assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
-   assert(level < anv_image_aux_levels(image, aspect));
 
    struct anv_bo *ss_bo =
       &cmd_buffer->device->surface_state_pool.block_pool.bo;
    uint32_t ss_clear_offset = surface_state.offset +
       cmd_buffer->device->isl_dev.ss.clear_value_offset;
    const struct anv_address entry_addr =
-      get_fast_clear_state_address(cmd_buffer->device, image, aspect, level,
-                                   FAST_CLEAR_STATE_FIELD_CLEAR_COLOR);
+      anv_image_get_clear_color_addr(cmd_buffer->device, image, aspect);
    unsigned copy_size = cmd_buffer->device->isl_dev.ss.clear_value_size;
 
    if (copy_from_surface_state) {
@@ -659,6 +922,7 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
                         VkImageLayout initial_layout,
                         VkImageLayout final_layout)
 {
+   const struct gen_device_info *devinfo = &cmd_buffer->device->info;
    /* Validate the inputs. */
    assert(cmd_buffer);
    assert(image && image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
@@ -702,101 +966,127 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
    if (base_layer >= anv_image_aux_layers(image, aspect, base_level))
       return;
 
-   /* A transition of a 3D subresource works on all slices at a time. */
-   if (image->type == VK_IMAGE_TYPE_3D) {
-      base_layer = 0;
-      layer_count = anv_minify(image->extent.depth, base_level);
-   }
-
-   /* We're interested in the subresource range subset that has aux data. */
-   level_count = MIN2(level_count, anv_image_aux_levels(image, aspect) - base_level);
-   layer_count = MIN2(layer_count,
-                      anv_image_aux_layers(image, aspect, base_level) - base_layer);
-   last_level_num = base_level + level_count;
-
-   /* Record whether or not the layout is undefined. Pre-initialized images
-    * with auxiliary buffers have a non-linear layout and are thus undefined.
-    */
    assert(image->tiling == VK_IMAGE_TILING_OPTIMAL);
-   const bool undef_layout = initial_layout == VK_IMAGE_LAYOUT_UNDEFINED ||
-                             initial_layout == VK_IMAGE_LAYOUT_PREINITIALIZED;
 
-   /* Do preparatory work before the resolve operation or return early if no
-    * resolve is actually needed.
-    */
-   if (undef_layout) {
+   if (initial_layout == VK_IMAGE_LAYOUT_UNDEFINED ||
+       initial_layout == VK_IMAGE_LAYOUT_PREINITIALIZED) {
       /* A subresource in the undefined layout may have been aliased and
        * populated with any arrangement of bits. Therefore, we must initialize
        * the related aux buffer and clear buffer entry with desirable values.
+       * An initial layout of PREINITIALIZED is the same as UNDEFINED for
+       * images with VK_IMAGE_TILING_OPTIMAL.
        *
        * Initialize the relevant clear buffer entries.
        */
-      for (unsigned level = base_level; level < last_level_num; level++)
-         init_fast_clear_state_entry(cmd_buffer, image, aspect, level);
+      if (base_level == 0 && base_layer == 0)
+         init_fast_clear_color(cmd_buffer, image, aspect);
 
-      /* Initialize the aux buffers to enable correct rendering. This operation
-       * requires up to two steps: one to rid the aux buffer of data that may
-       * cause GPU hangs, and another to ensure that writes done without aux
-       * will be visible to reads done with aux.
+      /* Initialize the aux buffers to enable correct rendering.  In order to
+       * ensure that things such as storage images work correctly, aux buffers
+       * need to be initialized to valid data.
        *
-       * Having an aux buffer with invalid data is possible for CCS buffers
-       * SKL+ and for MCS buffers with certain sample counts (2x and 8x). One
-       * easy way to get to a valid state is to fast-clear the specified range.
+       * Having an aux buffer with invalid data is a problem for two reasons:
        *
-       * Even for MCS buffers that have sample counts that don't require
-       * certain bits to be reserved (4x and 8x), we're unsure if the hardware
-       * will be okay with the sample mappings given by the undefined buffer.
-       * We don't have any data to show that this is a problem, but we want to
-       * avoid causing difficult-to-debug problems.
+       *  1) Having an invalid value in the buffer can confuse the hardware.
+       *     For instance, with CCS_E on SKL, a two-bit CCS value of 2 is
+       *     invalid and leads to the hardware doing strange things.  It
+       *     doesn't hang as far as we can tell but rendering corruption can
+       *     occur.
+       *
+       *  2) If this transition is into the GENERAL layout and we then use the
+       *     image as a storage image, then we must have the aux buffer in the
+       *     pass-through state so that, if we then go to texture from the
+       *     image, we get the results of our storage image writes and not the
+       *     fast clear color or other random data.
+       *
+       * For CCS both of the problems above are real demonstrable issues.  In
+       * that case, the only thing we can do is to perform an ambiguate to
+       * transition the aux surface into the pass-through state.
+       *
+       * For MCS, (2) is never an issue because we don't support multisampled
+       * storage images.  In theory, issue (1) is a problem with MCS but we've
+       * never seen it in the wild.  For 4x and 16x, all bit patters could, in
+       * theory, be interpreted as something but we don't know that all bit
+       * patterns are actually valid.  For 2x and 8x, you could easily end up
+       * with the MCS referring to an invalid plane because not all bits of
+       * the MCS value are actually used.  Even though we've never seen issues
+       * in the wild, it's best to play it safe and initialize the MCS.  We
+       * can use a fast-clear for MCS because we only ever touch from render
+       * and texture (no image load store).
        */
-      if ((GEN_GEN >= 9 && image->samples == 1) || image->samples > 1) {
+      if (image->samples == 1) {
+         for (uint32_t l = 0; l < level_count; l++) {
+            const uint32_t level = base_level + l;
+
+            uint32_t aux_layers = anv_image_aux_layers(image, aspect, level);
+            if (base_layer >= aux_layers)
+               break; /* We will only get fewer layers as level increases */
+            uint32_t level_layer_count =
+               MIN2(layer_count, aux_layers - base_layer);
+
+            anv_image_ccs_op(cmd_buffer, image, aspect, level,
+                             base_layer, level_layer_count,
+                             ISL_AUX_OP_AMBIGUATE, NULL, false);
+
+            if (image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E) {
+               set_image_compressed_bit(cmd_buffer, image, aspect,
+                                        level, base_layer, level_layer_count,
+                                        false);
+            }
+         }
+      } else {
          if (image->samples == 4 || image->samples == 16) {
             anv_perf_warn(cmd_buffer->device->instance, image,
                           "Doing a potentially unnecessary fast-clear to "
                           "define an MCS buffer.");
          }
 
-         anv_image_fast_clear(cmd_buffer, image, aspect,
-                              base_level, level_count,
-                              base_layer, layer_count);
+         assert(base_level == 0 && level_count == 1);
+         anv_image_mcs_op(cmd_buffer, image, aspect,
+                          base_layer, layer_count,
+                          ISL_AUX_OP_FAST_CLEAR, NULL, false);
       }
-      /* At this point, some elements of the CCS buffer may have the fast-clear
-       * bit-arrangement. As the user writes to a subresource, we need to have
-       * the associated CCS elements enter the ambiguated state. This enables
-       * reads (implicit or explicit) to reflect the user-written data instead
-       * of the clear color. The only time such elements will not change their
-       * state as described above, is in a final layout that doesn't have CCS
-       * enabled. In this case, we must force the associated CCS buffers of the
-       * specified range to enter the ambiguated state in advance.
-       */
-      if (image->samples == 1 &&
-          image->planes[plane].aux_usage != ISL_AUX_USAGE_CCS_E &&
-          final_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-         /* The CCS_D buffer may not be enabled in the final layout. Continue
-          * executing this function to perform a resolve.
-          */
-          anv_perf_warn(cmd_buffer->device->instance, image,
-                        "Performing an additional resolve for CCS_D layout "
-                        "transition. Consider always leaving it on or "
-                        "performing an ambiguation pass.");
-      } else {
-         /* Writes in the final layout will be aware of the auxiliary buffer.
-          * In addition, the clear buffer entries and the auxiliary buffers
-          * have been populated with values that will result in correct
-          * rendering.
-          */
-         return;
-      }
-   } else if (initial_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-      /* Resolves are only necessary if the subresource may contain blocks
-       * fast-cleared to values unsupported in other layouts. This only occurs
-       * if the initial layout is COLOR_ATTACHMENT_OPTIMAL.
-       */
-      return;
-   } else if (image->samples > 1) {
-      /* MCS buffers don't need resolving. */
       return;
    }
+
+   const enum isl_aux_usage initial_aux_usage =
+      anv_layout_to_aux_usage(devinfo, image, aspect, initial_layout);
+   const enum isl_aux_usage final_aux_usage =
+      anv_layout_to_aux_usage(devinfo, image, aspect, final_layout);
+
+   /* The current code assumes that there is no mixing of CCS_E and CCS_D.
+    * We can handle transitions between CCS_D/E to and from NONE.  What we
+    * don't yet handle is switching between CCS_E and CCS_D within a given
+    * image.  Doing so in a performant way requires more detailed aux state
+    * tracking such as what is done in i965.  For now, just assume that we
+    * only have one type of compression.
+    */
+   assert(initial_aux_usage == ISL_AUX_USAGE_NONE ||
+          final_aux_usage == ISL_AUX_USAGE_NONE ||
+          initial_aux_usage == final_aux_usage);
+
+   /* If initial aux usage is NONE, there is nothing to resolve */
+   if (initial_aux_usage == ISL_AUX_USAGE_NONE)
+      return;
+
+   enum isl_aux_op resolve_op = ISL_AUX_OP_NONE;
+
+   /* If the initial layout supports more fast clear than the final layout
+    * then we need at least a partial resolve.
+    */
+   const enum anv_fast_clear_type initial_fast_clear =
+      anv_layout_to_fast_clear_type(devinfo, image, aspect, initial_layout);
+   const enum anv_fast_clear_type final_fast_clear =
+      anv_layout_to_fast_clear_type(devinfo, image, aspect, final_layout);
+   if (final_fast_clear < initial_fast_clear)
+      resolve_op = ISL_AUX_OP_PARTIAL_RESOLVE;
+
+   if (initial_aux_usage == ISL_AUX_USAGE_CCS_E &&
+       final_aux_usage != ISL_AUX_USAGE_CCS_E)
+      resolve_op = ISL_AUX_OP_FULL_RESOLVE;
+
+   if (resolve_op == ISL_AUX_OP_NONE)
+      return;
 
    /* Perform a resolve to synchronize data between the main and aux buffer.
     * Before we begin, we must satisfy the cache flushing requirement specified
@@ -818,47 +1108,27 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
    cmd_buffer->state.pending_pipe_bits |=
       ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | ANV_PIPE_CS_STALL_BIT;
 
-   for (uint32_t level = base_level; level < last_level_num; level++) {
+   for (uint32_t l = 0; l < level_count; l++) {
+      uint32_t level = base_level + l;
 
-      /* The number of layers changes at each 3D miplevel. */
-      if (image->type == VK_IMAGE_TYPE_3D) {
-         layer_count = MIN2(layer_count, anv_image_aux_layers(image, aspect, level));
+      uint32_t aux_layers = anv_image_aux_layers(image, aspect, level);
+      if (base_layer >= aux_layers)
+         break; /* We will only get fewer layers as level increases */
+      uint32_t level_layer_count =
+         MIN2(layer_count, aux_layers - base_layer);
+
+      for (uint32_t a = 0; a < level_layer_count; a++) {
+         uint32_t array_layer = base_layer + a;
+         if (image->samples == 1) {
+            anv_cmd_predicated_ccs_resolve(cmd_buffer, image, aspect,
+                                           level, array_layer, resolve_op,
+                                           final_fast_clear);
+         } else {
+            anv_cmd_predicated_mcs_resolve(cmd_buffer, image, aspect,
+                                           array_layer, resolve_op,
+                                           final_fast_clear);
+         }
       }
-
-      genX(load_needs_resolve_predicate)(cmd_buffer, image, aspect, level);
-
-      enum isl_aux_usage aux_usage =
-         image->planes[plane].aux_usage == ISL_AUX_USAGE_NONE ?
-         ISL_AUX_USAGE_CCS_D : image->planes[plane].aux_usage;
-
-      /* Create a surface state with the right clear color and perform the
-       * resolve.
-       */
-      struct anv_surface_state surface_state;
-      surface_state.state = anv_cmd_buffer_alloc_surface_state(cmd_buffer);
-      anv_image_fill_surface_state(cmd_buffer->device,
-                                   image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                   &(struct isl_view) {
-                                      .format = image->planes[plane].surface.isl.format,
-                                      .swizzle = ISL_SWIZZLE_IDENTITY,
-                                      .base_level = level,
-                                      .levels = 1,
-                                      .base_array_layer = base_layer,
-                                      .array_len = layer_count,
-                                   },
-                                   ISL_SURF_USAGE_RENDER_TARGET_BIT,
-                                   aux_usage, NULL, 0,
-                                   &surface_state, NULL);
-      add_image_relocs(cmd_buffer, image, 0, surface_state);
-      genX(copy_fast_clear_dwords)(cmd_buffer, surface_state.state, image,
-                                   aspect, level, false /* copy to ss */);
-      anv_ccs_resolve(cmd_buffer, surface_state.state, image,
-                      aspect, level, layer_count,
-                      image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E ?
-                      BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL :
-                      BLORP_FAST_CLEAR_OP_RESOLVE_FULL);
-
-      genX(set_image_needs_resolve)(cmd_buffer, image, aspect, level, false);
    }
 
    cmd_buffer->state.pending_pipe_bits |=
@@ -943,32 +1213,45 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
          struct anv_render_pass_attachment *att = &pass->attachments[i];
          VkImageAspectFlags att_aspects = vk_format_aspects(att->format);
          VkImageAspectFlags clear_aspects = 0;
+         VkImageAspectFlags load_aspects = 0;
 
          if (att_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
             /* color attachment */
             if (att->load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
                clear_aspects |= VK_IMAGE_ASPECT_COLOR_BIT;
+            } else if (att->load_op == VK_ATTACHMENT_LOAD_OP_LOAD) {
+               load_aspects |= VK_IMAGE_ASPECT_COLOR_BIT;
             }
          } else {
             /* depthstencil attachment */
-            if ((att_aspects & VK_IMAGE_ASPECT_DEPTH_BIT) &&
-                att->load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
-               clear_aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+            if (att_aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
+               if (att->load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
+                  clear_aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+               } else if (att->load_op == VK_ATTACHMENT_LOAD_OP_LOAD) {
+                  load_aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+               }
             }
-            if ((att_aspects & VK_IMAGE_ASPECT_STENCIL_BIT) &&
-                att->stencil_load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
-               clear_aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            if (att_aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
+               if (att->stencil_load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
+                  clear_aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+               } else if (att->stencil_load_op == VK_ATTACHMENT_LOAD_OP_LOAD) {
+                  load_aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+               }
             }
          }
 
          state->attachments[i].current_layout = att->initial_layout;
          state->attachments[i].pending_clear_aspects = clear_aspects;
+         state->attachments[i].pending_load_aspects = load_aspects;
          if (clear_aspects)
             state->attachments[i].clear_value = begin->pClearValues[i];
 
          struct anv_image_view *iview = framebuffer->attachments[i];
          anv_assert(iview->vk_format == att->format);
          anv_assert(iview->n_planes == 1);
+
+         const uint32_t num_layers = iview->planes[0].isl.array_len;
+         state->attachments[i].pending_clear_views = (1 << num_layers) - 1;
 
          union isl_color_value clear_color = { .u32 = { 0, } };
          if (att_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
@@ -991,12 +1274,9 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
             add_image_view_relocs(cmd_buffer, iview, 0,
                                   state->attachments[i].color);
          } else {
-            /* This field will be initialized after the first subpass
-             * transition.
-             */
-            state->attachments[i].aux_usage = ISL_AUX_USAGE_NONE;
-
-            state->attachments[i].input_aux_usage = ISL_AUX_USAGE_NONE;
+            depth_stencil_attachment_compute_aux_usage(cmd_buffer->device,
+                                                       state, i,
+                                                       begin->renderArea);
          }
 
          if (need_input_attachment_state(&pass->attachments[i])) {
@@ -1062,6 +1342,14 @@ genX(BeginCommandBuffer)(
    if (cmd_buffer->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY)
       cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_VF_CACHE_INVALIDATE_BIT;
 
+   /* We send an "Indirect State Pointers Disable" packet at
+    * EndCommandBuffer, so all push contant packets are ignored during a
+    * context restore. Documentation says after that command, we need to
+    * emit push constants again before any rendering operation. So we
+    * flag them dirty here to make sure they get emitted.
+    */
+   cmd_buffer->state.push_constants_dirty |= VK_SHADER_STAGE_ALL_GRAPHICS;
+
    VkResult result = VK_SUCCESS;
    if (cmd_buffer->usage_flags &
        VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT) {
@@ -1070,15 +1358,76 @@ genX(BeginCommandBuffer)(
          anv_render_pass_from_handle(pBeginInfo->pInheritanceInfo->renderPass);
       cmd_buffer->state.subpass =
          &cmd_buffer->state.pass->subpasses[pBeginInfo->pInheritanceInfo->subpass];
-      cmd_buffer->state.framebuffer = NULL;
+
+      /* This is optional in the inheritance info. */
+      cmd_buffer->state.framebuffer =
+         anv_framebuffer_from_handle(pBeginInfo->pInheritanceInfo->framebuffer);
 
       result = genX(cmd_buffer_setup_attachments)(cmd_buffer,
                                                   cmd_buffer->state.pass, NULL);
 
-      cmd_buffer->state.dirty |= ANV_CMD_DIRTY_RENDER_TARGETS;
+      /* Record that HiZ is enabled if we can. */
+      if (cmd_buffer->state.framebuffer) {
+         const struct anv_image_view * const iview =
+            anv_cmd_buffer_get_depth_stencil_view(cmd_buffer);
+
+         if (iview) {
+            VkImageLayout layout =
+                cmd_buffer->state.subpass->depth_stencil_attachment.layout;
+
+            enum isl_aux_usage aux_usage =
+               anv_layout_to_aux_usage(&cmd_buffer->device->info, iview->image,
+                                       VK_IMAGE_ASPECT_DEPTH_BIT, layout);
+
+            cmd_buffer->state.hiz_enabled = aux_usage == ISL_AUX_USAGE_HIZ;
+         }
+      }
+
+      cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_RENDER_TARGETS;
    }
 
    return result;
+}
+
+/* From the PRM, Volume 2a:
+ *
+ *    "Indirect State Pointers Disable
+ *
+ *    At the completion of the post-sync operation associated with this pipe
+ *    control packet, the indirect state pointers in the hardware are
+ *    considered invalid; the indirect pointers are not saved in the context.
+ *    If any new indirect state commands are executed in the command stream
+ *    while the pipe control is pending, the new indirect state commands are
+ *    preserved.
+ *
+ *    [DevIVB+]: Using Invalidate State Pointer (ISP) only inhibits context
+ *    restoring of Push Constant (3DSTATE_CONSTANT_*) commands. Push Constant
+ *    commands are only considered as Indirect State Pointers. Once ISP is
+ *    issued in a context, SW must initialize by programming push constant
+ *    commands for all the shaders (at least to zero length) before attempting
+ *    any rendering operation for the same context."
+ *
+ * 3DSTATE_CONSTANT_* packets are restored during a context restore,
+ * even though they point to a BO that has been already unreferenced at
+ * the end of the previous batch buffer. This has been fine so far since
+ * we are protected by these scratch page (every address not covered by
+ * a BO should be pointing to the scratch page). But on CNL, it is
+ * causing a GPU hang during context restore at the 3DSTATE_CONSTANT_*
+ * instruction.
+ *
+ * The flag "Indirect State Pointers Disable" in PIPE_CONTROL tells the
+ * hardware to ignore previous 3DSTATE_CONSTANT_* packets during a
+ * context restore, so the mentioned hang doesn't happen. However,
+ * software must program push constant commands for all stages prior to
+ * rendering anything. So we flag them dirty in BeginCommandBuffer.
+ */
+static void
+emit_isp_disable(struct anv_cmd_buffer *cmd_buffer)
+{
+   anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
+         pc.IndirectStatePointersDisable = true;
+         pc.CommandStreamerStallEnable = true;
+   }
 }
 
 VkResult
@@ -1096,6 +1445,8 @@ genX(EndCommandBuffer)(
    genX(cmd_buffer_enable_pma_fix)(cmd_buffer, false);
 
    genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+
+   emit_isp_disable(cmd_buffer);
 
    anv_cmd_buffer_end_batch_buffer(cmd_buffer);
 
@@ -1150,6 +1501,15 @@ genX(CmdExecuteCommands)(
 
       anv_cmd_buffer_add_secondary(primary, secondary);
    }
+
+   /* The secondary may have selected a different pipeline (3D or compute) and
+    * may have changed the current L3$ configuration.  Reset our tracking
+    * variables to invalid values to ensure that we re-emit these in the case
+    * where we do any draws or compute dispatches from the primary after the
+    * secondary has returned.
+    */
+   primary->state.current_pipeline = UINT32_MAX;
+   primary->state.current_l3_config = NULL;
 
    /* Each of the secondary command buffers will use its own state base
     * address.  We need to re-emit state base address for the primary after
@@ -1442,12 +1802,20 @@ void genX(CmdPipelineBarrier)(
             anv_image_expand_aspects(image, range->aspectMask);
          uint32_t aspect_bit;
 
+         uint32_t base_layer, layer_count;
+         if (image->type == VK_IMAGE_TYPE_3D) {
+            base_layer = 0;
+            layer_count = anv_minify(image->extent.depth, range->baseMipLevel);
+         } else {
+            base_layer = range->baseArrayLayer;
+            layer_count = anv_get_layerCount(image, range);
+         }
+
          anv_foreach_image_aspect_bit(aspect_bit, image, color_aspects) {
             transition_color_buffer(cmd_buffer, image, 1UL << aspect_bit,
                                     range->baseMipLevel,
                                     anv_get_levelCount(image, range),
-                                    range->baseArrayLayer,
-                                    anv_get_layerCount(image, range),
+                                    base_layer, layer_count,
                                     pImageMemoryBarriers[i].oldLayout,
                                     pImageMemoryBarriers[i].newLayout);
          }
@@ -1462,7 +1830,8 @@ void genX(CmdPipelineBarrier)(
 static void
 cmd_buffer_alloc_push_constants(struct anv_cmd_buffer *cmd_buffer)
 {
-   VkShaderStageFlags stages = cmd_buffer->state.pipeline->active_stages;
+   VkShaderStageFlags stages =
+      cmd_buffer->state.gfx.base.pipeline->active_stages;
 
    /* In order to avoid thrash, we assume that vertex and fragment stages
     * always exist.  In the rare case where one is missing *and* the other
@@ -1525,25 +1894,55 @@ cmd_buffer_alloc_push_constants(struct anv_cmd_buffer *cmd_buffer)
    cmd_buffer->state.push_constants_dirty |= VK_SHADER_STAGE_ALL_GRAPHICS;
 }
 
+static const struct anv_descriptor *
+anv_descriptor_for_binding(const struct anv_cmd_pipeline_state *pipe_state,
+                           const struct anv_pipeline_binding *binding)
+{
+   assert(binding->set < MAX_SETS);
+   const struct anv_descriptor_set *set =
+      pipe_state->descriptors[binding->set];
+   const uint32_t offset =
+      set->layout->binding[binding->binding].descriptor_index;
+   return &set->descriptors[offset + binding->index];
+}
+
+static uint32_t
+dynamic_offset_for_binding(const struct anv_cmd_pipeline_state *pipe_state,
+                           const struct anv_pipeline_binding *binding)
+{
+   assert(binding->set < MAX_SETS);
+   const struct anv_descriptor_set *set =
+      pipe_state->descriptors[binding->set];
+
+   uint32_t dynamic_offset_idx =
+      pipe_state->layout->set[binding->set].dynamic_offset_start +
+      set->layout->binding[binding->binding].dynamic_offset_index +
+      binding->index;
+
+   return pipe_state->dynamic_offsets[dynamic_offset_idx];
+}
+
 static VkResult
 emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
                    gl_shader_stage stage,
                    struct anv_state *bt_state)
 {
    struct anv_subpass *subpass = cmd_buffer->state.subpass;
+   struct anv_cmd_pipeline_state *pipe_state;
    struct anv_pipeline *pipeline;
    uint32_t bias, state_offset;
 
    switch (stage) {
    case  MESA_SHADER_COMPUTE:
-      pipeline = cmd_buffer->state.compute_pipeline;
+      pipe_state = &cmd_buffer->state.compute.base;
       bias = 1;
       break;
    default:
-      pipeline = cmd_buffer->state.pipeline;
+      pipe_state = &cmd_buffer->state.gfx.base;
       bias = 0;
       break;
    }
+   pipeline = pipe_state->pipeline;
 
    if (!anv_pipeline_has_stage(pipeline, stage)) {
       *bt_state = (struct anv_state) { 0, };
@@ -1565,9 +1964,9 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
    if (stage == MESA_SHADER_COMPUTE &&
-       get_cs_prog_data(cmd_buffer->state.compute_pipeline)->uses_num_work_groups) {
-      struct anv_bo *bo = cmd_buffer->state.num_workgroups_bo;
-      uint32_t bo_offset = cmd_buffer->state.num_workgroups_offset;
+       get_cs_prog_data(pipeline)->uses_num_work_groups) {
+      struct anv_bo *bo = cmd_buffer->state.compute.num_workgroups.bo;
+      uint32_t bo_offset = cmd_buffer->state.compute.num_workgroups.offset;
 
       struct anv_state surface_state;
       surface_state =
@@ -1627,10 +2026,8 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
          continue;
       }
 
-      struct anv_descriptor_set *set =
-         cmd_buffer->state.descriptors[binding->set];
-      uint32_t offset = set->layout->binding[binding->binding].descriptor_index;
-      struct anv_descriptor *desc = &set->descriptors[offset + binding->index];
+      const struct anv_descriptor *desc =
+         anv_descriptor_for_binding(pipe_state, binding);
 
       switch (desc->type) {
       case VK_DESCRIPTOR_TYPE_SAMPLER:
@@ -1704,14 +2101,10 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
 
       case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
       case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
-         uint32_t dynamic_offset_idx =
-            pipeline->layout->set[binding->set].dynamic_offset_start +
-            set->layout->binding[binding->binding].dynamic_offset_index +
-            binding->index;
-
          /* Compute the offset within the buffer */
-         uint64_t offset = desc->offset +
-            cmd_buffer->state.dynamic_offsets[dynamic_offset_idx];
+         uint32_t dynamic_offset =
+            dynamic_offset_for_binding(pipe_state, binding);
+         uint64_t offset = desc->offset + dynamic_offset;
          /* Clamp to the buffer size */
          offset = MIN2(offset, desc->buffer->size);
          /* Clamp the range to the buffer size */
@@ -1758,6 +2151,26 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
  out:
    anv_state_flush(cmd_buffer->device, *bt_state);
 
+#if GEN_GEN >= 11
+   /* The PIPE_CONTROL command description says:
+    *
+    *    "Whenever a Binding Table Index (BTI) used by a Render Taget Message
+    *     points to a different RENDER_SURFACE_STATE, SW must issue a Render
+    *     Target Cache Flush by enabling this bit. When render target flush
+    *     is set due to new association of BTI, PS Scoreboard Stall bit must
+    *     be set in this packet."
+    *
+    * FINISHME: Currently we shuffle around the surface states in the binding
+    * table based on if they are getting used or not. So, we've to do below
+    * pipe control flush for every binding table upload. Make changes so
+    * that we do it only when we modify render target surface states.
+    */
+   anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
+      pc.RenderTargetCacheFlushEnable  = true;
+      pc.StallAtPixelScoreboard        = true;
+   }
+#endif
+
    return VK_SUCCESS;
 }
 
@@ -1766,12 +2179,10 @@ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
               gl_shader_stage stage,
               struct anv_state *state)
 {
-   struct anv_pipeline *pipeline;
-
-   if (stage == MESA_SHADER_COMPUTE)
-      pipeline = cmd_buffer->state.compute_pipeline;
-   else
-      pipeline = cmd_buffer->state.pipeline;
+   struct anv_cmd_pipeline_state *pipe_state =
+      stage == MESA_SHADER_COMPUTE ? &cmd_buffer->state.compute.base :
+                                     &cmd_buffer->state.gfx.base;
+   struct anv_pipeline *pipeline = pipe_state->pipeline;
 
    if (!anv_pipeline_has_stage(pipeline, stage)) {
       *state = (struct anv_state) { 0, };
@@ -1792,10 +2203,8 @@ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
 
    for (uint32_t s = 0; s < map->sampler_count; s++) {
       struct anv_pipeline_binding *binding = &map->sampler_to_descriptor[s];
-      struct anv_descriptor_set *set =
-         cmd_buffer->state.descriptors[binding->set];
-      uint32_t offset = set->layout->binding[binding->binding].descriptor_index;
-      struct anv_descriptor *desc = &set->descriptors[offset + binding->index];
+      const struct anv_descriptor *desc =
+         anv_descriptor_for_binding(pipe_state, binding);
 
       if (desc->type != VK_DESCRIPTOR_TYPE_SAMPLER &&
           desc->type != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
@@ -1821,8 +2230,10 @@ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
 static uint32_t
 flush_descriptor_sets(struct anv_cmd_buffer *cmd_buffer)
 {
+   struct anv_pipeline *pipeline = cmd_buffer->state.gfx.base.pipeline;
+
    VkShaderStageFlags dirty = cmd_buffer->state.descriptors_dirty &
-                              cmd_buffer->state.pipeline->active_stages;
+                              pipeline->active_stages;
 
    VkResult result = VK_SUCCESS;
    anv_foreach_stage(s, dirty) {
@@ -1848,7 +2259,7 @@ flush_descriptor_sets(struct anv_cmd_buffer *cmd_buffer)
       genX(cmd_buffer_emit_state_base_address)(cmd_buffer);
 
       /* Re-emit all active binding tables */
-      dirty |= cmd_buffer->state.pipeline->active_stages;
+      dirty |= pipeline->active_stages;
       anv_foreach_stage(s, dirty) {
          result = emit_samplers(cmd_buffer, s, &cmd_buffer->state.samplers[s]);
          if (result != VK_SUCCESS) {
@@ -1892,6 +2303,9 @@ cmd_buffer_emit_descriptor_pointers(struct anv_cmd_buffer *cmd_buffer,
    };
 
    anv_foreach_stage(s, stages) {
+      assert(s < ARRAY_SIZE(binding_table_opcodes));
+      assert(binding_table_opcodes[s] > 0);
+
       if (cmd_buffer->state.samplers[s].alloc_size > 0) {
          anv_batch_emit(&cmd_buffer->batch,
                         GENX(3DSTATE_SAMPLER_STATE_POINTERS_VS), ssp) {
@@ -1910,9 +2324,13 @@ cmd_buffer_emit_descriptor_pointers(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
-static uint32_t
-cmd_buffer_flush_push_constants(struct anv_cmd_buffer *cmd_buffer)
+static void
+cmd_buffer_flush_push_constants(struct anv_cmd_buffer *cmd_buffer,
+                                VkShaderStageFlags dirty_stages)
 {
+   const struct anv_cmd_graphics_state *gfx_state = &cmd_buffer->state.gfx;
+   const struct anv_pipeline *pipeline = gfx_state->base.pipeline;
+
    static const uint32_t push_constant_opcodes[] = {
       [MESA_SHADER_VERTEX]                      = 21,
       [MESA_SHADER_TESS_CTRL]                   = 25, /* HS */
@@ -1924,45 +2342,126 @@ cmd_buffer_flush_push_constants(struct anv_cmd_buffer *cmd_buffer)
 
    VkShaderStageFlags flushed = 0;
 
-   anv_foreach_stage(stage, cmd_buffer->state.push_constants_dirty) {
-      if (stage == MESA_SHADER_COMPUTE)
-         continue;
+   anv_foreach_stage(stage, dirty_stages) {
+      assert(stage < ARRAY_SIZE(push_constant_opcodes));
+      assert(push_constant_opcodes[stage] > 0);
 
-      struct anv_state state = anv_cmd_buffer_push_constants(cmd_buffer, stage);
+      anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_CONSTANT_VS), c) {
+         c._3DCommandSubOpcode = push_constant_opcodes[stage];
 
-      if (state.offset == 0) {
-         anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_CONSTANT_VS), c)
-            c._3DCommandSubOpcode = push_constant_opcodes[stage];
-      } else {
-         anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_CONSTANT_VS), c) {
-            c._3DCommandSubOpcode = push_constant_opcodes[stage],
-            c.ConstantBody = (struct GENX(3DSTATE_CONSTANT_BODY)) {
-#if GEN_GEN >= 9
-               .Buffer[2] = { &cmd_buffer->device->dynamic_state_pool.block_pool.bo, state.offset },
-               .ReadLength[2] = DIV_ROUND_UP(state.alloc_size, 32),
+         if (anv_pipeline_has_stage(pipeline, stage)) {
+#if GEN_GEN >= 8 || GEN_IS_HASWELL
+            const struct brw_stage_prog_data *prog_data =
+               pipeline->shaders[stage]->prog_data;
+            const struct anv_pipeline_bind_map *bind_map =
+               &pipeline->shaders[stage]->bind_map;
+
+            /* The Skylake PRM contains the following restriction:
+             *
+             *    "The driver must ensure The following case does not occur
+             *     without a flush to the 3D engine: 3DSTATE_CONSTANT_* with
+             *     buffer 3 read length equal to zero committed followed by a
+             *     3DSTATE_CONSTANT_* with buffer 0 read length not equal to
+             *     zero committed."
+             *
+             * To avoid this, we program the buffers in the highest slots.
+             * This way, slot 0 is only used if slot 3 is also used.
+             */
+            int n = 3;
+
+            for (int i = 3; i >= 0; i--) {
+               const struct brw_ubo_range *range = &prog_data->ubo_ranges[i];
+               if (range->length == 0)
+                  continue;
+
+               const unsigned surface =
+                  prog_data->binding_table.ubo_start + range->block;
+
+               assert(surface <= bind_map->surface_count);
+               const struct anv_pipeline_binding *binding =
+                  &bind_map->surface_to_descriptor[surface];
+
+               const struct anv_descriptor *desc =
+                  anv_descriptor_for_binding(&gfx_state->base, binding);
+
+               struct anv_address read_addr;
+               uint32_t read_len;
+               if (desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+                  read_len = MIN2(range->length,
+                     DIV_ROUND_UP(desc->buffer_view->range, 32) - range->start);
+                  read_addr = (struct anv_address) {
+                     .bo = desc->buffer_view->bo,
+                     .offset = desc->buffer_view->offset +
+                               range->start * 32,
+                  };
+               } else {
+                  assert(desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
+
+                  uint32_t dynamic_offset =
+                     dynamic_offset_for_binding(&gfx_state->base, binding);
+                  uint32_t buf_offset =
+                     MIN2(desc->offset + dynamic_offset, desc->buffer->size);
+                  uint32_t buf_range =
+                     MIN2(desc->range, desc->buffer->size - buf_offset);
+
+                  read_len = MIN2(range->length,
+                     DIV_ROUND_UP(buf_range, 32) - range->start);
+                  read_addr = (struct anv_address) {
+                     .bo = desc->buffer->bo,
+                     .offset = desc->buffer->offset + buf_offset +
+                               range->start * 32,
+                  };
+               }
+
+               if (read_len > 0) {
+                  c.ConstantBody.Buffer[n] = read_addr;
+                  c.ConstantBody.ReadLength[n] = read_len;
+                  n--;
+               }
+            }
+
+            struct anv_state state =
+               anv_cmd_buffer_push_constants(cmd_buffer, stage);
+
+            if (state.alloc_size > 0) {
+               c.ConstantBody.Buffer[n] = (struct anv_address) {
+                  .bo = &cmd_buffer->device->dynamic_state_pool.block_pool.bo,
+                  .offset = state.offset,
+               };
+               c.ConstantBody.ReadLength[n] =
+                  DIV_ROUND_UP(state.alloc_size, 32);
+            }
 #else
-               .Buffer[0] = { .offset = state.offset },
-               .ReadLength[0] = DIV_ROUND_UP(state.alloc_size, 32),
+            /* For Ivy Bridge, the push constants packets have a different
+             * rule that would require us to iterate in the other direction
+             * and possibly mess around with dynamic state base address.
+             * Don't bother; just emit regular push constants at n = 0.
+             */
+            struct anv_state state =
+               anv_cmd_buffer_push_constants(cmd_buffer, stage);
+
+            if (state.alloc_size > 0) {
+               c.ConstantBody.Buffer[0].offset = state.offset,
+               c.ConstantBody.ReadLength[0] =
+                  DIV_ROUND_UP(state.alloc_size, 32);
+            }
 #endif
-            };
          }
       }
 
       flushed |= mesa_to_vk_shader_stage(stage);
    }
 
-   cmd_buffer->state.push_constants_dirty &= ~VK_SHADER_STAGE_ALL_GRAPHICS;
-
-   return flushed;
+   cmd_buffer->state.push_constants_dirty &= ~flushed;
 }
 
 void
 genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
 {
-   struct anv_pipeline *pipeline = cmd_buffer->state.pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.gfx.base.pipeline;
    uint32_t *p;
 
-   uint32_t vb_emit = cmd_buffer->state.vb_dirty & pipeline->vb_used;
+   uint32_t vb_emit = cmd_buffer->state.gfx.vb_dirty & pipeline->vb_used;
 
    assert((pipeline->active_stages & VK_SHADER_STAGE_COMPUTE_BIT) == 0);
 
@@ -2013,16 +2512,15 @@ genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
       }
    }
 
-   cmd_buffer->state.vb_dirty &= ~vb_emit;
+   cmd_buffer->state.gfx.vb_dirty &= ~vb_emit;
 
-   if (cmd_buffer->state.dirty & ANV_CMD_DIRTY_PIPELINE) {
+   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_PIPELINE) {
       anv_batch_emit_batch(&cmd_buffer->batch, &pipeline->batch);
 
       /* The exact descriptor layout is pulled from the pipeline, so we need
        * to re-emit binding tables on every pipeline change.
        */
-      cmd_buffer->state.descriptors_dirty |=
-         cmd_buffer->state.pipeline->active_stages;
+      cmd_buffer->state.descriptors_dirty |= pipeline->active_stages;
 
       /* If the pipeline changed, we may need to re-allocate push constant
        * space in the URB.
@@ -2053,7 +2551,7 @@ genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
 #endif
 
    /* Render targets live in the same binding table as fragment descriptors */
-   if (cmd_buffer->state.dirty & ANV_CMD_DIRTY_RENDER_TARGETS)
+   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_RENDER_TARGETS)
       cmd_buffer->state.descriptors_dirty |= VK_SHADER_STAGE_FRAGMENT_BIT;
 
    /* We emit the binding tables and sampler tables first, then emit push
@@ -2067,31 +2565,28 @@ genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
    if (cmd_buffer->state.descriptors_dirty)
       dirty = flush_descriptor_sets(cmd_buffer);
 
-   if (cmd_buffer->state.push_constants_dirty) {
-#if GEN_GEN >= 9
-      /* On Sky Lake and later, the binding table pointers commands are
-       * what actually flush the changes to push constant state so we need
-       * to dirty them so they get re-emitted below.
+   if (dirty || cmd_buffer->state.push_constants_dirty) {
+      /* Because we're pushing UBOs, we have to push whenever either
+       * descriptors or push constants is dirty.
        */
-      dirty |= cmd_buffer_flush_push_constants(cmd_buffer);
-#else
-      cmd_buffer_flush_push_constants(cmd_buffer);
-#endif
+      dirty |= cmd_buffer->state.push_constants_dirty;
+      dirty &= ANV_STAGE_MASK & VK_SHADER_STAGE_ALL_GRAPHICS;
+      cmd_buffer_flush_push_constants(cmd_buffer, dirty);
    }
 
    if (dirty)
       cmd_buffer_emit_descriptor_pointers(cmd_buffer, dirty);
 
-   if (cmd_buffer->state.dirty & ANV_CMD_DIRTY_DYNAMIC_VIEWPORT)
+   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_VIEWPORT)
       gen8_cmd_buffer_emit_viewport(cmd_buffer);
 
-   if (cmd_buffer->state.dirty & (ANV_CMD_DIRTY_DYNAMIC_VIEWPORT |
+   if (cmd_buffer->state.gfx.dirty & (ANV_CMD_DIRTY_DYNAMIC_VIEWPORT |
                                   ANV_CMD_DIRTY_PIPELINE)) {
       gen8_cmd_buffer_emit_depth_viewport(cmd_buffer,
                                           pipeline->depth_clamp_enable);
    }
 
-   if (cmd_buffer->state.dirty & ANV_CMD_DIRTY_DYNAMIC_SCISSOR)
+   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_SCISSOR)
       gen7_cmd_buffer_emit_scissor(cmd_buffer);
 
    genX(cmd_buffer_flush_dynamic_state)(cmd_buffer);
@@ -2170,7 +2665,7 @@ void genX(CmdDraw)(
     uint32_t                                    firstInstance)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct anv_pipeline *pipeline = cmd_buffer->state.pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.gfx.base.pipeline;
    const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
@@ -2208,7 +2703,7 @@ void genX(CmdDrawIndexed)(
     uint32_t                                    firstInstance)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct anv_pipeline *pipeline = cmd_buffer->state.pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.gfx.base.pipeline;
    const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
@@ -2247,23 +2742,6 @@ void genX(CmdDrawIndexed)(
 
 /* MI_MATH only exists on Haswell+ */
 #if GEN_IS_HASWELL || GEN_GEN >= 8
-
-static uint32_t
-mi_alu(uint32_t opcode, uint32_t op1, uint32_t op2)
-{
-   struct GENX(MI_MATH_ALU_INSTRUCTION) instr = {
-      .ALUOpcode = opcode,
-      .Operand1 = op1,
-      .Operand2 = op2,
-   };
-
-   uint32_t dw;
-   GENX(MI_MATH_ALU_INSTRUCTION_pack)(NULL, &dw, &instr);
-
-   return dw;
-}
-
-#define CS_GPR(n) (0x2600 + (n) * 8)
 
 /* Emit dwords to multiply GPR0 by N */
 static void
@@ -2360,7 +2838,7 @@ void genX(CmdDrawIndirect)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
-   struct anv_pipeline *pipeline = cmd_buffer->state.pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.gfx.base.pipeline;
    const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
@@ -2398,7 +2876,7 @@ void genX(CmdDrawIndexedIndirect)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
-   struct anv_pipeline *pipeline = cmd_buffer->state.pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.gfx.base.pipeline;
    const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
@@ -2431,7 +2909,7 @@ void genX(CmdDrawIndexedIndirect)(
 static VkResult
 flush_compute_descriptor_set(struct anv_cmd_buffer *cmd_buffer)
 {
-   struct anv_pipeline *pipeline = cmd_buffer->state.compute_pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.compute.base.pipeline;
    struct anv_state surfaces = { 0, }, samplers = { 0, };
    VkResult result;
 
@@ -2487,7 +2965,7 @@ flush_compute_descriptor_set(struct anv_cmd_buffer *cmd_buffer)
 void
 genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
 {
-   struct anv_pipeline *pipeline = cmd_buffer->state.compute_pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.compute.base.pipeline;
    MAYBE_UNUSED VkResult result;
 
    assert(pipeline->active_stages == VK_SHADER_STAGE_COMPUTE_BIT);
@@ -2496,7 +2974,7 @@ genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
 
    genX(flush_pipeline_select_gpgpu)(cmd_buffer);
 
-   if (cmd_buffer->state.compute_dirty & ANV_CMD_DIRTY_PIPELINE) {
+   if (cmd_buffer->state.compute.pipeline_dirty) {
       /* From the Sky Lake PRM Vol 2a, MEDIA_VFE_STATE:
        *
        *    "A stalling PIPE_CONTROL is required before MEDIA_VFE_STATE unless
@@ -2512,7 +2990,7 @@ genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
    }
 
    if ((cmd_buffer->state.descriptors_dirty & VK_SHADER_STAGE_COMPUTE_BIT) ||
-       (cmd_buffer->state.compute_dirty & ANV_CMD_DIRTY_PIPELINE)) {
+       cmd_buffer->state.compute.pipeline_dirty) {
       /* FIXME: figure out descriptors for gen7 */
       result = flush_compute_descriptor_set(cmd_buffer);
       if (result != VK_SUCCESS)
@@ -2533,7 +3011,7 @@ genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
       }
    }
 
-   cmd_buffer->state.compute_dirty = 0;
+   cmd_buffer->state.compute.pipeline_dirty = false;
 
    genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
 }
@@ -2557,15 +3035,60 @@ verify_cmd_parser(const struct anv_device *device,
 
 #endif
 
+static void
+anv_cmd_buffer_push_base_group_id(struct anv_cmd_buffer *cmd_buffer,
+                                  uint32_t baseGroupX,
+                                  uint32_t baseGroupY,
+                                  uint32_t baseGroupZ)
+{
+   if (anv_batch_has_error(&cmd_buffer->batch))
+      return;
+
+   VkResult result =
+      anv_cmd_buffer_ensure_push_constant_field(cmd_buffer, MESA_SHADER_COMPUTE,
+                                                base_work_group_id);
+   if (result != VK_SUCCESS) {
+      cmd_buffer->batch.status = result;
+      return;
+   }
+
+   struct anv_push_constants *push =
+      cmd_buffer->state.push_constants[MESA_SHADER_COMPUTE];
+   if (push->base_work_group_id[0] != baseGroupX ||
+       push->base_work_group_id[1] != baseGroupY ||
+       push->base_work_group_id[2] != baseGroupZ) {
+      push->base_work_group_id[0] = baseGroupX;
+      push->base_work_group_id[1] = baseGroupY;
+      push->base_work_group_id[2] = baseGroupZ;
+
+      cmd_buffer->state.push_constants_dirty |= VK_SHADER_STAGE_COMPUTE_BIT;
+   }
+}
+
 void genX(CmdDispatch)(
     VkCommandBuffer                             commandBuffer,
     uint32_t                                    x,
     uint32_t                                    y,
     uint32_t                                    z)
 {
+   genX(CmdDispatchBase)(commandBuffer, 0, 0, 0, x, y, z);
+}
+
+void genX(CmdDispatchBase)(
+    VkCommandBuffer                             commandBuffer,
+    uint32_t                                    baseGroupX,
+    uint32_t                                    baseGroupY,
+    uint32_t                                    baseGroupZ,
+    uint32_t                                    groupCountX,
+    uint32_t                                    groupCountY,
+    uint32_t                                    groupCountZ)
+{
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct anv_pipeline *pipeline = cmd_buffer->state.compute_pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.compute.base.pipeline;
    const struct brw_cs_prog_data *prog_data = get_cs_prog_data(pipeline);
+
+   anv_cmd_buffer_push_base_group_id(cmd_buffer, baseGroupX,
+                                     baseGroupY, baseGroupZ);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
       return;
@@ -2574,13 +3097,14 @@ void genX(CmdDispatch)(
       struct anv_state state =
          anv_cmd_buffer_alloc_dynamic_state(cmd_buffer, 12, 4);
       uint32_t *sizes = state.map;
-      sizes[0] = x;
-      sizes[1] = y;
-      sizes[2] = z;
+      sizes[0] = groupCountX;
+      sizes[1] = groupCountY;
+      sizes[2] = groupCountZ;
       anv_state_flush(cmd_buffer->device, state);
-      cmd_buffer->state.num_workgroups_offset = state.offset;
-      cmd_buffer->state.num_workgroups_bo =
-         &cmd_buffer->device->dynamic_state_pool.block_pool.bo;
+      cmd_buffer->state.compute.num_workgroups = (struct anv_address) {
+         .bo = &cmd_buffer->device->dynamic_state_pool.block_pool.bo,
+         .offset = state.offset,
+      };
    }
 
    genX(cmd_buffer_flush_compute_state)(cmd_buffer);
@@ -2590,9 +3114,9 @@ void genX(CmdDispatch)(
       ggw.ThreadDepthCounterMaximum    = 0;
       ggw.ThreadHeightCounterMaximum   = 0;
       ggw.ThreadWidthCounterMaximum    = prog_data->threads - 1;
-      ggw.ThreadGroupIDXDimension      = x;
-      ggw.ThreadGroupIDYDimension      = y;
-      ggw.ThreadGroupIDZDimension      = z;
+      ggw.ThreadGroupIDXDimension      = groupCountX;
+      ggw.ThreadGroupIDYDimension      = groupCountY;
+      ggw.ThreadGroupIDZDimension      = groupCountZ;
       ggw.RightExecutionMask           = pipeline->cs_right_mask;
       ggw.BottomExecutionMask          = 0xffffffff;
    }
@@ -2611,11 +3135,13 @@ void genX(CmdDispatchIndirect)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
-   struct anv_pipeline *pipeline = cmd_buffer->state.compute_pipeline;
+   struct anv_pipeline *pipeline = cmd_buffer->state.compute.base.pipeline;
    const struct brw_cs_prog_data *prog_data = get_cs_prog_data(pipeline);
    struct anv_bo *bo = buffer->bo;
    uint32_t bo_offset = buffer->offset + offset;
    struct anv_batch *batch = &cmd_buffer->batch;
+
+   anv_cmd_buffer_push_base_group_id(cmd_buffer, 0, 0, 0);
 
 #if GEN_GEN == 7
    /* Linux 4.4 added command parser version 5 which allows the GPGPU
@@ -2627,8 +3153,10 @@ void genX(CmdDispatchIndirect)(
 #endif
 
    if (prog_data->uses_num_work_groups) {
-      cmd_buffer->state.num_workgroups_offset = bo_offset;
-      cmd_buffer->state.num_workgroups_bo = bo;
+      cmd_buffer->state.compute.num_workgroups = (struct anv_address) {
+         .bo = bo,
+         .offset = bo_offset,
+      };
    }
 
    genX(cmd_buffer_flush_compute_state)(cmd_buffer);
@@ -2700,6 +3228,8 @@ static void
 genX(flush_pipeline_select)(struct anv_cmd_buffer *cmd_buffer,
                             uint32_t pipeline)
 {
+   UNUSED const struct gen_device_info *devinfo = &cmd_buffer->device->info;
+
    if (cmd_buffer->state.current_pipeline == pipeline)
       return;
 
@@ -2749,6 +3279,25 @@ genX(flush_pipeline_select)(struct anv_cmd_buffer *cmd_buffer,
 #endif
       ps.PipelineSelection = pipeline;
    }
+
+#if GEN_GEN == 9
+   if (devinfo->is_geminilake) {
+      /* Project: DevGLK
+       *
+       * "This chicken bit works around a hardware issue with barrier logic
+       *  encountered when switching between GPGPU and 3D pipelines.  To
+       *  workaround the issue, this mode bit should be set after a pipeline
+       *  is selected."
+       */
+      uint32_t scec;
+      anv_pack_struct(&scec, GENX(SLICE_COMMON_ECO_CHICKEN1),
+                      .GLKBarrierMode =
+                          pipeline == GPGPU ? GLK_BARRIER_MODE_GPGPU
+                                            : GLK_BARRIER_MODE_3D_HULL,
+                      .GLKBarrierModeMask = 1);
+      emit_lri(&cmd_buffer->batch, GENX(SLICE_COMMON_ECO_CHICKEN1_num), scec);
+   }
+#endif
 
    cmd_buffer->state.current_pipeline = pipeline;
 }
@@ -2868,213 +3417,51 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
    cmd_buffer->state.hiz_enabled = info.hiz_usage == ISL_AUX_USAGE_HIZ;
 }
 
-
 /**
- * @brief Perform any layout transitions required at the beginning and/or end
- *        of the current subpass for depth buffers.
- *
- * TODO: Consider preprocessing the attachment reference array at render pass
- *       create time to determine if no layout transition is needed at the
- *       beginning and/or end of each subpass.
- *
- * @param cmd_buffer The command buffer the transition is happening within.
- * @param subpass_end If true, marks that the transition is happening at the
- *                    end of the subpass.
+ * This ANDs the view mask of the current subpass with the pending clear
+ * views in the attachment to get the mask of views active in the subpass
+ * that still need to be cleared.
  */
-static void
-cmd_buffer_subpass_transition_layouts(struct anv_cmd_buffer * const cmd_buffer,
-                                      const bool subpass_end)
+static inline uint32_t
+get_multiview_subpass_clear_mask(const struct anv_cmd_state *cmd_state,
+                                 const struct anv_attachment_state *att_state)
 {
-   /* We need a non-NULL command buffer. */
-   assert(cmd_buffer);
-
-   const struct anv_cmd_state * const cmd_state = &cmd_buffer->state;
-   const struct anv_subpass * const subpass = cmd_state->subpass;
-
-   /* This function must be called within a subpass. */
-   assert(subpass);
-
-   /* If there are attachment references, the array shouldn't be NULL.
-    */
-   if (subpass->attachment_count > 0)
-      assert(subpass->attachments);
-
-   /* Iterate over the array of attachment references. */
-   for (const VkAttachmentReference *att_ref = subpass->attachments;
-        att_ref < subpass->attachments + subpass->attachment_count; att_ref++) {
-
-      /* If the attachment is unused, we can't perform a layout transition. */
-      if (att_ref->attachment == VK_ATTACHMENT_UNUSED)
-         continue;
-
-      /* This attachment index shouldn't go out of bounds. */
-      assert(att_ref->attachment < cmd_state->pass->attachment_count);
-
-      const struct anv_render_pass_attachment * const att_desc =
-         &cmd_state->pass->attachments[att_ref->attachment];
-      struct anv_attachment_state * const att_state =
-         &cmd_buffer->state.attachments[att_ref->attachment];
-
-      /* The attachment should not be used in a subpass after its last. */
-      assert(att_desc->last_subpass_idx >= anv_get_subpass_id(cmd_state));
-
-      if (subpass_end && anv_get_subpass_id(cmd_state) <
-          att_desc->last_subpass_idx) {
-         /* We're calling this function on a buffer twice in one subpass and
-          * this is not the last use of the buffer. The layout should not have
-          * changed from the first call and no transition is necessary.
-          */
-         assert(att_state->current_layout == att_ref->layout ||
-                att_state->current_layout ==
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-         continue;
-      }
-
-      /* The attachment index must be less than the number of attachments
-       * within the framebuffer.
-       */
-      assert(att_ref->attachment < cmd_state->framebuffer->attachment_count);
-
-      const struct anv_image_view * const iview =
-         cmd_state->framebuffer->attachments[att_ref->attachment];
-      const struct anv_image * const image = iview->image;
-
-      /* Get the appropriate target layout for this attachment. */
-      VkImageLayout target_layout;
-
-      /* A resolve is necessary before use as an input attachment if the clear
-       * color or auxiliary buffer usage isn't supported by the sampler.
-       */
-      const bool input_needs_resolve =
-            (att_state->fast_clear && !att_state->clear_color_is_zero_one) ||
-            att_state->input_aux_usage != att_state->aux_usage;
-      if (subpass_end) {
-         target_layout = att_desc->final_layout;
-      } else if (iview->aspect_mask & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV &&
-                 !input_needs_resolve) {
-         /* Layout transitions before the final only help to enable sampling as
-          * an input attachment. If the input attachment supports sampling
-          * using the auxiliary surface, we can skip such transitions by making
-          * the target layout one that is CCS-aware.
-          */
-         target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-      } else {
-         target_layout = att_ref->layout;
-      }
-
-      /* Perform the layout transition. */
-      if (image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
-         transition_depth_buffer(cmd_buffer, image,
-                                 att_state->current_layout, target_layout);
-         att_state->aux_usage =
-            anv_layout_to_aux_usage(&cmd_buffer->device->info, image,
-                                    VK_IMAGE_ASPECT_DEPTH_BIT, target_layout);
-      } else if (image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
-         assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
-         transition_color_buffer(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                 iview->planes[0].isl.base_level, 1,
-                                 iview->planes[0].isl.base_array_layer,
-                                 iview->planes[0].isl.array_len,
-                                 att_state->current_layout, target_layout);
-      }
-
-      att_state->current_layout = target_layout;
-   }
+   return cmd_state->subpass->view_mask & att_state->pending_clear_views;
 }
 
-/* Update the clear value dword(s) in surface state objects or the fast clear
- * state buffer entry for the color attachments used in this subpass.
- */
-static void
-cmd_buffer_subpass_sync_fast_clear_values(struct anv_cmd_buffer *cmd_buffer)
+static inline bool
+do_first_layer_clear(const struct anv_cmd_state *cmd_state,
+                     const struct anv_attachment_state *att_state)
 {
-   assert(cmd_buffer && cmd_buffer->state.subpass);
+   if (!cmd_state->subpass->view_mask)
+      return true;
 
-   const struct anv_cmd_state *state = &cmd_buffer->state;
+   uint32_t pending_clear_mask =
+      get_multiview_subpass_clear_mask(cmd_state, att_state);
 
-   /* Iterate through every color attachment used in this subpass. */
-   for (uint32_t i = 0; i < state->subpass->color_count; ++i) {
-
-      /* The attachment should be one of the attachments described in the
-       * render pass and used in the subpass.
-       */
-      const uint32_t a = state->subpass->color_attachments[i].attachment;
-      if (a == VK_ATTACHMENT_UNUSED)
-         continue;
-
-      assert(a < state->pass->attachment_count);
-
-      /* Store some information regarding this attachment. */
-      const struct anv_attachment_state *att_state = &state->attachments[a];
-      const struct anv_image_view *iview = state->framebuffer->attachments[a];
-      const struct anv_render_pass_attachment *rp_att =
-         &state->pass->attachments[a];
-
-      if (att_state->aux_usage == ISL_AUX_USAGE_NONE)
-         continue;
-
-      /* The fast clear state entry must be updated if a fast clear is going to
-       * happen. The surface state must be updated if the clear value from a
-       * prior fast clear may be needed.
-       */
-      if (att_state->pending_clear_aspects && att_state->fast_clear) {
-         /* Update the fast clear state entry. */
-         genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color.state,
-                                      iview->image,
-                                      VK_IMAGE_ASPECT_COLOR_BIT,
-                                      iview->planes[0].isl.base_level,
-                                      true /* copy from ss */);
-
-         /* Fast-clears impact whether or not a resolve will be necessary. */
-         if (iview->image->planes[0].aux_usage == ISL_AUX_USAGE_CCS_E &&
-             att_state->clear_color_is_zero) {
-            /* This image always has the auxiliary buffer enabled. We can mark
-             * the subresource as not needing a resolve because the clear color
-             * will match what's in every RENDER_SURFACE_STATE object when it's
-             * being used for sampling.
-             */
-            genX(set_image_needs_resolve)(cmd_buffer, iview->image,
-                                          VK_IMAGE_ASPECT_COLOR_BIT,
-                                          iview->planes[0].isl.base_level,
-                                          false);
-         } else {
-            genX(set_image_needs_resolve)(cmd_buffer, iview->image,
-                                          VK_IMAGE_ASPECT_COLOR_BIT,
-                                          iview->planes[0].isl.base_level,
-                                          true);
-         }
-      } else if (rp_att->load_op == VK_ATTACHMENT_LOAD_OP_LOAD) {
-         /* The attachment may have been fast-cleared in a previous render
-          * pass and the value is needed now. Update the surface state(s).
-          *
-          * TODO: Do this only once per render pass instead of every subpass.
-          */
-         genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color.state,
-                                      iview->image,
-                                      VK_IMAGE_ASPECT_COLOR_BIT,
-                                      iview->planes[0].isl.base_level,
-                                      false /* copy to ss */);
-
-         if (need_input_attachment_state(rp_att) &&
-             att_state->input_aux_usage != ISL_AUX_USAGE_NONE) {
-            genX(copy_fast_clear_dwords)(cmd_buffer, att_state->input.state,
-                                         iview->image,
-                                         VK_IMAGE_ASPECT_COLOR_BIT,
-                                         iview->planes[0].isl.base_level,
-                                         false /* copy to ss */);
-         }
-      }
-   }
+   return pending_clear_mask & 1;
 }
 
+static inline bool
+current_subpass_is_last_for_attachment(const struct anv_cmd_state *cmd_state,
+                                       uint32_t att_idx)
+{
+   const uint32_t last_subpass_idx =
+      cmd_state->pass->attachments[att_idx].last_subpass_idx;
+   const struct anv_subpass *last_subpass =
+      &cmd_state->pass->subpasses[last_subpass_idx];
+   return last_subpass == cmd_state->subpass;
+}
 
 static void
-genX(cmd_buffer_set_subpass)(struct anv_cmd_buffer *cmd_buffer,
-                             struct anv_subpass *subpass)
+cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
+                         uint32_t subpass_id)
 {
-   cmd_buffer->state.subpass = subpass;
+   struct anv_cmd_state *cmd_state = &cmd_buffer->state;
+   struct anv_subpass *subpass = &cmd_state->pass->subpasses[subpass_id];
+   cmd_state->subpass = subpass;
 
-   cmd_buffer->state.dirty |= ANV_CMD_DIRTY_RENDER_TARGETS;
+   cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_RENDER_TARGETS;
 
    /* Our implementation of VK_KHR_multiview uses instancing to draw the
     * different views.  If the client asks for instancing, we need to use the
@@ -3084,25 +3471,363 @@ genX(cmd_buffer_set_subpass)(struct anv_cmd_buffer *cmd_buffer,
     * of each subpass.
     */
    if (GEN_GEN == 7)
-      cmd_buffer->state.vb_dirty |= ~0;
+      cmd_buffer->state.gfx.vb_dirty |= ~0;
 
-   /* Perform transitions to the subpass layout before any writes have
-    * occurred.
+   /* It is possible to start a render pass with an old pipeline.  Because the
+    * render pass and subpass index are both baked into the pipeline, this is
+    * highly unlikely.  In order to do so, it requires that you have a render
+    * pass with a single subpass and that you use that render pass twice
+    * back-to-back and use the same pipeline at the start of the second render
+    * pass as at the end of the first.  In order to avoid unpredictable issues
+    * with this edge case, we just dirty the pipeline at the start of every
+    * subpass.
     */
-   cmd_buffer_subpass_transition_layouts(cmd_buffer, false);
+   cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_PIPELINE;
 
-   /* Update clear values *after* performing automatic layout transitions.
-    * This ensures that transitions from the UNDEFINED layout have had a chance
-    * to populate the clear value buffer with the correct values for the
-    * LOAD_OP_LOAD loadOp and that the fast-clears will update the buffer
-    * without the aforementioned layout transition overwriting the fast-clear
-    * value.
-    */
-   cmd_buffer_subpass_sync_fast_clear_values(cmd_buffer);
+   /* Accumulate any subpass flushes that need to happen before the subpass */
+   cmd_buffer->state.pending_pipe_bits |=
+      cmd_buffer->state.pass->subpass_flushes[subpass_id];
+
+   VkRect2D render_area = cmd_buffer->state.render_area;
+   struct anv_framebuffer *fb = cmd_buffer->state.framebuffer;
+
+   bool is_multiview = subpass->view_mask != 0;
+
+   for (uint32_t i = 0; i < subpass->attachment_count; ++i) {
+      const uint32_t a = subpass->attachments[i].attachment;
+      if (a == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      assert(a < cmd_state->pass->attachment_count);
+      struct anv_attachment_state *att_state = &cmd_state->attachments[a];
+
+      struct anv_image_view *iview = fb->attachments[a];
+      const struct anv_image *image = iview->image;
+
+      /* A resolve is necessary before use as an input attachment if the clear
+       * color or auxiliary buffer usage isn't supported by the sampler.
+       */
+      const bool input_needs_resolve =
+            (att_state->fast_clear && !att_state->clear_color_is_zero_one) ||
+            att_state->input_aux_usage != att_state->aux_usage;
+
+      VkImageLayout target_layout;
+      if (iview->aspect_mask & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV &&
+          !input_needs_resolve) {
+         /* Layout transitions before the final only help to enable sampling
+          * as an input attachment. If the input attachment supports sampling
+          * using the auxiliary surface, we can skip such transitions by
+          * making the target layout one that is CCS-aware.
+          */
+         target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      } else {
+         target_layout = subpass->attachments[i].layout;
+      }
+
+      if (image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
+         assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+
+         uint32_t base_layer, layer_count;
+         if (image->type == VK_IMAGE_TYPE_3D) {
+            base_layer = 0;
+            layer_count = anv_minify(iview->image->extent.depth,
+                                     iview->planes[0].isl.base_level);
+         } else {
+            base_layer = iview->planes[0].isl.base_array_layer;
+            layer_count = fb->layers;
+         }
+
+         transition_color_buffer(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 iview->planes[0].isl.base_level, 1,
+                                 base_layer, layer_count,
+                                 att_state->current_layout, target_layout);
+      } else if (image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
+         transition_depth_buffer(cmd_buffer, image,
+                                 att_state->current_layout, target_layout);
+         att_state->aux_usage =
+            anv_layout_to_aux_usage(&cmd_buffer->device->info, image,
+                                    VK_IMAGE_ASPECT_DEPTH_BIT, target_layout);
+      }
+      att_state->current_layout = target_layout;
+
+      if (att_state->pending_clear_aspects & VK_IMAGE_ASPECT_COLOR_BIT) {
+         assert(att_state->pending_clear_aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+
+         /* Multi-planar images are not supported as attachments */
+         assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+         assert(image->n_planes == 1);
+
+         uint32_t base_clear_layer = iview->planes[0].isl.base_array_layer;
+         uint32_t clear_layer_count = fb->layers;
+
+         if (att_state->fast_clear &&
+             do_first_layer_clear(cmd_state, att_state)) {
+            /* We only support fast-clears on the first layer */
+            assert(iview->planes[0].isl.base_level == 0);
+            assert(iview->planes[0].isl.base_array_layer == 0);
+
+            union isl_color_value clear_color = {};
+            anv_clear_color_from_att_state(&clear_color, att_state, iview);
+            if (iview->image->samples == 1) {
+               anv_image_ccs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                0, 0, 1, ISL_AUX_OP_FAST_CLEAR,
+                                &clear_color,
+                                false);
+            } else {
+               anv_image_mcs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                0, 1, ISL_AUX_OP_FAST_CLEAR,
+                                &clear_color,
+                                false);
+            }
+            base_clear_layer++;
+            clear_layer_count--;
+            if (is_multiview)
+               att_state->pending_clear_views &= ~1;
+
+            if (att_state->clear_color_is_zero) {
+               /* This image has the auxiliary buffer enabled. We can mark the
+                * subresource as not needing a resolve because the clear color
+                * will match what's in every RENDER_SURFACE_STATE object when
+                * it's being used for sampling.
+                */
+               set_image_fast_clear_state(cmd_buffer, iview->image,
+                                          VK_IMAGE_ASPECT_COLOR_BIT,
+                                          ANV_FAST_CLEAR_DEFAULT_VALUE);
+            } else {
+               set_image_fast_clear_state(cmd_buffer, iview->image,
+                                          VK_IMAGE_ASPECT_COLOR_BIT,
+                                          ANV_FAST_CLEAR_ANY);
+            }
+         }
+
+         /* From the VkFramebufferCreateInfo spec:
+          *
+          * "If the render pass uses multiview, then layers must be one and each
+          *  attachment requires a number of layers that is greater than the
+          *  maximum bit index set in the view mask in the subpasses in which it
+          *  is used."
+          *
+          * So if multiview is active we ignore the number of layers in the
+          * framebuffer and instead we honor the view mask from the subpass.
+          */
+         if (is_multiview) {
+            assert(image->n_planes == 1);
+            uint32_t pending_clear_mask =
+               get_multiview_subpass_clear_mask(cmd_state, att_state);
+
+            uint32_t layer_idx;
+            for_each_bit(layer_idx, pending_clear_mask) {
+               uint32_t layer =
+                  iview->planes[0].isl.base_array_layer + layer_idx;
+
+               anv_image_clear_color(cmd_buffer, image,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     att_state->aux_usage,
+                                     iview->planes[0].isl.format,
+                                     iview->planes[0].isl.swizzle,
+                                     iview->planes[0].isl.base_level,
+                                     layer, 1,
+                                     render_area,
+                                     vk_to_isl_color(att_state->clear_value.color));
+            }
+
+            att_state->pending_clear_views &= ~pending_clear_mask;
+         } else if (clear_layer_count > 0) {
+            assert(image->n_planes == 1);
+            anv_image_clear_color(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                  att_state->aux_usage,
+                                  iview->planes[0].isl.format,
+                                  iview->planes[0].isl.swizzle,
+                                  iview->planes[0].isl.base_level,
+                                  base_clear_layer, clear_layer_count,
+                                  render_area,
+                                  vk_to_isl_color(att_state->clear_value.color));
+         }
+      } else if (att_state->pending_clear_aspects & (VK_IMAGE_ASPECT_DEPTH_BIT |
+                                                     VK_IMAGE_ASPECT_STENCIL_BIT)) {
+         if (att_state->fast_clear && !is_multiview) {
+            /* We currently only support HiZ for single-layer images */
+            if (att_state->pending_clear_aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
+               assert(iview->image->planes[0].aux_usage == ISL_AUX_USAGE_HIZ);
+               assert(iview->planes[0].isl.base_level == 0);
+               assert(iview->planes[0].isl.base_array_layer == 0);
+               assert(fb->layers == 1);
+            }
+
+            anv_image_hiz_clear(cmd_buffer, image,
+                                att_state->pending_clear_aspects,
+                                iview->planes[0].isl.base_level,
+                                iview->planes[0].isl.base_array_layer,
+                                fb->layers, render_area,
+                                att_state->clear_value.depthStencil.stencil);
+         } else if (is_multiview) {
+            uint32_t pending_clear_mask =
+              get_multiview_subpass_clear_mask(cmd_state, att_state);
+
+            uint32_t layer_idx;
+            for_each_bit(layer_idx, pending_clear_mask) {
+               uint32_t layer =
+                  iview->planes[0].isl.base_array_layer + layer_idx;
+
+               anv_image_clear_depth_stencil(cmd_buffer, image,
+                                             att_state->pending_clear_aspects,
+                                             att_state->aux_usage,
+                                             iview->planes[0].isl.base_level,
+                                             layer, 1,
+                                             render_area,
+                                             att_state->clear_value.depthStencil.depth,
+                                             att_state->clear_value.depthStencil.stencil);
+            }
+
+            att_state->pending_clear_views &= ~pending_clear_mask;
+         } else {
+            anv_image_clear_depth_stencil(cmd_buffer, image,
+                                          att_state->pending_clear_aspects,
+                                          att_state->aux_usage,
+                                          iview->planes[0].isl.base_level,
+                                          iview->planes[0].isl.base_array_layer,
+                                          fb->layers, render_area,
+                                          att_state->clear_value.depthStencil.depth,
+                                          att_state->clear_value.depthStencil.stencil);
+         }
+      } else  {
+         assert(att_state->pending_clear_aspects == 0);
+      }
+
+      if (GEN_GEN < 10 &&
+          (att_state->pending_load_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) &&
+          image->planes[0].aux_surface.isl.size > 0 &&
+          iview->planes[0].isl.base_level == 0 &&
+          iview->planes[0].isl.base_array_layer == 0) {
+         if (att_state->aux_usage != ISL_AUX_USAGE_NONE) {
+            genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color.state,
+                                         image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                         false /* copy to ss */);
+         }
+
+         if (need_input_attachment_state(&cmd_state->pass->attachments[a]) &&
+             att_state->input_aux_usage != ISL_AUX_USAGE_NONE) {
+            genX(copy_fast_clear_dwords)(cmd_buffer, att_state->input.state,
+                                         image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                         false /* copy to ss */);
+         }
+      }
+
+      if (subpass->attachments[i].usage ==
+          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) {
+         /* We assume that if we're starting a subpass, we're going to do some
+          * rendering so we may end up with compressed data.
+          */
+         genX(cmd_buffer_mark_image_written)(cmd_buffer, iview->image,
+                                             VK_IMAGE_ASPECT_COLOR_BIT,
+                                             att_state->aux_usage,
+                                             iview->planes[0].isl.base_level,
+                                             iview->planes[0].isl.base_array_layer,
+                                             fb->layers);
+      } else if (subpass->attachments[i].usage ==
+                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+         /* We may be writing depth or stencil so we need to mark the surface.
+          * Unfortunately, there's no way to know at this point whether the
+          * depth or stencil tests used will actually write to the surface.
+          *
+          * Even though stencil may be plane 1, it always shares a base_level
+          * with depth.
+          */
+         const struct isl_view *ds_view = &iview->planes[0].isl;
+         if (iview->aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) {
+            genX(cmd_buffer_mark_image_written)(cmd_buffer, image,
+                                                VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                att_state->aux_usage,
+                                                ds_view->base_level,
+                                                ds_view->base_array_layer,
+                                                fb->layers);
+         }
+         if (iview->aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT) {
+            /* Even though stencil may be plane 1, it always shares a
+             * base_level with depth.
+             */
+            genX(cmd_buffer_mark_image_written)(cmd_buffer, image,
+                                                VK_IMAGE_ASPECT_STENCIL_BIT,
+                                                ISL_AUX_USAGE_NONE,
+                                                ds_view->base_level,
+                                                ds_view->base_array_layer,
+                                                fb->layers);
+         }
+      }
+
+      /* If multiview is enabled, then we are only done clearing when we no
+       * longer have pending layers to clear, or when we have processed the
+       * last subpass that uses this attachment.
+       */
+      if (!is_multiview ||
+          att_state->pending_clear_views == 0 ||
+          current_subpass_is_last_for_attachment(cmd_state, a)) {
+         att_state->pending_clear_aspects = 0;
+      }
+
+      att_state->pending_load_aspects = 0;
+   }
 
    cmd_buffer_emit_depth_stencil(cmd_buffer);
+}
 
-   anv_cmd_buffer_clear_subpass(cmd_buffer);
+static void
+cmd_buffer_end_subpass(struct anv_cmd_buffer *cmd_buffer)
+{
+   struct anv_cmd_state *cmd_state = &cmd_buffer->state;
+   struct anv_subpass *subpass = cmd_state->subpass;
+   uint32_t subpass_id = anv_get_subpass_id(&cmd_buffer->state);
+
+   anv_cmd_buffer_resolve_subpass(cmd_buffer);
+
+   struct anv_framebuffer *fb = cmd_buffer->state.framebuffer;
+   for (uint32_t i = 0; i < subpass->attachment_count; ++i) {
+      const uint32_t a = subpass->attachments[i].attachment;
+      if (a == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      if (cmd_state->pass->attachments[a].last_subpass_idx != subpass_id)
+         continue;
+
+      assert(a < cmd_state->pass->attachment_count);
+      struct anv_attachment_state *att_state = &cmd_state->attachments[a];
+      struct anv_image_view *iview = fb->attachments[a];
+      const struct anv_image *image = iview->image;
+
+      /* Transition the image into the final layout for this render pass */
+      VkImageLayout target_layout =
+         cmd_state->pass->attachments[a].final_layout;
+
+      if (image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
+         assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+
+         uint32_t base_layer, layer_count;
+         if (image->type == VK_IMAGE_TYPE_3D) {
+            base_layer = 0;
+            layer_count = anv_minify(iview->image->extent.depth,
+                                     iview->planes[0].isl.base_level);
+         } else {
+            base_layer = iview->planes[0].isl.base_array_layer;
+            layer_count = fb->layers;
+         }
+
+         transition_color_buffer(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 iview->planes[0].isl.base_level, 1,
+                                 base_layer, layer_count,
+                                 att_state->current_layout, target_layout);
+      } else if (image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
+         transition_depth_buffer(cmd_buffer, image,
+                                 att_state->current_layout, target_layout);
+      }
+   }
+
+   /* Accumulate any subpass flushes that need to happen after the subpass.
+    * Yes, they do get accumulated twice in the NextSubpass case but since
+    * genX_CmdNextSubpass just calls end/begin back-to-back, we just end up
+    * ORing the bits in twice so it's harmless.
+    */
+   cmd_buffer->state.pending_pipe_bits |=
+      cmd_buffer->state.pass->subpass_flushes[subpass_id + 1];
 }
 
 void genX(CmdBeginRenderPass)(
@@ -3128,10 +3853,7 @@ void genX(CmdBeginRenderPass)(
 
    genX(flush_pipeline_select_3d)(cmd_buffer);
 
-   genX(cmd_buffer_set_subpass)(cmd_buffer, pass->subpasses);
-
-   cmd_buffer->state.pending_pipe_bits |=
-      cmd_buffer->state.pass->subpass_flushes[0];
+   cmd_buffer_begin_subpass(cmd_buffer, 0);
 }
 
 void genX(CmdNextSubpass)(
@@ -3145,17 +3867,9 @@ void genX(CmdNextSubpass)(
 
    assert(cmd_buffer->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 
-   anv_cmd_buffer_resolve_subpass(cmd_buffer);
-
-   /* Perform transitions to the final layout after all writes have occurred.
-    */
-   cmd_buffer_subpass_transition_layouts(cmd_buffer, true);
-
-   genX(cmd_buffer_set_subpass)(cmd_buffer, cmd_buffer->state.subpass + 1);
-
-   uint32_t subpass_id = anv_get_subpass_id(&cmd_buffer->state);
-   cmd_buffer->state.pending_pipe_bits |=
-      cmd_buffer->state.pass->subpass_flushes[subpass_id];
+   uint32_t prev_subpass = anv_get_subpass_id(&cmd_buffer->state);
+   cmd_buffer_end_subpass(cmd_buffer);
+   cmd_buffer_begin_subpass(cmd_buffer, prev_subpass + 1);
 }
 
 void genX(CmdEndRenderPass)(
@@ -3166,14 +3880,7 @@ void genX(CmdEndRenderPass)(
    if (anv_batch_has_error(&cmd_buffer->batch))
       return;
 
-   anv_cmd_buffer_resolve_subpass(cmd_buffer);
-
-   /* Perform transitions to the final layout after all writes have occurred.
-    */
-   cmd_buffer_subpass_transition_layouts(cmd_buffer, true);
-
-   cmd_buffer->state.pending_pipe_bits |=
-      cmd_buffer->state.pass->subpass_flushes[cmd_buffer->state.pass->subpass_count];
+   cmd_buffer_end_subpass(cmd_buffer);
 
    cmd_buffer->state.hiz_enabled = false;
 

@@ -171,6 +171,7 @@ ALU2(SHR)
 ALU2(SHL)
 ALU1(DIM)
 ALU2(ASR)
+ALU3(CSEL)
 ALU1(F32TO16)
 ALU1(F16TO32)
 ALU2(ADD)
@@ -444,7 +445,8 @@ brw_untyped_atomic(struct brw_codegen *p,
                    struct brw_reg surface,
                    unsigned atomic_op,
                    unsigned msg_length,
-                   bool response_expected);
+                   bool response_expected,
+                   bool header_present);
 
 void
 brw_untyped_surface_read(struct brw_codegen *p,
@@ -459,7 +461,8 @@ brw_untyped_surface_write(struct brw_codegen *p,
                           struct brw_reg payload,
                           struct brw_reg surface,
                           unsigned msg_length,
-                          unsigned num_channels);
+                          unsigned num_channels,
+                          bool header_present);
 
 void
 brw_typed_atomic(struct brw_codegen *p,
@@ -468,7 +471,8 @@ brw_typed_atomic(struct brw_codegen *p,
                  struct brw_reg surface,
                  unsigned atomic_op,
                  unsigned msg_length,
-                 bool response_expected);
+                 bool response_expected,
+                 bool header_present);
 
 void
 brw_typed_surface_read(struct brw_codegen *p,
@@ -476,14 +480,32 @@ brw_typed_surface_read(struct brw_codegen *p,
                        struct brw_reg payload,
                        struct brw_reg surface,
                        unsigned msg_length,
-                       unsigned num_channels);
+                       unsigned num_channels,
+                       bool header_present);
 
 void
 brw_typed_surface_write(struct brw_codegen *p,
                         struct brw_reg payload,
                         struct brw_reg surface,
                         unsigned msg_length,
-                        unsigned num_channels);
+                        unsigned num_channels,
+                        bool header_present);
+
+void
+brw_byte_scattered_read(struct brw_codegen *p,
+                        struct brw_reg dst,
+                        struct brw_reg payload,
+                        struct brw_reg surface,
+                        unsigned msg_length,
+                        unsigned bit_size);
+
+void
+brw_byte_scattered_write(struct brw_codegen *p,
+                         struct brw_reg payload,
+                         struct brw_reg surface,
+                         unsigned msg_length,
+                         unsigned bit_size,
+                         bool header_present);
 
 void
 brw_memory_fence(struct brw_codegen *p,
@@ -509,6 +531,10 @@ brw_broadcast(struct brw_codegen *p,
               struct brw_reg dst,
               struct brw_reg src,
               struct brw_reg idx);
+
+void
+brw_rounding_mode(struct brw_codegen *p,
+                  enum brw_rnd_mode mode);
 
 /***********************************************************************
  * brw_eu_util.c:

@@ -63,6 +63,7 @@
 #include "main/eval.h"
 #include "main/externalobjects.h"
 #include "main/get.h"
+#include "main/glspirv.h"
 #include "main/feedback.h"
 #include "main/fog.h"
 #include "main/fbobject.h"
@@ -428,8 +429,6 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_GetPerfMonitorGroupStringAMD(exec, _mesa_GetPerfMonitorGroupStringAMD);
       SET_GetPerfMonitorGroupsAMD(exec, _mesa_GetPerfMonitorGroupsAMD);
       SET_GetQueryIndexediv(exec, _mesa_GetQueryIndexediv);
-      SET_GetQueryObjecti64v(exec, _mesa_GetQueryObjecti64v);
-      SET_GetQueryObjectui64v(exec, _mesa_GetQueryObjectui64v);
       SET_GetTexImage(exec, _mesa_GetTexImage);
       SET_GetTextureSubImage(exec, _mesa_GetTextureSubImage);
       SET_GetVertexAttribdv(exec, _mesa_GetVertexAttribdv);
@@ -465,8 +464,8 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_ProgramUniformMatrix4x2dv(exec, _mesa_ProgramUniformMatrix4x2dv);
       SET_ProgramUniformMatrix4x3dv(exec, _mesa_ProgramUniformMatrix4x3dv);
       SET_ProvokingVertex(exec, _mesa_ProvokingVertex);
-      SET_QueryCounter(exec, _mesa_QueryCounter);
       SET_SelectPerfMonitorCountersAMD(exec, _mesa_SelectPerfMonitorCountersAMD);
+      SET_SpecializeShaderARB(exec, _mesa_SpecializeShaderARB);
       SET_StringMarkerGREMEDY(exec, _mesa_StringMarkerGREMEDY);
       SET_TexImage2DMultisample(exec, _mesa_TexImage2DMultisample);
       SET_TexImage3DMultisample(exec, _mesa_TexImage3DMultisample);
@@ -715,6 +714,7 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_DeleteShader(exec, _mesa_DeleteShader);
       SET_EndPerfQueryINTEL(exec, _mesa_EndPerfQueryINTEL);
       SET_EndQuery(exec, _mesa_EndQuery);
+      SET_FramebufferFetchBarrierEXT(exec, _mesa_FramebufferFetchBarrierEXT);
       SET_GenQueries(exec, _mesa_GenQueries);
       SET_GetActiveAttrib(exec, _mesa_GetActiveAttrib);
       SET_GetActiveUniform(exec, _mesa_GetActiveUniform);
@@ -732,7 +732,9 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_GetProgramPipelineInfoLog(exec, _mesa_GetProgramPipelineInfoLog);
       SET_GetProgramPipelineiv(exec, _mesa_GetProgramPipelineiv);
       SET_GetProgramiv(exec, _mesa_GetProgramiv);
+      SET_GetQueryObjecti64v(exec, _mesa_GetQueryObjecti64v);
       SET_GetQueryObjectiv(exec, _mesa_GetQueryObjectiv);
+      SET_GetQueryObjectui64v(exec, _mesa_GetQueryObjectui64v);
       SET_GetQueryObjectuiv(exec, _mesa_GetQueryObjectuiv);
       SET_GetQueryiv(exec, _mesa_GetQueryiv);
       SET_GetShaderInfoLog(exec, _mesa_GetShaderInfoLog);
@@ -778,6 +780,7 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_ProgramUniformMatrix4fv(exec, _mesa_ProgramUniformMatrix4fv);
       SET_ProgramUniformMatrix4x2fv(exec, _mesa_ProgramUniformMatrix4x2fv);
       SET_ProgramUniformMatrix4x3fv(exec, _mesa_ProgramUniformMatrix4x3fv);
+      SET_QueryCounter(exec, _mesa_QueryCounter);
       SET_ReleaseShaderCompiler(exec, _mesa_ReleaseShaderCompiler);
       SET_ShaderBinary(exec, _mesa_ShaderBinary);
       SET_Uniform1f(exec, _mesa_Uniform1f);
@@ -1538,6 +1541,9 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_TexGeniv(exec, _mesa_TexGeniv);
       SET_Translatef(exec, _mesa_Translatef);
    }
+   if (ctx->API == API_OPENGL_COMPAT || ctx->API == API_OPENGL_CORE) {
+      SET_GetVertexAttribLui64vARB(exec, _mesa_GetVertexAttribLui64vARB);
+   }
    if (ctx->API == API_OPENGL_COMPAT || ctx->API == API_OPENGL_CORE || (ctx->API == API_OPENGLES2 && ctx->Version >= 31)) {
       SET_FramebufferParameteri(exec, _mesa_FramebufferParameteri);
       SET_TexBuffer(exec, _mesa_TexBuffer);
@@ -1588,7 +1594,6 @@ _mesa_initialize_exec_table(struct gl_context *ctx)
       SET_GetVertexArrayIndexediv(exec, _mesa_GetVertexArrayIndexediv);
       SET_GetVertexArrayiv(exec, _mesa_GetVertexArrayiv);
       SET_GetVertexAttribLdv(exec, _mesa_GetVertexAttribLdv);
-      SET_GetVertexAttribLui64vARB(exec, _mesa_GetVertexAttribLui64vARB);
       SET_GetnUniformi64vARB(exec, _mesa_GetnUniformi64vARB);
       SET_GetnUniformui64vARB(exec, _mesa_GetnUniformui64vARB);
       SET_InvalidateNamedFramebufferData(exec, _mesa_InvalidateNamedFramebufferData);

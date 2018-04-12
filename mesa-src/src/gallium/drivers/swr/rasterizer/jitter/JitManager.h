@@ -29,52 +29,9 @@
 ******************************************************************************/
 #pragma once
 
-#if defined(_WIN32)
-#pragma warning(disable : 4146 4244 4267 4800 4996)
-#endif
-
-// llvm 3.7+ reuses "DEBUG" as an enum value
-#pragma push_macro("DEBUG")
-#undef DEBUG
-
-#include "llvm/IR/DataLayout.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Type.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/IntrinsicInst.h"
-#include "llvm/ExecutionEngine/ObjectCache.h"
-
-#include "llvm/Config/llvm-config.h"
-
-#include "llvm/IR/Verifier.h"
-#include "llvm/ExecutionEngine/MCJIT.h"
-#include "llvm/Support/FileSystem.h"
-#define LLVM_F_NONE sys::fs::F_None
-
-#include "llvm/Analysis/Passes.h"
-
-#include "llvm/IR/LegacyPassManager.h"
-using FunctionPassManager = llvm::legacy::FunctionPassManager;
-using PassManager = llvm::legacy::PassManager;
-
-#include "llvm/CodeGen/Passes.h"
-#include "llvm/ExecutionEngine/ExecutionEngine.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/Scalar.h"
-#include "llvm/Support/Host.h"
-#include "llvm/Support/DynamicLibrary.h"
-
-
-#include "common/os.h"
+#include "jit_pch.hpp"
 #include "common/isa.hpp"
 
-#include <mutex>
-
-#pragma pop_macro("DEBUG")
 
 //////////////////////////////////////////////////////////////////////////
 /// JitInstructionSet
@@ -127,9 +84,11 @@ struct JitLLVMContext : llvm::LLVMContext
 {
 };
 
+
 //////////////////////////////////////////////////////////////////////////
 /// JitCache
 //////////////////////////////////////////////////////////////////////////
+struct JitManager; // Forward Decl
 class JitCache : public llvm::ObjectCache
 {
 public:
@@ -137,7 +96,15 @@ public:
     JitCache();
     virtual ~JitCache() {}
 
-    void SetCpu(const llvm::StringRef& cpu) { mCpu = cpu.str(); }
+    void Init(
+        JitManager* pJitMgr,
+        const llvm::StringRef& cpu,
+        llvm::CodeGenOpt::Level level)
+    {
+        mCpu = cpu.str();
+        mpJitMgr = pJitMgr;
+        mOptLevel = level;
+    }
 
     /// notifyObjectCompiled - Provides a pointer to compiled code for Module M.
     virtual void notifyObjectCompiled(const llvm::Module *M, llvm::MemoryBufferRef Obj);
@@ -150,7 +117,9 @@ public:
 private:
     std::string mCpu;
     llvm::SmallString<MAX_PATH> mCacheDir;
-    uint32_t mCurrentModuleCRC;
+    uint32_t mCurrentModuleCRC = 0;
+    JitManager* mpJitMgr = nullptr;
+    llvm::CodeGenOpt::Level mOptLevel = llvm::CodeGenOpt::None;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -167,40 +136,66 @@ struct JitManager
     JitCache                mCache;
 
     // Need to be rebuilt after a JIT and before building new IR
-    llvm::Module* mpCurrentModule;
-    bool mIsModuleFinalized;
-    uint32_t mJitNumber;
+    llvm::Module*           mpCurrentModule;
+    bool                    mIsModuleFinalized;
+    uint32_t                mJitNumber;
 
-    uint32_t                 mVWidth;
+    uint32_t                mVWidth;
+
 
     // Built in types.
-    llvm::Type*                mInt8Ty;
-    llvm::Type*                mInt32Ty;
-    llvm::Type*                mInt64Ty;
-    llvm::Type*                mFP32Ty;
+    llvm::Type*             mInt8Ty;
+    llvm::Type*             mInt32Ty;
+    llvm::Type*             mInt64Ty;
+    llvm::Type*             mFP32Ty;
 
-    llvm::Type* mSimtFP32Ty;
-    llvm::Type* mSimtInt32Ty;
+    llvm::Type*             mSimtFP32Ty;
+    llvm::Type*             mSimtInt32Ty;
 
-    llvm::Type* mSimdVectorInt32Ty;
-    llvm::Type* mSimdVectorTy;
+    llvm::Type*             mSimdVectorInt32Ty;
+    llvm::Type*             mSimdVectorTy;
 
 #if USE_SIMD16_SHADERS
-    llvm::Type* mSimd16FP32Ty;
-    llvm::Type* mSimd16Int32Ty;
+    llvm::Type*             mSimd16FP32Ty;
+    llvm::Type*             mSimd16Int32Ty;
 
-    llvm::Type* mSimd16VectorFP32Ty;
-    llvm::Type* mSimd16VectorInt32Ty;
+    llvm::Type*             mSimd16VectorFP32Ty;
+    llvm::Type*             mSimd16VectorInt32Ty;
 
 #endif
     // fetch shader types
-    llvm::FunctionType*        mFetchShaderTy;
+    llvm::FunctionType*     mFetchShaderTy;
 
-    JitInstructionSet mArch;
-    std::string mCore;
+    JitInstructionSet       mArch;
+    std::string             mCore;
+
+    // Debugging support
+    std::unordered_map<llvm::StructType*, llvm::DIType*> mDebugStructMap;
 
     void SetupNewModule();
 
     void DumpAsm(llvm::Function* pFunction, const char* fileName);
     static void DumpToFile(llvm::Function *f, const char *fileName);
+    static void DumpToFile(llvm::Module *M, const char *fileName);
+    static std::string GetOutputDir();
+
+    // Debugging support methods
+    llvm::DIType* GetDebugType(llvm::Type* pTy);
+    llvm::DIType* GetDebugIntegerType(llvm::Type* pTy);
+    llvm::DIType* GetDebugArrayType(llvm::Type* pTy);
+    llvm::DIType* GetDebugVectorType(llvm::Type* pTy);
+    llvm::DIType* GetDebugFunctionType(llvm::Type* pTy);
+
+    llvm::DIType* GetDebugStructType(llvm::Type* pType)
+    {
+        llvm::StructType* pStructTy = llvm::cast<llvm::StructType>(pType);
+        if (mDebugStructMap.find(pStructTy) == mDebugStructMap.end())
+        {
+            return nullptr;
+        }
+        return mDebugStructMap[pStructTy];
+    }
+
+    llvm::DIType* CreateDebugStructType(llvm::StructType* pType, const std::string& name, llvm::DIFile* pFile, uint32_t lineNum,
+        const std::vector<std::pair<std::string, uint32_t>>& members);
 };

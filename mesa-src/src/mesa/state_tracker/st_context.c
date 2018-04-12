@@ -60,6 +60,7 @@
 #include "st_cb_program.h"
 #include "st_cb_queryobj.h"
 #include "st_cb_readpixels.h"
+#include "st_cb_semaphoreobjects.h"
 #include "st_cb_texture.h"
 #include "st_cb_xformfb.h"
 #include "st_cb_flush.h"
@@ -74,6 +75,7 @@
 #include "st_pbo.h"
 #include "st_program.h"
 #include "st_sampler_view.h"
+#include "st_shader_cache.h"
 #include "st_vdpau.h"
 #include "st_texture.h"
 #include "pipe/p_context.h"
@@ -252,7 +254,7 @@ st_invalidate_state(struct gl_context *ctx)
 static void
 st_destroy_context_priv(struct st_context *st, bool destroy_pipe)
 {
-   uint shader, i;
+   uint i;
 
    st_destroy_atoms(st);
    st_destroy_draw(st);
@@ -265,16 +267,10 @@ st_destroy_context_priv(struct st_context *st, bool destroy_pipe)
    st_destroy_bound_texture_handles(st);
    st_destroy_bound_image_handles(st);
 
-   for (shader = 0; shader < ARRAY_SIZE(st->state.sampler_views); shader++) {
-      for (i = 0; i < ARRAY_SIZE(st->state.sampler_views[0]); i++) {
-         pipe_sampler_view_release(st->pipe,
-                                   &st->state.sampler_views[shader][i]);
-      }
+   for (i = 0; i < ARRAY_SIZE(st->state.frag_sampler_views); i++) {
+      pipe_sampler_view_release(st->pipe,
+                                &st->state.frag_sampler_views[i]);
    }
-
-   /* free glDrawPixels cache data */
-   free(st->drawpix_cache.image);
-   pipe_resource_reference(&st->drawpix_cache.texture, NULL);
 
    /* free glReadPixels cache data */
    st_invalidate_readpix_cache(st);
@@ -302,7 +298,7 @@ st_init_driver_flags(struct st_context *st)
    /* Shader resources */
    f->NewTextureBuffer = ST_NEW_SAMPLER_VIEWS;
    if (st->has_hw_atomics)
-      f->NewAtomicBuffer = ST_NEW_HW_ATOMICS;
+      f->NewAtomicBuffer = ST_NEW_HW_ATOMICS | ST_NEW_CS_ATOMICS;
    else
       f->NewAtomicBuffer = ST_NEW_ATOMIC_BUFFER;
    f->NewShaderStorageBuffer = ST_NEW_STORAGE_BUFFER;
@@ -371,8 +367,6 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
 
    st->dirty = ST_ALL_STATES_MASK;
 
-   st->has_user_constbuf =
-      screen->get_param(screen, PIPE_CAP_USER_CONSTANT_BUFFERS);
    st->can_bind_const_buffer_as_vertex =
       screen->get_param(screen, PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX);
 
@@ -388,7 +382,6 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
 
    st_init_atoms(st);
    st_init_clear(st);
-   st_init_draw(st);
    st_init_pbo_helpers(st);
 
    /* Choose texture target for glDrawPixels, glBitmap, renderbuffers */
@@ -439,6 +432,9 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    if (no_error)
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_NO_ERROR_BIT_KHR;
 
+   ctx->Const.PackedDriverUniformStorage =
+      screen->get_param(screen, PIPE_CAP_PACKED_UNIFORMS);
+
    st->has_stencil_export =
       screen->get_param(screen, PIPE_CAP_SHADER_STENCIL_EXPORT);
    st->has_shader_model3 = screen->get_param(screen, PIPE_CAP_SM3);
@@ -474,7 +470,7 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
       ? true : false;
 
    /* GL limits and extensions */
-   st_init_limits(pipe->screen, &ctx->Const, &ctx->Extensions);
+   st_init_limits(pipe->screen, &ctx->Const, &ctx->Extensions, ctx->API);
    st_init_extensions(pipe->screen, &ctx->Const,
                       &ctx->Extensions, &st->options, ctx->API);
 
@@ -553,6 +549,9 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
 
    /* Initialize context's winsys buffers list */
    LIST_INITHEAD(&st->winsys_buffers);
+
+   /* Keep our list of gl_vertex_array inputs */
+   _vbo_init_inputs(&st->draw_arrays);
 
    return st;
 }
@@ -715,9 +714,9 @@ void
 st_init_driver_functions(struct pipe_screen *screen,
                          struct dd_function_table *functions)
 {
-   _mesa_init_shader_object_functions(functions);
    _mesa_init_sampler_object_functions(functions);
 
+   st_init_draw_functions(functions);
    st_init_blit_functions(functions);
    st_init_bufferobject_functions(screen, functions);
    st_init_clear_functions(functions);
@@ -739,6 +738,7 @@ st_init_driver_functions(struct pipe_screen *screen,
    st_init_query_functions(functions);
    st_init_cond_render_functions(functions);
    st_init_readpixels_functions(functions);
+   st_init_semaphoreobject_functions(functions);
    st_init_texture_functions(functions);
    st_init_texture_barrier_functions(functions);
    st_init_flush_functions(screen, functions);
@@ -758,6 +758,22 @@ st_init_driver_functions(struct pipe_screen *screen,
    functions->UpdateState = st_invalidate_state;
    functions->QueryMemoryInfo = st_query_memory_info;
    functions->SetBackgroundContext = st_set_background_context;
-   functions->GetDriverUuid = st_get_device_uuid;
-   functions->GetDeviceUuid = st_get_driver_uuid;
+   functions->GetDriverUuid = st_get_driver_uuid;
+   functions->GetDeviceUuid = st_get_device_uuid;
+
+   /* GL_ARB_get_program_binary */
+   functions->GetProgramBinaryDriverSHA1 = st_get_program_binary_driver_sha1;
+
+   enum pipe_shader_ir preferred_ir = (enum pipe_shader_ir)
+      screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
+                               PIPE_SHADER_CAP_PREFERRED_IR);
+   if (preferred_ir == PIPE_SHADER_IR_NIR) {
+      functions->ProgramBinarySerializeDriverBlob = st_serialise_nir_program;
+      functions->ProgramBinaryDeserializeDriverBlob =
+         st_deserialise_nir_program;
+   } else {
+      functions->ProgramBinarySerializeDriverBlob = st_serialise_tgsi_program;
+      functions->ProgramBinaryDeserializeDriverBlob =
+         st_deserialise_tgsi_program;
+   }
 }

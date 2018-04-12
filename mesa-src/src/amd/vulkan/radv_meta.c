@@ -34,6 +34,13 @@ void
 radv_meta_save(struct radv_meta_saved_state *state,
 	       struct radv_cmd_buffer *cmd_buffer, uint32_t flags)
 {
+	VkPipelineBindPoint bind_point =
+		flags & RADV_META_SAVE_GRAPHICS_PIPELINE ?
+			VK_PIPELINE_BIND_POINT_GRAPHICS :
+			VK_PIPELINE_BIND_POINT_COMPUTE;
+	struct radv_descriptor_state *descriptors_state =
+		radv_get_descriptors_state(cmd_buffer, bind_point);
+
 	assert(flags & (RADV_META_SAVE_GRAPHICS_PIPELINE |
 			RADV_META_SAVE_COMPUTE_PIPELINE));
 
@@ -73,8 +80,8 @@ radv_meta_save(struct radv_meta_saved_state *state,
 	}
 
 	if (state->flags & RADV_META_SAVE_DESCRIPTORS) {
-		if (cmd_buffer->state.valid_descriptors & (1 << 0))
-			state->old_descriptor_set0 = cmd_buffer->descriptors[0];
+		if (descriptors_state->valid & (1 << 0))
+			state->old_descriptor_set0 = descriptors_state->sets[0];
 		else
 			state->old_descriptor_set0 = NULL;
 	}
@@ -97,6 +104,11 @@ void
 radv_meta_restore(const struct radv_meta_saved_state *state,
 		  struct radv_cmd_buffer *cmd_buffer)
 {
+	VkPipelineBindPoint bind_point =
+		state->flags & RADV_META_SAVE_GRAPHICS_PIPELINE ?
+			VK_PIPELINE_BIND_POINT_GRAPHICS :
+			VK_PIPELINE_BIND_POINT_COMPUTE;
+
 	if (state->flags & RADV_META_SAVE_GRAPHICS_PIPELINE) {
 		radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer),
 				     VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -127,7 +139,8 @@ radv_meta_restore(const struct radv_meta_saved_state *state,
 	}
 
 	if (state->flags & RADV_META_SAVE_DESCRIPTORS) {
-		radv_set_descriptor_set(cmd_buffer, state->old_descriptor_set0, 0);
+		radv_set_descriptor_set(cmd_buffer, bind_point,
+					state->old_descriptor_set0, 0);
 	}
 
 	if (state->flags & RADV_META_SAVE_CONSTANTS) {
@@ -379,9 +392,9 @@ fail_resolve_fragment:
 fail_resolve_compute:
 	radv_device_finish_meta_fast_clear_flush_state(device);
 fail_fast_clear:
-	radv_device_finish_meta_buffer_state(device);
-fail_query:
 	radv_device_finish_meta_query_state(device);
+fail_query:
+	radv_device_finish_meta_buffer_state(device);
 fail_buffer:
 	radv_device_finish_meta_depth_decomp_state(device);
 fail_depth_decomp:
@@ -535,7 +548,7 @@ void radv_meta_build_resolve_shader_core(nir_builder *b,
 		nir_ssa_dest_init(&tex_all_same->instr, &tex_all_same->dest, 1, 32, "tex");
 		nir_builder_instr_insert(b, &tex_all_same->instr);
 
-		nir_ssa_def *all_same = nir_ine(b, &tex_all_same->dest.ssa, nir_imm_int(b, 0));
+		nir_ssa_def *all_same = nir_ieq(b, &tex_all_same->dest.ssa, nir_imm_int(b, 0));
 		nir_if *if_stmt = nir_if_create(b->shader);
 		if_stmt->condition = nir_src_for_ssa(all_same);
 		nir_cf_node_insert(b->cursor, &if_stmt->cf_node);

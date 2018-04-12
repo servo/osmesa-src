@@ -71,16 +71,7 @@
 #include "brw_context.h"
 #include "brw_defines.h"
 #include "brw_performance_query.h"
-#include "brw_oa_hsw.h"
-#include "brw_oa_bdw.h"
-#include "brw_oa_chv.h"
-#include "brw_oa_sklgt2.h"
-#include "brw_oa_sklgt3.h"
-#include "brw_oa_sklgt4.h"
-#include "brw_oa_bxt.h"
-#include "brw_oa_kblgt2.h"
-#include "brw_oa_kblgt3.h"
-#include "brw_oa_glk.h"
+#include "brw_oa_metrics.h"
 #include "intel_batchbuffer.h"
 
 #define FILE_DEBUG_FLAG DEBUG_PERFMON
@@ -277,12 +268,21 @@ struct brw_perf_query_object
          uint64_t accumulator[MAX_OA_REPORT_COUNTERS];
 
          /**
+          * Hw ID used by the context on which the query was running.
+          */
+         uint32_t hw_id;
+
+         /**
           * false while in the unaccumulated_elements list, and set to
           * true when the final, end MI_RPC snapshot has been
           * accumulated.
           */
          bool results_accumulated;
 
+         /**
+          * Number of reports accumulated to produce the results.
+          */
+         uint32_t reports_accumulated;
       } oa;
 
       struct {
@@ -308,6 +308,47 @@ brw_perf_query(struct gl_perf_query_object *o)
 
 #define MI_RPC_BO_SIZE              4096
 #define MI_RPC_BO_END_OFFSET_BYTES  (MI_RPC_BO_SIZE / 2)
+
+/******************************************************************************/
+
+static bool
+read_file_uint64(const char *file, uint64_t *val)
+{
+    char buf[32];
+    int fd, n;
+
+    fd = open(file, 0);
+    if (fd < 0)
+       return false;
+    while ((n = read(fd, buf, sizeof (buf) - 1)) < 0 &&
+           errno == EINTR);
+    close(fd);
+    if (n < 0)
+       return false;
+
+    buf[n] = '\0';
+    *val = strtoull(buf, NULL, 0);
+
+    return true;
+}
+
+static bool
+read_sysfs_drm_device_file_uint64(struct brw_context *brw,
+                                  const char *file,
+                                  uint64_t *value)
+{
+   char buf[512];
+   int len;
+
+   len = snprintf(buf, sizeof(buf), "%s/%s",
+                  brw->perfquery.sysfs_dev_dir, file);
+   if (len < 0 || len >= sizeof(buf)) {
+      DBG("Failed to concatenate sys filename to read u64 from\n");
+      return false;
+   }
+
+   return read_file_uint64(buf, value);
+}
 
 /******************************************************************************/
 
@@ -338,6 +379,9 @@ dump_perf_query_callback(GLuint id, void *query_void, void *brw_void)
           o->Used ? "Dirty," : "New,",
           o->Active ? "Active," : (o->Ready ? "Ready," : "Pending,"),
           obj->pipeline_stats.bo ? "yes" : "no");
+      break;
+   default:
+      unreachable("Unknown query type");
       break;
    }
 }
@@ -434,6 +478,10 @@ brw_get_perf_query_info(struct gl_context *ctx,
 
    case PIPELINE_STATS:
       *n_active = brw->perfquery.n_active_pipeline_stats_queries;
+      break;
+
+   default:
+      unreachable("Unknown query type");
       break;
    }
 }
@@ -558,15 +606,6 @@ drop_from_unaccumulated_query_list(struct brw_context *brw,
    reap_old_sample_buffers(brw);
 }
 
-static uint64_t
-timebase_scale(struct brw_context *brw, uint32_t u32_time_delta)
-{
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   uint64_t tmp = ((uint64_t)u32_time_delta) * 1000000000ull;
-
-   return tmp ? tmp / devinfo->timestamp_frequency : 0;
-}
-
 static void
 accumulate_uint32(const uint32_t *report0,
                   const uint32_t *report1,
@@ -611,6 +650,8 @@ add_deltas(struct brw_context *brw,
    uint64_t *accumulator = obj->oa.accumulator;
    int idx = 0;
    int i;
+
+   obj->oa.reports_accumulated++;
 
    switch (query->oa_format) {
    case I915_OA_FORMAT_A32u40_A4u32_B8_C8:
@@ -835,7 +876,6 @@ accumulate_oa_reports(struct brw_context *brw,
    uint32_t *end;
    struct exec_node *first_samples_node;
    bool in_ctx = true;
-   uint32_t ctx_id;
    int out_duration = 0;
 
    assert(o->Ready);
@@ -853,7 +893,7 @@ accumulate_oa_reports(struct brw_context *brw,
       goto error;
    }
 
-   ctx_id = start[2];
+   obj->oa.hw_id = start[2];
 
    /* See if we have any periodic reports to accumulate too... */
 
@@ -889,13 +929,13 @@ accumulate_oa_reports(struct brw_context *brw,
             /* Ignore reports that come before the start marker.
              * (Note: takes care to allow overflow of 32bit timestamps)
              */
-            if (timebase_scale(brw, report[1] - start[1]) > 5000000000)
+            if (brw_timebase_scale(brw, report[1] - start[1]) > 5000000000)
                continue;
 
             /* Ignore reports that come after the end marker.
              * (Note: takes care to allow overflow of 32bit timestamps)
              */
-            if (timebase_scale(brw, report[1] - end[1]) <= 5000000000)
+            if (brw_timebase_scale(brw, report[1] - end[1]) <= 5000000000)
                goto end;
 
             /* For Gen8+ since the counters continue while other
@@ -908,11 +948,11 @@ accumulate_oa_reports(struct brw_context *brw,
              * of OA counters while any other context is acctive.
              */
             if (devinfo->gen >= 8) {
-               if (in_ctx && report[2] != ctx_id) {
+               if (in_ctx && report[2] != obj->oa.hw_id) {
                   DBG("i915 perf: Switch AWAY (observed by ID change)\n");
                   in_ctx = false;
                   out_duration = 0;
-               } else if (in_ctx == false && report[2] == ctx_id) {
+               } else if (in_ctx == false && report[2] == obj->oa.hw_id) {
                   DBG("i915 perf: Switch TO\n");
                   in_ctx = true;
 
@@ -929,10 +969,10 @@ accumulate_oa_reports(struct brw_context *brw,
                   if (out_duration >= 1)
                      add = false;
                } else if (in_ctx) {
-                  assert(report[2] == ctx_id);
+                  assert(report[2] == obj->oa.hw_id);
                   DBG("i915 perf: Continuation IN\n");
                } else {
-                  assert(report[2] != ctx_id);
+                  assert(report[2] != obj->oa.hw_id);
                   DBG("i915 perf: Continuation OUT\n");
                   add = false;
                   out_duration++;
@@ -963,8 +1003,6 @@ end:
 
    DBG("Marking %d accumulated - results gathered\n", o->Id);
 
-   brw_bo_unmap(obj->oa.bo);
-   obj->oa.map = NULL;
    obj->oa.results_accumulated = true;
    drop_from_unaccumulated_query_list(brw, obj);
    dec_n_oa_users(brw);
@@ -973,8 +1011,6 @@ end:
 
 error:
 
-   brw_bo_unmap(obj->oa.bo);
-   obj->oa.map = NULL;
    discard_all_queries(brw);
 }
 
@@ -1200,8 +1236,7 @@ brw_begin_perf_query(struct gl_context *ctx,
       }
 
       obj->oa.bo =
-         brw_bo_alloc(brw->bufmgr, "perf. query OA MI_RPC bo",
-                      MI_RPC_BO_SIZE, 64);
+         brw_bo_alloc(brw->bufmgr, "perf. query OA MI_RPC bo", MI_RPC_BO_SIZE);
 #ifdef DEBUG
       /* Pre-filling the BO helps debug whether writes landed. */
       void *map = brw_bo_map(brw, obj->oa.bo, MAP_WRITE);
@@ -1242,6 +1277,7 @@ brw_begin_perf_query(struct gl_context *ctx,
        */
       buf->refcount++;
 
+      obj->oa.hw_id = 0xffffffff;
       memset(obj->oa.accumulator, 0, sizeof(obj->oa.accumulator));
       obj->oa.results_accumulated = false;
 
@@ -1256,12 +1292,16 @@ brw_begin_perf_query(struct gl_context *ctx,
 
       obj->pipeline_stats.bo =
          brw_bo_alloc(brw->bufmgr, "perf. query pipeline stats bo",
-                            STATS_BO_SIZE, 64);
+                      STATS_BO_SIZE);
 
       /* Take starting snapshots. */
       snapshot_statistics_registers(brw, obj, 0);
 
       ++brw->perfquery.n_active_pipeline_stats_queries;
+      break;
+
+   default:
+      unreachable("Unknown query type");
       break;
    }
 
@@ -1319,6 +1359,10 @@ brw_end_perf_query(struct gl_context *ctx,
                                     STATS_BO_END_OFFSET_BYTES);
       --brw->perfquery.n_active_pipeline_stats_queries;
       break;
+
+   default:
+      unreachable("Unknown query type");
+      break;
    }
 }
 
@@ -1338,6 +1382,10 @@ brw_wait_perf_query(struct gl_context *ctx, struct gl_perf_query_object *o)
 
    case PIPELINE_STATS:
       bo = obj->pipeline_stats.bo;
+      break;
+
+   default:
+      unreachable("Unknown query type");
       break;
    }
 
@@ -1384,9 +1432,12 @@ brw_is_perf_query_ready(struct gl_context *ctx,
       return (obj->pipeline_stats.bo &&
               !brw_batch_references(&brw->batch, obj->pipeline_stats.bo) &&
               !brw_bo_busy(obj->pipeline_stats.bo));
+
+   default:
+      unreachable("Unknown query type");
+      break;
    }
 
-   unreachable("missing ready check for unknown query kind");
    return false;
 }
 
@@ -1403,6 +1454,9 @@ get_oa_counter_data(struct brw_context *brw,
    if (!obj->oa.results_accumulated) {
       accumulate_oa_reports(brw, obj);
       assert(obj->oa.results_accumulated);
+
+      brw_bo_unmap(obj->oa.bo);
+      obj->oa.map = NULL;
    }
 
    for (int i = 0; i < n_counters; i++) {
@@ -1500,6 +1554,10 @@ brw_get_perf_query_data(struct gl_context *ctx,
    case PIPELINE_STATS:
       written = get_pipeline_stats_data(brw, obj, data_size, (uint8_t *)data);
       break;
+
+   default:
+      unreachable("Unknown query type");
+      break;
    }
 
    if (bytes_written)
@@ -1564,6 +1622,10 @@ brw_delete_perf_query(struct gl_context *ctx,
          brw_bo_unreference(obj->pipeline_stats.bo);
          obj->pipeline_stats.bo = NULL;
       }
+      break;
+
+   default:
+      unreachable("Unknown query type");
       break;
    }
 
@@ -1709,35 +1771,27 @@ init_pipeline_statistic_query_registers(struct brw_context *brw)
    query->data_size = sizeof(uint64_t) * query->n_counters;
 }
 
-static bool
-read_file_uint64(const char *file, uint64_t *val)
+static void
+register_oa_config(struct brw_context *brw,
+                   const struct brw_perf_query_info *query,
+                   uint64_t config_id)
 {
-    char buf[32];
-    int fd, n;
-
-    fd = open(file, 0);
-    if (fd < 0)
-	return false;
-    n = read(fd, buf, sizeof (buf) - 1);
-    close(fd);
-    if (n < 0)
-	return false;
-
-    buf[n] = '\0';
-    *val = strtoull(buf, NULL, 0);
-
-    return true;
+   struct brw_perf_query_info *registred_query = append_query_info(brw);
+   *registred_query = *query;
+   registred_query->oa_metrics_set_id = config_id;
+   DBG("metric set registred: id = %" PRIu64", guid = %s\n",
+       registred_query->oa_metrics_set_id, query->guid);
 }
 
 static void
-enumerate_sysfs_metrics(struct brw_context *brw, const char *sysfs_dev_dir)
+enumerate_sysfs_metrics(struct brw_context *brw)
 {
    char buf[256];
    DIR *metricsdir = NULL;
    struct dirent *metric_entry;
    int len;
 
-   len = snprintf(buf, sizeof(buf), "%s/metrics", sysfs_dev_dir);
+   len = snprintf(buf, sizeof(buf), "%s/metrics", brw->perfquery.sysfs_dev_dir);
    if (len < 0 || len >= sizeof(buf)) {
       DBG("Failed to concatenate path to sysfs metrics/ directory\n");
       return;
@@ -1761,11 +1815,10 @@ enumerate_sysfs_metrics(struct brw_context *brw, const char *sysfs_dev_dir)
       entry = _mesa_hash_table_search(brw->perfquery.oa_metrics_table,
                                       metric_entry->d_name);
       if (entry) {
-         struct brw_perf_query_info *query;
          uint64_t id;
 
          len = snprintf(buf, sizeof(buf), "%s/metrics/%s/id",
-                        sysfs_dev_dir, metric_entry->d_name);
+                        brw->perfquery.sysfs_dev_dir, metric_entry->d_name);
          if (len < 0 || len >= sizeof(buf)) {
             DBG("Failed to concatenate path to sysfs metric id file\n");
             continue;
@@ -1776,12 +1829,7 @@ enumerate_sysfs_metrics(struct brw_context *brw, const char *sysfs_dev_dir)
             continue;
          }
 
-         query = append_query_info(brw);
-         *query = *(struct brw_perf_query_info *)entry->data;
-         query->oa_metrics_set_id = id;
-
-         DBG("metric set known by mesa: id = %" PRIu64"\n",
-             query->oa_metrics_set_id);
+         register_oa_config(brw, (const struct brw_perf_query_info *)entry->data, id);
       } else
          DBG("metric set not known by mesa (skipping)\n");
    }
@@ -1790,125 +1838,212 @@ enumerate_sysfs_metrics(struct brw_context *brw, const char *sysfs_dev_dir)
 }
 
 static bool
-read_sysfs_drm_device_file_uint64(struct brw_context *brw,
-                                  const char *sysfs_dev_dir,
-                                  const char *file,
-                                  uint64_t *value)
+kernel_has_dynamic_config_support(struct brw_context *brw)
 {
-   char buf[512];
-   int len;
+   __DRIscreen *screen = brw->screen->driScrnPriv;
+   struct hash_entry *entry;
 
-   len = snprintf(buf, sizeof(buf), "%s/%s", sysfs_dev_dir, file);
-   if (len < 0 || len >= sizeof(buf)) {
-      DBG("Failed to concatenate sys filename to read u64 from\n");
-      return false;
+   hash_table_foreach(brw->perfquery.oa_metrics_table, entry) {
+      struct brw_perf_query_info *query = entry->data;
+      char config_path[280];
+      uint64_t config_id;
+
+      snprintf(config_path, sizeof(config_path), "%s/metrics/%s/id",
+               brw->perfquery.sysfs_dev_dir, query->guid);
+
+      /* Look for the test config, which we know we can't replace. */
+      if (read_file_uint64(config_path, &config_id) && config_id == 1) {
+         return drmIoctl(screen->fd, DRM_IOCTL_I915_PERF_REMOVE_CONFIG,
+                         &config_id) < 0 && errno == ENOENT;
+      }
    }
 
-   return read_file_uint64(buf, value);
+   return false;
+}
+
+static void
+init_oa_configs(struct brw_context *brw)
+{
+   __DRIscreen *screen = brw->screen->driScrnPriv;
+   struct hash_entry *entry;
+
+   hash_table_foreach(brw->perfquery.oa_metrics_table, entry) {
+      const struct brw_perf_query_info *query = entry->data;
+      struct drm_i915_perf_oa_config config;
+      char config_path[280];
+      uint64_t config_id;
+      int ret;
+
+      snprintf(config_path, sizeof(config_path), "%s/metrics/%s/id",
+               brw->perfquery.sysfs_dev_dir, query->guid);
+
+      /* Don't recreate already loaded configs. */
+      if (read_file_uint64(config_path, &config_id)) {
+         DBG("metric set: %s (already loaded)\n", query->guid);
+         register_oa_config(brw, query, config_id);
+         continue;
+      }
+
+      memset(&config, 0, sizeof(config));
+
+      memcpy(config.uuid, query->guid, sizeof(config.uuid));
+
+      config.n_mux_regs = query->n_mux_regs;
+      config.mux_regs_ptr = (uintptr_t) query->mux_regs;
+
+      config.n_boolean_regs = query->n_b_counter_regs;
+      config.boolean_regs_ptr = (uintptr_t) query->b_counter_regs;
+
+      config.n_flex_regs = query->n_flex_regs;
+      config.flex_regs_ptr = (uintptr_t) query->flex_regs;
+
+      ret = drmIoctl(screen->fd, DRM_IOCTL_I915_PERF_ADD_CONFIG, &config);
+      if (ret < 0) {
+         DBG("Failed to load \"%s\" (%s) metrics set in kernel: %s\n",
+             query->name, query->guid, strerror(errno));
+         continue;
+      }
+
+      register_oa_config(brw, query, ret);
+      DBG("metric set: %s (added)\n", query->guid);
+   }
 }
 
 static bool
-init_oa_sys_vars(struct brw_context *brw, const char *sysfs_dev_dir)
+query_topology(struct brw_context *brw)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   uint64_t min_freq_mhz = 0, max_freq_mhz = 0;
    __DRIscreen *screen = brw->screen->driScrnPriv;
+   struct drm_i915_query_item item = {
+      .query_id = DRM_I915_QUERY_TOPOLOGY_INFO,
+   };
+   struct drm_i915_query query = {
+      .num_items = 1,
+      .items_ptr = (uintptr_t) &item,
+   };
 
-   if (!read_sysfs_drm_device_file_uint64(brw, sysfs_dev_dir,
-                                          "gt_min_freq_mhz",
-                                          &min_freq_mhz))
+   if (drmIoctl(screen->fd, DRM_IOCTL_I915_QUERY, &query))
       return false;
 
-   if (!read_sysfs_drm_device_file_uint64(brw, sysfs_dev_dir,
-                                          "gt_max_freq_mhz",
-                                          &max_freq_mhz))
+   struct drm_i915_query_topology_info *topo_info =
+      (struct drm_i915_query_topology_info *) calloc(1, item.length);
+   item.data_ptr = (uintptr_t) topo_info;
+
+   if (drmIoctl(screen->fd, DRM_IOCTL_I915_QUERY, &query) ||
+       item.length <= 0)
       return false;
 
-   brw->perfquery.sys_vars.gt_min_freq = min_freq_mhz * 1000000;
-   brw->perfquery.sys_vars.gt_max_freq = max_freq_mhz * 1000000;
-   brw->perfquery.sys_vars.timestamp_frequency = devinfo->timestamp_frequency;
+   gen_device_info_update_from_topology(&brw->screen->devinfo,
+                                        topo_info);
 
-   brw->perfquery.sys_vars.revision = intel_device_get_revision(screen->fd);
-   brw->perfquery.sys_vars.n_eu_slices = devinfo->num_slices;
-   /* Assuming uniform distribution of subslices per slices. */
-   brw->perfquery.sys_vars.n_eu_sub_slices = devinfo->num_subslices[0];
-
-   if (devinfo->is_haswell) {
-      brw->perfquery.sys_vars.slice_mask = 0;
-      brw->perfquery.sys_vars.subslice_mask = 0;
-
-      for (int s = 0; s < devinfo->num_slices; s++)
-         brw->perfquery.sys_vars.slice_mask |= 1U << s;
-      for (int ss = 0; ss < devinfo->num_subslices[0]; ss++)
-         brw->perfquery.sys_vars.subslice_mask |= 1U << ss;
-
-      if (devinfo->gt == 1) {
-         brw->perfquery.sys_vars.n_eus = 10;
-      } else if (devinfo->gt == 2) {
-         brw->perfquery.sys_vars.n_eus = 20;
-      } else if (devinfo->gt == 3) {
-         brw->perfquery.sys_vars.n_eus = 40;
-      } else
-         unreachable("not reached");
-   } else {
-      drm_i915_getparam_t gp;
-      int ret;
-      int slice_mask = 0;
-      int ss_mask = 0;
-      /* maximum number of slices */
-      int s_max = devinfo->num_slices;
-      /* maximum number of subslices per slice (assuming uniform subslices per
-       * slices)
-       */
-      int ss_max = devinfo->num_subslices[0];
-      uint64_t subslice_mask = 0;
-      int s;
-
-      gp.param = I915_PARAM_SLICE_MASK;
-      gp.value = &slice_mask;
-      ret = drmIoctl(screen->fd, DRM_IOCTL_I915_GETPARAM, &gp);
-      if (ret)
-         return false;
-
-      gp.param = I915_PARAM_SUBSLICE_MASK;
-      gp.value = &ss_mask;
-      ret = drmIoctl(screen->fd, DRM_IOCTL_I915_GETPARAM, &gp);
-      if (ret)
-         return false;
-
-      brw->perfquery.sys_vars.n_eus = brw->screen->eu_total;
-      brw->perfquery.sys_vars.n_eu_slices = __builtin_popcount(slice_mask);
-      brw->perfquery.sys_vars.slice_mask = slice_mask;
-
-      /* Note: the _SUBSLICE_MASK param only reports a global subslice mask
-       * which applies to all slices.
-       *
-       * Note: some of the metrics we have (as described in XML) are
-       * conditional on a $SubsliceMask variable which is expected to also
-       * reflect the slice mask by packing together subslice masks for each
-       * slice in one value..
-       */
-      for (s = 0; s < s_max; s++) {
-         if (slice_mask & (1<<s)) {
-            subslice_mask |= ss_mask << (ss_max * s);
-         }
-      }
-
-      brw->perfquery.sys_vars.subslice_mask = subslice_mask;
-      brw->perfquery.sys_vars.n_eu_sub_slices =
-         __builtin_popcount(subslice_mask);
-   }
-
-   brw->perfquery.sys_vars.eu_threads_count =
-      brw->perfquery.sys_vars.n_eus * devinfo->num_thread_per_eu;
+   free(topo_info);
 
    return true;
 }
 
 static bool
-get_sysfs_dev_dir(struct brw_context *brw,
-                  char *path_buf,
-                  int path_buf_len)
+getparam_topology(struct brw_context *brw)
+{
+   __DRIscreen *screen = brw->screen->driScrnPriv;
+   drm_i915_getparam_t gp;
+   int ret;
+
+   int slice_mask = 0;
+   gp.param = I915_PARAM_SLICE_MASK;
+   gp.value = &slice_mask;
+   ret = drmIoctl(screen->fd, DRM_IOCTL_I915_GETPARAM, &gp);
+   if (ret)
+      return false;
+
+   int subslice_mask = 0;
+   gp.param = I915_PARAM_SUBSLICE_MASK;
+   gp.value = &subslice_mask;
+   ret = drmIoctl(screen->fd, DRM_IOCTL_I915_GETPARAM, &gp);
+   if (ret)
+      return false;
+
+   gen_device_info_update_from_masks(&brw->screen->devinfo,
+                                     slice_mask,
+                                     subslice_mask,
+                                     brw->screen->eu_total);
+
+   return true;
+}
+
+static void
+compute_topology_builtins(struct brw_context *brw)
+{
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   brw->perfquery.sys_vars.slice_mask = devinfo->slice_masks;
+   brw->perfquery.sys_vars.n_eu_slices = devinfo->num_slices;
+
+   for (int i = 0; i < sizeof(devinfo->subslice_masks[i]); i++) {
+      brw->perfquery.sys_vars.n_eu_sub_slices +=
+         _mesa_bitcount(devinfo->subslice_masks[i]);
+   }
+
+   for (int i = 0; i < sizeof(devinfo->eu_masks); i++)
+      brw->perfquery.sys_vars.n_eus += _mesa_bitcount(devinfo->eu_masks[i]);
+
+   brw->perfquery.sys_vars.eu_threads_count =
+      brw->perfquery.sys_vars.n_eus * devinfo->num_thread_per_eu;
+
+   /* At the moment the subslice mask builtin has groups of 3bits for each
+    * slice.
+    *
+    * Ideally equations would be updated to have a slice/subslice query
+    * function/operator.
+    */
+   brw->perfquery.sys_vars.subslice_mask = 0;
+   for (int s = 0; s < util_last_bit(devinfo->slice_masks); s++) {
+      for (int ss = 0; ss < (devinfo->subslice_slice_stride * 8); ss++) {
+         if (gen_device_info_subslice_available(devinfo, s, ss))
+            brw->perfquery.sys_vars.subslice_mask |= 1UL << (s * 3 + ss);
+      }
+   }
+}
+
+static bool
+init_oa_sys_vars(struct brw_context *brw)
+{
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   uint64_t min_freq_mhz = 0, max_freq_mhz = 0;
+   __DRIscreen *screen = brw->screen->driScrnPriv;
+
+   if (!read_sysfs_drm_device_file_uint64(brw, "gt_min_freq_mhz", &min_freq_mhz))
+      return false;
+
+   if (!read_sysfs_drm_device_file_uint64(brw,  "gt_max_freq_mhz", &max_freq_mhz))
+      return false;
+
+   if (!query_topology(brw)) {
+      /* We need the i915 query uAPI on CNL+ (kernel 4.17+). */
+      if (devinfo->gen >= 10)
+         return false;
+
+      if (!getparam_topology(brw)) {
+         /* We need the SLICE_MASK/SUBSLICE_MASK on gen8+ (kernel 4.13+). */
+         if (devinfo->gen >= 8)
+            return false;
+
+         /* On Haswell, the values are already computed for us in
+          * gen_device_info.
+          */
+      }
+   }
+
+   memset(&brw->perfquery.sys_vars, 0, sizeof(brw->perfquery.sys_vars));
+   brw->perfquery.sys_vars.gt_min_freq = min_freq_mhz * 1000000;
+   brw->perfquery.sys_vars.gt_max_freq = max_freq_mhz * 1000000;
+   brw->perfquery.sys_vars.timestamp_frequency = devinfo->timestamp_frequency;
+   brw->perfquery.sys_vars.revision = intel_device_get_revision(screen->fd);
+   compute_topology_builtins(brw);
+
+   return true;
+}
+
+static bool
+get_sysfs_dev_dir(struct brw_context *brw)
 {
    __DRIscreen *screen = brw->screen->driScrnPriv;
    struct stat sb;
@@ -1917,9 +2052,7 @@ get_sysfs_dev_dir(struct brw_context *brw,
    struct dirent *drm_entry;
    int len;
 
-   assert(path_buf);
-   assert(path_buf_len);
-   path_buf[0] = '\0';
+   brw->perfquery.sysfs_dev_dir[0] = '\0';
 
    if (fstat(screen->fd, &sb)) {
       DBG("Failed to stat DRM fd\n");
@@ -1934,16 +2067,17 @@ get_sysfs_dev_dir(struct brw_context *brw,
       return false;
    }
 
-   len = snprintf(path_buf, path_buf_len,
+   len = snprintf(brw->perfquery.sysfs_dev_dir,
+                  sizeof(brw->perfquery.sysfs_dev_dir),
                   "/sys/dev/char/%d:%d/device/drm", maj, min);
-   if (len < 0 || len >= path_buf_len) {
+   if (len < 0 || len >= sizeof(brw->perfquery.sysfs_dev_dir)) {
       DBG("Failed to concatenate sysfs path to drm device\n");
       return false;
    }
 
-   drmdir = opendir(path_buf);
+   drmdir = opendir(brw->perfquery.sysfs_dev_dir);
    if (!drmdir) {
-      DBG("Failed to open %s: %m\n", path_buf);
+      DBG("Failed to open %s: %m\n", brw->perfquery.sysfs_dev_dir);
       return false;
    }
 
@@ -1952,11 +2086,12 @@ get_sysfs_dev_dir(struct brw_context *brw,
            drm_entry->d_type == DT_LNK) &&
           strncmp(drm_entry->d_name, "card", 4) == 0)
       {
-         len = snprintf(path_buf, path_buf_len,
+         len = snprintf(brw->perfquery.sysfs_dev_dir,
+                        sizeof(brw->perfquery.sysfs_dev_dir),
                         "/sys/dev/char/%d:%d/device/drm/%s",
                         maj, min, drm_entry->d_name);
          closedir(drmdir);
-         if (len < 0 || len >= path_buf_len)
+         if (len < 0 || len >= sizeof(brw->perfquery.sysfs_dev_dir))
             return false;
          else
             return true;
@@ -2000,6 +2135,15 @@ get_register_queries_function(const struct gen_device_info *devinfo)
    }
    if (devinfo->is_geminilake)
       return brw_oa_register_queries_glk;
+   if (devinfo->is_coffeelake) {
+      if (devinfo->gt == 2)
+         return brw_oa_register_queries_cflgt2;
+      if (devinfo->gt == 3)
+         return brw_oa_register_queries_cflgt3;
+   }
+   if (devinfo->is_cannonlake)
+      return brw_oa_register_queries_cnl;
+
    return NULL;
 }
 
@@ -2010,7 +2154,6 @@ brw_init_perf_query_info(struct gl_context *ctx)
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
    bool i915_perf_oa_available = false;
    struct stat sb;
-   char sysfs_dev_dir[128];
    perf_register_oa_queries_t oa_register;
 
    if (brw->perfquery.n_queries)
@@ -2042,8 +2185,8 @@ brw_init_perf_query_info(struct gl_context *ctx)
 
    if (i915_perf_oa_available &&
        oa_register &&
-       get_sysfs_dev_dir(brw, sysfs_dev_dir, sizeof(sysfs_dev_dir)) &&
-       init_oa_sys_vars(brw, sysfs_dev_dir))
+       get_sysfs_dev_dir(brw) &&
+       init_oa_sys_vars(brw))
    {
       brw->perfquery.oa_metrics_table =
          _mesa_hash_table_create(NULL, _mesa_key_hash_string,
@@ -2054,7 +2197,11 @@ brw_init_perf_query_info(struct gl_context *ctx)
        */
       oa_register(brw);
 
-      enumerate_sysfs_metrics(brw, sysfs_dev_dir);
+      if (likely((INTEL_DEBUG & DEBUG_NO_OACONFIG) == 0) &&
+          kernel_has_dynamic_config_support(brw))
+         init_oa_configs(brw);
+      else
+         enumerate_sysfs_metrics(brw);
    }
 
    brw->perfquery.unaccumulated =

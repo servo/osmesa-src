@@ -27,6 +27,7 @@
  */
 
 #include "freedreno_context.h"
+#include "freedreno_blitter.h"
 #include "freedreno_draw.h"
 #include "freedreno_fence.h"
 #include "freedreno_program.h"
@@ -40,31 +41,32 @@
 #include "util/u_upload_mgr.h"
 
 static void
-fd_context_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
+fd_context_flush(struct pipe_context *pctx, struct pipe_fence_handle **fencep,
 		unsigned flags)
 {
 	struct fd_context *ctx = fd_context(pctx);
+	struct pipe_fence_handle *fence = NULL;
+
+	DBG("%p: flush: flags=%x\n", ctx->batch, flags);
+
+	/* Take a ref to the batch's fence (batch can be unref'd when flushed: */
+	fd_fence_ref(pctx->screen, &fence, ctx->batch->fence);
 
 	if (flags & PIPE_FLUSH_FENCE_FD)
 		ctx->batch->needs_out_fence_fd = true;
 
 	if (!ctx->screen->reorder) {
-		fd_batch_flush(ctx->batch, true);
+		fd_batch_flush(ctx->batch, true, false);
+	} else if (flags & PIPE_FLUSH_DEFERRED) {
+		fd_bc_flush_deferred(&ctx->screen->batch_cache, ctx);
 	} else {
 		fd_bc_flush(&ctx->screen->batch_cache, ctx);
 	}
 
-	if (fence) {
-		/* if there hasn't been any rendering submitted yet, we might not
-		 * have actually created a fence
-		 */
-		if (!ctx->last_fence || ctx->batch->needs_out_fence_fd) {
-			ctx->batch->needs_flush = true;
-			fd_gmem_render_noop(ctx->batch);
-			fd_batch_reset(ctx->batch);
-		}
-		fd_fence_ref(pctx->screen, fence, ctx->last_fence);
-	}
+	if (fencep)
+		fd_fence_ref(pctx->screen, fencep, fence);
+
+	fd_fence_ref(pctx->screen, &fence, NULL);
 }
 
 static void
@@ -76,6 +78,13 @@ fd_texture_barrier(struct pipe_context *pctx, unsigned flags)
 	 * us to use GMEM, and a flush in bypass isn't the end of the world.
 	 */
 	fd_context_flush(pctx, NULL, 0);
+}
+
+static void
+fd_memory_barrier(struct pipe_context *pctx, unsigned flags)
+{
+	fd_context_flush(pctx, NULL, 0);
+	/* TODO do we need to check for persistently mapped buffers and fd_bo_cpu_prep()?? */
 }
 
 /**
@@ -129,8 +138,6 @@ fd_context_destroy(struct pipe_context *pctx)
 	fd_batch_reference(&ctx->batch, NULL);  /* unref current batch */
 	fd_bc_invalidate_context(ctx);
 
-	fd_fence_ref(pctx->screen, &ctx->last_fence, NULL);
-
 	fd_prog_fini(pctx);
 
 	if (ctx->blitter)
@@ -158,9 +165,10 @@ fd_context_destroy(struct pipe_context *pctx)
 	fd_pipe_del(ctx->pipe);
 
 	if (fd_mesa_debug & (FD_DBG_BSTAT | FD_DBG_MSGS)) {
-		printf("batch_total=%u, batch_sysmem=%u, batch_gmem=%u, batch_restore=%u\n",
+		printf("batch_total=%u, batch_sysmem=%u, batch_gmem=%u, batch_nondraw=%u, batch_restore=%u\n",
 			(uint32_t)ctx->stats.batch_total, (uint32_t)ctx->stats.batch_sysmem,
-			(uint32_t)ctx->stats.batch_gmem, (uint32_t)ctx->stats.batch_restore);
+			(uint32_t)ctx->stats.batch_gmem, (uint32_t)ctx->stats.batch_nondraw,
+			(uint32_t)ctx->stats.batch_restore);
 	}
 
 	FREE(ctx);
@@ -260,10 +268,19 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 {
 	struct fd_screen *screen = fd_screen(pscreen);
 	struct pipe_context *pctx;
+	unsigned prio = 1;
 	int i;
 
+	/* lower numerical value == higher priority: */
+	if (fd_mesa_debug & FD_DBG_HIPRIO)
+		prio = 0;
+	else if (flags & PIPE_CONTEXT_HIGH_PRIORITY)
+		prio = 0;
+	else if (flags & PIPE_CONTEXT_LOW_PRIORITY)
+		prio = 2;
+
 	ctx->screen = screen;
-	ctx->pipe = fd_pipe_new(screen->dev, FD_PIPE_3D);
+	ctx->pipe = fd_pipe_new2(screen->dev, FD_PIPE_3D, prio);
 
 	ctx->primtypes = primtypes;
 	ctx->primtype_mask = 0;
@@ -285,6 +302,7 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 	pctx->create_fence_fd = fd_create_fence_fd;
 	pctx->fence_server_sync = fd_fence_server_sync;
 	pctx->texture_barrier = fd_texture_barrier;
+	pctx->memory_barrier = fd_memory_barrier;
 
 	pctx->stream_uploader = u_upload_create_default(pctx);
 	if (!pctx->stream_uploader)
@@ -294,6 +312,9 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 	ctx->batch = fd_bc_alloc_batch(&screen->batch_cache, ctx);
 
 	slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);
+
+	if (!ctx->blit)
+		ctx->blit = fd_blitter_blit;
 
 	fd_draw_init(pctx);
 	fd_resource_context_init(pctx);

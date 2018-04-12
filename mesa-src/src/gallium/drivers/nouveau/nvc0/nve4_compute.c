@@ -59,7 +59,8 @@ nve4_screen_compute_setup(struct nvc0_screen *screen,
       obj_class = GM200_COMPUTE_CLASS;
       break;
    case 0x130:
-      obj_class = dev->chipset == 0x130 ? GP100_COMPUTE_CLASS : GP104_COMPUTE_CLASS;
+      obj_class = (dev->chipset == 0x130 || dev->chipset == 0x13b) ?
+                      GP100_COMPUTE_CLASS : GP104_COMPUTE_CLASS;
       break;
    default:
       NOUVEAU_ERR("unsupported chipset: NV%02x\n", dev->chipset);
@@ -681,6 +682,16 @@ nve4_launch_grid(struct pipe_context *pipe, const struct pipe_grid_info *info)
    BCTX_REFN_bo(nvc0->bufctx_cp, CP_DESC, NOUVEAU_BO_GART | NOUVEAU_BO_RD,
                 desc_bo);
 
+   list_for_each_entry(struct nvc0_resident, resident, &nvc0->tex_head, list) {
+      nvc0_add_resident(nvc0->bufctx_cp, NVC0_BIND_CP_BINDLESS, resident->buf,
+                        resident->flags);
+   }
+
+   list_for_each_entry(struct nvc0_resident, resident, &nvc0->img_head, list) {
+      nvc0_add_resident(nvc0->bufctx_cp, NVC0_BIND_CP_BINDLESS, resident->buf,
+                        resident->flags);
+   }
+
    ret = !nve4_state_validate_cp(nvc0, ~0);
    if (ret)
       goto out;
@@ -742,6 +753,7 @@ out:
       NOUVEAU_ERR("Failed to launch grid !\n");
    nouveau_scratch_done(&nvc0->base);
    nouveau_bufctx_reset(nvc0->bufctx_cp, NVC0_BIND_CP_DESC);
+   nouveau_bufctx_reset(nvc0->bufctx_cp, NVC0_BIND_CP_BINDLESS);
 }
 
 

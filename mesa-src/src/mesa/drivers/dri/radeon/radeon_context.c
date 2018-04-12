@@ -194,6 +194,7 @@ r100CreateContext( gl_api api,
     * (the texture functions are especially important)
     */
    _mesa_init_driver_functions( &functions );
+   _tnl_init_driver_draw_function( &functions );
    radeonInitTextureFuncs( &rmesa->radeon, &functions );
    radeonInitQueryObjFunctions(&functions);
 
@@ -329,12 +330,6 @@ r100CreateContext( gl_api api,
 			    fthrottle_mode == DRI_CONF_FTHROTTLE_IRQS);
 
    rmesa->radeon.do_usleeps = (fthrottle_mode == DRI_CONF_FTHROTTLE_USLEEPS);
-
-
-#if DO_DEBUG
-   RADEON_DEBUG = parse_debug_string( getenv( "RADEON_DEBUG" ),
-                                      debug_control );
-#endif
 
    tcl_mode = driQueryOptioni(&rmesa->radeon.optionCache, "tcl_mode");
    if (driQueryOptionb(&rmesa->radeon.optionCache, "no_rast")) {

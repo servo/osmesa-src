@@ -35,13 +35,13 @@ void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 {
 	/* Flush the DMA IB if it's not empty. */
 	if (radeon_emitted(ctx->b.dma.cs, 0))
-		ctx->b.dma.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+		ctx->b.dma.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 
 	if (!radeon_cs_memory_below_limit(ctx->b.screen, ctx->b.gfx.cs,
 					  ctx->b.vram, ctx->b.gtt)) {
 		ctx->b.gtt = 0;
 		ctx->b.vram = 0;
-		ctx->b.gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+		ctx->b.gfx.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 		return;
 	}
 	/* all will be accounted once relocation are emited */
@@ -82,7 +82,7 @@ void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 
 	/* Flush if there's not enough space. */
 	if (!ctx->b.ws->cs_check_space(ctx->b.gfx.cs, num_dw)) {
-		ctx->b.gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+		ctx->b.gfx.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 	}
 }
 
@@ -121,6 +121,11 @@ void r600_flush_emit(struct r600_context *rctx)
 	if (rctx->b.flags & R600_CONTEXT_PS_PARTIAL_FLUSH) {
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4));
+	}
+
+	if (rctx->b.flags & R600_CONTEXT_CS_PARTIAL_FLUSH) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_CS_PARTIAL_FLUSH) | EVENT_INDEX(4));
 	}
 
 	if (wait_until) {
@@ -348,8 +353,12 @@ void r600_begin_new_cs(struct r600_context *ctx)
 	r600_mark_atom_dirty(ctx, &ctx->db_misc_state.atom);
 	r600_mark_atom_dirty(ctx, &ctx->db_state.atom);
 	r600_mark_atom_dirty(ctx, &ctx->framebuffer.atom);
-	if (ctx->b.chip_class >= EVERGREEN)
+	if (ctx->b.chip_class >= EVERGREEN) {
 		r600_mark_atom_dirty(ctx, &ctx->fragment_images.atom);
+		r600_mark_atom_dirty(ctx, &ctx->fragment_buffers.atom);
+		r600_mark_atom_dirty(ctx, &ctx->compute_images.atom);
+		r600_mark_atom_dirty(ctx, &ctx->compute_buffers.atom);
+	}
 	r600_mark_atom_dirty(ctx, &ctx->hw_shader_stages[R600_HW_STAGE_PS].atom);
 	r600_mark_atom_dirty(ctx, &ctx->poly_offset_state.atom);
 	r600_mark_atom_dirty(ctx, &ctx->vgt_state.atom);
@@ -406,6 +415,10 @@ void r600_begin_new_cs(struct r600_context *ctx)
 		r600_sampler_states_dirty(ctx, &samplers->states);
 	}
 
+	for (shader = 0; shader < ARRAY_SIZE(ctx->scratch_buffers); shader++) {
+		ctx->scratch_buffers[shader].dirty = true;
+	}
+
 	r600_postflush_resume_features(&ctx->b);
 
 	/* Re-emit the draw state. */
@@ -439,7 +452,7 @@ void r600_emit_pfp_sync_me(struct r600_context *rctx)
 				     &offset, (struct pipe_resource**)&buf);
 		if (!buf) {
 			/* This is too heavyweight, but will work. */
-			rctx->b.gfx.flush(rctx, RADEON_FLUSH_ASYNC, NULL);
+			rctx->b.gfx.flush(rctx, PIPE_FLUSH_ASYNC, NULL);
 			return;
 		}
 

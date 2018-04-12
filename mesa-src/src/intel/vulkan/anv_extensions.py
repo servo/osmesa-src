@@ -29,20 +29,38 @@ import copy
 import re
 import xml.etree.cElementTree as et
 
-from mako.template import Template
-
-MAX_API_VERSION = '1.0.57'
+def _bool_to_c_expr(b):
+    if b is True:
+        return 'true';
+    elif b is False:
+        return 'false';
+    else:
+        return b;
 
 class Extension:
     def __init__(self, name, ext_version, enable):
         self.name = name
         self.ext_version = int(ext_version)
-        if enable is True:
-            self.enable = 'true';
-        elif enable is False:
-            self.enable = 'false';
-        else:
-            self.enable = enable;
+        self.enable = _bool_to_c_expr(enable)
+
+class ApiVersion:
+    def __init__(self, max_patch_version, enable):
+        self.max_patch_version = max_patch_version
+        self.enable = _bool_to_c_expr(enable)
+
+# Supported API versions.  Each one is the maximum patch version for the given
+# version.  Version come in increasing order and each version is available if
+# it's provided "enable" condition is true and all previous versions are
+# available.
+API_VERSIONS = [
+    ApiVersion('1.0.57',    True),
+
+    # DRM_IOCTL_SYNCOBJ_WAIT is required for VK_KHR_external_fence which is a
+    # required core feature in Vulkan 1.1
+    ApiVersion('1.1.0',     'device->has_syncobj_wait'),
+]
+
+MAX_API_VERSION = None # Computed later
 
 # On Android, we disable all surface and swapchain extensions. Android's Vulkan
 # loader implements VK_KHR_surface and VK_KHR_swapchain, and applications
@@ -51,9 +69,12 @@ class Extension:
 # and dEQP-VK.api.info.device fail due to the duplicated strings.
 EXTENSIONS = [
     Extension('VK_ANDROID_native_buffer',                 5, 'ANDROID'),
+    Extension('VK_KHR_16bit_storage',                     1, 'device->info.gen >= 8'),
     Extension('VK_KHR_bind_memory2',                      1, True),
     Extension('VK_KHR_dedicated_allocation',              1, True),
     Extension('VK_KHR_descriptor_update_template',        1, True),
+    Extension('VK_KHR_device_group',                      1, True),
+    Extension('VK_KHR_device_group_creation',             1, True),
     Extension('VK_KHR_external_fence',                    1,
               'device->has_syncobj_wait'),
     Extension('VK_KHR_external_fence_capabilities',       1, True),
@@ -69,9 +90,10 @@ EXTENSIONS = [
     Extension('VK_KHR_get_physical_device_properties2',   1, True),
     Extension('VK_KHR_get_surface_capabilities2',         1, 'ANV_HAS_SURFACE'),
     Extension('VK_KHR_image_format_list',                 1, True),
-    Extension('VK_KHR_incremental_present',               1, True),
+    Extension('VK_KHR_incremental_present',               1, 'ANV_HAS_SURFACE'),
     Extension('VK_KHR_maintenance1',                      1, True),
     Extension('VK_KHR_maintenance2',                      1, True),
+    Extension('VK_KHR_maintenance3',                      1, True),
     Extension('VK_KHR_push_descriptor',                   1, True),
     Extension('VK_KHR_relaxed_block_layout',              1, True),
     Extension('VK_KHR_sampler_mirror_clamp_to_edge',      1, True),
@@ -84,8 +106,11 @@ EXTENSIONS = [
     Extension('VK_KHR_wayland_surface',                   6, 'VK_USE_PLATFORM_WAYLAND_KHR'),
     Extension('VK_KHR_xcb_surface',                       6, 'VK_USE_PLATFORM_XCB_KHR'),
     Extension('VK_KHR_xlib_surface',                      6, 'VK_USE_PLATFORM_XLIB_KHR'),
-    Extension('VK_KHX_multiview',                         1, True),
+    Extension('VK_KHR_multiview',                         1, True),
     Extension('VK_EXT_debug_report',                      8, True),
+    Extension('VK_EXT_external_memory_dma_buf',           1, True),
+    Extension('VK_EXT_global_priority',                   1,
+              'device->has_context_priority'),
 ]
 
 class VkVersion:
@@ -112,7 +137,8 @@ class VkVersion:
         return '.'.join(ver_list)
 
     def c_vk_version(self):
-        ver_list = [str(self.major), str(self.minor), str(self.patch)]
+        patch = self.patch if self.patch is not None else 0
+        ver_list = [str(self.major), str(self.minor), str(patch)]
         return 'VK_MAKE_VERSION(' + ', '.join(ver_list) + ')'
 
     def __int_ver(self):
@@ -129,156 +155,9 @@ class VkVersion:
 
         return self.__int_ver().__cmp__(other.__int_ver())
 
-MAX_API_VERSION = VkVersion(MAX_API_VERSION)
 
-def _init_exts_from_xml(xml):
-    """ Walk the Vulkan XML and fill out extra extension information. """
-
-    xml = et.parse(xml)
-
-    ext_name_map = {}
-    for ext in EXTENSIONS:
-        ext_name_map[ext.name] = ext
-
-    for ext_elem in xml.findall('.extensions/extension'):
-        ext_name = ext_elem.attrib['name']
-        if ext_name not in ext_name_map:
-            continue
-
-        # Workaround for VK_ANDROID_native_buffer. Its <extension> element in
-        # vk.xml lists it as supported="disabled" and provides only a stub
-        # definition.  Its <extension> element in Mesa's custom
-        # vk_android_native_buffer.xml, though, lists it as
-        # supported='android-vendor' and fully defines the extension. We want
-        # to skip the <extension> element in vk.xml.
-        if ext_elem.attrib['supported'] == 'disabled':
-            assert ext_name == 'VK_ANDROID_native_buffer'
-            continue
-
-        ext = ext_name_map[ext_name]
-        ext.type = ext_elem.attrib['type']
-
-_TEMPLATE = Template(COPYRIGHT + """
-#include "anv_private.h"
-
-#include "vk_util.h"
-
-/* Convert the VK_USE_PLATFORM_* defines to booleans */
-%for platform in ['ANDROID', 'WAYLAND', 'XCB', 'XLIB']:
-#ifdef VK_USE_PLATFORM_${platform}_KHR
-#   undef VK_USE_PLATFORM_${platform}_KHR
-#   define VK_USE_PLATFORM_${platform}_KHR true
-#else
-#   define VK_USE_PLATFORM_${platform}_KHR false
-#endif
-%endfor
-
-/* And ANDROID too */
-#ifdef ANDROID
-#   undef ANDROID
-#   define ANDROID true
-#else
-#   define ANDROID false
-#endif
-
-#define ANV_HAS_SURFACE (VK_USE_PLATFORM_WAYLAND_KHR || \\
-                         VK_USE_PLATFORM_XCB_KHR || \\
-                         VK_USE_PLATFORM_XLIB_KHR)
-
-bool
-anv_instance_extension_supported(const char *name)
-{
-%for ext in instance_extensions:
-    if (strcmp(name, "${ext.name}") == 0)
-        return ${ext.enable};
-%endfor
-    return false;
-}
-
-VkResult anv_EnumerateInstanceExtensionProperties(
-    const char*                                 pLayerName,
-    uint32_t*                                   pPropertyCount,
-    VkExtensionProperties*                      pProperties)
-{
-    VK_OUTARRAY_MAKE(out, pProperties, pPropertyCount);
-
-%for ext in instance_extensions:
-    if (${ext.enable}) {
-        vk_outarray_append(&out, prop) {
-            *prop = (VkExtensionProperties) {
-                .extensionName = "${ext.name}",
-                .specVersion = ${ext.ext_version},
-            };
-        }
-    }
-%endfor
-
-    return vk_outarray_status(&out);
-}
-
-uint32_t
-anv_physical_device_api_version(struct anv_physical_device *dev)
-{
-    return ${MAX_API_VERSION.c_vk_version()};
-}
-
-bool
-anv_physical_device_extension_supported(struct anv_physical_device *device,
-                                        const char *name)
-{
-%for ext in device_extensions:
-    if (strcmp(name, "${ext.name}") == 0)
-        return ${ext.enable};
-%endfor
-    return false;
-}
-
-VkResult anv_EnumerateDeviceExtensionProperties(
-    VkPhysicalDevice                            physicalDevice,
-    const char*                                 pLayerName,
-    uint32_t*                                   pPropertyCount,
-    VkExtensionProperties*                      pProperties)
-{
-    ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
-    VK_OUTARRAY_MAKE(out, pProperties, pPropertyCount);
-    (void)device;
-
-%for ext in device_extensions:
-    if (${ext.enable}) {
-        vk_outarray_append(&out, prop) {
-            *prop = (VkExtensionProperties) {
-                .extensionName = "${ext.name}",
-                .specVersion = ${ext.ext_version},
-            };
-        }
-    }
-%endfor
-
-    return vk_outarray_status(&out);
-}
-""")
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--out', help='Output C file.', required=True)
-    parser.add_argument('--xml',
-                        help='Vulkan API XML file.',
-                        required=True,
-                        action='append',
-                        dest='xml_files')
-    args = parser.parse_args()
-
-    for filename in args.xml_files:
-        _init_exts_from_xml(filename)
-
-    for ext in EXTENSIONS:
-        assert ext.type == 'instance' or ext.type == 'device'
-
-    template_env = {
-        'MAX_API_VERSION': MAX_API_VERSION,
-        'instance_extensions': [e for e in EXTENSIONS if e.type == 'instance'],
-        'device_extensions': [e for e in EXTENSIONS if e.type == 'device'],
-    }
-
-    with open(args.out, 'w') as f:
-        f.write(_TEMPLATE.render(**template_env))
+MAX_API_VERSION = VkVersion('0.0.0')
+for version in API_VERSIONS:
+    version.max_patch_version = VkVersion(version.max_patch_version)
+    assert version.max_patch_version > MAX_API_VERSION
+    MAX_API_VERSION = version.max_patch_version

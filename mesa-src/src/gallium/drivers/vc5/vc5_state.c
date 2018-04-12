@@ -31,7 +31,9 @@
 #include "util/u_helpers.h"
 
 #include "vc5_context.h"
-#include "broadcom/cle/v3d_packet_v33_pack.h"
+#include "vc5_tiling.h"
+#include "broadcom/common/v3d_macros.h"
+#include "broadcom/cle/v3dx_pack.h"
 
 static void *
 vc5_generic_cso_state_create(const void *src, uint32_t size)
@@ -156,17 +158,35 @@ vc5_create_depth_stencil_alpha_state(struct pipe_context *pctx,
         so->base = *cso;
 
         if (cso->depth.enabled) {
-                /* We only handle early Z in the < direction because otherwise
-                 * we'd have to runtime guess which direction to set in the
-                 * render config.
+                switch (cso->depth.func) {
+                case PIPE_FUNC_LESS:
+                case PIPE_FUNC_LEQUAL:
+                        so->ez_state = VC5_EZ_LT_LE;
+                        break;
+                case PIPE_FUNC_GREATER:
+                case PIPE_FUNC_GEQUAL:
+                        so->ez_state = VC5_EZ_GT_GE;
+                        break;
+                case PIPE_FUNC_NEVER:
+                case PIPE_FUNC_EQUAL:
+                        so->ez_state = VC5_EZ_UNDECIDED;
+                        break;
+                default:
+                        so->ez_state = VC5_EZ_DISABLED;
+                        break;
+                }
+
+                /* If stencil is enabled and it's not a no-op, then it would
+                 * break EZ updates.
                  */
-                so->early_z_enable =
-                        ((cso->depth.func == PIPE_FUNC_LESS ||
-                          cso->depth.func == PIPE_FUNC_LEQUAL) &&
-                         (!cso->stencil[0].enabled ||
-                          (cso->stencil[0].zfail_op == PIPE_STENCIL_OP_KEEP &&
-                           (!cso->stencil[1].enabled ||
-                            cso->stencil[1].zfail_op == PIPE_STENCIL_OP_KEEP))));
+                if (cso->stencil[0].enabled &&
+                    (cso->stencil[0].zfail_op != PIPE_STENCIL_OP_KEEP ||
+                     cso->stencil[0].func != PIPE_FUNC_ALWAYS ||
+                     (cso->stencil[1].enabled &&
+                      (cso->stencil[1].zfail_op != PIPE_STENCIL_OP_KEEP &&
+                       cso->stencil[1].func != PIPE_FUNC_ALWAYS)))) {
+                        so->ez_state = VC5_EZ_DISABLED;
+                }
         }
 
         const struct pipe_stencil_state *front = &cso->stencil[0];
@@ -272,13 +292,6 @@ static void
 vc5_rasterizer_state_bind(struct pipe_context *pctx, void *hwcso)
 {
         struct vc5_context *vc5 = vc5_context(pctx);
-        struct vc5_rasterizer_state *rast = hwcso;
-
-        if (vc5->rasterizer && rast &&
-            vc5->rasterizer->base.flatshade != rast->base.flatshade) {
-                vc5->dirty |= VC5_DIRTY_FLAT_SHADE_FLAGS;
-        }
-
         vc5->rasterizer = hwcso;
         vc5->dirty |= VC5_DIRTY_RASTERIZER;
 }
@@ -322,7 +335,8 @@ vc5_vertex_state_create(struct pipe_context *pctx, unsigned num_elements,
 
                         attr.normalized_int_type = desc->channel[0].normalized;
                         attr.read_as_int_uint = desc->channel[0].pure_integer;
-                        attr.instance_divisor = elem->instance_divisor;
+                        attr.instance_divisor = MIN2(elem->instance_divisor,
+                                                     0xffff);
 
                         switch (desc->channel[0].type) {
                         case UTIL_FORMAT_TYPE_FLOAT:
@@ -447,6 +461,9 @@ vc5_set_framebuffer_state(struct pipe_context *pctx,
         vc5->blend_dst_alpha_one = 0;
         for (int i = 0; i < vc5->framebuffer.nr_cbufs; i++) {
                 struct pipe_surface *cbuf = vc5->framebuffer.cbufs[i];
+                if (!cbuf)
+                        continue;
+
                 const struct util_format_description *desc =
                         util_format_description(cbuf->format);
 
@@ -506,6 +523,7 @@ static void *
 vc5_create_sampler_state(struct pipe_context *pctx,
                          const struct pipe_sampler_state *cso)
 {
+        MAYBE_UNUSED struct vc5_context *vc5 = vc5_context(pctx);
         struct vc5_sampler_state *so = CALLOC_STRUCT(vc5_sampler_state);
 
         if (!so)
@@ -517,6 +535,67 @@ vc5_create_sampler_state(struct pipe_context *pctx,
                 (cso->mag_img_filter == PIPE_TEX_MIPFILTER_NEAREST ||
                  cso->min_img_filter == PIPE_TEX_MIPFILTER_NEAREST);
 
+#if V3D_VERSION >= 40
+        so->bo = vc5_bo_alloc(vc5->screen, cl_packet_length(SAMPLER_STATE),
+                              "sampler");
+        void *map = vc5_bo_map(so->bo);
+
+        v3dx_pack(map, SAMPLER_STATE, sampler) {
+                sampler.wrap_i_border = false;
+
+                sampler.wrap_s = translate_wrap(cso->wrap_s, either_nearest);
+                sampler.wrap_t = translate_wrap(cso->wrap_t, either_nearest);
+                sampler.wrap_r = translate_wrap(cso->wrap_r, either_nearest);
+
+                sampler.fixed_bias = cso->lod_bias;
+                sampler.depth_compare_function = cso->compare_func;
+
+                sampler.min_filter_nearest =
+                        cso->min_img_filter == PIPE_TEX_FILTER_NEAREST;
+                sampler.mag_filter_nearest =
+                        cso->mag_img_filter == PIPE_TEX_FILTER_NEAREST;
+                sampler.mip_filter_nearest =
+                        cso->min_mip_filter != PIPE_TEX_MIPFILTER_LINEAR;
+
+                sampler.min_level_of_detail = MIN2(MAX2(0, cso->min_lod),
+                                                   15);
+                sampler.max_level_of_detail = MIN2(cso->max_lod, 15);
+
+                if (cso->min_mip_filter == PIPE_TEX_MIPFILTER_NONE) {
+                        sampler.min_level_of_detail = 0;
+                        sampler.max_level_of_detail = 0;
+                }
+
+                if (cso->max_anisotropy) {
+                        sampler.anisotropy_enable = true;
+
+                        if (cso->max_anisotropy > 8)
+                                sampler.maximum_anisotropy = 3;
+                        else if (cso->max_anisotropy > 4)
+                                sampler.maximum_anisotropy = 2;
+                        else if (cso->max_anisotropy > 2)
+                                sampler.maximum_anisotropy = 1;
+                }
+
+                sampler.border_colour_mode = V3D_BORDER_COLOUR_FOLLOWS;
+                /* XXX: The border colour field is in the TMU blending format
+                 * (32, f16, or i16), and we need to customize it based on
+                 * that.
+                 *
+                 * XXX: for compat alpha formats, we need the alpha field to
+                 * be in the red channel.
+                 */
+                sampler.border_colour_red =
+                        util_float_to_half(cso->border_color.f[0]);
+                sampler.border_colour_green =
+                        util_float_to_half(cso->border_color.f[1]);
+                sampler.border_colour_blue =
+                        util_float_to_half(cso->border_color.f[2]);
+                sampler.border_colour_alpha =
+                        util_float_to_half(cso->border_color.f[3]);
+        }
+
+#else /* V3D_VERSION < 40 */
         v3dx_pack(&so->p0, TEXTURE_UNIFORM_PARAMETER_0_CFG_MODE1, p0) {
                 p0.s_wrap_mode = translate_wrap(cso->wrap_s, either_nearest);
                 p0.t_wrap_mode = translate_wrap(cso->wrap_t, either_nearest);
@@ -527,7 +606,7 @@ vc5_create_sampler_state(struct pipe_context *pctx,
                 tex.depth_compare_function = cso->compare_func;
                 tex.fixed_bias = cso->lod_bias;
         }
-
+#endif /* V3D_VERSION < 40 */
         return so;
 }
 
@@ -556,6 +635,18 @@ vc5_sampler_states_bind(struct pipe_context *pctx,
         stage_tex->num_samplers = new_nr;
 }
 
+static void
+vc5_sampler_state_delete(struct pipe_context *pctx,
+                         void *hwcso)
+{
+        struct pipe_sampler_state *psampler = hwcso;
+        struct vc5_sampler_state *sampler = vc5_sampler_state(psampler);
+
+        vc5_bo_unreference(&sampler->bo);
+        free(psampler);
+}
+
+#if V3D_VERSION >= 40
 static uint32_t
 translate_swizzle(unsigned char pipe_swizzle)
 {
@@ -573,11 +664,14 @@ translate_swizzle(unsigned char pipe_swizzle)
                 unreachable("unknown swizzle");
         }
 }
+#endif
 
 static struct pipe_sampler_view *
 vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                         const struct pipe_sampler_view *cso)
 {
+        struct vc5_context *vc5 = vc5_context(pctx);
+        struct vc5_screen *screen = vc5->screen;
         struct vc5_sampler_view *so = CALLOC_STRUCT(vc5_sampler_view);
         struct vc5_resource *rsc = vc5_resource(prsc);
 
@@ -587,19 +681,6 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
         so->base = *cso;
 
         pipe_reference(NULL, &prsc->reference);
-
-        v3dx_pack(&so->p1, TEXTURE_UNIFORM_PARAMETER_1_CFG_MODE1, p1) {
-                p1.return_word_0_of_texture_data = true;
-                if (vc5_get_tex_return_size(cso->format) == 16) {
-                        p1.return_word_1_of_texture_data = true;
-                } else {
-                        int chans = vc5_get_tex_return_channels(cso->format);
-
-                        p1.return_word_1_of_texture_data = chans > 1;
-                        p1.return_word_2_of_texture_data = chans > 2;
-                        p1.return_word_3_of_texture_data = chans > 3;
-                }
-        }
 
         /* Compute the sampler view's swizzle up front. This will be plugged
          * into either the sampler (for 16-bit returns) or the shader's
@@ -611,7 +692,8 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                 cso->swizzle_b,
                 cso->swizzle_a
         };
-        const uint8_t *fmt_swizzle = vc5_get_format_swizzle(so->base.format);
+        const uint8_t *fmt_swizzle =
+                vc5_get_format_swizzle(&screen->devinfo, so->base.format);
         util_format_compose_swizzles(fmt_swizzle, view_swizzle, so->swizzle);
 
         so->base.texture = prsc;
@@ -620,9 +702,29 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
 
         int msaa_scale = prsc->nr_samples > 1 ? 2 : 1;
 
+#if V3D_VERSION >= 40
+        so->bo = vc5_bo_alloc(vc5->screen, cl_packet_length(SAMPLER_STATE),
+                              "sampler");
+        void *map = vc5_bo_map(so->bo);
+
+        v3dx_pack(map, TEXTURE_SHADER_STATE, tex) {
+#else /* V3D_VERSION < 40 */
         v3dx_pack(&so->texture_shader_state, TEXTURE_SHADER_STATE, tex) {
+#endif
+
                 tex.image_width = prsc->width0 * msaa_scale;
                 tex.image_height = prsc->height0 * msaa_scale;
+
+#if V3D_VERSION >= 40
+                /* On 4.x, the height of a 1D texture is redefined to be the
+                 * upper 14 bits of the width (which is only usable with txf).
+                 */
+                if (prsc->target == PIPE_TEXTURE_1D ||
+                    prsc->target == PIPE_TEXTURE_1D_ARRAY) {
+                        tex.image_height = tex.image_width >> 14;
+                }
+#endif
+
                 if (prsc->target == PIPE_TEXTURE_3D) {
                         tex.image_depth = prsc->depth0;
                 } else {
@@ -633,6 +735,21 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                 tex.srgb = util_format_is_srgb(cso->format);
 
                 tex.base_level = cso->u.tex.first_level;
+#if V3D_VERSION >= 40
+                tex.max_level = cso->u.tex.last_level;
+                /* Note that we don't have a job to reference the texture's sBO
+                 * at state create time, so any time this sampler view is used
+                 * we need to add the texture to the job.
+                 */
+                tex.texture_base_pointer = cl_address(NULL,
+                                                      rsc->bo->offset +
+                                                      rsc->slices[0].offset),
+
+                tex.swizzle_r = translate_swizzle(so->swizzle[0]);
+                tex.swizzle_g = translate_swizzle(so->swizzle[1]);
+                tex.swizzle_b = translate_swizzle(so->swizzle[2]);
+                tex.swizzle_a = translate_swizzle(so->swizzle[3]);
+#endif
                 tex.array_stride_64_byte_aligned = rsc->cube_map_stride / 64;
 
                 if (prsc->nr_samples > 1) {
@@ -647,18 +764,19 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                         assert(util_format_linear(cso->format) ==
                                util_format_linear(prsc->format));
                         uint32_t output_image_format =
-                                vc5_get_rt_format(cso->format);
+                                vc5_get_rt_format(&screen->devinfo, cso->format);
                         uint32_t internal_type;
                         uint32_t internal_bpp;
-                        vc5_get_internal_type_bpp_for_output_format(output_image_format,
+                        vc5_get_internal_type_bpp_for_output_format(&screen->devinfo,
+                                                                    output_image_format,
                                                                     &internal_type,
                                                                     &internal_bpp);
 
                         switch (internal_type) {
-                        case INTERNAL_TYPE_8:
+                        case V3D_INTERNAL_TYPE_8:
                                 tex.texture_type = TEXTURE_DATA_FORMAT_RGBA8;
                                 break;
-                        case INTERNAL_TYPE_16F:
+                        case V3D_INTERNAL_TYPE_16F:
                                 tex.texture_type = TEXTURE_DATA_FORMAT_RGBA16F;
                                 break;
                         default:
@@ -673,41 +791,31 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                          */
                         tex.srgb = false;
                 } else {
-                        tex.texture_type = vc5_get_tex_format(cso->format);
+                        tex.texture_type = vc5_get_tex_format(&screen->devinfo,
+                                                              cso->format);
                 }
 
-                /* Note: Contrary to the docs, the swizzle still applies even
-                 * if the return size is 32.  It's just that you probably want
-                 * to swizzle in the shader, because you need the Y/Z/W
-                 * channels to be defined.
+                /* Since other platform devices may produce UIF images even
+                 * when they're not big enough for V3D to assume they're UIF,
+                 * we force images with level 0 as UIF to be always treated
+                 * that way.
                  */
-                if (vc5_get_tex_return_size(cso->format) != 32) {
-                        tex.swizzle_r = translate_swizzle(so->swizzle[0]);
-                        tex.swizzle_g = translate_swizzle(so->swizzle[1]);
-                        tex.swizzle_b = translate_swizzle(so->swizzle[2]);
-                        tex.swizzle_a = translate_swizzle(so->swizzle[3]);
-                } else {
-                        tex.swizzle_r = translate_swizzle(PIPE_SWIZZLE_X);
-                        tex.swizzle_g = translate_swizzle(PIPE_SWIZZLE_Y);
-                        tex.swizzle_b = translate_swizzle(PIPE_SWIZZLE_Z);
-                        tex.swizzle_a = translate_swizzle(PIPE_SWIZZLE_W);
-                }
+                tex.level_0_is_strictly_uif = (rsc->slices[0].tiling ==
+                                               VC5_TILING_UIF_XOR ||
+                                               rsc->slices[0].tiling ==
+                                               VC5_TILING_UIF_NO_XOR);
+                tex.level_0_xor_enable = (rsc->slices[0].tiling ==
+                                          VC5_TILING_UIF_XOR);
 
-                /* XXX: While we need to use this flag to enable tiled
-                 * resource sharing (even a small shared buffer should be UIF,
-                 * not UBLINEAR or raster), this is also at the moment
-                 * patching up the fact that our resource layout's decisions
-                 * about XOR don't quite match the HW's.
-                 */
-                switch (rsc->slices[0].tiling) {
-                case VC5_TILING_UIF_NO_XOR:
-                case VC5_TILING_UIF_XOR:
-                        tex.level_0_is_strictly_uif = true;
-                        tex.level_0_xor_enable = false;
-                        break;
-                default:
-                        break;
+                if (tex.level_0_is_strictly_uif)
+                        tex.level_0_ub_pad = rsc->slices[0].ub_pad;
+
+#if V3D_VERSION >= 40
+                if (tex.uif_xor_disable ||
+                    tex.level_0_is_strictly_uif) {
+                        tex.extended = true;
                 }
+#endif /* V3D_VERSION >= 40 */
         };
 
         return &so->base;
@@ -715,10 +823,13 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
 
 static void
 vc5_sampler_view_destroy(struct pipe_context *pctx,
-                         struct pipe_sampler_view *view)
+                         struct pipe_sampler_view *psview)
 {
-        pipe_resource_reference(&view->texture, NULL);
-        free(view);
+        struct vc5_sampler_view *sview = vc5_sampler_view(psview);
+
+        vc5_bo_unreference(&sview->bo);
+        pipe_resource_reference(&psview->texture, NULL);
+        free(psview);
 }
 
 static void
@@ -801,7 +912,7 @@ vc5_set_stream_output_targets(struct pipe_context *pctx,
 }
 
 void
-vc5_state_init(struct pipe_context *pctx)
+v3dX(state_init)(struct pipe_context *pctx)
 {
         pctx->set_blend_color = vc5_set_blend_color;
         pctx->set_stencil_ref = vc5_set_stencil_ref;
@@ -832,7 +943,7 @@ vc5_state_init(struct pipe_context *pctx)
         pctx->bind_vertex_elements_state = vc5_vertex_state_bind;
 
         pctx->create_sampler_state = vc5_create_sampler_state;
-        pctx->delete_sampler_state = vc5_generic_cso_state_delete;
+        pctx->delete_sampler_state = vc5_sampler_state_delete;
         pctx->bind_sampler_states = vc5_sampler_states_bind;
 
         pctx->create_sampler_view = vc5_create_sampler_view;

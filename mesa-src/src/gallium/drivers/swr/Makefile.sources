@@ -140,11 +140,14 @@ JITTER_CXX_SOURCES := \
 	rasterizer/jitter/builder.cpp \
 	rasterizer/jitter/builder.h \
 	rasterizer/jitter/builder_math.h \
+	rasterizer/jitter/builder_mem.cpp \
+	rasterizer/jitter/builder_mem.h \
 	rasterizer/jitter/builder_misc.cpp \
 	rasterizer/jitter/builder_misc.h \
 	rasterizer/jitter/fetch_jit.cpp \
 	rasterizer/jitter/fetch_jit.h \
 	rasterizer/jitter/jit_api.h \
+	rasterizer/jitter/jit_pch.hpp \
 	rasterizer/jitter/JitManager.cpp \
 	rasterizer/jitter/JitManager.h \
 	rasterizer/jitter/streamout_jit.cpp \

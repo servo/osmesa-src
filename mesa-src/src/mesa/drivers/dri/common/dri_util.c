@@ -144,6 +144,10 @@ driCreateNewScreen2(int scrn, int fd,
     psp->fd = fd;
     psp->myNum = scrn;
 
+    /* Option parsing before ->InitScreen(), as some options apply there. */
+    driParseOptionInfo(&psp->optionInfo, __dri2ConfigOptions);
+    driParseConfigFiles(&psp->optionCache, &psp->optionInfo, psp->myNum, "dri2");
+
     *driver_configs = psp->driver->InitScreen(psp);
     if (*driver_configs == NULL) {
 	free(psp);
@@ -160,11 +164,9 @@ driCreateNewScreen2(int scrn, int fd,
 
     api = API_OPENGL_COMPAT;
     if (_mesa_override_gl_version_contextless(&consts, &api, &version)) {
-       if (api == API_OPENGL_CORE) {
-          psp->max_gl_core_version = version;
-       } else {
+       psp->max_gl_core_version = version;
+       if (api == API_OPENGL_COMPAT)
           psp->max_gl_compat_version = version;
-       }
     }
 
     psp->api_mask = 0;
@@ -178,10 +180,6 @@ driCreateNewScreen2(int scrn, int fd,
        psp->api_mask |= (1 << __DRI_API_GLES2);
     if (psp->max_gl_es2_version >= 30)
        psp->api_mask |= (1 << __DRI_API_GLES3);
-
-    driParseOptionInfo(&psp->optionInfo, __dri2ConfigOptions);
-    driParseConfigFiles(&psp->optionCache, &psp->optionInfo, psp->myNum, "dri2");
-
 
     return psp;
 }
@@ -381,12 +379,14 @@ driCreateContextAttribs(__DRIscreen *screen, int api,
 	}
     }
 
-    /* Mesa does not support the GL_ARB_compatibilty extension or the
-     * compatibility profile.  This means that we treat a API_OPENGL_COMPAT 3.1 as
-     * API_OPENGL_CORE and reject API_OPENGL_COMPAT 3.2+.
+    /* The specific Mesa driver may not support the GL_ARB_compatibilty
+     * extension or the compatibility profile.  In that case, we treat an
+     * API_OPENGL_COMPAT 3.1 as API_OPENGL_CORE. We reject API_OPENGL_COMPAT
+     * 3.2+ in any case.
      */
     if (mesa_api == API_OPENGL_COMPAT &&
-        ctx_config.major_version == 3 && ctx_config.minor_version == 1)
+        ctx_config.major_version == 3 && ctx_config.minor_version == 1 &&
+        screen->max_gl_compat_version < 31)
        mesa_api = API_OPENGL_CORE;
 
     if (mesa_api == API_OPENGL_COMPAT

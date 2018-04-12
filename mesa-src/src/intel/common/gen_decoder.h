@@ -26,8 +26,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 
-#include "common/gen_device_info.h"
+#include "dev/gen_device_info.h"
 #include "util/hash_table.h"
 
 #ifdef __cplusplus
@@ -62,20 +63,18 @@ struct gen_field *gen_group_find_field(struct gen_group *group, const char *name
 struct gen_enum *gen_spec_find_enum(struct gen_spec *spec, const char *name);
 
 bool gen_field_is_header(struct gen_field *field);
-void gen_field_decode(struct gen_field *field,
-                      const uint32_t *p, const uint32_t *end,
-                      union gen_field_value *value);
 
 struct gen_field_iterator {
    struct gen_group *group;
    char name[128];
    char value[128];
+   uint64_t raw_value;
    struct gen_group *struct_desc;
    const uint32_t *p;
+   int p_bit; /**< bit offset into p */
    const uint32_t *p_end;
-   int dword; /**< current field starts at &p[dword] */
-   int start; /**< current field starts at this bit number */
-   int end;   /**< current field ends at this bit number */
+   int start_bit; /**< current field starts at this bit offset into p */
+   int end_bit; /**< current field ends at this bit offset into p */
 
    int group_iter;
 
@@ -176,15 +175,64 @@ struct gen_field {
 
 void gen_field_iterator_init(struct gen_field_iterator *iter,
                              struct gen_group *group,
-                             const uint32_t *p,
+                             const uint32_t *p, int p_bit,
                              bool print_colors);
 
 bool gen_field_iterator_next(struct gen_field_iterator *iter);
 
 void gen_print_group(FILE *out,
                      struct gen_group *group,
-                     uint64_t offset, const uint32_t *p,
+                     uint64_t offset, const uint32_t *p, int p_bit,
                      bool color);
+
+enum gen_batch_decode_flags {
+   /** Print in color! */
+   GEN_BATCH_DECODE_IN_COLOR  = (1 << 0),
+   /** Print everything, not just headers */
+   GEN_BATCH_DECODE_FULL      = (1 << 1),
+   /** Print offsets along with the batch */
+   GEN_BATCH_DECODE_OFFSETS   = (1 << 2),
+   /** Guess when a value is a float and print it as such */
+   GEN_BATCH_DECODE_FLOATS    = (1 << 3),
+};
+
+struct gen_batch_decode_bo {
+   uint64_t addr;
+   uint32_t size;
+   const void *map;
+};
+
+struct gen_disasm *disasm;
+
+struct gen_batch_decode_ctx {
+   struct gen_batch_decode_bo (*get_bo)(void *user_data,
+                                        uint64_t base_address);
+   void *user_data;
+
+   FILE *fp;
+   struct gen_spec *spec;
+   enum gen_batch_decode_flags flags;
+
+   struct gen_disasm *disasm;
+
+   struct gen_batch_decode_bo surface_base;
+   struct gen_batch_decode_bo dynamic_base;
+   struct gen_batch_decode_bo instruction_base;
+};
+
+void gen_batch_decode_ctx_init(struct gen_batch_decode_ctx *ctx,
+                               const struct gen_device_info *devinfo,
+                               FILE *fp, enum gen_batch_decode_flags flags,
+                               const char *xml_path,
+                               struct gen_batch_decode_bo (*get_bo)(void *,
+                                                                    uint64_t),
+                               void *user_data);
+void gen_batch_decode_ctx_finish(struct gen_batch_decode_ctx *ctx);
+
+
+void gen_print_batch(struct gen_batch_decode_ctx *ctx,
+                     const uint32_t *batch, uint32_t batch_size,
+                     uint64_t batch_addr);
 
 #ifdef __cplusplus
 }

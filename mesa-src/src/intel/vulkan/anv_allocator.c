@@ -109,11 +109,13 @@ struct anv_mmap_cleanup {
 
 #define ANV_MMAP_CLEANUP_INIT ((struct anv_mmap_cleanup){0})
 
+#ifndef HAVE_MEMFD_CREATE
 static inline int
 memfd_create(const char *name, unsigned int flags)
 {
    return syscall(SYS_memfd_create, name, flags);
 }
+#endif
 
 static inline uint32_t
 ilog2_round_up(uint32_t value)
@@ -617,7 +619,7 @@ anv_state_pool_init(struct anv_state_pool *pool,
    if (result != VK_SUCCESS)
       return result;
 
-   assert(util_is_power_of_two(block_size));
+   assert(util_is_power_of_two_or_zero(block_size));
    pool->block_size = block_size;
    pool->back_alloc_free_list = ANV_FREE_LIST_EMPTY;
    for (unsigned i = 0; i < ANV_STATE_BUCKETS; i++) {
@@ -812,7 +814,7 @@ done:
 static void
 anv_state_pool_free_no_vg(struct anv_state_pool *pool, struct anv_state state)
 {
-   assert(util_is_power_of_two(state.alloc_size));
+   assert(util_is_power_of_two_or_zero(state.alloc_size));
    unsigned bucket = anv_state_pool_get_bucket(state.alloc_size);
 
    if (state.offset < 0) {
@@ -1039,7 +1041,7 @@ anv_bo_pool_free(struct anv_bo_pool *pool, const struct anv_bo *bo_in)
    struct bo_pool_bo_link *link = bo.map;
    VG_NOACCESS_WRITE(&link->bo, bo);
 
-   assert(util_is_power_of_two(bo.size));
+   assert(util_is_power_of_two_or_zero(bo.size));
    const unsigned size_log2 = ilog2_round_up(bo.size);
    const unsigned bucket = size_log2 - 12;
    assert(bucket < ARRAY_SIZE(pool->free_list));
@@ -1086,31 +1088,44 @@ anv_scratch_pool_alloc(struct anv_device *device, struct anv_scratch_pool *pool,
    pthread_mutex_lock(&device->mutex);
 
    __sync_synchronize();
-   if (bo->exists)
+   if (bo->exists) {
+      pthread_mutex_unlock(&device->mutex);
       return &bo->bo;
+   }
 
    const struct anv_physical_device *physical_device =
       &device->instance->physicalDevice;
    const struct gen_device_info *devinfo = &physical_device->info;
 
-   /* WaCSScratchSize:hsw
-    *
-    * Haswell's scratch space address calculation appears to be sparse
-    * rather than tightly packed. The Thread ID has bits indicating which
-    * subslice, EU within a subslice, and thread within an EU it is.
-    * There's a maximum of two slices and two subslices, so these can be
-    * stored with a single bit. Even though there are only 10 EUs per
-    * subslice, this is stored in 4 bits, so there's an effective maximum
-    * value of 16 EUs. Similarly, although there are only 7 threads per EU,
-    * this is stored in a 3 bit number, giving an effective maximum value
-    * of 8 threads per EU.
-    *
-    * This means that we need to use 16 * 8 instead of 10 * 7 for the
-    * number of threads per subslice.
-    */
    const unsigned subslices = MAX2(physical_device->subslice_total, 1);
-   const unsigned scratch_ids_per_subslice =
-      device->info.is_haswell ? 16 * 8 : devinfo->max_cs_threads;
+
+   unsigned scratch_ids_per_subslice;
+   if (devinfo->is_haswell) {
+      /* WaCSScratchSize:hsw
+       *
+       * Haswell's scratch space address calculation appears to be sparse
+       * rather than tightly packed. The Thread ID has bits indicating
+       * which subslice, EU within a subslice, and thread within an EU it
+       * is. There's a maximum of two slices and two subslices, so these
+       * can be stored with a single bit. Even though there are only 10 EUs
+       * per subslice, this is stored in 4 bits, so there's an effective
+       * maximum value of 16 EUs. Similarly, although there are only 7
+       * threads per EU, this is stored in a 3 bit number, giving an
+       * effective maximum value of 8 threads per EU.
+       *
+       * This means that we need to use 16 * 8 instead of 10 * 7 for the
+       * number of threads per subslice.
+       */
+      scratch_ids_per_subslice = 16 * 8;
+   } else if (devinfo->is_cherryview) {
+      /* Cherryview devices have either 6 or 8 EUs per subslice, and each EU
+       * has 7 threads. The 6 EU devices appear to calculate thread IDs as if
+       * it had 8 EUs.
+       */
+      scratch_ids_per_subslice = 8 * 7;
+   } else {
+      scratch_ids_per_subslice = devinfo->max_cs_threads;
+   }
 
    uint32_t max_threads[] = {
       [MESA_SHADER_VERTEX]           = devinfo->max_vs_threads,

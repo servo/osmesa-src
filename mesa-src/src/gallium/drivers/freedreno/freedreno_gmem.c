@@ -372,15 +372,16 @@ render_sysmem(struct fd_batch *batch)
 static void
 flush_ring(struct fd_batch *batch)
 {
-	struct fd_context *ctx = batch->ctx;
+	/* for compute/blit batch, there is no batch->gmem, only batch->draw: */
+	struct fd_ringbuffer *ring = batch->nondraw ? batch->draw : batch->gmem;
+	uint32_t timestamp;
 	int out_fence_fd = -1;
 
-	fd_ringbuffer_flush2(batch->gmem, batch->in_fence_fd,
+	fd_ringbuffer_flush2(ring, batch->in_fence_fd,
 			batch->needs_out_fence_fd ? &out_fence_fd : NULL);
 
-	fd_fence_ref(&ctx->screen->base, &ctx->last_fence, NULL);
-	ctx->last_fence = fd_fence_create(ctx,
-			fd_ringbuffer_timestamp(batch->gmem), out_fence_fd);
+	timestamp = fd_ringbuffer_timestamp(ring);
+	fd_fence_populate(batch->fence, timestamp, out_fence_fd);
 }
 
 void
@@ -390,8 +391,9 @@ fd_gmem_render_tiles(struct fd_batch *batch)
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 	bool sysmem = false;
 
-	if (ctx->emit_sysmem_prep) {
-		if (batch->cleared || batch->gmem_reason || (batch->num_draws > 5)) {
+	if (ctx->emit_sysmem_prep && !batch->nondraw) {
+		if (batch->cleared || batch->gmem_reason ||
+				((batch->num_draws > 5) && !batch->blit)) {
 			DBG("GMEM: cleared=%x, gmem_reason=%x, num_draws=%u",
 				batch->cleared, batch->gmem_reason, batch->num_draws);
 		} else if (!(fd_mesa_debug & FD_DBG_NOBYPASS)) {
@@ -408,7 +410,10 @@ fd_gmem_render_tiles(struct fd_batch *batch)
 
 	ctx->stats.batch_total++;
 
-	if (sysmem) {
+	if (batch->nondraw) {
+		DBG("%p: rendering non-draw", batch);
+		ctx->stats.batch_nondraw++;
+	} else if (sysmem) {
 		DBG("%p: rendering sysmem %ux%u (%s/%s)",
 			batch, pfb->width, pfb->height,
 			util_format_short_name(pipe_surface_format(pfb->cbufs[0])),
@@ -445,13 +450,6 @@ fd_gmem_render_noop(struct fd_batch *batch)
 	pctx->emit_string_marker(pctx, "noop", 4);
 	/* emit IB to drawcmds (which contain the string marker): */
 	ctx->emit_ib(batch->gmem, batch->draw);
-	flush_ring(batch);
-}
-
-void
-fd_gmem_flush_compute(struct fd_batch *batch)
-{
-	render_sysmem(batch);
 	flush_ring(batch);
 }
 

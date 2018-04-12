@@ -49,51 +49,52 @@ Constant *C(const std::initializer_list<Ty> &constList)
     return ConstantVector::get(vConsts);
 }
 
+template<typename Ty>
+Constant *CA(LLVMContext& ctx, ArrayRef<Ty> constList)
+{
+    return ConstantDataArray::get(ctx, constList);
+}
+
 Constant *PRED(bool pred);
+
 Value *VIMMED1(int i);
+Value *VIMMED1_16(int i);
+
 Value *VIMMED1(uint32_t i);
+Value *VIMMED1_16(uint32_t i);
+
 Value *VIMMED1(float i);
+Value *VIMMED1_16(float i);
+
 Value *VIMMED1(bool i);
-#if USE_SIMD16_BUILDER
-Value *VIMMED2_1(int i);
-Value *VIMMED2_1(uint32_t i);
-Value *VIMMED2_1(float i);
-Value *VIMMED2_1(bool i);
-#endif
+Value *VIMMED1_16(bool i);
+
 Value *VUNDEF(Type* t);
+
 Value *VUNDEF_F();
+Value *VUNDEF_F_16();
+
 Value *VUNDEF_I();
-#if USE_SIMD16_BUILDER
-Value *VUNDEF2_F();
-Value *VUNDEF2_I();
-#endif
+Value *VUNDEF_I_16();
+
 Value *VUNDEF(Type* ty, uint32_t size);
+
 Value *VUNDEF_IPTR();
-Value *VBROADCAST(Value *src);
-#if USE_SIMD16_BUILDER
-Value *VBROADCAST2(Value *src);
-#endif
-Value *VRCP(Value *va);
+
+Value *VBROADCAST(Value *src, const llvm::Twine& name = "");
+Value *VBROADCAST_16(Value *src);
+
+Value *VRCP(Value *va, const llvm::Twine& name = "");
 Value *VPLANEPS(Value* vA, Value* vB, Value* vC, Value* &vX, Value* &vY);
 
 uint32_t IMMED(Value* i);
 int32_t S_IMMED(Value* i);
 
-Value *GEP(Value* ptr, const std::initializer_list<Value*> &indexList);
-Value *GEP(Value* ptr, const std::initializer_list<uint32_t> &indexList);
-Value *IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<Value*> &indexList);
-Value *IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<uint32_t> &indexList);
-
-CallInst *CALL(Value *Callee, const std::initializer_list<Value*> &args);
+CallInst *CALL(Value *Callee, const std::initializer_list<Value*> &args, const llvm::Twine& name = "");
 CallInst *CALL(Value *Callee) { return CALLA(Callee); }
 CallInst *CALL(Value *Callee, Value* arg);
 CallInst *CALL2(Value *Callee, Value* arg1, Value* arg2);
 CallInst *CALL3(Value *Callee, Value* arg1, Value* arg2, Value* arg3);
-
-LoadInst *LOAD(Value *BasePtr, const std::initializer_list<uint32_t> &offset, const llvm::Twine& name = "");
-LoadInst *LOADV(Value *BasePtr, const std::initializer_list<Value*> &offset, const llvm::Twine& name = "");
-StoreInst *STORE(Value *Val, Value *BasePtr, const std::initializer_list<uint32_t> &offset);
-StoreInst *STOREV(Value *Val, Value *BasePtr, const std::initializer_list<Value*> &offset);
 
 Value *VCMPPS_EQ(Value* a, Value* b)    { return VCMPPS(a, b, C((uint8_t)_CMP_EQ_OQ)); }
 Value *VCMPPS_LT(Value* a, Value* b)    { return VCMPPS(a, b, C((uint8_t)_CMP_LT_OQ)); }
@@ -105,53 +106,25 @@ Value *VCMPPS_GT(Value* a, Value* b)    { return VCMPPS(a, b, C((uint8_t)_CMP_GT
 Value *VCMPPS_NOTNAN(Value* a, Value* b){ return VCMPPS(a, b, C((uint8_t)_CMP_ORD_Q)); }
 
 Value *MASK(Value *vmask);
+Value *MASK_16(Value *vmask);
+
 Value *VMASK(Value *mask);
-#if USE_SIMD16_BUILDER
-Value *MASK2(Value *vmask);
-Value *VMASK2(Value *mask);
-#endif
+Value *VMASK_16(Value *mask);
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief functions that build IR to call x86 intrinsics directly, or
 /// emulate them with other instructions if not available on the host
 //////////////////////////////////////////////////////////////////////////
 
-#if USE_SIMD16_BUILDER
-Value *EXTRACT2_F(Value *a2, uint32_t imm);
-Value *EXTRACT2_I(Value *a2, uint32_t imm);
-Value *INSERT2_F(Value *a2, Value *b, uint32_t imm);
-Value *INSERT2_I(Value *a2, Value *b, uint32_t imm);
-
-#endif
-Value *MASKLOADD(Value* src, Value* mask);
-
-void Gather4(const SWR_FORMAT format, Value* pSrcBase, Value* byteOffsets,
-                      Value* mask, Value* vGatherComponents[], bool bPackedOutput);
-
-Value *GATHERPS(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
-#if USE_SIMD16_BUILDER
-Value *GATHERPS2(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
-#endif
-void GATHER4PS(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
-               Value* mask, Value* vGatherComponents[], bool bPackedOutput);
-
-Value *GATHERDD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
-void GATHER4DD(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
-               Value* mask, Value* vGatherComponents[], bool bPackedOutput);
-
-Value *GATHERPD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
-
-void SCATTERPS(Value* pDst, Value* vSrc, Value* vOffsets, Value* vMask);
-
-void Shuffle8bpcGather4(const SWR_FORMAT_INFO &info, Value* vGatherInput, Value* vGatherOutput[], bool bPackedOutput);
-void Shuffle16bpcGather4(const SWR_FORMAT_INFO &info, Value* vGatherInput[], Value* vGatherOutput[], bool bPackedOutput);
+Value *EXTRACT_16(Value *x, uint32_t imm);
+Value *JOIN_16(Value *a, Value *b);
 
 Value *PSHUFB(Value* a, Value* b);
 Value *PMOVSXBD(Value* a);
 Value *PMOVSXWD(Value* a);
 Value *PERMD(Value* a, Value* idx);
 Value *PERMPS(Value* a, Value* idx);
-Value *CVTPH2PS(Value* a);
+Value *CVTPH2PS(Value* a, const llvm::Twine& name = "");
 Value *CVTPS2PH(Value* a, Value* rounding);
 Value *PMAXSD(Value* a, Value* b);
 Value *PMINSD(Value* a, Value* b);
@@ -167,16 +140,15 @@ Value *VPCMPGTD(Value* a, Value* b)
     return S_EXT(vIndexMask,VectorType::get(mInt32Ty,JM()->mVWidth));
 }
 
-Value *ICLAMP(Value* src, Value* low, Value* high);
+Value *ICLAMP(Value* src, Value* low, Value* high, const llvm::Twine& name = "");
 Value *FCLAMP(Value* src, Value* low, Value* high);
 Value *FCLAMP(Value* src, float low, float high);
 
 CallInst *PRINT(const std::string &printStr);
 CallInst *PRINT(const std::string &printStr,const std::initializer_list<Value*> &printArgs);
-Value* STACKSAVE();
-void STACKRESTORE(Value* pSaved);
 
 Value* POPCNT(Value* a);
+Value* VPOPCNT(Value* a);
 
 Value* DEBUGTRAP();
 Value* INT3() { return DEBUGTRAP(); }
@@ -191,10 +163,5 @@ void RDTSC_STOP(Value* pBucketMgr, Value* pId);
 
 Value* CreateEntryAlloca(Function* pFunc, Type* pType);
 Value* CreateEntryAlloca(Function* pFunc, Type* pType, Value* pArraySize);
-
-// Static stack allocations for scatter operations
-Value* pScatterStackSrc{ nullptr };
-Value* pScatterStackOffsets{ nullptr };
-
 
 uint32_t GetTypeSize(Type* pType);

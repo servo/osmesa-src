@@ -35,6 +35,7 @@
 #include "compiler/v3d_compiler.h"
 #include "vc5_context.h"
 #include "broadcom/cle/v3d_packet_v33_pack.h"
+#include "mesa/state_tracker/st_glsl_types.h"
 
 static gl_varying_slot
 vc5_get_slot_for_driver_location(nir_shader *s, uint32_t driver_location)
@@ -48,6 +49,14 @@ vc5_get_slot_for_driver_location(nir_shader *s, uint32_t driver_location)
         return -1;
 }
 
+/**
+ * Precomputes the TRANSFORM_FEEDBACK_OUTPUT_DATA_SPEC array for the shader.
+ *
+ * A shader can have 16 of these specs, and each one of them can write up to
+ * 16 dwords.  Since we allow a total of 64 transform feedback output
+ * components (not 16 vectors), we have to group the writes of multiple
+ * varyings together in a single data spec.
+ */
 static void
 vc5_set_transform_feedback_outputs(struct vc5_uncompiled_shader *so,
                                    const struct pipe_stream_output_info *stream_output)
@@ -101,19 +110,39 @@ vc5_set_transform_feedback_outputs(struct vc5_uncompiled_shader *so,
                 if (!vpm_size)
                         continue;
 
-                struct V3D33_TRANSFORM_FEEDBACK_OUTPUT_DATA_SPEC unpacked = {
-                        /* We need the offset from the coordinate shader's VPM
-                         * output block, which has the [X, Y, Z, W, Xs, Ys]
-                         * values at the start.  Note that this will need some
-                         * shifting when PSIZ is also present.
+                uint32_t vpm_start_offset = vpm_start + 6;
+
+                while (vpm_size) {
+                        uint32_t write_size = MIN2(vpm_size, 1 << 4);
+
+                        struct V3D33_TRANSFORM_FEEDBACK_OUTPUT_DATA_SPEC unpacked = {
+                                /* We need the offset from the coordinate shader's VPM
+                                 * output block, which has the [X, Y, Z, W, Xs, Ys]
+                                 * values at the start.
+                                 */
+                                .first_shaded_vertex_value_to_output = vpm_start_offset,
+                                .number_of_consecutive_vertex_values_to_output_as_32_bit_values_minus_1 = write_size - 1,
+                                .output_buffer_to_write_to = buffer,
+                        };
+
+                        assert(so->num_tf_specs != ARRAY_SIZE(so->tf_specs));
+                        V3D33_TRANSFORM_FEEDBACK_OUTPUT_DATA_SPEC_pack(NULL,
+                                                                       (void *)&so->tf_specs[so->num_tf_specs],
+                                                                       &unpacked);
+
+                        /* If point size is being written by the shader, then
+                         * all the VPM start offsets are shifted up by one.
+                         * We won't know that until the variant is compiled,
+                         * though.
                          */
-                        .first_shaded_vertex_value_to_output = vpm_start + 6,
-                        .number_of_consecutive_vertex_values_to_output_as_32_bit_values_minus_1 = vpm_size - 1,
-                        .output_buffer_to_write_to = buffer,
-                };
-                V3D33_TRANSFORM_FEEDBACK_OUTPUT_DATA_SPEC_pack(NULL,
-                                                               (void *)&so->tf_specs[so->num_tf_specs++],
-                                                               &unpacked);
+                        unpacked.first_shaded_vertex_value_to_output++;
+                        V3D33_TRANSFORM_FEEDBACK_OUTPUT_DATA_SPEC_pack(NULL,
+                                                                       (void *)&so->tf_specs_psiz[so->num_tf_specs],
+                                                                       &unpacked);
+                        so->num_tf_specs++;
+                        vpm_start_offset += write_size;
+                        vpm_size -= write_size;
+                }
         }
 
         so->num_tf_outputs = slot_count;
@@ -126,6 +155,12 @@ static int
 type_size(const struct glsl_type *type)
 {
         return glsl_count_attribute_slots(type, false);
+}
+
+static int
+uniforms_type_size(const struct glsl_type *type)
+{
+        return st_glsl_storage_type_size(type, false);
 }
 
 static void *
@@ -147,7 +182,11 @@ vc5_shader_state_create(struct pipe_context *pctx,
                  */
                 s = cso->ir.nir;
 
-                NIR_PASS_V(s, nir_lower_io, nir_var_all, type_size,
+                NIR_PASS_V(s, nir_lower_io, nir_var_all & ~nir_var_uniform,
+                           type_size,
+                           (nir_lower_io_options)0);
+                NIR_PASS_V(s, nir_lower_io, nir_var_uniform,
+                           uniforms_type_size,
                            (nir_lower_io_options)0);
         } else {
                 assert(cso->type == PIPE_SHADER_IR_TGSI);
@@ -159,6 +198,8 @@ vc5_shader_state_create(struct pipe_context *pctx,
                         fprintf(stderr, "\n");
                 }
                 s = tgsi_to_nir(cso->tokens, &v3d_nir_options);
+
+                so->was_tgsi = true;
         }
 
         NIR_PASS_V(s, nir_opt_global_to_local);
@@ -256,6 +297,21 @@ vc5_get_compiled_shader(struct vc5_context *vc5, struct v3d_key *key)
         memcpy(dup_key, key, key_size);
         _mesa_hash_table_insert(ht, dup_key, shader);
 
+        if (shader->prog_data.base->spill_size >
+            vc5->prog.spill_size_per_thread) {
+                /* Max 4 QPUs per slice, 3 slices per core. We only do single
+                 * core so far.  This overallocates memory on smaller cores.
+                 */
+                int total_spill_size =
+                        4 * 3 * shader->prog_data.base->spill_size;
+
+                vc5_bo_unreference(&vc5->prog.spill_bo);
+                vc5->prog.spill_bo = vc5_bo_alloc(vc5->screen,
+                                                  total_spill_size, "spill");
+                vc5->prog.spill_size_per_thread =
+                        shader->prog_data.base->spill_size;
+        }
+
         return shader;
 }
 
@@ -263,6 +319,8 @@ static void
 vc5_setup_shared_key(struct vc5_context *vc5, struct v3d_key *key,
                      struct vc5_texture_stateobj *texstate)
 {
+        const struct v3d_device_info *devinfo = &vc5->screen->devinfo;
+
         for (int i = 0; i < texstate->num_textures; i++) {
                 struct pipe_sampler_view *sampler = texstate->textures[i];
                 struct vc5_sampler_view *vc5_sampler = vc5_sampler_view(sampler);
@@ -273,7 +331,9 @@ vc5_setup_shared_key(struct vc5_context *vc5, struct v3d_key *key,
                         continue;
 
                 key->tex[i].return_size =
-                        vc5_get_tex_return_size(sampler->format);
+                        vc5_get_tex_return_size(devinfo,
+                                                sampler->format,
+                                                sampler_state->compare_mode);
 
                 /* For 16-bit, we set up the sampler to always return 2
                  * channels (meaning no recompiles for most statechanges),
@@ -281,12 +341,15 @@ vc5_setup_shared_key(struct vc5_context *vc5, struct v3d_key *key,
                  */
                 if (key->tex[i].return_size == 16) {
                         key->tex[i].return_channels = 2;
+                } else if (devinfo->ver > 40) {
+                        key->tex[i].return_channels = 4;
                 } else {
                         key->tex[i].return_channels =
-                                vc5_get_tex_return_channels(sampler->format);
+                                vc5_get_tex_return_channels(devinfo,
+                                                            sampler->format);
                 }
 
-                if (vc5_get_tex_return_size(sampler->format) == 32) {
+                if (key->tex[i].return_size == 32 && devinfo->ver < 40) {
                         memcpy(key->tex[i].swizzle,
                                vc5_sampler->swizzle,
                                sizeof(vc5_sampler->swizzle));
@@ -371,12 +434,22 @@ vc5_update_compiled_fs(struct vc5_context *vc5, uint8_t prim_mode)
 
         for (int i = 0; i < key->nr_cbufs; i++) {
                 struct pipe_surface *cbuf = vc5->framebuffer.cbufs[i];
+                if (!cbuf)
+                        continue;
+
                 const struct util_format_description *desc =
                         util_format_description(cbuf->format);
 
                 if (desc->channel[0].type == UTIL_FORMAT_TYPE_FLOAT &&
                     desc->channel[0].size == 32) {
                         key->f32_color_rb |= 1 << i;
+                }
+
+                if (vc5->prog.bind_fs->was_tgsi) {
+                        if (util_format_is_pure_uint(cbuf->format))
+                                key->uint_color_rb |= 1 << i;
+                        else if (util_format_is_pure_sint(cbuf->format))
+                                key->int_color_rb |= 1 << i;
                 }
         }
 
@@ -389,6 +462,7 @@ vc5_update_compiled_fs(struct vc5_context *vc5, uint8_t prim_mode)
         }
 
         key->light_twoside = vc5->rasterizer->base.light_twoside;
+        key->shade_model_flat = vc5->rasterizer->base.flatshade;
 
         struct vc5_compiled_shader *old_fs = vc5->prog.fs;
         vc5->prog.fs = vc5_get_compiled_shader(vc5, &key->base);
@@ -398,11 +472,8 @@ vc5_update_compiled_fs(struct vc5_context *vc5, uint8_t prim_mode)
         vc5->dirty |= VC5_DIRTY_COMPILED_FS;
 
         if (old_fs &&
-            (vc5->prog.fs->prog_data.fs->flat_shade_flags !=
-             old_fs->prog_data.fs->flat_shade_flags ||
-             (vc5->rasterizer->base.flatshade &&
-              vc5->prog.fs->prog_data.fs->shade_model_flags !=
-              old_fs->prog_data.fs->shade_model_flags))) {
+            vc5->prog.fs->prog_data.fs->flat_shade_flags !=
+            old_fs->prog_data.fs->flat_shade_flags) {
                 vc5->dirty |= VC5_DIRTY_FLAT_SHADE_FLAGS;
         }
 

@@ -141,12 +141,6 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 	case R600_QUERY_NUM_DB_CACHE_FLUSHES:
 		query->begin_result = rctx->num_db_cache_flushes;
 		break;
-	case R600_QUERY_NUM_L2_INVALIDATES:
-		query->begin_result = rctx->num_L2_invalidates;
-		break;
-	case R600_QUERY_NUM_L2_WRITEBACKS:
-		query->begin_result = rctx->num_L2_writebacks;
-		break;
 	case R600_QUERY_NUM_RESIDENT_HANDLES:
 		query->begin_result = rctx->num_resident_handles;
 		break;
@@ -298,12 +292,6 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 		break;
 	case R600_QUERY_NUM_DB_CACHE_FLUSHES:
 		query->end_result = rctx->num_db_cache_flushes;
-		break;
-	case R600_QUERY_NUM_L2_INVALIDATES:
-		query->end_result = rctx->num_L2_invalidates;
-		break;
-	case R600_QUERY_NUM_L2_WRITEBACKS:
-		query->end_result = rctx->num_L2_writebacks;
 		break;
 	case R600_QUERY_NUM_RESIDENT_HANDLES:
 		query->end_result = rctx->num_resident_handles;
@@ -547,7 +535,8 @@ static bool r600_query_hw_prepare_buffer(struct r600_common_screen *rscreen,
 	memset(results, 0, buffer->b.b.width0);
 
 	if (query->b.type == PIPE_QUERY_OCCLUSION_COUNTER ||
-	    query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE) {
+	    query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE ||
+	    query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE) {
 		unsigned max_rbs = rscreen->info.num_render_backends;
 		unsigned enabled_rb_mask = rscreen->info.enabled_rb_mask;
 		unsigned num_results;
@@ -632,6 +621,7 @@ static struct pipe_query *r600_query_hw_create(struct r600_common_screen *rscree
 	switch (query_type) {
 	case PIPE_QUERY_OCCLUSION_COUNTER:
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
+  	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		query->result_size = 16 * rscreen->info.num_render_backends;
 		query->result_size += 16; /* for the fence + alignment */
 		query->num_cs_dw_begin = 6;
@@ -688,7 +678,8 @@ static void r600_update_occlusion_query_state(struct r600_common_context *rctx,
 					      unsigned type, int diff)
 {
 	if (type == PIPE_QUERY_OCCLUSION_COUNTER ||
-	    type == PIPE_QUERY_OCCLUSION_PREDICATE) {
+	    type == PIPE_QUERY_OCCLUSION_PREDICATE ||
+	    type == PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE) {
 		bool old_enable = rctx->num_occlusion_queries != 0;
 		bool old_perfect_enable =
 			rctx->num_perfect_occlusion_queries != 0;
@@ -697,7 +688,7 @@ static void r600_update_occlusion_query_state(struct r600_common_context *rctx,
 		rctx->num_occlusion_queries += diff;
 		assert(rctx->num_occlusion_queries >= 0);
 
-		if (type == PIPE_QUERY_OCCLUSION_COUNTER) {
+		if (type != PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE) {
 			rctx->num_perfect_occlusion_queries += diff;
 			assert(rctx->num_perfect_occlusion_queries >= 0);
 		}
@@ -742,6 +733,7 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 	switch (query->b.type) {
 	case PIPE_QUERY_OCCLUSION_COUNTER:
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
+  	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
 		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_ZPASS_DONE) | EVENT_INDEX(1));
 		radeon_emit(cs, va);
@@ -822,6 +814,7 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 	switch (query->b.type) {
 	case PIPE_QUERY_OCCLUSION_COUNTER:
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
+	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		va += 8;
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
 		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_ZPASS_DONE) | EVENT_INDEX(1));
@@ -934,6 +927,7 @@ static void r600_emit_query_predication(struct r600_common_context *ctx,
 	switch (query->b.type) {
 	case PIPE_QUERY_OCCLUSION_COUNTER:
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
+	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		op = PRED_OP(PREDICATION_OP_ZPASS);
 		break;
 	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
@@ -1096,6 +1090,7 @@ static void r600_get_hw_query_params(struct r600_common_context *rctx,
 	switch (rquery->b.type) {
 	case PIPE_QUERY_OCCLUSION_COUNTER:
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
+	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		params->start_offset = 0;
 		params->end_offset = 8;
 		params->fence_offset = max_rbs * 16;
@@ -1188,7 +1183,8 @@ static void r600_query_hw_add_result(struct r600_common_screen *rscreen,
 		}
 		break;
 	}
-	case PIPE_QUERY_OCCLUSION_PREDICATE: {
+	case PIPE_QUERY_OCCLUSION_PREDICATE:
+	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE: {
 		for (unsigned i = 0; i < max_rbs; ++i) {
 			unsigned results_base = i * 16;
 			result->b = result->b ||
@@ -1395,6 +1391,8 @@ bool r600_query_hw_get_result(struct r600_common_context *rctx,
  *  1.x = fence_offset
  *  1.y = pair_stride
  *  1.z = pair_count
+ *  1.w = result_offset
+ *  2.x = buffer0 offset
  *
  * BUFFER[0] = query result buffer
  * BUFFER[1] = previous summary buffer
@@ -1416,7 +1414,7 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 		"DCL BUFFER[0]\n"
 		"DCL BUFFER[1]\n"
 		"DCL BUFFER[2]\n"
-		"DCL CONST[0][0..1]\n"
+		"DCL CONST[0][0..2]\n"
 		"DCL TEMP[0..5]\n"
 		"IMM[0] UINT32 {0, 31, 2147483647, 4294967295}\n"
 		"IMM[1] UINT32 {1, 2, 4, 8}\n"
@@ -1427,14 +1425,16 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 		"AND TEMP[5], CONST[0][0].wwww, IMM[2].xxxx\n"
 		"UIF TEMP[5]\n"
 			/* Check result availability. */
-			"LOAD TEMP[1].x, BUFFER[0], CONST[0][1].xxxx\n"
+			"UADD TEMP[1].x, CONST[0][1].xxxx, CONST[0][2].xxxx\n"
+			"LOAD TEMP[1].x, BUFFER[0], TEMP[1].xxxx\n"
 			"ISHR TEMP[0].z, TEMP[1].xxxx, IMM[0].yyyy\n"
 			"MOV TEMP[1], TEMP[0].zzzz\n"
 			"NOT TEMP[0].z, TEMP[0].zzzz\n"
 
 			/* Load result if available. */
 			"UIF TEMP[1]\n"
-				"LOAD TEMP[0].xy, BUFFER[0], IMM[0].xxxx\n"
+				"UADD TEMP[0].x, IMM[0].xxxx, CONST[0][2].xxxx\n"
+				"LOAD TEMP[0].xy, BUFFER[0], TEMP[0].xxxx\n"
 			"ENDIF\n"
 		"ELSE\n"
 			/* Load previously accumulated result if requested. */
@@ -1459,6 +1459,7 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 
 				/* Load fence and check result availability */
 				"UMAD TEMP[5].x, TEMP[1].xxxx, CONST[0][0].yyyy, CONST[0][1].xxxx\n"
+				"UADD TEMP[5].x, TEMP[5].xxxx, CONST[0][2].xxxx\n"
 				"LOAD TEMP[5].x, BUFFER[0], TEMP[5].xxxx\n"
 				"ISHR TEMP[0].z, TEMP[5].xxxx, IMM[0].yyyy\n"
 				"NOT TEMP[0].z, TEMP[0].zzzz\n"
@@ -1471,6 +1472,7 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 					/* Load start and end. */
 					"UMUL TEMP[5].x, TEMP[1].xxxx, CONST[0][0].yyyy\n"
 					"UMAD TEMP[5].x, TEMP[1].yyyy, CONST[0][1].yyyy, TEMP[5].xxxx\n"
+					"UADD TEMP[5].x, TEMP[5].xxxx, CONST[0][2].xxxx\n"
 					"LOAD TEMP[2].xy, BUFFER[0], TEMP[5].xxxx\n"
 
 					"UADD TEMP[5].y, TEMP[5].xxxx, CONST[0][0].xxxx\n"
@@ -1509,18 +1511,18 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 		"AND TEMP[4], CONST[0][0].wwww, IMM[1].yyyy\n"
 		"UIF TEMP[4]\n"
 			/* Store accumulated data for chaining. */
-			"STORE BUFFER[2].xyz, IMM[0].xxxx, TEMP[0]\n"
+			"STORE BUFFER[2].xyz, CONST[0][1].wwww, TEMP[0]\n"
 		"ELSE\n"
 			"AND TEMP[4], CONST[0][0].wwww, IMM[1].zzzz\n"
 			"UIF TEMP[4]\n"
 				/* Store result availability. */
 				"NOT TEMP[0].z, TEMP[0]\n"
 				"AND TEMP[0].z, TEMP[0].zzzz, IMM[1].xxxx\n"
-				"STORE BUFFER[2].x, IMM[0].xxxx, TEMP[0].zzzz\n"
+				"STORE BUFFER[2].x, CONST[0][1].wwww, TEMP[0].zzzz\n"
 
 				"AND TEMP[4], CONST[0][0].wwww, IMM[2].zzzz\n"
 				"UIF TEMP[4]\n"
-					"STORE BUFFER[2].y, IMM[0].xxxx, IMM[0].xxxx\n"
+					"STORE BUFFER[2].y, CONST[0][1].wwww, IMM[0].xxxx\n"
 				"ENDIF\n"
 			"ELSE\n"
 				/* Store result if it is available. */
@@ -1543,7 +1545,7 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 
 					"AND TEMP[4], CONST[0][0].wwww, IMM[2].zzzz\n"
 					"UIF TEMP[4]\n"
-						"STORE BUFFER[2].xy, IMM[0].xxxx, TEMP[0].xyxy\n"
+						"STORE BUFFER[2].xy, CONST[0][1].wwww, TEMP[0].xyxy\n"
 					"ELSE\n"
 						/* Clamping */
 						"UIF TEMP[0].yyyy\n"
@@ -1555,7 +1557,7 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 							"UMIN TEMP[0].x, TEMP[0].xxxx, IMM[0].zzzz\n"
 						"ENDIF\n"
 
-						"STORE BUFFER[2].x, IMM[0].xxxx, TEMP[0].xxxx\n"
+						"STORE BUFFER[2].x, CONST[0][1].wwww, TEMP[0].xxxx\n"
 					"ENDIF\n"
 				"ENDIF\n"
 			"ENDIF\n"
@@ -1623,6 +1625,8 @@ static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
 		uint32_t fence_offset;
 		uint32_t pair_stride;
 		uint32_t pair_count;
+		uint32_t buffer_offset;
+		uint32_t buffer0_offset;
 	} consts;
 
 	if (!rctx->query_result_shader) {
@@ -1668,7 +1672,8 @@ static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
 	consts.config = 0;
 	if (index < 0)
 		consts.config |= 4;
-	if (query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE)
+	if (query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE ||
+	    query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE)
 		consts.config |= 8;
 	else if (query->b.type == PIPE_QUERY_SO_OVERFLOW_PREDICATE ||
 		 query->b.type == PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE)
@@ -1708,18 +1713,20 @@ static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
 			params.start_offset += qbuf->results_end - query->result_size;
 		}
 
-		rctx->b.set_constant_buffer(&rctx->b, PIPE_SHADER_COMPUTE, 0, &constant_buffer);
-
 		ssbo[0].buffer = &qbuf->buf->b.b;
-		ssbo[0].buffer_offset = params.start_offset;
-		ssbo[0].buffer_size = qbuf->results_end - params.start_offset;
-
+		ssbo[0].buffer_offset = params.start_offset & ~0xff;
+		ssbo[0].buffer_size = qbuf->results_end - ssbo[0].buffer_offset;
+		consts.buffer0_offset = (params.start_offset & 0xff);
 		if (!qbuf->previous) {
-			ssbo[2].buffer = resource;
-			ssbo[2].buffer_offset = offset;
-			ssbo[2].buffer_size = 8;
 
-		}
+			ssbo[2].buffer = resource;
+			ssbo[2].buffer_offset = offset & ~0xff;
+			ssbo[2].buffer_size = offset + 8;
+			consts.buffer_offset = (offset & 0xff);
+		} else
+			consts.buffer_offset = 0;
+
+		rctx->b.set_constant_buffer(&rctx->b, PIPE_SHADER_COMPUTE, 0, &constant_buffer);
 
 		rctx->b.set_shader_buffers(&rctx->b, PIPE_SHADER_COMPUTE, 0, 3, ssbo);
 
@@ -1733,7 +1740,7 @@ static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
 			va = qbuf->buf->gpu_address + qbuf->results_end - query->result_size;
 			va += params.fence_offset;
 
-			r600_gfx_wait_fence(rctx, va, 0x80000000, 0x80000000);
+			r600_gfx_wait_fence(rctx, qbuf->buf, va, 0x80000000, 0x80000000);
 		}
 
 		rctx->b.launch_grid(&rctx->b, &grid);
@@ -1830,12 +1837,31 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 	struct r600_resource *buffer;
 	uint32_t *results;
 	unsigned i, mask = 0;
-	unsigned max_rbs = ctx->screen->info.num_render_backends;
+	unsigned max_rbs;
+	
+	if (ctx->family == CHIP_JUNIPER) {
+		/*
+		 * Fix for predication lockups - the chip can only ever have
+		 * 4 RBs, however it looks like the predication logic assumes
+		 * there's 8, trying to read results from query buffers never
+		 * written to. By increasing this number we'll write the
+		 * status bit for these as per the normal disabled rb logic.
+		 */
+		ctx->screen->info.num_render_backends = 8;
+	}
+	max_rbs = ctx->screen->info.num_render_backends;
 
 	assert(rscreen->chip_class <= CAYMAN);
 
-	/* if backend_map query is supported by the kernel */
-	if (rscreen->info.r600_gb_backend_map_valid) {
+	/*
+	 * if backend_map query is supported by the kernel.
+	 * Note the kernel drm driver for a long time never filled in the
+	 * associated data on eg/cm, only on r600/r700, hence ignore the valid
+	 * bit there if the map is zero.
+	 * (Albeit some chips with just one active rb can have a valid 0 map.)
+	 */ 
+	if (rscreen->info.r600_gb_backend_map_valid &&
+	    (ctx->chip_class < EVERGREEN || rscreen->info.r600_gb_backend_map != 0)) {
 		unsigned num_tile_pipes = rscreen->info.num_tile_pipes;
 		unsigned backend_map = rscreen->info.r600_gb_backend_map;
 		unsigned item_width, item_mask;
@@ -1895,8 +1921,13 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 
 	r600_resource_reference(&buffer, NULL);
 
-	if (mask)
+	if (mask) {
+		if (rscreen->debug_flags & DBG_INFO &&
+		    mask != rscreen->info.enabled_rb_mask) {
+			printf("enabled_rb_mask (fixed) = 0x%x\n", mask);
+		}
 		rscreen->info.enabled_rb_mask = mask;
+	}
 }
 
 #define XFULL(name_, query_type_, type_, result_type_, group_id_) \
@@ -1932,8 +1963,6 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("num-cs-flushes",		NUM_CS_FLUSHES,		UINT64, AVERAGE),
 	X("num-CB-cache-flushes",	NUM_CB_CACHE_FLUSHES,	UINT64, AVERAGE),
 	X("num-DB-cache-flushes",	NUM_DB_CACHE_FLUSHES,	UINT64, AVERAGE),
-	X("num-L2-invalidates",		NUM_L2_INVALIDATES,	UINT64, AVERAGE),
-	X("num-L2-writebacks",		NUM_L2_WRITEBACKS,	UINT64, AVERAGE),
 	X("num-resident-handles",	NUM_RESIDENT_HANDLES,	UINT64, AVERAGE),
 	X("tc-offloaded-slots",		TC_OFFLOADED_SLOTS,     UINT64, AVERAGE),
 	X("tc-direct-slots",		TC_DIRECT_SLOTS,	UINT64, AVERAGE),

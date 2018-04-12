@@ -1020,6 +1020,12 @@ const struct function common_desktop_functions_possible[] = {
    { "glImportMemoryFdEXT", 45, -1 },
    { "glImportSemaphoreFdEXT", 45, -1 },
 
+   /* GL_ARB_gl_spirv */
+   { "glSpecializeShaderARB", 45, -1 },
+
+   /* GL_EXT_shader_framebuffer_fetch_non_coherent */
+   { "glFramebufferFetchBarrierEXT", 20, -1 },
+
    { NULL, 0, -1 }
 };
 
@@ -1963,6 +1969,9 @@ const struct function gl_core_functions_possible[] = {
    { "glProgramUniform3ui64vARB", 45, -1 },
    { "glProgramUniform4ui64vARB", 45, -1 },
 
+   /* GL_ARB_gl_spirv */
+   { "glSpecializeShaderARB", 45, -1 },
+
    { NULL, 0, -1 }
 };
 
@@ -2434,6 +2443,14 @@ const struct function gles2_functions_possible[] = {
    { "glGetQueryivEXT", 20, -1 },
    { "glGetQueryObjectivEXT", 20, -1 },
    { "glGetQueryObjectuivEXT", 20, -1 },
+
+   /* GL_EXT_disjoint_timer_query */
+   { "glGetQueryObjecti64vEXT", 20, -1 },
+   { "glGetQueryObjectui64vEXT", 20, -1 },
+   { "glQueryCounterEXT", 20, -1 },
+
+   /* GL_EXT_shader_framebuffer_fetch_non_coherent */
+   { "glFramebufferFetchBarrierEXT", 20, -1 },
 
    { NULL, 0, -1 }
 };

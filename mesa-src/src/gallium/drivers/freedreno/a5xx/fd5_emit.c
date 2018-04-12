@@ -36,6 +36,7 @@
 
 #include "fd5_emit.h"
 #include "fd5_blend.h"
+#include "fd5_blitter.h"
 #include "fd5_context.h"
 #include "fd5_image.h"
 #include "fd5_program.h"
@@ -337,8 +338,13 @@ emit_textures(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			const struct fd5_pipe_sampler_view *view = tex->textures[i] ?
 					fd5_pipe_sampler_view(tex->textures[i]) :
 					&dummy_view;
+			enum a5xx_tile_mode tile_mode = TILE5_LINEAR;
 
-			OUT_RING(ring, view->texconst0);
+			if (view->base.texture)
+				tile_mode = fd_resource(view->base.texture)->tile_mode;
+
+			OUT_RING(ring, view->texconst0 |
+					A5XX_TEX_CONST_0_TILE_MODE(tile_mode));
 			OUT_RING(ring, view->texconst1);
 			OUT_RING(ring, view->texconst2);
 			OUT_RING(ring, view->texconst3);
@@ -959,8 +965,8 @@ t7              opcode: CP_WAIT_FOR_IDLE (26) (1 dwords)
 	OUT_PKT4(ring, REG_A5XX_UNKNOWN_E004, 1);
 	OUT_RING(ring, 0x00000000);   /* UNKNOWN_E004 */
 
-	OUT_PKT4(ring, REG_A5XX_UNKNOWN_E093, 1);
-	OUT_RING(ring, 0x00000000);   /* UNKNOWN_E093 */
+	OUT_PKT4(ring, REG_A5XX_GRAS_SU_LAYERED, 1);
+	OUT_RING(ring, 0x00000000);   /* GRAS_SU_LAYERED */
 
 	OUT_PKT4(ring, REG_A5XX_UNKNOWN_E29A, 1);
 	OUT_RING(ring, 0x00ffff00);   /* UNKNOWN_E29A */
@@ -974,8 +980,8 @@ t7              opcode: CP_WAIT_FOR_IDLE (26) (1 dwords)
 	OUT_PKT4(ring, REG_A5XX_UNKNOWN_E389, 1);
 	OUT_RING(ring, 0x00000000);   /* UNKNOWN_E389 */
 
-	OUT_PKT4(ring, REG_A5XX_UNKNOWN_E38D, 1);
-	OUT_RING(ring, 0x00000000);   /* UNKNOWN_E38D */
+	OUT_PKT4(ring, REG_A5XX_PC_GS_LAYERED, 1);
+	OUT_RING(ring, 0x00000000);   /* PC_GS_LAYERED */
 
 	OUT_PKT4(ring, REG_A5XX_UNKNOWN_E5AB, 1);
 	OUT_RING(ring, 0x00000000);   /* UNKNOWN_E5AB */
@@ -1068,6 +1074,26 @@ fd5_emit_ib(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
 	__OUT_IB5(ring, target);
 }
 
+static void
+fd5_mem_to_mem(struct fd_ringbuffer *ring, struct pipe_resource *dst,
+		unsigned dst_off, struct pipe_resource *src, unsigned src_off,
+		unsigned sizedwords)
+{
+	struct fd_bo *src_bo = fd_resource(src)->bo;
+	struct fd_bo *dst_bo = fd_resource(dst)->bo;
+	unsigned i;
+
+	for (i = 0; i < sizedwords; i++) {
+		OUT_PKT7(ring, CP_MEM_TO_MEM, 5);
+		OUT_RING(ring, 0x00000000);
+		OUT_RELOCW(ring, dst_bo, dst_off, 0, 0);
+		OUT_RELOC (ring, src_bo, src_off, 0, 0);
+
+		dst_off += 4;
+		src_off += 4;
+	}
+}
+
 void
 fd5_emit_init(struct pipe_context *pctx)
 {
@@ -1075,4 +1101,5 @@ fd5_emit_init(struct pipe_context *pctx)
 	ctx->emit_const = fd5_emit_const;
 	ctx->emit_const_bo = fd5_emit_const_bo;
 	ctx->emit_ib = fd5_emit_ib;
+	ctx->mem_to_mem = fd5_mem_to_mem;
 }

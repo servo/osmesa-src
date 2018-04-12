@@ -21,7 +21,7 @@
  * IN THE SOFTWARE.
  */
 
-#include "compiler/nir/nir_builder.h"
+#include "blorp_nir_builder.h"
 
 #include "blorp_priv.h"
 
@@ -268,7 +268,8 @@ blorp_nir_txf_ms(nir_builder *b, struct brw_blorp_blit_vars *v,
 }
 
 static nir_ssa_def *
-blorp_nir_txf_ms_mcs(nir_builder *b, struct brw_blorp_blit_vars *v, nir_ssa_def *pos)
+blorp_blit_txf_ms_mcs(nir_builder *b, struct brw_blorp_blit_vars *v,
+                      nir_ssa_def *pos)
 {
    nir_tex_instr *tex =
       blorp_create_nir_tex_instr(b, v, nir_texop_txf_ms_mcs,
@@ -621,7 +622,7 @@ blorp_nir_manual_blend_average(nir_builder *b, struct brw_blorp_blit_vars *v,
 
    nir_ssa_def *mcs = NULL;
    if (tex_aux_usage == ISL_AUX_USAGE_MCS)
-      mcs = blorp_nir_txf_ms_mcs(b, v, pos);
+      mcs = blorp_blit_txf_ms_mcs(b, v, pos);
 
    /* We add together samples using a binary tree structure, e.g. for 4x MSAA:
     *
@@ -679,6 +680,11 @@ blorp_nir_manual_blend_average(nir_builder *b, struct brw_blorp_blit_vars *v,
           * ld2dms are equivalent (since all samples are on sample slice 0).
           * Since we have already sampled from sample 0, all we need to do is
           * skip the remaining fetches and averaging if MCS is zero.
+          *
+          * It's also trivial to detect when the MCS has the magic clear color
+          * value.  In this case, the txf we did on sample 0 will return the
+          * clear color and we can skip the remaining fetches just like we do
+          * when MCS == 0.
           */
          nir_ssa_def *mcs_zero =
             nir_ieq(b, nir_channel(b, mcs, 0), nir_imm_int(b, 0));
@@ -686,9 +692,11 @@ blorp_nir_manual_blend_average(nir_builder *b, struct brw_blorp_blit_vars *v,
             mcs_zero = nir_iand(b, mcs_zero,
                nir_ieq(b, nir_channel(b, mcs, 1), nir_imm_int(b, 0)));
          }
+         nir_ssa_def *mcs_clear =
+            blorp_nir_mcs_is_clear_color(b, mcs, tex_samples);
 
          nir_if *if_stmt = nir_if_create(b->shader);
-         if_stmt->condition = nir_src_for_ssa(mcs_zero);
+         if_stmt->condition = nir_src_for_ssa(nir_ior(b, mcs_zero, mcs_clear));
          nir_cf_node_insert(b->cursor, &if_stmt->cf_node);
 
          b->cursor = nir_after_cf_list(&if_stmt->then_list);
@@ -783,7 +791,7 @@ blorp_nir_manual_blend_bilinear(nir_builder *b, nir_ssa_def *pos,
        */
       nir_ssa_def *mcs = NULL;
       if (key->tex_aux_usage == ISL_AUX_USAGE_MCS)
-         mcs = blorp_nir_txf_ms_mcs(b, v, sample_coords_int);
+         mcs = blorp_blit_txf_ms_mcs(b, v, sample_coords_int);
 
       /* Compute sample index and map the sample index to a sample number.
        * Sample index layout shows the numbering of slots in a rectangular
@@ -1260,7 +1268,7 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp, void *mem_ctx,
          } else {
             nir_ssa_def *mcs = NULL;
             if (key->tex_aux_usage == ISL_AUX_USAGE_MCS)
-               mcs = blorp_nir_txf_ms_mcs(&b, &v, src_pos);
+               mcs = blorp_blit_txf_ms_mcs(&b, &v, src_pos);
 
             color = blorp_nir_txf_ms(&b, &v, src_pos, mcs, key->texture_data_type);
          }
@@ -2343,7 +2351,7 @@ blorp_surf_convert_to_uncompressed(const struct isl_device *isl_dev,
     */
    blorp_surf_convert_to_single_slice(isl_dev, info);
 
-   if (width || height) {
+   if (width && height) {
 #ifndef NDEBUG
       uint32_t right_edge_px = info->tile_x_sa + *x + *width;
       uint32_t bottom_edge_px = info->tile_y_sa + *y + *height;
@@ -2356,7 +2364,7 @@ blorp_surf_convert_to_uncompressed(const struct isl_device *isl_dev,
       *height = DIV_ROUND_UP(*height, fmtl->bh);
    }
 
-   if (x || y) {
+   if (x && y) {
       assert(*x % fmtl->bw == 0);
       assert(*y % fmtl->bh == 0);
       *x /= fmtl->bw;

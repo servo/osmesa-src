@@ -64,9 +64,11 @@ struct fd_screen {
 	uint32_t gpu_id;         /* 220, 305, etc */
 	uint32_t chip_id;        /* coreid:8 majorrev:8 minorrev:8 patch:8 */
 	uint32_t max_freq;
+	uint32_t ram_size;
 	uint32_t max_rts;        /* max # of render targets */
 	uint32_t gmem_alignw, gmem_alignh;
 	uint32_t num_vsc_pipes;
+	uint32_t priority_mask;
 	bool has_timestamp;
 
 	void *compiler;          /* currently unused for a2xx */
@@ -78,6 +80,9 @@ struct fd_screen {
 	 * related, use ctx->pipe instead.
 	 */
 	struct fd_pipe *pipe;
+
+	uint32_t (*setup_slices)(struct fd_resource *rsc);
+	unsigned (*tile_mode)(const struct pipe_resource *prsc);
 
 	int64_t cpu_gpu_time_delta;
 

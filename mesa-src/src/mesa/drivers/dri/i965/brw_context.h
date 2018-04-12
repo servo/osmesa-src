@@ -36,7 +36,9 @@
 #include <stdbool.h>
 #include "main/macros.h"
 #include "main/mtypes.h"
+#include "vbo/vbo.h"
 #include "brw_structs.h"
+#include "brw_pipe_control.h"
 #include "compiler/brw_compiler.h"
 
 #include "isl/isl.h"
@@ -375,6 +377,35 @@ struct brw_cache {
    uint32_t next_offset;
 };
 
+#define perf_debug(...) do {                                    \
+   static GLuint msg_id = 0;                                    \
+   if (unlikely(INTEL_DEBUG & DEBUG_PERF))                      \
+      dbg_printf(__VA_ARGS__);                                  \
+   if (brw->perf_debug)                                         \
+      _mesa_gl_debug(&brw->ctx, &msg_id,                        \
+                     MESA_DEBUG_SOURCE_API,                     \
+                     MESA_DEBUG_TYPE_PERFORMANCE,               \
+                     MESA_DEBUG_SEVERITY_MEDIUM,                \
+                     __VA_ARGS__);                              \
+} while(0)
+
+#define WARN_ONCE(cond, fmt...) do {                            \
+   if (unlikely(cond)) {                                        \
+      static bool _warned = false;                              \
+      static GLuint msg_id = 0;                                 \
+      if (!_warned) {                                           \
+         fprintf(stderr, "WARNING: ");                          \
+         fprintf(stderr, fmt);                                  \
+         _warned = true;                                        \
+                                                                \
+         _mesa_gl_debug(ctx, &msg_id,                           \
+                        MESA_DEBUG_SOURCE_API,                  \
+                        MESA_DEBUG_TYPE_OTHER,                  \
+                        MESA_DEBUG_SEVERITY_HIGH, fmt);         \
+      }                                                         \
+   }                                                            \
+} while (0)
+
 /* Considered adding a member to this struct to document which flags
  * an update might raise so that ordering of the state atoms can be
  * checked or derived at runtime.  Dropped the idea in favor of having
@@ -440,25 +471,31 @@ struct brw_reloc_list {
    int reloc_array_size;
 };
 
+struct brw_growing_bo {
+   struct brw_bo *bo;
+   uint32_t *map;
+   struct brw_bo *partial_bo;
+   uint32_t *partial_bo_map;
+   unsigned partial_bytes;
+};
+
 struct intel_batchbuffer {
    /** Current batchbuffer being queued up. */
-   struct brw_bo *bo;
-   /** Last BO submitted to the hardware.  Used for glFinish(). */
-   struct brw_bo *last_bo;
+   struct brw_growing_bo batch;
    /** Current statebuffer being queued up. */
-   struct brw_bo *state_bo;
+   struct brw_growing_bo state;
+
+   /** Last batchbuffer submitted to the hardware.  Used for glFinish(). */
+   struct brw_bo *last_bo;
 
 #ifdef DEBUG
    uint16_t emit, total;
 #endif
    uint32_t *map_next;
-   uint32_t *map;
-   uint32_t *batch_cpu_map;
-   uint32_t *state_cpu_map;
-   uint32_t *state_map;
    uint32_t state_used;
 
    enum brw_gpu_ring ring;
+   bool use_shadow_copy;
    bool use_batch_first;
    bool needs_sol_reset;
    bool state_base_address_emitted;
@@ -490,6 +527,36 @@ struct intel_batchbuffer {
 
 #define BRW_MAX_XFB_STREAMS 4
 
+struct brw_transform_feedback_counter {
+   /**
+    * Index of the first entry of this counter within the primitive count BO.
+    * An entry is considered to be an N-tuple of 64bit values, where N is the
+    * number of vertex streams supported by the platform.
+    */
+   unsigned bo_start;
+
+   /**
+    * Index one past the last entry of this counter within the primitive
+    * count BO.
+    */
+   unsigned bo_end;
+
+   /**
+    * Primitive count values accumulated while this counter was active,
+    * excluding any entries buffered between \c bo_start and \c bo_end, which
+    * haven't been accounted for yet.
+    */
+   uint64_t accum[BRW_MAX_XFB_STREAMS];
+};
+
+static inline void
+brw_reset_transform_feedback_counter(
+   struct brw_transform_feedback_counter *counter)
+{
+   counter->bo_start = counter->bo_end;
+   memset(&counter->accum, 0, sizeof(counter->accum));
+}
+
 struct brw_transform_feedback_object {
    struct gl_transform_feedback_object base;
 
@@ -508,14 +575,18 @@ struct brw_transform_feedback_object {
     */
    unsigned max_index;
 
+   struct brw_bo *prim_count_bo;
+
    /**
     * Count of primitives generated during this transform feedback operation.
-    *  @{
     */
-   uint64_t prims_generated[BRW_MAX_XFB_STREAMS];
-   struct brw_bo *prim_count_bo;
-   unsigned prim_count_buffer_index; /**< in number of uint64_t units */
-   /** @} */
+   struct brw_transform_feedback_counter counter;
+
+   /**
+    * Count of primitives generated during the previous transform feedback
+    * operation.  Used to implement DrawTransformFeedback().
+    */
+   struct brw_transform_feedback_counter previous_counter;
 
    /**
     * Number of vertices written between last Begin/EndTransformFeedback().
@@ -648,6 +719,14 @@ struct brw_perf_query_info
    uint32_t n_b_counter_regs;
 };
 
+struct brw_uploader {
+   struct brw_bufmgr *bufmgr;
+   struct brw_bo *bo;
+   void *map;
+   uint32_t next_offset;
+   unsigned default_size;
+};
+
 /**
  * brw_context is derived from gl_context.
  */
@@ -697,7 +776,7 @@ struct brw_context
     * and would need flushing before being used from another cache domain that
     * isn't coherent with it (i.e. the sampler).
     */
-   struct set *render_cache;
+   struct hash_table *render_cache;
 
    /**
     * Set of struct brw_bo * that have been used as a depth buffer within this
@@ -716,11 +795,7 @@ struct brw_context
 
    struct intel_batchbuffer batch;
 
-   struct {
-      struct brw_bo *bo;
-      void *map;
-      uint32_t next_offset;
-   } upload;
+   struct brw_uploader upload;
 
    /**
     * Set if rendering has occurred to the drawable's front buffer.
@@ -880,6 +955,9 @@ struct brw_context
        * These bitfields indicate which workarounds are needed.
        */
       uint8_t attrib_wa_flags[VERT_ATTRIB_MAX];
+
+      /* For the initial pushdown, keep the list of vbo inputs. */
+      struct vbo_inputs draw_arrays;
    } vb;
 
    struct {
@@ -910,7 +988,7 @@ struct brw_context
     * Number of samples in ctx->DrawBuffer, updated by BRW_NEW_NUM_SAMPLES so
     * that we don't have to reemit that state every time we change FBOs.
     */
-   int num_samples;
+   unsigned int num_samples;
 
    /* BRW_NEW_URB_ALLOCATIONS:
     */
@@ -1115,6 +1193,9 @@ struct brw_context
        */
       struct hash_table *oa_metrics_table;
 
+      /* Location of the device's sysfs entry. */
+      char sysfs_dev_dir[256];
+
       struct brw_perf_query_info *queries;
       int n_queries;
 
@@ -1220,15 +1301,11 @@ struct brw_context
 
    struct brw_fast_clear_state *fast_clear_state;
 
-   /* Array of flags telling if auxiliary buffer is disabled for corresponding
-    * renderbuffer. If draw_aux_buffer_disabled[i] is set then use of
-    * auxiliary buffer for gl_framebuffer::_ColorDrawBuffers[i] is
-    * disabled.
-    * This is needed in case the same underlying buffer is also configured
-    * to be sampled but with a format that the sampling engine can't treat
-    * compressed or fast cleared.
+   /* Array of aux usages to use for drawing.  Aux usage for render targets is
+    * a bit more complex than simply calling a single function so we need some
+    * way of passing it form brw_draw.c to surface state setup.
     */
-   bool draw_aux_buffer_disabled[MAX_DRAW_BUFFERS];
+   enum isl_aux_usage draw_aux_usage[MAX_DRAW_BUFFERS];
 
    __DRIcontext *driContext;
    struct intel_screen *screen;
@@ -1254,7 +1331,8 @@ void intel_update_renderbuffers(__DRIcontext *context,
                                 __DRIdrawable *drawable);
 void intel_prepare_render(struct brw_context *brw);
 
-void brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering);
+void brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering,
+                                bool *draw_aux_buffer_disabled);
 
 void intel_resolve_for_dri2_flush(struct brw_context *brw,
                                   __DRIdrawable *drawable);
@@ -1385,7 +1463,7 @@ gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
 
 /* brw_draw_upload.c */
 unsigned brw_get_vertex_surface_type(struct brw_context *brw,
-                                     const struct gl_vertex_array *glarray);
+                                     const struct gl_array_attributes *glattr);
 
 static inline unsigned
 brw_get_index_type(unsigned index_size)
@@ -1432,7 +1510,6 @@ extern void intelInitExtensions(struct gl_context *ctx);
 extern int intel_translate_shadow_compare_func(GLenum func);
 extern int intel_translate_compare_func(GLenum func);
 extern int intel_translate_stencil_op(GLenum op);
-extern int intel_translate_logic_op(GLenum opcode);
 
 /* brw_sync.c */
 void brw_init_syncobj_functions(struct dd_function_table *functions);
@@ -1458,9 +1535,6 @@ brw_resume_transform_feedback(struct gl_context *ctx,
 void
 brw_save_primitives_written_counters(struct brw_context *brw,
                                      struct brw_transform_feedback_object *obj);
-void
-brw_compute_xfb_vertices_written(struct brw_context *brw,
-                                 struct brw_transform_feedback_object *obj);
 GLsizei
 brw_get_transform_feedback_vertex_count(struct gl_context *ctx,
                                         struct gl_transform_feedback_object *obj,
@@ -1512,6 +1586,10 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
                           int dstX0, int dstY0,
                           int width, int height);
 
+/* brw_generate_mipmap.c */
+void brw_generate_mipmap(struct gl_context *ctx, GLenum target,
+                         struct gl_texture_object *tex_obj);
+
 void
 gen6_get_sample_position(struct gl_context *ctx,
                          struct gl_framebuffer *fb,
@@ -1545,6 +1623,21 @@ brw_check_for_reset(struct brw_context *brw);
 /* brw_compute.c */
 extern void
 brw_init_compute_functions(struct dd_function_table *functions);
+
+/* brw_program_binary.c */
+extern void
+brw_program_binary_init(unsigned device_id);
+extern void
+brw_get_program_binary_driver_sha1(struct gl_context *ctx, uint8_t *sha1);
+extern void
+brw_deserialize_program_binary(struct gl_context *ctx,
+                               struct gl_shader_program *shProg,
+                               struct gl_program *prog);
+void
+brw_program_serialize_nir(struct gl_context *ctx, struct gl_program *prog);
+void
+brw_program_deserialize_nir(struct gl_context *ctx, struct gl_program *prog,
+                            gl_shader_stage stage);
 
 /*======================================================================
  * Inline conversion functions.  These are better-typed than the
@@ -1641,22 +1734,6 @@ gen6_upload_push_constants(struct brw_context *brw,
 bool
 gen9_use_linear_1d_layout(const struct brw_context *brw,
                           const struct intel_mipmap_tree *mt);
-
-/* brw_pipe_control.c */
-int brw_init_pipe_control(struct brw_context *brw,
-			  const struct gen_device_info *info);
-void brw_fini_pipe_control(struct brw_context *brw);
-
-void brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags);
-void brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
-                                 struct brw_bo *bo, uint32_t offset,
-                                 uint64_t imm);
-void brw_emit_end_of_pipe_sync(struct brw_context *brw, uint32_t flags);
-void brw_emit_mi_flush(struct brw_context *brw);
-void brw_emit_post_sync_nonzero_flush(struct brw_context *brw);
-void brw_emit_depth_stall_flushes(struct brw_context *brw);
-void gen7_emit_vs_workaround_flush(struct brw_context *brw);
-void gen7_emit_cs_stall_flush(struct brw_context *brw);
 
 /* brw_queryformat.c */
 void brw_query_internal_format(struct gl_context *ctx, GLenum target,

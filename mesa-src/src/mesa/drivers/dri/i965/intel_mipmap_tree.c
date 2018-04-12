@@ -36,6 +36,7 @@
 
 #include "brw_blorp.h"
 #include "brw_context.h"
+#include "brw_meta_util.h"
 #include "brw_state.h"
 
 #include "main/enums.h"
@@ -71,6 +72,10 @@ intel_miptree_supports_mcs(struct brw_context *brw,
 
    /* Prior to Gen7, all MSAA surfaces used IMS layout. */
    if (devinfo->gen < 7)
+      return false;
+
+   /* See isl_surf_get_mcs_surf for details. */
+   if (mt->surf.samples == 16 && mt->surf.logical_level0_px.width > 8192)
       return false;
 
    /* In Gen7, IMS layout is only used for depth and stencil buffers. */
@@ -800,11 +805,11 @@ intel_miptree_create_for_bo(struct brw_context *brw,
                             uint32_t height,
                             uint32_t depth,
                             int pitch,
+                            enum isl_tiling tiling,
                             enum intel_miptree_create_flags flags)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct intel_mipmap_tree *mt;
-   uint32_t tiling, swizzle;
    const GLenum target = depth > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
    const GLenum base_format = _mesa_get_format_base_format(format);
 
@@ -816,7 +821,7 @@ intel_miptree_create_for_bo(struct brw_context *brw,
                         devinfo->gen >= 6 ? depth_only_format : format,
                         0, 0, width, height, depth, 1, ISL_TILING_Y0_BIT,
                         ISL_SURF_USAGE_DEPTH_BIT | ISL_SURF_USAGE_TEXTURE_BIT,
-                        BO_ALLOC_BUSY, pitch, bo);
+                        0, pitch, bo);
       if (!mt)
          return NULL;
 
@@ -832,7 +837,7 @@ intel_miptree_create_for_bo(struct brw_context *brw,
                         ISL_TILING_W_BIT,
                         ISL_SURF_USAGE_STENCIL_BIT |
                         ISL_SURF_USAGE_TEXTURE_BIT,
-                        BO_ALLOC_BUSY, pitch, bo);
+                        0, pitch, bo);
       if (!mt)
          return NULL;
 
@@ -842,12 +847,10 @@ intel_miptree_create_for_bo(struct brw_context *brw,
       return mt;
    }
 
-   brw_bo_get_tiling(bo, &tiling, &swizzle);
-
    /* Nothing will be able to use this miptree with the BO if the offset isn't
     * aligned.
     */
-   if (tiling != I915_TILING_NONE)
+   if (tiling != ISL_TILING_LINEAR)
       assert(offset % 4096 == 0);
 
    /* miptrees can't handle negative pitch.  If you need flipping of images,
@@ -862,7 +865,7 @@ intel_miptree_create_for_bo(struct brw_context *brw,
 
    mt = make_surface(brw, target, format,
                      0, 0, width, height, depth, 1,
-                     1lu << isl_tiling_from_i915_tiling(tiling),
+                     1lu << tiling,
                      ISL_SURF_USAGE_RENDER_TARGET_BIT |
                      ISL_SURF_USAGE_TEXTURE_BIT,
                      0, pitch, bo);
@@ -887,7 +890,8 @@ intel_miptree_create_for_bo(struct brw_context *brw,
 
 static struct intel_mipmap_tree *
 miptree_create_for_planar_image(struct brw_context *brw,
-                                __DRIimage *image, GLenum target)
+                                __DRIimage *image, GLenum target,
+                                enum isl_tiling tiling)
 {
    const struct intel_image_format *f = image->planar_format;
    struct intel_mipmap_tree *planar_mt = NULL;
@@ -909,6 +913,7 @@ miptree_create_for_planar_image(struct brw_context *brw,
                                      image->offsets[index],
                                      width, height, 1,
                                      image->strides[index],
+                                     tiling,
                                      MIPTREE_CREATE_NO_AUX);
       if (mt == NULL)
          return NULL;
@@ -965,6 +970,23 @@ create_ccs_buf_for_image(struct brw_context *brw,
       return false;
    }
 
+   /* On gen10+ we start using an extra space in the aux buffer to store the
+    * indirect clear color. However, if we imported an image from the window
+    * system with CCS, we don't have the extra space at the end of the aux
+    * buffer. So create a new bo here that will store that clear color.
+    */
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   if (devinfo->gen >= 10) {
+      mt->mcs_buf->clear_color_bo =
+         brw_bo_alloc(brw->bufmgr, "clear_color_bo",
+                      brw->isl_dev.ss.clear_color_state_size);
+      if (!mt->mcs_buf->clear_color_bo) {
+         free(mt->mcs_buf);
+         mt->mcs_buf = NULL;
+         return false;
+      }
+   }
+
    mt->mcs_buf->bo = image->bo;
    brw_bo_reference(image->bo);
 
@@ -983,8 +1005,17 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
                                    mesa_format format,
                                    bool is_winsys_image)
 {
+   uint32_t bo_tiling, bo_swizzle;
+   brw_bo_get_tiling(image->bo, &bo_tiling, &bo_swizzle);
+
+   const struct isl_drm_modifier_info *mod_info =
+      isl_drm_modifier_get_info(image->modifier);
+
+   const enum isl_tiling tiling =
+      mod_info ? mod_info->tiling : isl_tiling_from_i915_tiling(bo_tiling);
+
    if (image->planar_format && image->planar_format->nplanes > 1)
-      return miptree_create_for_planar_image(brw, image, target);
+      return miptree_create_for_planar_image(brw, image, target, tiling);
 
    if (image->planar_format)
       assert(image->planar_format->planes[0].dri_format == image->dri_format);
@@ -1004,9 +1035,6 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
 
    if (!brw->ctx.TextureFormatSupported[format])
       return NULL;
-
-   const struct isl_drm_modifier_info *mod_info =
-      isl_drm_modifier_get_info(image->modifier);
 
    enum intel_miptree_create_flags mt_create_flags = 0;
 
@@ -1033,7 +1061,7 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
    struct intel_mipmap_tree *mt =
       intel_miptree_create_for_bo(brw, image->bo, format,
                                   image->offset, image->width, image->height, 1,
-                                  image->pitch, mt_create_flags);
+                                  image->pitch, tiling, mt_create_flags);
    if (mt == NULL)
       return NULL;
 
@@ -1201,6 +1229,7 @@ intel_miptree_aux_buffer_free(struct intel_miptree_aux_buffer *aux_buf)
       return;
 
    brw_bo_unreference(aux_buf->bo);
+   brw_bo_unreference(aux_buf->clear_color_bo);
 
    free(aux_buf);
 }
@@ -1298,7 +1327,8 @@ intel_miptree_match_image(struct intel_mipmap_tree *mt,
    if (mt->etc_format != MESA_FORMAT_NONE)
       mt_format = mt->etc_format;
 
-   if (image->TexFormat != mt_format)
+   if (_mesa_get_srgb_format_linear(image->TexFormat) !=
+       _mesa_get_srgb_format_linear(mt_format))
       return false;
 
    intel_get_image_dims(image, &width, &height, &depth);
@@ -1537,7 +1567,8 @@ intel_miptree_copy_slice(struct brw_context *brw,
    assert(src_layer < get_num_phys_layers(&src_mt->surf,
                                           src_level - src_mt->first_level));
 
-   assert(src_mt->format == dst_mt->format);
+   assert(_mesa_get_srgb_format_linear(src_mt->format) ==
+          _mesa_get_srgb_format_linear(dst_mt->format));
 
    if (dst_mt->compressed) {
       unsigned int i, j;
@@ -1574,7 +1605,7 @@ intel_miptree_copy_slice(struct brw_context *brw,
    if (!intel_miptree_blit(brw,
                            src_mt, src_level, src_layer, 0, 0, false,
                            dst_mt, dst_level, dst_layer, 0, 0, false,
-                           width, height, GL_COPY)) {
+                           width, height, COLOR_LOGICOP_COPY)) {
       perf_debug("miptree validate blit for %s failed\n",
                  _mesa_get_format_name(format));
 
@@ -1642,7 +1673,7 @@ intel_miptree_init_mcs(struct brw_context *brw,
     *
     * Note: the clear value for MCS buffers is all 1's, so we memset to 0xff.
     */
-   void *map = brw_bo_map(brw, mt->mcs_buf->bo, MAP_WRITE);
+   void *map = brw_bo_map(brw, mt->mcs_buf->bo, MAP_WRITE | MAP_RAW);
    if (unlikely(map == NULL)) {
       fprintf(stderr, "Failed to map mcs buffer into GTT\n");
       brw_bo_unreference(mt->mcs_buf->bo);
@@ -1666,6 +1697,17 @@ intel_alloc_aux_buffer(struct brw_context *brw,
       return false;
 
    buf->size = aux_surf->size;
+
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   if (devinfo->gen >= 10) {
+      /* On CNL, instead of setting the clear color in the SURFACE_STATE, we
+       * will set a pointer to a dword somewhere that contains the color. So,
+       * allocate the space for the clear color value here on the aux buffer.
+       */
+      buf->clear_color_offset = buf->size;
+      buf->size += brw->isl_dev.ss.clear_color_state_size;
+   }
+
    buf->pitch = aux_surf->row_pitch;
    buf->qpitch = isl_surf_get_array_pitch_sa_rows(aux_surf);
 
@@ -1678,6 +1720,11 @@ intel_alloc_aux_buffer(struct brw_context *brw,
    if (!buf->bo) {
       free(buf);
       return NULL;
+   }
+
+   if (devinfo->gen >= 10) {
+      buf->clear_color_bo = buf->bo;
+      brw_bo_reference(buf->clear_color_bo);
    }
 
    buf->surf = *aux_surf;
@@ -1901,10 +1948,7 @@ intel_miptree_sample_with_hiz(struct brw_context *brw,
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   /* It's unclear how well supported sampling from the hiz buffer is on GEN8,
-    * so keep things conservative for now and never enable it unless we're SKL+.
-    */
-   if (devinfo->gen < 9) {
+   if (!devinfo->has_sample_with_hiz) {
       return false;
    }
 
@@ -2036,7 +2080,7 @@ intel_miptree_check_color_resolve(const struct brw_context *brw,
    (void)layer;
 }
 
-static enum blorp_fast_clear_op
+static enum isl_aux_op
 get_ccs_d_resolve_op(enum isl_aux_state aux_state,
                      enum isl_aux_usage aux_usage,
                      bool fast_clear_supported)
@@ -2051,12 +2095,12 @@ get_ccs_d_resolve_op(enum isl_aux_state aux_state,
    case ISL_AUX_STATE_CLEAR:
    case ISL_AUX_STATE_PARTIAL_CLEAR:
       if (!ccs_supported)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+         return ISL_AUX_OP_FULL_RESOLVE;
       else
-         return BLORP_FAST_CLEAR_OP_NONE;
+         return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_PASS_THROUGH:
-      return BLORP_FAST_CLEAR_OP_NONE;
+      return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_RESOLVED:
    case ISL_AUX_STATE_AUX_INVALID:
@@ -2068,7 +2112,7 @@ get_ccs_d_resolve_op(enum isl_aux_state aux_state,
    unreachable("Invalid aux state for CCS_D");
 }
 
-static enum blorp_fast_clear_op
+static enum isl_aux_op
 get_ccs_e_resolve_op(enum isl_aux_state aux_state,
                      enum isl_aux_usage aux_usage,
                      bool fast_clear_supported)
@@ -2085,28 +2129,28 @@ get_ccs_e_resolve_op(enum isl_aux_state aux_state,
    case ISL_AUX_STATE_CLEAR:
    case ISL_AUX_STATE_PARTIAL_CLEAR:
       if (fast_clear_supported)
-         return BLORP_FAST_CLEAR_OP_NONE;
+         return ISL_AUX_OP_NONE;
       else if (aux_usage == ISL_AUX_USAGE_CCS_E)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL;
+         return ISL_AUX_OP_PARTIAL_RESOLVE;
       else
-         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+         return ISL_AUX_OP_FULL_RESOLVE;
 
    case ISL_AUX_STATE_COMPRESSED_CLEAR:
       if (aux_usage != ISL_AUX_USAGE_CCS_E)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+         return ISL_AUX_OP_FULL_RESOLVE;
       else if (!fast_clear_supported)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL;
+         return ISL_AUX_OP_PARTIAL_RESOLVE;
       else
-         return BLORP_FAST_CLEAR_OP_NONE;
+         return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
       if (aux_usage != ISL_AUX_USAGE_CCS_E)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+         return ISL_AUX_OP_FULL_RESOLVE;
       else
-         return BLORP_FAST_CLEAR_OP_NONE;
+         return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_PASS_THROUGH:
-      return BLORP_FAST_CLEAR_OP_NONE;
+      return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_RESOLVED:
    case ISL_AUX_STATE_AUX_INVALID:
@@ -2125,7 +2169,7 @@ intel_miptree_prepare_ccs_access(struct brw_context *brw,
 {
    enum isl_aux_state aux_state = intel_miptree_get_aux_state(mt, level, layer);
 
-   enum blorp_fast_clear_op resolve_op;
+   enum isl_aux_op resolve_op;
    if (mt->aux_usage == ISL_AUX_USAGE_CCS_E) {
       resolve_op = get_ccs_e_resolve_op(aux_state, aux_usage,
                                         fast_clear_supported);
@@ -2135,12 +2179,12 @@ intel_miptree_prepare_ccs_access(struct brw_context *brw,
                                         fast_clear_supported);
    }
 
-   if (resolve_op != BLORP_FAST_CLEAR_OP_NONE) {
+   if (resolve_op != ISL_AUX_OP_NONE) {
       intel_miptree_check_color_resolve(brw, mt, level, layer);
       brw_blorp_resolve_color(brw, mt, level, layer, resolve_op);
 
       switch (resolve_op) {
-      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+      case ISL_AUX_OP_FULL_RESOLVE:
          /* The CCS full resolve operation destroys the CCS and sets it to the
           * pass-through state.  (You can also think of this as being both a
           * resolve and an ambiguate in one operation.)
@@ -2149,7 +2193,7 @@ intel_miptree_prepare_ccs_access(struct brw_context *brw,
                                      ISL_AUX_STATE_PASS_THROUGH);
          break;
 
-      case BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL:
+      case ISL_AUX_OP_PARTIAL_RESOLVE:
          intel_miptree_set_aux_state(brw, mt, level, layer, 1,
                                      ISL_AUX_STATE_COMPRESSED_NO_CLEAR);
          break;
@@ -2298,17 +2342,17 @@ intel_miptree_prepare_hiz_access(struct brw_context *brw,
 {
    assert(aux_usage == ISL_AUX_USAGE_NONE || aux_usage == ISL_AUX_USAGE_HIZ);
 
-   enum blorp_hiz_op hiz_op = BLORP_HIZ_OP_NONE;
+   enum isl_aux_op hiz_op = ISL_AUX_OP_NONE;
    switch (intel_miptree_get_aux_state(mt, level, layer)) {
    case ISL_AUX_STATE_CLEAR:
    case ISL_AUX_STATE_COMPRESSED_CLEAR:
       if (aux_usage != ISL_AUX_USAGE_HIZ || !fast_clear_supported)
-         hiz_op = BLORP_HIZ_OP_DEPTH_RESOLVE;
+         hiz_op = ISL_AUX_OP_FULL_RESOLVE;
       break;
 
    case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
       if (aux_usage != ISL_AUX_USAGE_HIZ)
-         hiz_op = BLORP_HIZ_OP_DEPTH_RESOLVE;
+         hiz_op = ISL_AUX_OP_FULL_RESOLVE;
       break;
 
    case ISL_AUX_STATE_PASS_THROUGH:
@@ -2317,23 +2361,23 @@ intel_miptree_prepare_hiz_access(struct brw_context *brw,
 
    case ISL_AUX_STATE_AUX_INVALID:
       if (aux_usage == ISL_AUX_USAGE_HIZ)
-         hiz_op = BLORP_HIZ_OP_HIZ_RESOLVE;
+         hiz_op = ISL_AUX_OP_AMBIGUATE;
       break;
 
    case ISL_AUX_STATE_PARTIAL_CLEAR:
       unreachable("Invalid HiZ state");
    }
 
-   if (hiz_op != BLORP_HIZ_OP_NONE) {
+   if (hiz_op != ISL_AUX_OP_NONE) {
       intel_hiz_exec(brw, mt, level, layer, 1, hiz_op);
 
       switch (hiz_op) {
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          intel_miptree_set_aux_state(brw, mt, level, layer, 1,
                                      ISL_AUX_STATE_RESOLVED);
          break;
 
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_AMBIGUATE:
          /* The HiZ resolve operation is actually an ambiguate */
          intel_miptree_set_aux_state(brw, mt, level, layer, 1,
                                      ISL_AUX_STATE_PASS_THROUGH);
@@ -2566,9 +2610,8 @@ can_texture_with_ccs(struct brw_context *brw,
    if (mt->aux_usage != ISL_AUX_USAGE_CCS_E)
       return false;
 
-   /* TODO: Replace with format_ccs_e_compat_with_miptree for better perf. */
-   if (!isl_formats_are_ccs_e_compatible(&brw->screen->devinfo,
-                                         mt->surf.format, view_format)) {
+   if (!format_ccs_e_compat_with_miptree(&brw->screen->devinfo,
+                                         mt, view_format)) {
       perf_debug("Incompatible sampling format (%s) for rbc (%s)\n",
                  isl_format_get_layout(view_format)->name,
                  _mesa_get_format_name(mt->format));
@@ -2640,10 +2683,9 @@ intel_miptree_prepare_texture(struct brw_context *brw,
                               struct intel_mipmap_tree *mt,
                               enum isl_format view_format,
                               uint32_t start_level, uint32_t num_levels,
-                              uint32_t start_layer, uint32_t num_layers,
-                              bool disable_aux)
+                              uint32_t start_layer, uint32_t num_layers)
 {
-   enum isl_aux_usage aux_usage = disable_aux ? ISL_AUX_USAGE_NONE :
+   enum isl_aux_usage aux_usage =
       intel_miptree_texture_aux_usage(brw, mt, view_format);
    bool clear_supported = aux_usage != ISL_AUX_USAGE_NONE;
 
@@ -2673,36 +2715,42 @@ enum isl_aux_usage
 intel_miptree_render_aux_usage(struct brw_context *brw,
                                struct intel_mipmap_tree *mt,
                                enum isl_format render_format,
-                               bool blend_enabled)
+                               bool blend_enabled,
+                               bool draw_aux_disabled)
 {
+   struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   if (draw_aux_disabled)
+      return ISL_AUX_USAGE_NONE;
+
    switch (mt->aux_usage) {
    case ISL_AUX_USAGE_MCS:
       assert(mt->mcs_buf);
       return ISL_AUX_USAGE_MCS;
 
    case ISL_AUX_USAGE_CCS_D:
-      return mt->mcs_buf ? ISL_AUX_USAGE_CCS_D : ISL_AUX_USAGE_NONE;
-
-   case ISL_AUX_USAGE_CCS_E: {
-      /* If the format supports CCS_E and is compatible with the miptree,
-       * then we can use it.
-       */
-      if (format_ccs_e_compat_with_miptree(&brw->screen->devinfo,
-                                           mt, render_format))
-         return ISL_AUX_USAGE_CCS_E;
-
-      /* Otherwise, we have to fall back to CCS_D */
+   case ISL_AUX_USAGE_CCS_E:
+      if (!mt->mcs_buf) {
+         assert(mt->aux_usage == ISL_AUX_USAGE_CCS_D);
+         return ISL_AUX_USAGE_NONE;
+      }
 
       /* gen9 hardware technically supports non-0/1 clear colors with sRGB
        * formats.  However, there are issues with blending where it doesn't
        * properly apply the sRGB curve to the clear color when blending.
        */
-      if (blend_enabled && isl_format_is_srgb(render_format) &&
+      if (devinfo->gen == 9 && blend_enabled &&
+          isl_format_is_srgb(render_format) &&
           !isl_color_value_is_zero_one(mt->fast_clear_color, render_format))
          return ISL_AUX_USAGE_NONE;
 
+      if (mt->aux_usage == ISL_AUX_USAGE_CCS_E &&
+          format_ccs_e_compat_with_miptree(&brw->screen->devinfo,
+                                           mt, render_format))
+         return ISL_AUX_USAGE_CCS_E;
+
+      /* Otherwise, we have to fall back to CCS_D */
       return ISL_AUX_USAGE_CCS_D;
-   }
 
    default:
       return ISL_AUX_USAGE_NONE;
@@ -2713,11 +2761,8 @@ void
 intel_miptree_prepare_render(struct brw_context *brw,
                              struct intel_mipmap_tree *mt, uint32_t level,
                              uint32_t start_layer, uint32_t layer_count,
-                             enum isl_format render_format,
-                             bool blend_enabled)
+                             enum isl_aux_usage aux_usage)
 {
-   enum isl_aux_usage aux_usage =
-      intel_miptree_render_aux_usage(brw, mt, render_format, blend_enabled);
    intel_miptree_prepare_access(brw, mt, level, 1, start_layer, layer_count,
                                 aux_usage, aux_usage != ISL_AUX_USAGE_NONE);
 }
@@ -2726,13 +2771,10 @@ void
 intel_miptree_finish_render(struct brw_context *brw,
                             struct intel_mipmap_tree *mt, uint32_t level,
                             uint32_t start_layer, uint32_t layer_count,
-                            enum isl_format render_format,
-                            bool blend_enabled)
+                            enum isl_aux_usage aux_usage)
 {
    assert(_mesa_is_format_color_format(mt->format));
 
-   enum isl_aux_usage aux_usage =
-      intel_miptree_render_aux_usage(brw, mt, render_format, blend_enabled);
    intel_miptree_finish_write(brw, mt, level, start_layer, layer_count,
                               aux_usage);
 }
@@ -2787,6 +2829,25 @@ intel_miptree_prepare_external(struct brw_context *brw,
    intel_miptree_prepare_access(brw, mt, 0, INTEL_REMAINING_LEVELS,
                                 0, INTEL_REMAINING_LAYERS,
                                 aux_usage, supports_fast_clear);
+}
+
+void
+intel_miptree_finish_external(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt)
+{
+   if (!mt->mcs_buf)
+      return;
+
+   /* We don't know the actual aux state of the aux surface.  The previous
+    * owner could have given it to us in a number of different states.
+    * Because we don't know the aux state, we reset the aux state to the
+    * least common denominator of possible valid states.
+    */
+   enum isl_aux_state default_aux_state =
+      isl_drm_modifier_get_default_aux_state(mt->drm_modifier);
+   assert(mt->last_level == mt->first_level);
+   intel_miptree_set_aux_state(brw, mt, 0, 0, INTEL_REMAINING_LAYERS,
+                               default_aux_state);
 }
 
 /**
@@ -3743,4 +3804,33 @@ intel_miptree_get_aux_isl_usage(const struct brw_context *brw,
       return ISL_AUX_USAGE_NONE;
 
    return mt->aux_usage;
+}
+
+bool
+intel_miptree_set_clear_color(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt,
+                              const union gl_color_union *color)
+{
+   const union isl_color_value clear_color =
+      brw_meta_convert_fast_clear_color(brw, mt, color);
+
+   if (memcmp(&mt->fast_clear_color, &clear_color, sizeof(clear_color)) != 0) {
+      mt->fast_clear_color = clear_color;
+      brw->ctx.NewDriverState |= BRW_NEW_AUX_STATE;
+      return true;
+   }
+   return false;
+}
+
+bool
+intel_miptree_set_depth_clear_value(struct brw_context *brw,
+                                    struct intel_mipmap_tree *mt,
+                                    float clear_value)
+{
+   if (mt->fast_clear_color.f32[0] != clear_value) {
+      mt->fast_clear_color.f32[0] = clear_value;
+      brw->ctx.NewDriverState |= BRW_NEW_AUX_STATE;
+      return true;
+   }
+   return false;
 }

@@ -30,3 +30,6 @@ popd
 tar -xvf mesa-tmp/mesa-${VERSION}.tar.gz
 mv mesa-${VERSION} mesa-src
 rm -rf mesa-tmp
+
+# apply local patches necessary for Servo's CI
+patch -i patches/1.diff -p1

@@ -40,8 +40,10 @@ The integer capabilities:
   for a 3D texture.
 * ``PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS``: The maximum number of mipmap levels available
   for a cubemap.
-* ``PIPE_CAP_TEXTURE_MIRROR_CLAMP``: Whether mirrored texture coordinates with clamp
-  are supported.
+* ``PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE``: Whether mirrored texture coordinates are
+  supported with the clamp-to-edge wrap mode.
+* ``PIPE_CAP_TEXTURE_MIRROR_CLAMP``: Whether mirrored texture coordinates are supported
+  with clamp or clamp-to-border wrap modes.
 * ``PIPE_CAP_BLEND_EQUATION_SEPARATE``: Whether alpha blend equations may be different
   from color blend equations, in :ref:`Blend` state.
 * ``PIPE_CAP_SM3``: Whether the vertex shader and fragment shader support equivalent
@@ -67,6 +69,10 @@ The integer capabilities:
   property FS_COORD_PIXEL_CENTER with value INTEGER is supported.
 * ``PIPE_CAP_DEPTH_CLIP_DISABLE``: Whether the driver is capable of disabling
   depth clipping (through pipe_rasterizer_state)
+* ``PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE``: Whether the driver is capable of
+  disabling depth clipping (through pipe_rasterizer_state) separately for
+  the near and far plane. If not, depth_clip_near and depth_clip_far will be
+  equal.
 * ``PIPE_CAP_SHADER_STENCIL_EXPORT``: Whether a stencil reference value can be
   written from a fragment shader.
 * ``PIPE_CAP_TGSI_INSTANCEID``: Whether TGSI_SEMANTIC_INSTANCEID is supported
@@ -93,6 +99,12 @@ The integer capabilities:
   shader.
 * ``PIPE_CAP_GLSL_FEATURE_LEVEL``: Whether the driver supports features
   equivalent to a specific GLSL version. E.g. for GLSL 1.3, report 130.
+* ``PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY``: Whether the driver supports
+  features equivalent to a specific GLSL version including all legacy OpenGL
+  features only present in the OpenGL compatibility profile.
+  The only legacy features that Gallium drivers must implement are
+  the legacy shader inputs and outputs (colors, texcoords, fog, clipvertex,
+  edgeflag).
 * ``PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION``: Whether quads adhere to
   the flatshade_first setting in ``pipe_rasterizer_state``.
 * ``PIPE_CAP_USER_VERTEX_BUFFERS``: Whether the driver supports user vertex
@@ -334,6 +346,8 @@ The integer capabilities:
   for ``pipe_rasterizer_state::offset_units_unscaled``.
 * ``PIPE_CAP_VIEWPORT_SUBPIXEL_BITS``: Number of bits of subpixel precision for
   floating point viewport bounds.
+* ``PIPE_CAP_RASTERIZER_SUBPIXEL_BITS``: Number of bits of subpixel precision used
+  by the rasterizer.
 * ``PIPE_CAP_MIXED_COLOR_DEPTH_BITS``: Whether there is non-fallback
   support for color/depth format combinations that use a different
   number of bits. For the purpose of this cap, Z24 is treated as
@@ -405,6 +419,17 @@ The integer capabilities:
 * ``PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES``: Limit on combined shader
   output resources (images + buffers + fragment outputs). If 0 the state
   tracker works it out.
+* ``PIPE_CAP_FRAMEBUFFER_MSAA_CONSTRAINTS``: This determines limitations
+  on the number of samples that framebuffer attachments can have.
+  Possible values:
+    0: color.nr_samples == zs.nr_samples == color.nr_storage_samples
+       (standard MSAA quality)
+    1: color.nr_samples >= zs.nr_samples == color.nr_storage_samples
+       (enhanced MSAA quality)
+    2: color.nr_samples >= zs.nr_samples >= color.nr_storage_samples
+       (full flexibility in tuning MSAA quality and performance)
+  All color attachments must have the same number of samples and the same
+  number of storage samples.
 * ``PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET``:
   Whether pipe_vertex_buffer::buffer_offset is treated as signed. The u_vbuf
   module needs this for optimal performance in workstation applications.
@@ -420,7 +445,38 @@ The integer capabilities:
   by the driver, and the driver can throw assertion failures.
 * ``PIPE_CAP_PACKED_UNIFORMS``: True if the driver supports packed uniforms
   as opposed to padding to vec4s.
-
+* ``PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES``: Whether the
+  PIPE_CONSERVATIVE_RASTER_POST_SNAP mode is supported for triangles.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES``: Whether the
+PIPE_CONSERVATIVE_RASTER_POST_SNAP mode is supported for points and lines.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES``: Whether the
+PIPE_CONSERVATIVE_RASTER_PRE_SNAP mode is supported for triangles.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES``: Whether the
+PIPE_CONSERVATIVE_RASTER_PRE_SNAP mode is supported for points and lines.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE``: Whether PIPE_CAP_POST_DEPTH_COVERAGE
+works with conservative rasterization.
+* ``PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS``: The maximum
+subpixel precision bias in bits during conservative rasterization.
+* ``PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS``: True is the driver supports
+  programmable sample location through ```get_sample_pixel_grid``` and
+  ```set_sample_locations```.
+* ``PIPE_CAP_MAX_GS_INVOCATIONS``: Maximum supported value of
+  TGSI_PROPERTY_GS_INVOCATIONS.
+* ``PIPE_CAP_MAX_SHADER_BUFFER_SIZE``: Maximum supported size for binding
+  with set_shader_buffers.
+* ``PIPE_CAP_MAX_COMBINED_SHADER_BUFFERS``: Maximum total number of shader
+  buffers. A value of 0 means the sum of all per-shader stage maximums (see
+  ``PIPE_SHADER_CAP_MAX_SHADER_BUFFERS``).
+* ``PIPE_CAP_MAX_COMBINED_HW_ATOMIC_COUNTERS``: Maximum total number of atomic
+  counters. A value of 0 means the default value (MAX_ATOMIC_COUNTERS = 4096).
+* ``PIPE_CAP_MAX_COMBINED_HW_ATOMIC_COUNTER_BUFFERS``: Maximum total number of
+  atomic counter buffers. A value of 0 means the sum of all per-shader stage
+  maximums (see ``PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS``).
+* ``PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET: Maximum recommend memory size
+  for all active texture uploads combined. This is a performance hint.
+  0 means no limit.
+* ``PIPE_CAP_MAX_VERTEX_ELEMENT_SRC_OFFSET``: The maximum supported value for
+  of pipe_vertex_element::src_offset.
 
 .. _pipe_capf:
 
@@ -437,6 +493,12 @@ The floating-point capabilities are:
   applied to anisotropically filtered textures.
 * ``PIPE_CAPF_MAX_TEXTURE_LOD_BIAS``: The maximum :term:`LOD` bias that may be applied
   to filtered textures.
+* ``PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE``: The minimum conservative rasterization
+  dilation.
+* ``PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE``: The maximum conservative rasterization
+  dilation.
+* ``PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY``: The conservative rasterization
+  dilation granularity for values relative to the minimum dilation.
 
 
 .. _pipe_shader_cap:
@@ -522,6 +584,7 @@ MOV OUT[0], CONST[0][3]  # copy vector 3 of constbuf 0
   how many HW counters are available for this stage. (0 uses SSBO atomics).
 * ``PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS``: If atomic counters are
   separate, how many atomic counter buffers are available for this stage.
+* ``PIPE_SHADER_CAP_SCALAR_ISA``: Whether the ISA is a scalar one.
 
 .. _pipe_compute_cap:
 
@@ -707,6 +770,9 @@ Determine if a resource in the given format can be used in a specific manner.
 **sample_count** the number of samples. 0 and 1 mean no multisampling,
 the maximum allowed legal value is 32.
 
+**storage_sample_count** the number of storage samples. This must be <=
+sample_count. See the documentation of ``pipe_resource::nr_storage_samples``.
+
 **bindings** is a bitmask of :ref:`PIPE_BIND` flags.
 
 Returns TRUE if all usages can be satisfied.
@@ -750,8 +816,27 @@ For cube maps this must be 6, for other textures 1.
 
 **last_level** the last mip map level present.
 
-**nr_samples** the nr of msaa samples. 0 (or 1) specifies a resource
-which isn't multisampled.
+**nr_samples**: Number of samples determining quality, driving the rasterizer,
+shading, and framebuffer. It is the number of samples seen by the whole
+graphics pipeline. 0 and 1 specify a resource which isn't multisampled.
+
+**nr_storage_samples**: Only color buffers can set this lower than nr_samples.
+Multiple samples within a pixel can have the same color. ``nr_storage_samples``
+determines how many slots for different colors there are per pixel.
+If there are not enough slots to store all sample colors, some samples will
+have an undefined color (called "undefined samples").
+
+The resolve blit behavior is driver-specific, but can be one of these two:
+1. Only defined samples will be averaged. Undefined samples will be ignored.
+2. Undefined samples will be approximated by looking at surrounding defined
+   samples (even in different pixels).
+
+Blits and MSAA texturing: If the sample being fetched is undefined, one of
+the defined samples is returned instead.
+
+Sample shading (``set_min_samples``) will operate at a sample frequency that
+is at most ``nr_storage_samples``. Greater ``min_samples`` values will be
+replaced by ``nr_storage_samples``.
 
 **usage** one of the :ref:`PIPE_USAGE` flags.
 

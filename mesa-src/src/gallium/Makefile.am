@@ -11,12 +11,6 @@ SUBDIRS += auxiliary/pipe-loader
 ## Gallium pipe drivers and their respective winsys'
 ##
 
-SUBDIRS += \
-	drivers/ddebug \
-	drivers/noop \
-	drivers/trace \
-	drivers/rbug
-
 ## freedreno/msm/kgsl
 if HAVE_GALLIUM_FREEDRENO
 SUBDIRS += drivers/freedreno winsys/freedreno/drm
@@ -94,9 +88,9 @@ if HAVE_GALLIUM_VC4
 SUBDIRS += drivers/vc4 winsys/vc4/drm
 endif
 
-## vc5
-if HAVE_GALLIUM_VC5
-SUBDIRS += drivers/vc5 winsys/vc5/drm
+## v3d
+if HAVE_GALLIUM_V3D
+SUBDIRS += drivers/v3d winsys/v3d/drm
 endif
 
 ## virgl
@@ -212,4 +206,6 @@ endif
 EXTRA_DIST += \
 	tests/graw \
 	tests/python \
-	meson.build
+	meson.build \
+	tests/meson.build \
+	tests/graw/meson.build

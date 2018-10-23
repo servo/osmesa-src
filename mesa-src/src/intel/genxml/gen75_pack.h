@@ -6292,9 +6292,9 @@ GEN75_MI_BATCH_BUFFER_END_pack(__attribute__((unused)) __gen_user_data *data,
 struct GEN75_MI_BATCH_BUFFER_START {
    uint32_t                             CommandType;
    uint32_t                             MICommandOpcode;
-   uint32_t                             _2ndLevelBatchBuffer;
-#define _1stlevelbatch                           0
-#define _2ndlevelbatch                           1
+   uint32_t                             SecondLevelBatchBuffer;
+#define Firstlevelbatch                          0
+#define Secondlevelbatch                         1
    bool                                 AddOffsetEnable;
    bool                                 PredicationEnable;
    bool                                 NonPrivileged;
@@ -6317,7 +6317,7 @@ GEN75_MI_BATCH_BUFFER_START_pack(__attribute__((unused)) __gen_user_data *data,
    dw[0] =
       __gen_uint(values->CommandType, 29, 31) |
       __gen_uint(values->MICommandOpcode, 23, 28) |
-      __gen_uint(values->_2ndLevelBatchBuffer, 22, 22) |
+      __gen_uint(values->SecondLevelBatchBuffer, 22, 22) |
       __gen_uint(values->AddOffsetEnable, 16, 16) |
       __gen_uint(values->PredicationEnable, 15, 15) |
       __gen_uint(values->NonPrivileged, 13, 13) |
@@ -6986,13 +6986,12 @@ GEN75_MI_SET_CONTEXT_pack(__attribute__((unused)) __gen_user_data *data,
 #define GEN75_MI_SET_PREDICATE_length_bias      1
 #define GEN75_MI_SET_PREDICATE_header           \
    .CommandType                         =      0,  \
-   .MICommandOpcode                     =      1,  \
-   .PREDICATEENABLE                     =      6
+   .MICommandOpcode                     =      1
 
 struct GEN75_MI_SET_PREDICATE {
    uint32_t                             CommandType;
    uint32_t                             MICommandOpcode;
-   bool                                 PREDICATEENABLE;
+   uint32_t                             PREDICATEENABLE;
 };
 
 static inline void
@@ -8523,7 +8522,7 @@ GEN75_BCS_FAULT_REG_pack(__attribute__((unused)) __gen_user_data *data,
       __gen_uint(values->ValidBit, 0, 0) |
       __gen_uint(values->FaultType, 1, 2) |
       __gen_uint(values->SRCIDofFault, 3, 10) |
-      __gen_uint(values->GTTSEL, 11, 1);
+      __gen_uint(values->GTTSEL, 11, 11);
    dw[0] = __gen_combine_address(data, &dw[0], values->VirtualAddressofFault, v0);
 }
 
@@ -8554,7 +8553,7 @@ GEN75_RCS_FAULT_REG_pack(__attribute__((unused)) __gen_user_data *data,
       __gen_uint(values->ValidBit, 0, 0) |
       __gen_uint(values->FaultType, 1, 2) |
       __gen_uint(values->SRCIDofFault, 3, 10) |
-      __gen_uint(values->GTTSEL, 11, 1);
+      __gen_uint(values->GTTSEL, 11, 11);
    dw[0] = __gen_combine_address(data, &dw[0], values->VirtualAddressofFault, v0);
 }
 
@@ -8585,7 +8584,7 @@ GEN75_VECS_FAULT_REG_pack(__attribute__((unused)) __gen_user_data *data,
       __gen_uint(values->ValidBit, 0, 0) |
       __gen_uint(values->FaultType, 1, 2) |
       __gen_uint(values->SRCIDofFault, 3, 10) |
-      __gen_uint(values->GTTSEL, 11, 1);
+      __gen_uint(values->GTTSEL, 11, 11);
    dw[0] = __gen_combine_address(data, &dw[0], values->VirtualAddressofFault, v0);
 }
 
@@ -8616,7 +8615,7 @@ GEN75_VCS_FAULT_REG_pack(__attribute__((unused)) __gen_user_data *data,
       __gen_uint(values->ValidBit, 0, 0) |
       __gen_uint(values->FaultType, 1, 2) |
       __gen_uint(values->SRCIDofFault, 3, 10) |
-      __gen_uint(values->GTTSEL, 11, 1);
+      __gen_uint(values->GTTSEL, 11, 11);
    dw[0] = __gen_combine_address(data, &dw[0], values->VirtualAddressofFault, v0);
 }
 
@@ -8748,6 +8747,10 @@ struct GEN75_INSTPM {
    bool                                 _3DRenderingInstructionDisable;
    bool                                 MediaInstructionDisable;
    bool                                 CONSTANT_BUFFERAddressOffsetDisable;
+   bool                                 _3DStateInstructionDisableMask;
+   bool                                 _3DRenderingInstructionDisableMask;
+   bool                                 MediaInstructionDisableMask;
+   bool                                 CONSTANT_BUFFERAddressOffsetDisableMask;
 };
 
 static inline void
@@ -8761,7 +8764,11 @@ GEN75_INSTPM_pack(__attribute__((unused)) __gen_user_data *data,
       __gen_uint(values->_3DStateInstructionDisable, 1, 1) |
       __gen_uint(values->_3DRenderingInstructionDisable, 2, 2) |
       __gen_uint(values->MediaInstructionDisable, 3, 3) |
-      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisable, 6, 6);
+      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisable, 6, 6) |
+      __gen_uint(values->_3DStateInstructionDisableMask, 17, 17) |
+      __gen_uint(values->_3DRenderingInstructionDisableMask, 18, 18) |
+      __gen_uint(values->MediaInstructionDisableMask, 19, 19) |
+      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisableMask, 22, 22);
 }
 
 #endif /* GEN75_PACK_H */

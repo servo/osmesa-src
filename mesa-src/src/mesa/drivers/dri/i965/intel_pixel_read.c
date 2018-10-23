@@ -39,7 +39,6 @@
 #include "brw_blorp.h"
 #include "intel_screen.h"
 #include "intel_batchbuffer.h"
-#include "intel_blit.h"
 #include "intel_buffers.h"
 #include "intel_fbo.h"
 #include "intel_mipmap_tree.h"
@@ -182,7 +181,7 @@ intel_readpixels_tiled_memcpy(struct gl_context * ctx,
     * tiled_to_linear a negative pitch so that it walks through the
     * client's data backwards as it walks through the renderbufer forwards.
     */
-   if (rb->Name == 0) {
+   if (ctx->ReadBuffer->FlipY) {
       yoffset = rb->Height - yoffset - height;
       pixels += (ptrdiff_t) (height - 1) * dst_pitch;
       dst_pitch = -dst_pitch;
@@ -204,7 +203,7 @@ intel_readpixels_tiled_memcpy(struct gl_context * ctx,
       yoffset, yoffset + height,
       pixels,
       map + irb->mt->offset,
-      dst_pitch, irb->mt->surf.row_pitch,
+      dst_pitch, irb->mt->surf.row_pitch_B,
       brw->has_swizzling,
       irb->mt->surf.tiling,
       mem_copy
@@ -250,7 +249,7 @@ intel_readpixels_blorp(struct gl_context *ctx,
    return brw_blorp_download_miptree(brw, irb->mt, rb->Format, swizzle,
                                      irb->mt_level, x, y, irb->mt_layer,
                                      w, h, 1, GL_TEXTURE_2D, format, type,
-                                     rb->Name == 0, pixels, packing);
+                                     ctx->ReadBuffer->FlipY, pixels, packing);
 }
 
 void

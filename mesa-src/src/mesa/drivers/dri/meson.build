@@ -44,7 +44,7 @@ endif
 if dri_drivers != []
   libmesa_dri_drivers = shared_library(
     'mesa_dri_drivers',
-    dummy_cpp,  # see meson #2180
+    [],
     link_whole : dri_drivers,
     link_with : [
       libmegadriver_stub, libdricommon, libxmlconfig, libglapi, libmesa_util,
@@ -57,6 +57,7 @@ if dri_drivers != []
   )
 
   meson.add_install_script(
+    prog_python.path(),
     join_paths(meson.source_root(), 'bin/install_megadrivers.py'),
     libmesa_dri_drivers.full_path(),
     dri_drivers_path,

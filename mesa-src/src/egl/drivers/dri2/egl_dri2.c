@@ -65,34 +65,6 @@
 #include "util/u_vector.h"
 #include "mapi/glapi/glapi.h"
 
-/* The kernel header drm_fourcc.h defines the DRM formats below.  We duplicate
- * some of the definitions here so that building Mesa won't bleeding-edge
- * kernel headers.
- */
-#ifndef DRM_FORMAT_R8
-#define DRM_FORMAT_R8            fourcc_code('R', '8', ' ', ' ') /* [7:0] R */
-#endif
-
-#ifndef DRM_FORMAT_RG88
-#define DRM_FORMAT_RG88          fourcc_code('R', 'G', '8', '8') /* [15:0] R:G 8:8 little endian */
-#endif
-
-#ifndef DRM_FORMAT_GR88
-#define DRM_FORMAT_GR88          fourcc_code('G', 'R', '8', '8') /* [15:0] G:R 8:8 little endian */
-#endif
-
-#ifndef DRM_FORMAT_R16
-#define DRM_FORMAT_R16           fourcc_code('R', '1', '6', ' ') /* [15:0] R 16 little endian */
-#endif
-
-#ifndef DRM_FORMAT_GR1616
-#define DRM_FORMAT_GR1616        fourcc_code('G', 'R', '3', '2') /* [31:0] R:G 16:16 little endian */
-#endif
-
-#ifndef DRM_FORMAT_MOD_INVALID
-#define DRM_FORMAT_MOD_INVALID ((1ULL<<56) - 1)
-#endif
-
 #define NUM_ATTRIBS 12
 
 static void
@@ -300,7 +272,10 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
          _eglSetConfigKey(&base, EGL_MAX_PBUFFER_HEIGHT,
                           _EGL_MAX_PBUFFER_HEIGHT);
          break;
-
+      case __DRI_ATTRIB_MUTABLE_RENDER_BUFFER:
+         if (disp->Extensions.KHR_mutable_render_buffer)
+            surface_type |= EGL_MUTABLE_RENDER_BUFFER_BIT_KHR;
+         break;
       default:
          key = dri2_to_egl_attribute_map[attrib];
          if (key != 0)
@@ -460,6 +435,7 @@ static const struct dri2_extension_match optional_core_extensions[] = {
    { __DRI_IMAGE, 1, offsetof(struct dri2_egl_display, image) },
    { __DRI2_FLUSH_CONTROL, 1, offsetof(struct dri2_egl_display, flush_control) },
    { __DRI2_BLOB, 1, offsetof(struct dri2_egl_display, blob) },
+   { __DRI_MUTABLE_RENDER_BUFFER_DRIVER, 1, offsetof(struct dri2_egl_display, mutable_render_buffer) },
    { NULL, 0, 0 }
 };
 
@@ -1317,12 +1293,6 @@ dri2_create_context(_EGLDriver *drv, _EGLDisplay *disp, _EGLConfig *conf,
          dri_config = dri2_config->dri_config[1][0];
       else
          dri_config = dri2_config->dri_config[0][0];
-
-      /* EGL_WINDOW_BIT is set only when there is a double-buffered dri_config.
-       * This makes sure the back buffer will always be used.
-       */
-      if (conf->SurfaceType & EGL_WINDOW_BIT)
-         dri2_ctx->base.WindowRenderBuffer = EGL_BACK_BUFFER;
    }
    else
       dri_config = NULL;
@@ -1493,6 +1463,8 @@ dri2_make_current(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *dsurf,
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_context *dri2_ctx = dri2_egl_context(ctx);
+   _EGLDisplay *old_disp = NULL;
+   struct dri2_egl_display *old_dri2_dpy = NULL;
    _EGLContext *old_ctx;
    _EGLSurface *old_dsurf, *old_rsurf;
    _EGLSurface *tmp_dsurf, *tmp_rsurf;
@@ -1509,6 +1481,11 @@ dri2_make_current(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *dsurf,
       return EGL_FALSE;
    }
 
+   if (old_ctx) {
+      old_disp = old_ctx->Resource.Display;
+      old_dri2_dpy = dri2_egl_display(old_disp);
+   }
+
    /* flush before context switch */
    if (old_ctx)
       dri2_gl_flush();
@@ -1522,30 +1499,29 @@ dri2_make_current(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *dsurf,
 
       if (old_dsurf)
          dri2_surf_update_fence_fd(old_ctx, disp, old_dsurf);
+
+      /* Disable shared buffer mode */
+      if (old_dsurf && _eglSurfaceInSharedBufferMode(old_dsurf) &&
+          old_dri2_dpy->vtbl->set_shared_buffer_mode) {
+         old_dri2_dpy->vtbl->set_shared_buffer_mode(old_disp, old_dsurf, false);
+      }
+
       dri2_dpy->core->unbindContext(old_cctx);
    }
 
    unbind = (cctx == NULL && ddraw == NULL && rdraw == NULL);
 
-   if (unbind || dri2_dpy->core->bindContext(cctx, ddraw, rdraw)) {
-      dri2_destroy_surface(drv, disp, old_dsurf);
-      dri2_destroy_surface(drv, disp, old_rsurf);
-
-      if (!unbind)
-         dri2_dpy->ref_count++;
-      if (old_ctx) {
-         EGLDisplay old_disp = _eglGetDisplayHandle(old_ctx->Resource.Display);
-         dri2_destroy_context(drv, disp, old_ctx);
-         dri2_display_release(old_disp);
-      }
-
-      return EGL_TRUE;
-   } else {
+   if (!unbind && !dri2_dpy->core->bindContext(cctx, ddraw, rdraw)) {
       /* undo the previous _eglBindContext */
       _eglBindContext(old_ctx, old_dsurf, old_rsurf, &ctx, &tmp_dsurf, &tmp_rsurf);
       assert(&dri2_ctx->base == ctx &&
              tmp_dsurf == dsurf &&
              tmp_rsurf == rsurf);
+
+      if (old_dsurf && _eglSurfaceInSharedBufferMode(old_dsurf) &&
+          old_dri2_dpy->vtbl->set_shared_buffer_mode) {
+         old_dri2_dpy->vtbl->set_shared_buffer_mode(old_disp, old_dsurf, true);
+      }
 
       _eglPutSurface(dsurf);
       _eglPutSurface(rsurf);
@@ -1561,6 +1537,31 @@ dri2_make_current(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *dsurf,
        */
       return _eglError(EGL_BAD_MATCH, "eglMakeCurrent");
    }
+
+   dri2_destroy_surface(drv, disp, old_dsurf);
+   dri2_destroy_surface(drv, disp, old_rsurf);
+
+   if (!unbind)
+      dri2_dpy->ref_count++;
+
+   if (old_ctx) {
+      dri2_destroy_context(drv, disp, old_ctx);
+      dri2_display_release(old_disp);
+   }
+
+   if (dsurf && _eglSurfaceHasMutableRenderBuffer(dsurf) &&
+       dri2_dpy->vtbl->set_shared_buffer_mode) {
+      /* Always update the shared buffer mode. This is obviously needed when
+       * the active EGL_RENDER_BUFFER is EGL_SINGLE_BUFFER. When
+       * EGL_RENDER_BUFFER is EGL_BACK_BUFFER, the update protects us in the
+       * case where external non-EGL API may have changed window's shared
+       * buffer mode since we last saw it.
+       */
+      bool mode = (dsurf->ActiveRenderBuffer == EGL_SINGLE_BUFFER);
+      dri2_dpy->vtbl->set_shared_buffer_mode(disp, dsurf, mode);
+   }
+
+   return EGL_TRUE;
 }
 
 __DRIdrawable *
@@ -2223,13 +2224,13 @@ dri2_check_dma_buf_attribs(const _EGLImageAttribs *attrs)
    return EGL_TRUE;
 }
 
-/* Returns the total number of file descriptors. Zero indicates an error. */
+/* Returns the total number of planes for the format or zero if it isn't a
+ * valid fourcc format.
+ */
 static unsigned
-dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
+dri2_num_fourcc_format_planes(EGLint format)
 {
-   unsigned plane_n;
-
-   switch (attrs->DMABufFourCC.Value) {
+   switch (format) {
    case DRM_FORMAT_R8:
    case DRM_FORMAT_RG88:
    case DRM_FORMAT_GR88:
@@ -2277,14 +2278,14 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
    case DRM_FORMAT_YVYU:
    case DRM_FORMAT_UYVY:
    case DRM_FORMAT_VYUY:
-      plane_n = 1;
-      break;
+      return 1;
+
    case DRM_FORMAT_NV12:
    case DRM_FORMAT_NV21:
    case DRM_FORMAT_NV16:
    case DRM_FORMAT_NV61:
-      plane_n = 2;
-      break;
+      return 2;
+
    case DRM_FORMAT_YUV410:
    case DRM_FORMAT_YVU410:
    case DRM_FORMAT_YUV411:
@@ -2295,9 +2296,19 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
    case DRM_FORMAT_YVU422:
    case DRM_FORMAT_YUV444:
    case DRM_FORMAT_YVU444:
-      plane_n = 3;
-      break;
+      return 3;
+
    default:
+      return 0;
+   }
+}
+
+/* Returns the total number of file descriptors. Zero indicates an error. */
+static unsigned
+dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
+{
+   unsigned plane_n = dri2_num_fourcc_format_planes(attrs->DMABufFourCC.Value);
+   if (plane_n == 0) {
       _eglError(EGL_BAD_ATTRIBUTE, "invalid format");
       return 0;
    }
@@ -2371,6 +2382,18 @@ dri2_query_dma_buf_formats(_EGLDriver *drv, _EGLDisplay *disp,
                                             formats, count))
       return EGL_FALSE;
 
+   if (max > 0) {
+      /* Assert that all of the formats returned are actually fourcc formats.
+       * Some day, if we want the internal interface function to be able to
+       * return the fake fourcc formats defined in dri_interface.h, we'll have
+       * to do something more clever here to pair the list down to just real
+       * fourcc formats so that we don't leak the fake internal ones.
+       */
+      for (int i = 0; i < *count; i++) {
+         assert(dri2_num_fourcc_format_planes(formats[i]) > 0);
+      }
+   }
+
    return EGL_TRUE;
 }
 
@@ -2380,6 +2403,9 @@ dri2_query_dma_buf_modifiers(_EGLDriver *drv, _EGLDisplay *disp, EGLint format,
                              EGLBoolean *external_only, EGLint *count)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+
+   if (dri2_num_fourcc_format_planes(format) == 0)
+      return _eglError(EGL_BAD_PARAMETER, "invalid fourcc format");
 
    if (max < 0)
       return _eglError(EGL_BAD_PARAMETER, "invalid value for max count of formats");
@@ -2457,8 +2483,8 @@ dri2_create_image_dma_buf(_EGLDisplay *disp, _EGLContext *ctx,
     * will be present in attrs.DMABufPlaneModifiersLo[0] and
     * attrs.DMABufPlaneModifiersHi[0] */
    if (attrs.DMABufPlaneModifiersLo[0].IsPresent) {
-      modifier = (uint64_t) attrs.DMABufPlaneModifiersHi[0].Value << 32;
-      modifier |= (uint64_t) (attrs.DMABufPlaneModifiersLo[0].Value & 0xffffffff);
+      modifier = combine_u32_into_u64(attrs.DMABufPlaneModifiersHi[0].Value,
+                                      attrs.DMABufPlaneModifiersLo[0].Value);
       has_modifier = true;
    }
 
@@ -2596,6 +2622,28 @@ dri2_export_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *img,
    return EGL_TRUE;
 }
 
+/**
+ * Checks if we can support EGL_MESA_image_dma_buf_export on this image.
+
+ * The spec provides a boolean return for the driver to reject exporting for
+ * basically any reason, but doesn't specify any particular error cases.  For
+ * now, we just fail if we don't have a DRM fourcc for the format.
+ */
+static bool
+dri2_can_export_dma_buf_image(_EGLDisplay *disp, _EGLImage *img)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_image *dri2_img = dri2_egl_image(img);
+   EGLint fourcc;
+
+   if (!dri2_dpy->image->queryImage(dri2_img->dri_image,
+                                    __DRI_IMAGE_ATTRIB_FOURCC, &fourcc)) {
+      return false;
+   }
+
+   return true;
+}
+
 static EGLBoolean
 dri2_export_dma_buf_image_query_mesa(_EGLDriver *drv, _EGLDisplay *disp,
                                      _EGLImage *img,
@@ -2607,6 +2655,8 @@ dri2_export_dma_buf_image_query_mesa(_EGLDriver *drv, _EGLDisplay *disp,
 
    (void) drv;
 
+   if (!dri2_can_export_dma_buf_image(disp, img))
+      return EGL_FALSE;
 
    if (nplanes)
       dri2_dpy->image->queryImage(dri2_img->dri_image,
@@ -2629,6 +2679,9 @@ dri2_export_dma_buf_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *im
    struct dri2_egl_image *dri2_img = dri2_egl_image(img);
 
    (void) drv;
+
+   if (!dri2_can_export_dma_buf_image(disp, img))
+      return EGL_FALSE;
 
    /* rework later to provide multiple fds/strides/offsets */
    if (fds)

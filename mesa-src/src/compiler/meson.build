@@ -40,7 +40,7 @@ ir_expression_operation_h = custom_target(
   'ir_expression_operation.h',
   input : 'glsl/ir_expression_operation.py',
   output : 'ir_expression_operation.h',
-  command : [prog_python2, '@INPUT@', 'enum'],
+  command : [prog_python, '@INPUT@', 'enum'],
   capture : true,
 )
 
@@ -62,7 +62,7 @@ subdir('nir')
 # dependency with nir/meson.build.
 spirv2nir = executable(
   'spirv2nir',
-  [files('spirv/spirv2nir.c'), dummy_cpp],
+  files('spirv/spirv2nir.c'),
   dependencies : [dep_m, dep_thread, idep_nir],
   include_directories : [inc_common, inc_nir, include_directories('spirv')],
   link_with : libmesa_util,

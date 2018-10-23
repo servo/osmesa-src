@@ -129,6 +129,7 @@ static const struct opProperties _initProps[] =
    { OP_LG2,    0x1, 0x1, 0x0, 0x8, 0x0, 0x0 },
    { OP_RCP,    0x1, 0x1, 0x0, 0x8, 0x0, 0x0 },
    { OP_RSQ,    0x1, 0x1, 0x0, 0x8, 0x0, 0x0 },
+   { OP_SQRT,   0x1, 0x1, 0x0, 0x8, 0x0, 0x0 },
    { OP_DFDX,   0x1, 0x0, 0x0, 0x0, 0x0, 0x0 },
    { OP_DFDY,   0x1, 0x0, 0x0, 0x0, 0x0, 0x0 },
    { OP_CALL,   0x0, 0x0, 0x0, 0x0, 0x1, 0x0 },
@@ -161,6 +162,7 @@ static const struct opProperties _initPropsGM107[] = {
    { OP_SUSTP,   0x0, 0x0, 0x0, 0x0, 0x0, 0x4 },
    { OP_SUREDB,  0x0, 0x0, 0x0, 0x0, 0x0, 0x4 },
    { OP_SUREDP,  0x0, 0x0, 0x0, 0x0, 0x0, 0x4 },
+   { OP_XMAD,    0x0, 0x0, 0x0, 0x0, 0x6, 0x2 },
 };
 
 void TargetNVC0::initProps(const struct opProperties *props, int size)
@@ -191,17 +193,15 @@ void TargetNVC0::initOpInfo()
 {
    unsigned int i, j;
 
-   static const uint32_t commutative[(OP_LAST + 31) / 32] =
+   static const operation commutative[] =
    {
-      // ADD, MUL, MAD, FMA, AND, OR, XOR, MAX, MIN, SET_AND, SET_OR, SET_XOR,
-      // SET, SELP, SLCT
-      0x0ce0ca00, 0x0000007e, 0x00000000, 0x00000000
+      OP_ADD, OP_MUL, OP_MAD, OP_FMA, OP_AND, OP_OR, OP_XOR, OP_MAX, OP_MIN,
+      OP_SET_AND, OP_SET_OR, OP_SET_XOR, OP_SET, OP_SELP, OP_SLCT
    };
 
-   static const uint32_t shortForm[(OP_LAST + 31) / 32] =
+   static const operation shortForm[] =
    {
-      // ADD, MUL, MAD, FMA, AND, OR, XOR, MAX, MIN
-      0x0ce0ca00, 0x00000000, 0x00000000, 0x00000000
+      OP_ADD, OP_MUL, OP_MAD, OP_FMA, OP_AND, OP_OR, OP_XOR, OP_MAX, OP_MIN
    };
 
    static const operation noDest[] =
@@ -240,15 +240,19 @@ void TargetNVC0::initOpInfo()
 
       opInfo[i].hasDest = 1;
       opInfo[i].vector = (i >= OP_TEX && i <= OP_TEXCSAA);
-      opInfo[i].commutative = (commutative[i / 32] >> (i % 32)) & 1;
+      opInfo[i].commutative = false; /* set below */
       opInfo[i].pseudo = (i < OP_MOV);
       opInfo[i].predicate = !opInfo[i].pseudo;
       opInfo[i].flow = (i >= OP_BRA && i <= OP_JOIN);
-      opInfo[i].minEncSize = (shortForm[i / 32] & (1 << (i % 32))) ? 4 : 8;
+      opInfo[i].minEncSize = 8; /* set below */
    }
-   for (i = 0; i < sizeof(noDest) / sizeof(noDest[0]); ++i)
+   for (i = 0; i < ARRAY_SIZE(commutative); ++i)
+      opInfo[commutative[i]].commutative = true;
+   for (i = 0; i < ARRAY_SIZE(shortForm); ++i)
+      opInfo[shortForm[i]].minEncSize = 4;
+   for (i = 0; i < ARRAY_SIZE(noDest); ++i)
       opInfo[noDest[i]].hasDest = 0;
-   for (i = 0; i < sizeof(noPred) / sizeof(noPred[0]); ++i)
+   for (i = 0; i < ARRAY_SIZE(noPred); ++i)
       opInfo[noPred[i]].predicate = 0;
 
    initProps(_initProps, ARRAY_SIZE(_initProps));
@@ -354,6 +358,18 @@ TargetNVC0::insnCanLoad(const Instruction *i, int s,
    if ((i->op == OP_SHL || i->op == OP_SHR) && typeSizeof(i->sType) == 8 &&
        sf == FILE_MEMORY_CONST)
       return false;
+   // constant buffer loads can't be used with cbcc xmads
+   if (i->op == OP_XMAD && sf == FILE_MEMORY_CONST &&
+       (i->subOp & NV50_IR_SUBOP_XMAD_CMODE_MASK) == NV50_IR_SUBOP_XMAD_CBCC)
+      return false;
+   // constant buffer loads for the third operand can't be used with psl/mrg xmads
+   if (i->op == OP_XMAD && sf == FILE_MEMORY_CONST && s == 2 &&
+       (i->subOp & (NV50_IR_SUBOP_XMAD_PSL | NV50_IR_SUBOP_XMAD_MRG)))
+      return false;
+   // for xmads, immediates can't have the h1 flag set
+   if (i->op == OP_XMAD && sf == FILE_IMMEDIATE && s < 2 &&
+       i->subOp & NV50_IR_SUBOP_XMAD_H1(s))
+      return false;
 
    for (int k = 0; i->srcExists(k); ++k) {
       if (i->src(k).getFile() == FILE_IMMEDIATE) {
@@ -390,6 +406,9 @@ TargetNVC0::insnCanLoad(const Instruction *i, int s,
             // with u32, 0xfffff counts as 0xffffffff as well
             if (reg.data.s32 > 0x7ffff || reg.data.s32 < -0x80000)
                return false;
+            // XMADs can only have 16-bit immediates
+            if (i->op == OP_XMAD && reg.data.u32 > 0xffff)
+               return false;
             break;
          case TYPE_U8:
          case TYPE_S8:
@@ -415,6 +434,7 @@ bool
 TargetNVC0::insnCanLoadOffset(const Instruction *insn, int s, int offset) const
 {
    const ValueRef& ref = insn->src(s);
+   offset += insn->src(s).get()->reg.data.offset;
    if (ref.getFile() == FILE_MEMORY_CONST &&
        (insn->op != OP_LOAD || insn->subOp != NV50_IR_SUBOP_LDC_IS))
       return offset >= -0x8000 && offset < 0x8000;
@@ -445,6 +465,8 @@ TargetNVC0::isOpSupported(operation op, DataType ty) const
       return false;
    if (op == OP_POW || op == OP_SQRT || op == OP_DIV || op == OP_MOD)
       return false;
+   if (op == OP_XMAD)
+      return false;
    return true;
 }
 
@@ -464,6 +486,7 @@ TargetNVC0::isModSupported(const Instruction *insn, int s, Modifier mod) const
       case OP_XOR:
       case OP_POPCNT:
       case OP_BFIND:
+      case OP_XMAD:
          break;
       case OP_SET:
          if (insn->sType != TYPE_F32)

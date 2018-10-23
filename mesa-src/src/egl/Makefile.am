@@ -27,6 +27,7 @@ BUILT_SOURCES =
 
 AM_CFLAGS = \
 	-I$(top_srcdir)/include \
+	-I$(top_srcdir)/include/drm-uapi \
 	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/egl/main \
 	-I$(top_srcdir)/src/gbm/main \
@@ -71,7 +72,7 @@ WL_DMABUF_XML = $(WAYLAND_PROTOCOLS_DATADIR)/unstable/linux-dmabuf/linux-dmabuf-
 
 drivers/dri2/linux-dmabuf-unstable-v1-protocol.c: $(WL_DMABUF_XML)
 	$(MKDIR_GEN)
-	$(AM_V_GEN)$(WAYLAND_SCANNER) code $< $@
+	$(AM_V_GEN)$(WAYLAND_SCANNER) $(SCANNER_ARG) $< $@
 
 drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h: $(WL_DMABUF_XML)
 	$(MKDIR_GEN)
@@ -80,10 +81,13 @@ drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h: $(WL_DMABUF_XML)
 if HAVE_PLATFORM_WAYLAND
 drivers/dri2/linux-dmabuf-unstable-v1-protocol.lo: drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h
 drivers/dri2/egl_dri2.lo: drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h
+drivers/dri2/platform_wayland.lo: drivers/dri2/linux-dmabuf-unstable-v1-client-protocol.h
 
 AM_CFLAGS += $(WAYLAND_CLIENT_CFLAGS)
 libEGL_common_la_LIBADD += $(WAYLAND_CLIENT_LIBS)
 libEGL_common_la_LIBADD += $(LIBDRM_LIBS)
+AM_CFLAGS += $(WAYLAND_EGL_CFLAGS)
+libEGL_common_la_LIBADD += $(WAYLAND_EGL_LIBS)
 AM_CFLAGS += $(WAYLAND_SERVER_CFLAGS)
 libEGL_common_la_LIBADD += $(top_builddir)/src/egl/wayland/wayland-drm/libwayland-drm.la
 libEGL_common_la_LIBADD += $(WAYLAND_SERVER_LIBS)
@@ -114,11 +118,9 @@ AM_CFLAGS += \
 	-I$(top_builddir)/src/egl/drivers/dri2 \
 	-I$(top_srcdir)/src/egl/drivers/dri2 \
 	-I$(top_srcdir)/src/gbm/backends/dri \
-	-I$(top_srcdir)/src/egl/wayland/wayland-egl \
 	-I$(top_builddir)/src/egl/wayland/wayland-drm \
 	-I$(top_srcdir)/src/egl/wayland/wayland-drm \
-	-DDEFAULT_DRIVER_DIR=\"$(DRI_DRIVER_SEARCH_DIR)\" \
-	-D_EGL_BUILT_IN_DRIVER_DRI2
+	-DDEFAULT_DRIVER_DIR=\"$(DRI_DRIVER_SEARCH_DIR)\"
 
 nodist_libEGL_common_la_SOURCES = \
 	$(dri2_backend_GENERATED_FILES)
@@ -200,6 +202,7 @@ endif # USE_LIBGLVND
 
 include $(top_srcdir)/install-lib-links.mk
 
+# TODO: When building with glvnd, glvnd itself should be providing egl.pc and the headers
 pkgconfigdir = $(libdir)/pkgconfig
 
 pkgconfig_DATA = main/egl.pc

@@ -29,7 +29,6 @@
  */
 
 #include <xf86drm.h>
-#include <fcntl.h>
 #include "GL/mesa_glinterop.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
@@ -45,14 +44,27 @@
 #include "main/bufferobj.h"
 #include "main/texobj.h"
 
+#include "dri_util.h"
+
 #include "dri_helpers.h"
 #include "dri_drawable.h"
 #include "dri_query_renderer.h"
-#include "dri2_buffer.h"
 
 #ifndef DRM_FORMAT_MOD_INVALID
 #define DRM_FORMAT_MOD_INVALID ((1ULL<<56) - 1)
 #endif
+
+struct dri2_buffer
+{
+   __DRIbuffer base;
+   struct pipe_resource *resource;
+};
+
+static inline struct dri2_buffer *
+dri2_buffer(__DRIbuffer * driBufferPriv)
+{
+   return (struct dri2_buffer *) driBufferPriv;
+}
 
 static const int fourcc_formats[] = {
    __DRI_IMAGE_FOURCC_ARGB2101010,
@@ -89,6 +101,10 @@ static int convert_fourcc(int format, int *dri_components_p)
 {
    int dri_components;
    switch(format) {
+   case __DRI_IMAGE_FOURCC_ARGB1555:
+      format = __DRI_IMAGE_FORMAT_ARGB1555;
+      dri_components = __DRI_IMAGE_COMPONENTS_RGBA;
+      break;
    case __DRI_IMAGE_FOURCC_RGB565:
       format = __DRI_IMAGE_FORMAT_RGB565;
       dri_components = __DRI_IMAGE_COMPONENTS_RGB;
@@ -175,6 +191,9 @@ static int convert_fourcc(int format, int *dri_components_p)
 static int convert_to_fourcc(int format)
 {
    switch(format) {
+   case __DRI_IMAGE_FORMAT_ARGB1555:
+      format = __DRI_IMAGE_FOURCC_ARGB1555;
+      break;
    case __DRI_IMAGE_FORMAT_RGB565:
       format = __DRI_IMAGE_FOURCC_RGB565;
       break;
@@ -219,6 +238,9 @@ static enum pipe_format dri2_format_to_pipe_format (int format)
    enum pipe_format pf;
 
    switch (format) {
+   case __DRI_IMAGE_FORMAT_ARGB1555:
+      pf = PIPE_FORMAT_B5G5R5A1_UNORM;
+      break;
    case __DRI_IMAGE_FORMAT_RGB565:
       pf = PIPE_FORMAT_B5G6R5_UNORM;
       break;
@@ -511,6 +533,9 @@ dri_image_drawable_get_buffers(struct dri_drawable *drawable,
       }
 
       switch (pf) {
+      case PIPE_FORMAT_B5G5R5A1_UNORM:
+         image_format = __DRI_IMAGE_FORMAT_ARGB1555;
+         break;
       case PIPE_FORMAT_B5G6R5_UNORM:
          image_format = __DRI_IMAGE_FORMAT_RGB565;
          break;
@@ -620,9 +645,9 @@ dri2_allocate_buffer(__DRIscreen *sPriv,
 
    memset(&whandle, 0, sizeof(whandle));
    if (screen->can_share_buffer)
-      whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+      whandle.type = WINSYS_HANDLE_TYPE_SHARED;
    else
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
 
    screen->base.screen->resource_get_handle(screen->base.screen, NULL,
          buffer->resource, &whandle,
@@ -808,9 +833,9 @@ dri2_allocate_textures(struct dri_context *ctx,
          whandle.offset = 0;
          whandle.modifier = DRM_FORMAT_MOD_INVALID;
          if (screen->can_share_buffer)
-            whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+            whandle.type = WINSYS_HANDLE_TYPE_SHARED;
          else
-            whandle.type = DRM_API_HANDLE_TYPE_KMS;
+            whandle.type = WINSYS_HANDLE_TYPE_KMS;
          drawable->textures[statt] =
             screen->base.screen->resource_from_handle(screen->base.screen,
                   &templ, &whandle,
@@ -832,6 +857,7 @@ dri2_allocate_textures(struct dri_context *ctx,
             templ.bind = drawable->textures[statt]->bind &
                          ~(PIPE_BIND_SCANOUT | PIPE_BIND_SHARED);
             templ.nr_samples = drawable->stvis.samples;
+            templ.nr_storage_samples = drawable->stvis.samples;
 
             /* Try to reuse the resource.
              * (the other resource parameters should be constant)
@@ -883,10 +909,12 @@ dri2_allocate_textures(struct dri_context *ctx,
 
          if (drawable->stvis.samples > 1) {
             templ.nr_samples = drawable->stvis.samples;
+            templ.nr_storage_samples = drawable->stvis.samples;
             zsbuf = &drawable->msaa_textures[statt];
          }
          else {
             templ.nr_samples = 0;
+            templ.nr_storage_samples = 0;
             zsbuf = &drawable->textures[statt];
          }
 
@@ -1068,7 +1096,7 @@ dri2_create_image_from_name(__DRIscreen *_screen,
    enum pipe_format pf;
 
    memset(&whandle, 0, sizeof(whandle));
-   whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+   whandle.type = WINSYS_HANDLE_TYPE_SHARED;
    whandle.handle = name;
    whandle.modifier = DRM_FORMAT_MOD_INVALID;
 
@@ -1127,7 +1155,7 @@ dri2_create_image_from_fd(__DRIscreen *_screen,
          goto exit;
       }
 
-      whandles[i].type = DRM_API_HANDLE_TYPE_FD;
+      whandles[i].type = WINSYS_HANDLE_TYPE_FD;
       whandles[i].handle = (unsigned)fds[i];
       whandles[i].stride = (unsigned)strides[i];
       whandles[i].offset = (unsigned)offsets[i];
@@ -1267,35 +1295,35 @@ dri2_query_image(__DRIimage *image, int attrib, int *value)
 
    switch (attrib) {
    case __DRI_IMAGE_ATTRIB_STRIDE:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
          return GL_FALSE;
       *value = whandle.stride;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_OFFSET:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
          return GL_FALSE;
       *value = whandle.offset;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_HANDLE:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
          NULL, image->texture, &whandle, usage))
          return GL_FALSE;
       *value = whandle.handle;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_NAME:
-      whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+      whandle.type = WINSYS_HANDLE_TYPE_SHARED;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
          NULL, image->texture, &whandle, usage))
          return GL_FALSE;
       *value = whandle.handle;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_FD:
-      whandle.type= DRM_API_HANDLE_TYPE_FD;
+      whandle.type= WINSYS_HANDLE_TYPE_FD;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
          return GL_FALSE;
@@ -1318,12 +1346,12 @@ dri2_query_image(__DRIimage *image, int attrib, int *value)
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_FOURCC:
       *value = convert_to_fourcc(image->dri_format);
-      return GL_TRUE;
+      return *value != -1;
    case __DRI_IMAGE_ATTRIB_NUM_PLANES:
       *value = 1;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_MODIFIER_UPPER:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       whandle.modifier = DRM_FORMAT_MOD_INVALID;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
@@ -1333,7 +1361,7 @@ dri2_query_image(__DRIimage *image, int attrib, int *value)
       *value = (whandle.modifier >> 32) & 0xffffffff;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_MODIFIER_LOWER:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       whandle.modifier = DRM_FORMAT_MOD_INVALID;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
@@ -1413,7 +1441,7 @@ dri2_from_names(__DRIscreen *screen, int width, int height, int format,
       return NULL;
 
    memset(&whandle, 0, sizeof(whandle));
-   whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+   whandle.type = WINSYS_HANDLE_TYPE_SHARED;
    whandle.handle = names[0];
    whandle.stride = strides[0];
    whandle.offset = offsets[0];
@@ -1482,11 +1510,17 @@ dri2_query_dma_buf_formats(__DRIscreen *_screen, int max, int *formats,
 
    for (i = 0, j = 0; (i < ARRAY_SIZE(fourcc_formats)) &&
          (j < max || max == 0); i++) {
+      /* The sRGB format is not a real FourCC as defined by drm_fourcc.h, so we
+       * must not leak it out to clients.
+       */
+      if (fourcc_formats[i] == __DRI_IMAGE_FOURCC_SARGB8888)
+         continue;
+
       if (pscreen->is_format_supported(pscreen,
                                        fourcc_to_pipe_format(
                                           fourcc_formats[i]),
                                        screen->target,
-                                       0, bind)) {
+                                       0, 0, bind)) {
          if (j < max)
             formats[j] = fourcc_formats[i];
          j++;
@@ -1507,7 +1541,8 @@ dri2_query_dma_buf_modifiers(__DRIscreen *_screen, int fourcc, int max,
    const unsigned usage = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW;
 
    if (pscreen->query_dmabuf_modifiers != NULL &&
-       pscreen->is_format_supported(pscreen, format, screen->target, 0, usage)) {
+       pscreen->is_format_supported(pscreen, format, screen->target, 0, 0,
+                                    usage)) {
       pscreen->query_dmabuf_modifiers(pscreen, format, max, modifiers,
                                       external_only, count);
       return true;
@@ -1945,7 +1980,7 @@ dri2_interop_export_object(__DRIcontext *_ctx,
    }
 
    memset(&whandle, 0, sizeof(whandle));
-   whandle.type = DRM_API_HANDLE_TYPE_FD;
+   whandle.type = WINSYS_HANDLE_TYPE_FD;
 
    success = screen->resource_get_handle(screen, st->pipe, res, &whandle,
                                          usage);
@@ -2080,7 +2115,6 @@ dri2_init_screen(__DRIscreen * sPriv)
    struct pipe_screen *pscreen = NULL;
    const struct drm_conf_ret *throttle_ret;
    const struct drm_conf_ret *dmabuf_ret;
-   int fd;
 
    screen = CALLOC_STRUCT(dri_screen);
    if (!screen)
@@ -2092,11 +2126,7 @@ dri2_init_screen(__DRIscreen * sPriv)
 
    sPriv->driverPrivate = (void *)screen;
 
-   if (screen->fd < 0 || (fd = fcntl(screen->fd, F_DUPFD_CLOEXEC, 3)) < 0)
-      goto free_screen;
-
-
-   if (pipe_loader_drm_probe_fd(&screen->dev, fd)) {
+   if (pipe_loader_drm_probe_fd(&screen->dev, screen->fd)) {
       dri_init_options(screen);
 
       pscreen = pipe_loader_create_screen(screen->dev);
@@ -2157,10 +2187,7 @@ destroy_screen:
 release_pipe:
    if (screen->dev)
       pipe_loader_release(&screen->dev, 1);
-   else
-      close(fd);
 
-free_screen:
    FREE(screen);
    return NULL;
 }
@@ -2189,10 +2216,7 @@ dri_kms_init_screen(__DRIscreen * sPriv)
 
    sPriv->driverPrivate = (void *)screen;
 
-   if (screen->fd < 0 || (fd = fcntl(screen->fd, F_DUPFD_CLOEXEC, 3)) < 0)
-      goto free_screen;
-
-   if (pipe_loader_sw_probe_kms(&screen->dev, fd)) {
+   if (pipe_loader_sw_probe_kms(&screen->dev, screen->fd)) {
       dri_init_options(screen);
       pscreen = pipe_loader_create_screen(screen->dev);
    }
@@ -2209,8 +2233,10 @@ dri_kms_init_screen(__DRIscreen * sPriv)
       dri2ImageExtension.createImageFromFds = dri2_from_fds;
       dri2ImageExtension.createImageFromDmaBufs = dri2_from_dma_bufs;
       dri2ImageExtension.createImageFromDmaBufs2 = dri2_from_dma_bufs2;
-      dri2ImageExtension.queryDmaBufFormats = dri2_query_dma_buf_formats;
-      dri2ImageExtension.queryDmaBufModifiers = dri2_query_dma_buf_modifiers;
+      if (pscreen->query_dmabuf_modifiers) {
+         dri2ImageExtension.queryDmaBufFormats = dri2_query_dma_buf_formats;
+         dri2ImageExtension.queryDmaBufModifiers = dri2_query_dma_buf_modifiers;
+      }
    }
 
    sPriv->extensions = dri_screen_extensions;
@@ -2232,10 +2258,7 @@ destroy_screen:
 release_pipe:
    if (screen->dev)
       pipe_loader_release(&screen->dev, 1);
-   else
-      close(fd);
 
-free_screen:
    FREE(screen);
 #endif // GALLIUM_SOFTPIPE
    return NULL;

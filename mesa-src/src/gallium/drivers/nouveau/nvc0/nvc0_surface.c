@@ -754,6 +754,16 @@ nvc0_clear(struct pipe_context *pipe, unsigned buffers,
    }
 }
 
+static void
+gm200_evaluate_depth_buffer(struct pipe_context *pipe)
+{
+   struct nvc0_context *nvc0 = nvc0_context(pipe);
+   struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+
+   nvc0_state_validate_3d(nvc0, NVC0_NEW_3D_FRAMEBUFFER);
+   IMMED_NVC0(push, SUBC_3D(0x11fc), 1);
+}
+
 
 /* =============================== BLIT CODE ===================================
  */
@@ -1563,6 +1573,13 @@ nvc0_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
    bool eng3d = false;
 
+   if (info->src.box.width == 0 || info->src.box.height == 0 ||
+       info->dst.box.width == 0 || info->dst.box.height == 0) {
+      pipe_debug_message(&nvc0->base.debug, ERROR,
+                         "Blit with zero-size src or dst box");
+      return;
+   }
+
    if (util_format_is_depth_or_stencil(info->dst.resource->format)) {
       if (!(info->mask & PIPE_MASK_ZS))
          return;
@@ -1600,6 +1617,10 @@ nvc0_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
             else
             if (util_format_is_alpha(info->src.format))
                eng3d = info->src.format != PIPE_FORMAT_A8_UNORM;
+            else
+            if (util_format_is_srgb(info->dst.format) &&
+                util_format_get_nr_components(info->src.format) == 1)
+               eng3d = true;
             else
                eng3d = !nv50_2d_format_supported(info->src.format);
          }
@@ -1720,4 +1741,6 @@ nvc0_init_surface_functions(struct nvc0_context *nvc0)
    pipe->clear_depth_stencil = nvc0_clear_depth_stencil;
    pipe->clear_texture = nv50_clear_texture;
    pipe->clear_buffer = nvc0_clear_buffer;
+   if (nvc0->screen->base.class_3d >= GM200_3D_CLASS)
+      pipe->evaluate_depth_buffer = gm200_evaluate_depth_buffer;
 }

@@ -1,42 +1,43 @@
 /****************************************************************************
-* Copyright (C) 2016 Intel Corporation.   All Rights Reserved.
-*
-* Permission is hereby granted, free of charge, to any person obtaining a
-* copy of this software and associated documentation files (the "Software"),
-* to deal in the Software without restriction, including without limitation
-* the rights to use, copy, modify, merge, publish, distribute, sublicense,
-* and/or sell copies of the Software, and to permit persons to whom the
-* Software is furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice (including the next
-* paragraph) shall be included in all copies or substantial portions of the
-* Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-* IN THE SOFTWARE.
-*
-* @file gen_ar_event.cpp
-*
-* @brief Implementation for events.  auto-generated file
-* 
-* DO NOT EDIT
-*
-* Generation Command Line:
-*  ./rasterizer/codegen/gen_archrast.py
-*    --proto
-*    ./rasterizer/archrast/events.proto
-*    --proto_private
-*    ./rasterizer/archrast/events_private.proto
-*    --output
-*    rasterizer/archrast/gen_ar_event.cpp
-*    --gen_event_cpp
-*
-******************************************************************************/
+ * Copyright (C) 2016 Intel Corporation.   All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ *
+ * @file gen_ar_event.cpp
+ *
+ * @brief Implementation for events.  auto-generated file
+ *
+ * DO NOT EDIT
+ *
+ * Generation Command Line:
+ *  ./rasterizer/codegen/gen_archrast.py
+ *    --proto
+ *    ./rasterizer/archrast/events.proto
+ *    --proto_private
+ *    ./rasterizer/archrast/events_private.proto
+ *    --output
+ *    rasterizer/archrast/gen_ar_event.cpp
+ *    --gen_event_cpp
+ *
+ ******************************************************************************/
+// clang-format off
 #include "common/os.h"
 #include "gen_ar_event.hpp"
 #include "gen_ar_eventhandler.hpp"
@@ -228,6 +229,46 @@ void ClipperEvent::Accept(EventHandler* pHandler) const
     pHandler->Handle(*this);
 }
 
+void CullEvent::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void AlphaEvent::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void VSInfo::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void HSInfo::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void DSInfo::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void GSInfo::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void PSInfo::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void CSInfo::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
 void EarlyDepthStencilInfoSingleSample::Accept(EventHandler* pHandler) const
 {
     pHandler->Handle(*this);
@@ -298,6 +339,16 @@ void ClipInfoEvent::Accept(EventHandler* pHandler) const
     pHandler->Handle(*this);
 }
 
+void CullInfoEvent::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void AlphaInfoEvent::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
 void DrawInstancedEvent::Accept(EventHandler* pHandler) const
 {
     pHandler->Handle(*this);
@@ -307,3 +358,35 @@ void DrawIndexedInstancedEvent::Accept(EventHandler* pHandler) const
 {
     pHandler->Handle(*this);
 }
+
+void VSStats::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void HSStats::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void DSStats::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void GSStats::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void PSStats::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+
+void CSStats::Accept(EventHandler* pHandler) const
+{
+    pHandler->Handle(*this);
+}
+// clan-format on
+

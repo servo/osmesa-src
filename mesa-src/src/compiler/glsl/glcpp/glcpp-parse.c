@@ -1,13 +1,14 @@
-/* A Bison parser, made by GNU Bison 3.0.4.  */
+/* A Bison parser, made by GNU Bison 2.3.  */
 
-/* Bison implementation for Yacc-like parsers in C
+/* Skeleton implementation for Bison's Yacc-like parsers in C
 
-   Copyright (C) 1984, 1989-1990, 2000-2015 Free Software Foundation, Inc.
+   Copyright (C) 1984, 1989, 1990, 2000, 2001, 2002, 2003, 2004, 2005, 2006
+   Free Software Foundation, Inc.
 
-   This program is free software: you can redistribute it and/or modify
+   This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
-   the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+   the Free Software Foundation; either version 2, or (at your option)
+   any later version.
 
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,7 +16,9 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin Street, Fifth Floor,
+   Boston, MA 02110-1301, USA.  */
 
 /* As a special exception, you may create a larger work that contains
    part or all of the Bison parser skeleton and distribute that work
@@ -44,7 +47,7 @@
 #define YYBISON 1
 
 /* Bison version.  */
-#define YYBISON_VERSION "3.0.4"
+#define YYBISON_VERSION "2.3"
 
 /* Skeleton name.  */
 #define YYSKELETON_NAME "yacc.c"
@@ -52,23 +55,112 @@
 /* Pure parsers.  */
 #define YYPURE 1
 
-/* Push parsers.  */
-#define YYPUSH 0
-
-/* Pull parsers.  */
-#define YYPULL 1
-
+/* Using locations.  */
+#define YYLSP_NEEDED 1
 
 /* Substitute the variable and function names.  */
-#define yyparse         glcpp_parser_parse
-#define yylex           glcpp_parser_lex
-#define yyerror         glcpp_parser_error
-#define yydebug         glcpp_parser_debug
-#define yynerrs         glcpp_parser_nerrs
+#define yyparse glcpp_parser_parse
+#define yylex   glcpp_parser_lex
+#define yyerror glcpp_parser_error
+#define yylval  glcpp_parser_lval
+#define yychar  glcpp_parser_char
+#define yydebug glcpp_parser_debug
+#define yynerrs glcpp_parser_nerrs
+#define yylloc glcpp_parser_lloc
+
+/* Tokens.  */
+#ifndef YYTOKENTYPE
+# define YYTOKENTYPE
+   /* Put the tokens into the symbol table, so that GDB and other debuggers
+      know about them.  */
+   enum yytokentype {
+     DEFINED = 258,
+     ELIF_EXPANDED = 259,
+     HASH_TOKEN = 260,
+     DEFINE_TOKEN = 261,
+     FUNC_IDENTIFIER = 262,
+     OBJ_IDENTIFIER = 263,
+     ELIF = 264,
+     ELSE = 265,
+     ENDIF = 266,
+     ERROR_TOKEN = 267,
+     IF = 268,
+     IFDEF = 269,
+     IFNDEF = 270,
+     LINE = 271,
+     PRAGMA = 272,
+     UNDEF = 273,
+     VERSION_TOKEN = 274,
+     GARBAGE = 275,
+     IDENTIFIER = 276,
+     IF_EXPANDED = 277,
+     INTEGER = 278,
+     INTEGER_STRING = 279,
+     LINE_EXPANDED = 280,
+     NEWLINE = 281,
+     OTHER = 282,
+     PLACEHOLDER = 283,
+     SPACE = 284,
+     PLUS_PLUS = 285,
+     MINUS_MINUS = 286,
+     PASTE = 287,
+     OR = 288,
+     AND = 289,
+     NOT_EQUAL = 290,
+     EQUAL = 291,
+     GREATER_OR_EQUAL = 292,
+     LESS_OR_EQUAL = 293,
+     RIGHT_SHIFT = 294,
+     LEFT_SHIFT = 295,
+     UNARY = 296
+   };
+#endif
+/* Tokens.  */
+#define DEFINED 258
+#define ELIF_EXPANDED 259
+#define HASH_TOKEN 260
+#define DEFINE_TOKEN 261
+#define FUNC_IDENTIFIER 262
+#define OBJ_IDENTIFIER 263
+#define ELIF 264
+#define ELSE 265
+#define ENDIF 266
+#define ERROR_TOKEN 267
+#define IF 268
+#define IFDEF 269
+#define IFNDEF 270
+#define LINE 271
+#define PRAGMA 272
+#define UNDEF 273
+#define VERSION_TOKEN 274
+#define GARBAGE 275
+#define IDENTIFIER 276
+#define IF_EXPANDED 277
+#define INTEGER 278
+#define INTEGER_STRING 279
+#define LINE_EXPANDED 280
+#define NEWLINE 281
+#define OTHER 282
+#define PLACEHOLDER 283
+#define SPACE 284
+#define PLUS_PLUS 285
+#define MINUS_MINUS 286
+#define PASTE 287
+#define OR 288
+#define AND 289
+#define NOT_EQUAL 290
+#define EQUAL 291
+#define GREATER_OR_EQUAL 292
+#define LESS_OR_EQUAL 293
+#define RIGHT_SHIFT 294
+#define LEFT_SHIFT 295
+#define UNARY 296
+
+
 
 
 /* Copy the first part of user declarations.  */
-#line 1 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:339  */
+#line 1 "./glsl/glcpp/glcpp-parse.y"
 
 /*
  * Copyright © 2010 Intel Corporation
@@ -100,8 +192,7 @@
 #include <inttypes.h>
 
 #include "glcpp.h"
-#include "main/core.h" /* for struct gl_extensions */
-#include "main/mtypes.h" /* for gl_api enum */
+#include "main/mtypes.h"
 
 static void
 yyerror(YYLTYPE *locp, glcpp_parser_t *parser, const char *error);
@@ -225,15 +316,11 @@ static void
 add_builtin_define(glcpp_parser_t *parser, const char *name, int value);
 
 
-#line 229 "glsl/glcpp/glcpp-parse.c" /* yacc.c:339  */
 
-# ifndef YY_NULLPTR
-#  if defined __cplusplus && 201103L <= __cplusplus
-#   define YY_NULLPTR nullptr
-#  else
-#   define YY_NULLPTR 0
-#  endif
-# endif
+/* Enabling traces.  */
+#ifndef YYDEBUG
+# define YYDEBUG 1
+#endif
 
 /* Enabling verbose error messages.  */
 #ifdef YYERROR_VERBOSE
@@ -243,90 +330,37 @@ add_builtin_define(glcpp_parser_t *parser, const char *name, int value);
 # define YYERROR_VERBOSE 1
 #endif
 
-/* In a future release of Bison, this section will be replaced
-   by #include "glcpp-parse.h".  */
-#ifndef YY_GLCPP_PARSER_GLSL_GLCPP_GLCPP_PARSE_H_INCLUDED
-# define YY_GLCPP_PARSER_GLSL_GLCPP_GLCPP_PARSE_H_INCLUDED
-/* Debug traces.  */
-#ifndef YYDEBUG
-# define YYDEBUG 1
-#endif
-#if YYDEBUG
-extern int glcpp_parser_debug;
+/* Enabling the token table.  */
+#ifndef YYTOKEN_TABLE
+# define YYTOKEN_TABLE 0
 #endif
 
-/* Token type.  */
-#ifndef YYTOKENTYPE
-# define YYTOKENTYPE
-  enum yytokentype
-  {
-    DEFINED = 258,
-    ELIF_EXPANDED = 259,
-    HASH_TOKEN = 260,
-    DEFINE_TOKEN = 261,
-    FUNC_IDENTIFIER = 262,
-    OBJ_IDENTIFIER = 263,
-    ELIF = 264,
-    ELSE = 265,
-    ENDIF = 266,
-    ERROR_TOKEN = 267,
-    IF = 268,
-    IFDEF = 269,
-    IFNDEF = 270,
-    LINE = 271,
-    PRAGMA = 272,
-    UNDEF = 273,
-    VERSION_TOKEN = 274,
-    GARBAGE = 275,
-    IDENTIFIER = 276,
-    IF_EXPANDED = 277,
-    INTEGER = 278,
-    INTEGER_STRING = 279,
-    LINE_EXPANDED = 280,
-    NEWLINE = 281,
-    OTHER = 282,
-    PLACEHOLDER = 283,
-    SPACE = 284,
-    PLUS_PLUS = 285,
-    MINUS_MINUS = 286,
-    PASTE = 287,
-    OR = 288,
-    AND = 289,
-    EQUAL = 290,
-    NOT_EQUAL = 291,
-    LESS_OR_EQUAL = 292,
-    GREATER_OR_EQUAL = 293,
-    LEFT_SHIFT = 294,
-    RIGHT_SHIFT = 295,
-    UNARY = 296
-  };
+#if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
+typedef int YYSTYPE;
+# define yystype YYSTYPE /* obsolescent; will be withdrawn */
+# define YYSTYPE_IS_DECLARED 1
+# define YYSTYPE_IS_TRIVIAL 1
 #endif
 
-/* Value type.  */
-
-/* Location type.  */
 #if ! defined YYLTYPE && ! defined YYLTYPE_IS_DECLARED
-typedef struct YYLTYPE YYLTYPE;
-struct YYLTYPE
+typedef struct YYLTYPE
 {
   int first_line;
   int first_column;
   int last_line;
   int last_column;
-};
+} YYLTYPE;
+# define yyltype YYLTYPE /* obsolescent; will be withdrawn */
 # define YYLTYPE_IS_DECLARED 1
 # define YYLTYPE_IS_TRIVIAL 1
 #endif
 
 
-
-int glcpp_parser_parse (glcpp_parser_t *parser);
-
-#endif /* !YY_GLCPP_PARSER_GLSL_GLCPP_GLCPP_PARSE_H_INCLUDED  */
-
 /* Copy the second part of user declarations.  */
 
-#line 330 "glsl/glcpp/glcpp-parse.c" /* yacc.c:358  */
+
+/* Line 216 of yacc.c.  */
+#line 364 "glsl/glcpp/glcpp-parse.c"
 
 #ifdef short
 # undef short
@@ -340,8 +374,11 @@ typedef unsigned char yytype_uint8;
 
 #ifdef YYTYPE_INT8
 typedef YYTYPE_INT8 yytype_int8;
-#else
+#elif (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 typedef signed char yytype_int8;
+#else
+typedef short int yytype_int8;
 #endif
 
 #ifdef YYTYPE_UINT16
@@ -361,7 +398,8 @@ typedef short int yytype_int16;
 #  define YYSIZE_T __SIZE_TYPE__
 # elif defined size_t
 #  define YYSIZE_T size_t
-# elif ! defined YYSIZE_T
+# elif ! defined YYSIZE_T && (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 #  include <stddef.h> /* INFRINGES ON USER NAME SPACE */
 #  define YYSIZE_T size_t
 # else
@@ -375,67 +413,38 @@ typedef short int yytype_int16;
 # if defined YYENABLE_NLS && YYENABLE_NLS
 #  if ENABLE_NLS
 #   include <libintl.h> /* INFRINGES ON USER NAME SPACE */
-#   define YY_(Msgid) dgettext ("bison-runtime", Msgid)
+#   define YY_(msgid) dgettext ("bison-runtime", msgid)
 #  endif
 # endif
 # ifndef YY_
-#  define YY_(Msgid) Msgid
-# endif
-#endif
-
-#ifndef YY_ATTRIBUTE
-# if (defined __GNUC__                                               \
-      && (2 < __GNUC__ || (__GNUC__ == 2 && 96 <= __GNUC_MINOR__)))  \
-     || defined __SUNPRO_C && 0x5110 <= __SUNPRO_C
-#  define YY_ATTRIBUTE(Spec) __attribute__(Spec)
-# else
-#  define YY_ATTRIBUTE(Spec) /* empty */
-# endif
-#endif
-
-#ifndef YY_ATTRIBUTE_PURE
-# define YY_ATTRIBUTE_PURE   YY_ATTRIBUTE ((__pure__))
-#endif
-
-#ifndef YY_ATTRIBUTE_UNUSED
-# define YY_ATTRIBUTE_UNUSED YY_ATTRIBUTE ((__unused__))
-#endif
-
-#if !defined _Noreturn \
-     && (!defined __STDC_VERSION__ || __STDC_VERSION__ < 201112)
-# if defined _MSC_VER && 1200 <= _MSC_VER
-#  define _Noreturn __declspec (noreturn)
-# else
-#  define _Noreturn YY_ATTRIBUTE ((__noreturn__))
+#  define YY_(msgid) msgid
 # endif
 #endif
 
 /* Suppress unused-variable warnings by "using" E.  */
 #if ! defined lint || defined __GNUC__
-# define YYUSE(E) ((void) (E))
+# define YYUSE(e) ((void) (e))
 #else
-# define YYUSE(E) /* empty */
+# define YYUSE(e) /* empty */
 #endif
 
-#if defined __GNUC__ && 407 <= __GNUC__ * 100 + __GNUC_MINOR__
-/* Suppress an incorrect diagnostic about yylval being uninitialized.  */
-# define YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN \
-    _Pragma ("GCC diagnostic push") \
-    _Pragma ("GCC diagnostic ignored \"-Wuninitialized\"")\
-    _Pragma ("GCC diagnostic ignored \"-Wmaybe-uninitialized\"")
-# define YY_IGNORE_MAYBE_UNINITIALIZED_END \
-    _Pragma ("GCC diagnostic pop")
+/* Identity function, used to suppress warnings about constant conditions.  */
+#ifndef lint
+# define YYID(n) (n)
 #else
-# define YY_INITIAL_VALUE(Value) Value
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
+static int
+YYID (int i)
+#else
+static int
+YYID (i)
+    int i;
 #endif
-#ifndef YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
-# define YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
-# define YY_IGNORE_MAYBE_UNINITIALIZED_END
+{
+  return i;
+}
 #endif
-#ifndef YY_INITIAL_VALUE
-# define YY_INITIAL_VALUE(Value) /* Nothing. */
-#endif
-
 
 #if ! defined yyoverflow || YYERROR_VERBOSE
 
@@ -454,11 +463,11 @@ typedef short int yytype_int16;
 #    define alloca _alloca
 #   else
 #    define YYSTACK_ALLOC alloca
-#    if ! defined _ALLOCA_H && ! defined EXIT_SUCCESS
+#    if ! defined _ALLOCA_H && ! defined _STDLIB_H && (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 #     include <stdlib.h> /* INFRINGES ON USER NAME SPACE */
-      /* Use EXIT_SUCCESS as a witness for stdlib.h.  */
-#     ifndef EXIT_SUCCESS
-#      define EXIT_SUCCESS 0
+#     ifndef _STDLIB_H
+#      define _STDLIB_H 1
 #     endif
 #    endif
 #   endif
@@ -466,8 +475,8 @@ typedef short int yytype_int16;
 # endif
 
 # ifdef YYSTACK_ALLOC
-   /* Pacify GCC's 'empty if-body' warning.  */
-#  define YYSTACK_FREE(Ptr) do { /* empty */; } while (0)
+   /* Pacify GCC's `empty if-body' warning.  */
+#  define YYSTACK_FREE(Ptr) do { /* empty */; } while (YYID (0))
 #  ifndef YYSTACK_ALLOC_MAXIMUM
     /* The OS might guarantee only one guard page at the bottom of the stack,
        and a page size can be as small as 4096 bytes.  So we cannot safely
@@ -481,23 +490,25 @@ typedef short int yytype_int16;
 #  ifndef YYSTACK_ALLOC_MAXIMUM
 #   define YYSTACK_ALLOC_MAXIMUM YYSIZE_MAXIMUM
 #  endif
-#  if (defined __cplusplus && ! defined EXIT_SUCCESS \
+#  if (defined __cplusplus && ! defined _STDLIB_H \
        && ! ((defined YYMALLOC || defined malloc) \
-             && (defined YYFREE || defined free)))
+	     && (defined YYFREE || defined free)))
 #   include <stdlib.h> /* INFRINGES ON USER NAME SPACE */
-#   ifndef EXIT_SUCCESS
-#    define EXIT_SUCCESS 0
+#   ifndef _STDLIB_H
+#    define _STDLIB_H 1
 #   endif
 #  endif
 #  ifndef YYMALLOC
 #   define YYMALLOC malloc
-#   if ! defined malloc && ! defined EXIT_SUCCESS
+#   if ! defined malloc && ! defined _STDLIB_H && (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 void *malloc (YYSIZE_T); /* INFRINGES ON USER NAME SPACE */
 #   endif
 #  endif
 #  ifndef YYFREE
 #   define YYFREE free
-#   if ! defined free && ! defined EXIT_SUCCESS
+#   if ! defined free && ! defined _STDLIB_H && (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 void free (void *); /* INFRINGES ON USER NAME SPACE */
 #   endif
 #  endif
@@ -507,15 +518,15 @@ void free (void *); /* INFRINGES ON USER NAME SPACE */
 
 #if (! defined yyoverflow \
      && (! defined __cplusplus \
-         || (defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL \
-             && defined YYSTYPE_IS_TRIVIAL && YYSTYPE_IS_TRIVIAL)))
+	 || (defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL \
+	     && defined YYSTYPE_IS_TRIVIAL && YYSTYPE_IS_TRIVIAL)))
 
 /* A type that is properly aligned for any stack member.  */
 union yyalloc
 {
-  yytype_int16 yyss_alloc;
-  YYSTYPE yyvs_alloc;
-  YYLTYPE yyls_alloc;
+  yytype_int16 yyss;
+  YYSTYPE yyvs;
+    YYLTYPE yyls;
 };
 
 /* The size of the maximum gap between one aligned stack and the next.  */
@@ -527,45 +538,41 @@ union yyalloc
      ((N) * (sizeof (yytype_int16) + sizeof (YYSTYPE) + sizeof (YYLTYPE)) \
       + 2 * YYSTACK_GAP_MAXIMUM)
 
-# define YYCOPY_NEEDED 1
+/* Copy COUNT objects from FROM to TO.  The source and destination do
+   not overlap.  */
+# ifndef YYCOPY
+#  if defined __GNUC__ && 1 < __GNUC__
+#   define YYCOPY(To, From, Count) \
+      __builtin_memcpy (To, From, (Count) * sizeof (*(From)))
+#  else
+#   define YYCOPY(To, From, Count)		\
+      do					\
+	{					\
+	  YYSIZE_T yyi;				\
+	  for (yyi = 0; yyi < (Count); yyi++)	\
+	    (To)[yyi] = (From)[yyi];		\
+	}					\
+      while (YYID (0))
+#  endif
+# endif
 
 /* Relocate STACK from its old location to the new one.  The
    local variables YYSIZE and YYSTACKSIZE give the old and new number of
    elements in the stack, and YYPTR gives the new location of the
    stack.  Advance YYPTR to a properly aligned location for the next
    stack.  */
-# define YYSTACK_RELOCATE(Stack_alloc, Stack)                           \
-    do                                                                  \
-      {                                                                 \
-        YYSIZE_T yynewbytes;                                            \
-        YYCOPY (&yyptr->Stack_alloc, Stack, yysize);                    \
-        Stack = &yyptr->Stack_alloc;                                    \
-        yynewbytes = yystacksize * sizeof (*Stack) + YYSTACK_GAP_MAXIMUM; \
-        yyptr += yynewbytes / sizeof (*yyptr);                          \
-      }                                                                 \
-    while (0)
+# define YYSTACK_RELOCATE(Stack)					\
+    do									\
+      {									\
+	YYSIZE_T yynewbytes;						\
+	YYCOPY (&yyptr->Stack, Stack, yysize);				\
+	Stack = &yyptr->Stack;						\
+	yynewbytes = yystacksize * sizeof (*Stack) + YYSTACK_GAP_MAXIMUM; \
+	yyptr += yynewbytes / sizeof (*yyptr);				\
+      }									\
+    while (YYID (0))
 
 #endif
-
-#if defined YYCOPY_NEEDED && YYCOPY_NEEDED
-/* Copy COUNT objects from SRC to DST.  The source and destination do
-   not overlap.  */
-# ifndef YYCOPY
-#  if defined __GNUC__ && 1 < __GNUC__
-#   define YYCOPY(Dst, Src, Count) \
-      __builtin_memcpy (Dst, Src, (Count) * sizeof (*(Src)))
-#  else
-#   define YYCOPY(Dst, Src, Count)              \
-      do                                        \
-        {                                       \
-          YYSIZE_T yyi;                         \
-          for (yyi = 0; yyi < (Count); yyi++)   \
-            (Dst)[yyi] = (Src)[yyi];            \
-        }                                       \
-      while (0)
-#  endif
-# endif
-#endif /* !YYCOPY_NEEDED */
 
 /* YYFINAL -- State number of the termination state.  */
 #define YYFINAL  2
@@ -578,19 +585,17 @@ union yyalloc
 #define YYNNTS  20
 /* YYNRULES -- Number of rules.  */
 #define YYNRULES  113
-/* YYNSTATES -- Number of states.  */
+/* YYNRULES -- Number of states.  */
 #define YYNSTATES  180
 
-/* YYTRANSLATE[YYX] -- Symbol number corresponding to YYX as returned
-   by yylex, with out-of-bounds checking.  */
+/* YYTRANSLATE(YYLEX) -- Bison symbol number corresponding to YYLEX.  */
 #define YYUNDEFTOK  2
 #define YYMAXUTOK   296
 
-#define YYTRANSLATE(YYX)                                                \
+#define YYTRANSLATE(YYX)						\
   ((unsigned int) (YYX) <= YYMAXUTOK ? yytranslate[YYX] : YYUNDEFTOK)
 
-/* YYTRANSLATE[TOKEN-NUM] -- Symbol number corresponding to TOKEN-NUM
-   as returned by yylex, without out-of-bounds checking.  */
+/* YYTRANSLATE[YYLEX] -- Bison symbol number corresponding to YYLEX.  */
 static const yytype_uint8 yytranslate[] =
 {
        0,     2,     2,     2,     2,     2,     2,     2,     2,     2,
@@ -626,25 +631,82 @@ static const yytype_uint8 yytranslate[] =
 };
 
 #if YYDEBUG
-  /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
+/* YYPRHS[YYN] -- Index of the first RHS symbol of rule number YYN in
+   YYRHS.  */
+static const yytype_uint16 yyprhs[] =
+{
+       0,     0,     3,     4,     7,     9,    12,    14,    16,    20,
+      24,    28,    33,    37,    43,    50,    52,    54,    59,    63,
+      68,    73,    77,    83,    89,    94,    98,    99,   104,   105,
+     110,   115,   121,   124,   128,   132,   136,   141,   143,   145,
+     147,   149,   151,   155,   159,   163,   167,   171,   175,   179,
+     183,   187,   191,   195,   199,   203,   207,   211,   215,   219,
+     223,   226,   229,   232,   235,   239,   241,   245,   247,   250,
+     251,   253,   254,   256,   258,   261,   263,   265,   267,   269,
+     271,   273,   275,   277,   279,   281,   283,   285,   287,   289,
+     291,   293,   295,   297,   299,   301,   303,   305,   307,   309,
+     311,   313,   315,   317,   319,   321,   323,   325,   327,   329,
+     331,   333,   335,   337
+};
+
+/* YYRHS -- A `-1'-separated list of the rules' RHS.  */
+static const yytype_int8 yyrhs[] =
+{
+      65,     0,    -1,    -1,    65,    66,    -1,    69,    -1,    29,
+      69,    -1,    78,    -1,    67,    -1,    22,    76,    26,    -1,
+       4,    76,    26,    -1,    25,    74,    26,    -1,    25,    74,
+      74,    26,    -1,     8,    79,    26,    -1,     7,    52,    53,
+      79,    26,    -1,     7,    52,    77,    53,    79,    26,    -1,
+      70,    -1,    73,    -1,     5,    16,    81,    26,    -1,     5,
+       6,    68,    -1,     5,    18,    21,    26,    -1,     5,    13,
+      81,    26,    -1,     5,    13,    26,    -1,     5,    14,    21,
+      80,    26,    -1,     5,    15,    21,    80,    26,    -1,     5,
+       9,    81,    26,    -1,     5,     9,    26,    -1,    -1,     5,
+      10,    71,    26,    -1,    -1,     5,    11,    72,    26,    -1,
+       5,    19,    75,    26,    -1,     5,    19,    75,    21,    26,
+      -1,     5,    26,    -1,     5,    17,    26,    -1,     5,    12,
+      26,    -1,     5,     6,    26,    -1,     5,    20,    81,    26,
+      -1,    24,    -1,    23,    -1,    24,    -1,    74,    -1,    21,
+      -1,    76,    33,    76,    -1,    76,    34,    76,    -1,    76,
+      35,    76,    -1,    76,    36,    76,    -1,    76,    37,    76,
+      -1,    76,    38,    76,    -1,    76,    39,    76,    -1,    76,
+      42,    76,    -1,    76,    43,    76,    -1,    76,    41,    76,
+      -1,    76,    40,    76,    -1,    76,    44,    76,    -1,    76,
+      45,    76,    -1,    76,    47,    76,    -1,    76,    46,    76,
+      -1,    76,    50,    76,    -1,    76,    49,    76,    -1,    76,
+      48,    76,    -1,    54,    76,    -1,    55,    76,    -1,    47,
+      76,    -1,    46,    76,    -1,    52,    76,    53,    -1,    21,
+      -1,    77,    56,    21,    -1,    26,    -1,    81,    26,    -1,
+      -1,    81,    -1,    -1,    81,    -1,    82,    -1,    81,    82,
+      -1,    21,    -1,    24,    -1,    83,    -1,     3,    -1,    27,
+      -1,    29,    -1,    57,    -1,    58,    -1,    52,    -1,    53,
+      -1,    59,    -1,    60,    -1,    61,    -1,    37,    -1,    48,
+      -1,    46,    -1,    47,    -1,    55,    -1,    54,    -1,    49,
+      -1,    50,    -1,    45,    -1,    44,    -1,    40,    -1,    41,
+      -1,    43,    -1,    42,    -1,    39,    -1,    38,    -1,    36,
+      -1,    35,    -1,    34,    -1,    33,    -1,    62,    -1,    56,
+      -1,    63,    -1,    32,    -1,    30,    -1,    31,    -1
+};
+
+/* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
 static const yytype_uint16 yyrline[] =
 {
-       0,   202,   202,   204,   208,   209,   210,   214,   218,   223,
-     228,   233,   245,   248,   251,   257,   260,   261,   274,   275,
-     327,   348,   358,   364,   370,   396,   416,   416,   429,   429,
-     432,   438,   444,   447,   453,   456,   459,   465,   474,   479,
-     490,   494,   501,   512,   523,   530,   537,   544,   551,   558,
-     565,   572,   579,   586,   593,   600,   607,   614,   626,   638,
-     645,   649,   653,   657,   661,   667,   671,   678,   679,   683,
-     684,   687,   689,   695,   700,   707,   711,   715,   719,   723,
-     727,   734,   735,   736,   737,   738,   739,   740,   741,   742,
-     743,   744,   745,   746,   747,   748,   749,   750,   751,   752,
-     753,   754,   755,   756,   757,   758,   759,   760,   761,   762,
-     763,   764,   765,   766
+       0,   201,   201,   203,   207,   208,   209,   213,   217,   222,
+     227,   232,   244,   247,   250,   256,   259,   260,   273,   274,
+     326,   347,   357,   363,   369,   395,   415,   415,   428,   428,
+     431,   437,   443,   446,   452,   455,   458,   464,   468,   473,
+     484,   488,   495,   506,   517,   524,   531,   538,   545,   552,
+     559,   566,   573,   580,   587,   594,   601,   608,   620,   632,
+     639,   643,   647,   651,   655,   661,   665,   672,   673,   677,
+     678,   681,   683,   689,   694,   701,   705,   709,   713,   717,
+     721,   728,   729,   730,   731,   732,   733,   734,   735,   736,
+     737,   738,   739,   740,   741,   742,   743,   744,   745,   746,
+     747,   748,   749,   750,   751,   752,   753,   754,   755,   756,
+     757,   758,   759,   760
 };
 #endif
 
-#if YYDEBUG || YYERROR_VERBOSE || 1
+#if YYDEBUG || YYERROR_VERBOSE || YYTOKEN_TABLE
 /* YYTNAME[SYMBOL-NUM] -- String name of the symbol SYMBOL-NUM.
    First, the terminals, then, starting at YYNTOKENS, nonterminals.  */
 static const char *const yytname[] =
@@ -655,20 +717,21 @@ static const char *const yytname[] =
   "UNDEF", "VERSION_TOKEN", "GARBAGE", "IDENTIFIER", "IF_EXPANDED",
   "INTEGER", "INTEGER_STRING", "LINE_EXPANDED", "NEWLINE", "OTHER",
   "PLACEHOLDER", "SPACE", "PLUS_PLUS", "MINUS_MINUS", "PASTE", "OR", "AND",
-  "'|'", "'^'", "'&'", "EQUAL", "NOT_EQUAL", "'<'", "'>'", "LESS_OR_EQUAL",
-  "GREATER_OR_EQUAL", "LEFT_SHIFT", "RIGHT_SHIFT", "'+'", "'-'", "'*'",
-  "'/'", "'%'", "UNARY", "'('", "')'", "'!'", "'~'", "','", "'['", "']'",
-  "'{'", "'}'", "'.'", "';'", "'='", "$accept", "input", "line",
-  "expanded_line", "define", "control_line", "control_line_success", "$@1",
-  "$@2", "control_line_error", "integer_constant", "version_constant",
-  "expression", "identifier_list", "text_line", "replacement_list", "junk",
-  "pp_tokens", "preprocessing_token", "operator", YY_NULLPTR
+  "'|'", "'^'", "'&'", "NOT_EQUAL", "EQUAL", "'<'", "'>'",
+  "GREATER_OR_EQUAL", "LESS_OR_EQUAL", "RIGHT_SHIFT", "LEFT_SHIFT", "'+'",
+  "'-'", "'*'", "'/'", "'%'", "UNARY", "'('", "')'", "'!'", "'~'", "','",
+  "'['", "']'", "'{'", "'}'", "'.'", "';'", "'='", "$accept", "input",
+  "line", "expanded_line", "define", "control_line",
+  "control_line_success", "@1", "@2", "control_line_error",
+  "integer_constant", "version_constant", "expression", "identifier_list",
+  "text_line", "replacement_list", "junk", "pp_tokens",
+  "preprocessing_token", "operator", 0
 };
 #endif
 
 # ifdef YYPRINT
-/* YYTOKNUM[NUM] -- (External) token number corresponding to the
-   (internal) symbol number NUM (which must be that of a token).  */
+/* YYTOKNUM[YYLEX-NUM] -- Internal token number corresponding to
+   token YYLEX-NUM.  */
 static const yytype_uint16 yytoknum[] =
 {
        0,   256,   257,   258,   259,   260,   261,   262,   263,   264,
@@ -681,18 +744,75 @@ static const yytype_uint16 yytoknum[] =
 };
 # endif
 
+/* YYR1[YYN] -- Symbol number of symbol that rule YYN derives.  */
+static const yytype_uint8 yyr1[] =
+{
+       0,    64,    65,    65,    66,    66,    66,    66,    67,    67,
+      67,    67,    68,    68,    68,    69,    69,    69,    70,    70,
+      70,    70,    70,    70,    70,    70,    71,    70,    72,    70,
+      70,    70,    70,    70,    73,    73,    73,    74,    74,    75,
+      76,    76,    76,    76,    76,    76,    76,    76,    76,    76,
+      76,    76,    76,    76,    76,    76,    76,    76,    76,    76,
+      76,    76,    76,    76,    76,    77,    77,    78,    78,    79,
+      79,    80,    80,    81,    81,    82,    82,    82,    82,    82,
+      82,    83,    83,    83,    83,    83,    83,    83,    83,    83,
+      83,    83,    83,    83,    83,    83,    83,    83,    83,    83,
+      83,    83,    83,    83,    83,    83,    83,    83,    83,    83,
+      83,    83,    83,    83
+};
+
+/* YYR2[YYN] -- Number of symbols composing right hand side of rule YYN.  */
+static const yytype_uint8 yyr2[] =
+{
+       0,     2,     0,     2,     1,     2,     1,     1,     3,     3,
+       3,     4,     3,     5,     6,     1,     1,     4,     3,     4,
+       4,     3,     5,     5,     4,     3,     0,     4,     0,     4,
+       4,     5,     2,     3,     3,     3,     4,     1,     1,     1,
+       1,     1,     3,     3,     3,     3,     3,     3,     3,     3,
+       3,     3,     3,     3,     3,     3,     3,     3,     3,     3,
+       2,     2,     2,     2,     3,     1,     3,     1,     2,     0,
+       1,     0,     1,     1,     2,     1,     1,     1,     1,     1,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     1,     1
+};
+
+/* YYDEFACT[STATE-NAME] -- Default rule to reduce with in state
+   STATE-NUM when YYTABLE doesn't specify something else to do.  Zero
+   means the default is an error.  */
+static const yytype_uint8 yydefact[] =
+{
+       2,     0,     1,    78,     0,     0,    75,     0,    76,     0,
+      67,    79,    80,   112,   113,   111,   107,   106,   105,   104,
+      88,   103,   102,    98,    99,   101,   100,    97,    96,    90,
+      91,    89,    94,    95,    83,    84,    93,    92,   109,    81,
+      82,    85,    86,    87,   108,   110,     3,     7,     4,    15,
+      16,     6,     0,    73,    77,    41,    38,    37,     0,     0,
+       0,     0,     0,    40,     0,     0,     0,    26,    28,     0,
+       0,     0,     0,     0,     0,     0,     0,     0,    32,     0,
+       0,     5,    68,    80,    74,    63,    62,     0,    60,    61,
+       9,     0,     0,     0,     0,     0,     0,     0,     0,     0,
+       0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
+      69,    35,    18,    25,     0,     0,     0,    34,    21,     0,
+      71,    71,     0,    33,     0,    39,     0,     0,     8,    10,
+       0,    64,    42,    43,    44,    45,    46,    47,    48,    52,
+      51,    49,    50,    53,    54,    56,    55,    59,    58,    57,
+       0,     0,    70,    24,    27,    29,    20,     0,    72,     0,
+      17,    19,     0,    30,    36,    11,    65,    69,     0,    12,
+      22,    23,    31,     0,    69,     0,    13,     0,    66,    14
+};
+
+/* YYDEFGOTO[NTERM-NUM].  */
+static const yytype_int16 yydefgoto[] =
+{
+      -1,     1,    46,    47,   112,    48,    49,   115,   116,    50,
+      63,   126,    64,   168,    51,   151,   157,   152,    53,    54
+};
+
+/* YYPACT[STATE-NUM] -- Index in YYTABLE of the portion describing
+   STATE-NUM.  */
 #define YYPACT_NINF -135
-
-#define yypact_value_is_default(Yystate) \
-  (!!((Yystate) == (-135)))
-
-#define YYTABLE_NINF -1
-
-#define yytable_value_is_error(Yytable_value) \
-  0
-
-  /* YYPACT[STATE-NUM] -- Index in YYTABLE of the portion describing
-     STATE-NUM.  */
 static const yytype_int16 yypact[] =
 {
     -135,   103,  -135,  -135,   -18,   595,  -135,   -18,  -135,   -15,
@@ -715,48 +835,18 @@ static const yytype_int16 yypact[] =
     -135,  -135,  -135,    91,   487,    97,  -135,    95,  -135,  -135
 };
 
-  /* YYDEFACT[STATE-NUM] -- Default reduction number in state STATE-NUM.
-     Performed when YYTABLE does not specify something else to do.  Zero
-     means the default is an error.  */
-static const yytype_uint8 yydefact[] =
-{
-       2,     0,     1,    78,     0,     0,    75,     0,    76,     0,
-      67,    79,    80,   112,   113,   111,   107,   106,   105,   104,
-      88,   102,   103,    98,    99,   100,   101,    96,    97,    90,
-      91,    89,    94,    95,    83,    84,    93,    92,   109,    81,
-      82,    85,    86,    87,   108,   110,     3,     7,     4,    15,
-      16,     6,     0,    73,    77,    41,    38,    37,     0,     0,
-       0,     0,     0,    40,     0,     0,     0,    26,    28,     0,
-       0,     0,     0,     0,     0,     0,     0,     0,    32,     0,
-       0,     5,    68,    80,    74,    63,    62,     0,    60,    61,
-       9,     0,     0,     0,     0,     0,     0,     0,     0,     0,
-       0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
-      69,    35,    18,    25,     0,     0,     0,    34,    21,     0,
-      71,    71,     0,    33,     0,    39,     0,     0,     8,    10,
-       0,    64,    42,    43,    44,    45,    46,    48,    47,    52,
-      51,    50,    49,    54,    53,    56,    55,    59,    58,    57,
-       0,     0,    70,    24,    27,    29,    20,     0,    72,     0,
-      17,    19,     0,    30,    36,    11,    65,    69,     0,    12,
-      22,    23,    31,     0,    69,     0,    13,     0,    66,    14
-};
-
-  /* YYPGOTO[NTERM-NUM].  */
+/* YYPGOTO[NTERM-NUM].  */
 static const yytype_int16 yypgoto[] =
 {
     -135,  -135,  -135,  -135,  -135,    58,  -135,  -135,  -135,  -135,
       -7,  -135,    -6,  -135,  -135,  -134,     1,    -1,   -48,  -135
 };
 
-  /* YYDEFGOTO[NTERM-NUM].  */
-static const yytype_int16 yydefgoto[] =
-{
-      -1,     1,    46,    47,   112,    48,    49,   115,   116,    50,
-      63,   126,    64,   168,    51,   151,   157,   152,    53,    54
-};
-
-  /* YYTABLE[YYPACT[STATE-NUM]] -- What to do in state STATE-NUM.  If
-     positive, shift that token.  If negative, reduce the rule whose
-     number is the opposite.  If YYTABLE_NINF, syntax error.  */
+/* YYTABLE[YYPACT[STATE-NUM]].  What to do in state STATE-NUM.  If
+   positive, shift that token.  If negative, reduce the rule which
+   number is the opposite.  If zero, do what YYDEFACT says.
+   If YYTABLE_NINF, syntax error.  */
+#define YYTABLE_NINF -1
 static const yytype_uint8 yytable[] =
 {
       52,    79,    80,    55,    84,    56,    57,   166,    56,    57,
@@ -907,8 +997,8 @@ static const yytype_int16 yycheck[] =
       43,    44,    45,    46,    47,    48,    49,    50
 };
 
-  /* YYSTOS[STATE-NUM] -- The (internal number of the) accessing
-     symbol of state STATE-NUM.  */
+/* YYSTOS[STATE-NUM] -- The (internal number of the) accessing
+   symbol of state STATE-NUM.  */
 static const yytype_uint8 yystos[] =
 {
        0,    65,     0,     3,     4,     5,    21,    22,    24,    25,
@@ -931,101 +1021,95 @@ static const yytype_uint8 yystos[] =
       26,    26,    26,    79,    53,    56,    26,    79,    21,    26
 };
 
-  /* YYR1[YYN] -- Symbol number of symbol that rule YYN derives.  */
-static const yytype_uint8 yyr1[] =
-{
-       0,    64,    65,    65,    66,    66,    66,    66,    67,    67,
-      67,    67,    68,    68,    68,    69,    69,    69,    70,    70,
-      70,    70,    70,    70,    70,    70,    71,    70,    72,    70,
-      70,    70,    70,    70,    73,    73,    73,    74,    74,    75,
-      76,    76,    76,    76,    76,    76,    76,    76,    76,    76,
-      76,    76,    76,    76,    76,    76,    76,    76,    76,    76,
-      76,    76,    76,    76,    76,    77,    77,    78,    78,    79,
-      79,    80,    80,    81,    81,    82,    82,    82,    82,    82,
-      82,    83,    83,    83,    83,    83,    83,    83,    83,    83,
-      83,    83,    83,    83,    83,    83,    83,    83,    83,    83,
-      83,    83,    83,    83,    83,    83,    83,    83,    83,    83,
-      83,    83,    83,    83
-};
+#define yyerrok		(yyerrstatus = 0)
+#define yyclearin	(yychar = YYEMPTY)
+#define YYEMPTY		(-2)
+#define YYEOF		0
 
-  /* YYR2[YYN] -- Number of symbols on the right hand side of rule YYN.  */
-static const yytype_uint8 yyr2[] =
-{
-       0,     2,     0,     2,     1,     2,     1,     1,     3,     3,
-       3,     4,     3,     5,     6,     1,     1,     4,     3,     4,
-       4,     3,     5,     5,     4,     3,     0,     4,     0,     4,
-       4,     5,     2,     3,     3,     3,     4,     1,     1,     1,
-       1,     1,     3,     3,     3,     3,     3,     3,     3,     3,
-       3,     3,     3,     3,     3,     3,     3,     3,     3,     3,
-       2,     2,     2,     2,     3,     1,     3,     1,     2,     0,
-       1,     0,     1,     1,     2,     1,     1,     1,     1,     1,
-       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
-       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
-       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
-       1,     1,     1,     1
-};
+#define YYACCEPT	goto yyacceptlab
+#define YYABORT		goto yyabortlab
+#define YYERROR		goto yyerrorlab
 
 
-#define yyerrok         (yyerrstatus = 0)
-#define yyclearin       (yychar = YYEMPTY)
-#define YYEMPTY         (-2)
-#define YYEOF           0
+/* Like YYERROR except do call yyerror.  This remains here temporarily
+   to ease the transition to the new meaning of YYERROR, for GCC.
+   Once GCC version 2 has supplanted version 1, this can go.  */
 
-#define YYACCEPT        goto yyacceptlab
-#define YYABORT         goto yyabortlab
-#define YYERROR         goto yyerrorlab
-
+#define YYFAIL		goto yyerrlab
 
 #define YYRECOVERING()  (!!yyerrstatus)
 
-#define YYBACKUP(Token, Value)                                  \
-do                                                              \
-  if (yychar == YYEMPTY)                                        \
-    {                                                           \
-      yychar = (Token);                                         \
-      yylval = (Value);                                         \
-      YYPOPSTACK (yylen);                                       \
-      yystate = *yyssp;                                         \
-      goto yybackup;                                            \
-    }                                                           \
-  else                                                          \
-    {                                                           \
+#define YYBACKUP(Token, Value)					\
+do								\
+  if (yychar == YYEMPTY && yylen == 1)				\
+    {								\
+      yychar = (Token);						\
+      yylval = (Value);						\
+      yytoken = YYTRANSLATE (yychar);				\
+      YYPOPSTACK (1);						\
+      goto yybackup;						\
+    }								\
+  else								\
+    {								\
       yyerror (&yylloc, parser, YY_("syntax error: cannot back up")); \
-      YYERROR;                                                  \
-    }                                                           \
-while (0)
+      YYERROR;							\
+    }								\
+while (YYID (0))
 
-/* Error token number */
-#define YYTERROR        1
-#define YYERRCODE       256
+
+#define YYTERROR	1
+#define YYERRCODE	256
 
 
 /* YYLLOC_DEFAULT -- Set CURRENT to span from RHS[1] to RHS[N].
    If N is 0, then set CURRENT to the empty location which ends
    the previous symbol: RHS[0] (always defined).  */
 
+#define YYRHSLOC(Rhs, K) ((Rhs)[K])
 #ifndef YYLLOC_DEFAULT
-# define YYLLOC_DEFAULT(Current, Rhs, N)                                \
-    do                                                                  \
-      if (N)                                                            \
-        {                                                               \
-          (Current).first_line   = YYRHSLOC (Rhs, 1).first_line;        \
-          (Current).first_column = YYRHSLOC (Rhs, 1).first_column;      \
-          (Current).last_line    = YYRHSLOC (Rhs, N).last_line;         \
-          (Current).last_column  = YYRHSLOC (Rhs, N).last_column;       \
-        }                                                               \
-      else                                                              \
-        {                                                               \
-          (Current).first_line   = (Current).last_line   =              \
-            YYRHSLOC (Rhs, 0).last_line;                                \
-          (Current).first_column = (Current).last_column =              \
-            YYRHSLOC (Rhs, 0).last_column;                              \
-        }                                                               \
-    while (0)
+# define YYLLOC_DEFAULT(Current, Rhs, N)				\
+    do									\
+      if (YYID (N))                                                    \
+	{								\
+	  (Current).first_line   = YYRHSLOC (Rhs, 1).first_line;	\
+	  (Current).first_column = YYRHSLOC (Rhs, 1).first_column;	\
+	  (Current).last_line    = YYRHSLOC (Rhs, N).last_line;		\
+	  (Current).last_column  = YYRHSLOC (Rhs, N).last_column;	\
+	}								\
+      else								\
+	{								\
+	  (Current).first_line   = (Current).last_line   =		\
+	    YYRHSLOC (Rhs, 0).last_line;				\
+	  (Current).first_column = (Current).last_column =		\
+	    YYRHSLOC (Rhs, 0).last_column;				\
+	}								\
+    while (YYID (0))
 #endif
 
-#define YYRHSLOC(Rhs, K) ((Rhs)[K])
 
+/* YY_LOCATION_PRINT -- Print the location on the stream.
+   This macro was not mandated originally: define only if we know
+   we won't break user code: when these are the locations we know.  */
+
+#ifndef YY_LOCATION_PRINT
+# if defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL
+#  define YY_LOCATION_PRINT(File, Loc)			\
+     fprintf (File, "%d.%d-%d.%d",			\
+	      (Loc).first_line, (Loc).first_column,	\
+	      (Loc).last_line,  (Loc).last_column)
+# else
+#  define YY_LOCATION_PRINT(File, Loc) ((void) 0)
+# endif
+#endif
+
+
+/* YYLEX -- calling `yylex' with the right arguments.  */
+
+#ifdef YYLEX_PARAM
+# define YYLEX yylex (&yylval, &yylloc, YYLEX_PARAM)
+#else
+# define YYLEX yylex (&yylval, &yylloc, parser)
+#endif
 
 /* Enable debugging if requested.  */
 #if YYDEBUG
@@ -1035,87 +1119,58 @@ while (0)
 #  define YYFPRINTF fprintf
 # endif
 
-# define YYDPRINTF(Args)                        \
-do {                                            \
-  if (yydebug)                                  \
-    YYFPRINTF Args;                             \
-} while (0)
+# define YYDPRINTF(Args)			\
+do {						\
+  if (yydebug)					\
+    YYFPRINTF Args;				\
+} while (YYID (0))
+
+# define YY_SYMBOL_PRINT(Title, Type, Value, Location)			  \
+do {									  \
+  if (yydebug)								  \
+    {									  \
+      YYFPRINTF (stderr, "%s ", Title);					  \
+      yy_symbol_print (stderr,						  \
+		  Type, Value, Location, parser); \
+      YYFPRINTF (stderr, "\n");						  \
+    }									  \
+} while (YYID (0))
 
 
-/* YY_LOCATION_PRINT -- Print the location on the stream.
-   This macro was not mandated originally: define only if we know
-   we won't break user code: when these are the locations we know.  */
+/*--------------------------------.
+| Print this symbol on YYOUTPUT.  |
+`--------------------------------*/
 
-#ifndef YY_LOCATION_PRINT
-# if defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL
-
-/* Print *YYLOCP on YYO.  Private, do not rely on its existence. */
-
-YY_ATTRIBUTE_UNUSED
-static unsigned
-yy_location_print_ (FILE *yyo, YYLTYPE const * const yylocp)
-{
-  unsigned res = 0;
-  int end_col = 0 != yylocp->last_column ? yylocp->last_column - 1 : 0;
-  if (0 <= yylocp->first_line)
-    {
-      res += YYFPRINTF (yyo, "%d", yylocp->first_line);
-      if (0 <= yylocp->first_column)
-        res += YYFPRINTF (yyo, ".%d", yylocp->first_column);
-    }
-  if (0 <= yylocp->last_line)
-    {
-      if (yylocp->first_line < yylocp->last_line)
-        {
-          res += YYFPRINTF (yyo, "-%d", yylocp->last_line);
-          if (0 <= end_col)
-            res += YYFPRINTF (yyo, ".%d", end_col);
-        }
-      else if (0 <= end_col && yylocp->first_column < end_col)
-        res += YYFPRINTF (yyo, "-%d", end_col);
-    }
-  return res;
- }
-
-#  define YY_LOCATION_PRINT(File, Loc)          \
-  yy_location_print_ (File, &(Loc))
-
-# else
-#  define YY_LOCATION_PRINT(File, Loc) ((void) 0)
-# endif
-#endif
-
-
-# define YY_SYMBOL_PRINT(Title, Type, Value, Location)                    \
-do {                                                                      \
-  if (yydebug)                                                            \
-    {                                                                     \
-      YYFPRINTF (stderr, "%s ", Title);                                   \
-      yy_symbol_print (stderr,                                            \
-                  Type, Value, Location, parser); \
-      YYFPRINTF (stderr, "\n");                                           \
-    }                                                                     \
-} while (0)
-
-
-/*----------------------------------------.
-| Print this symbol's value on YYOUTPUT.  |
-`----------------------------------------*/
-
+/*ARGSUSED*/
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 static void
 yy_symbol_value_print (FILE *yyoutput, int yytype, YYSTYPE const * const yyvaluep, YYLTYPE const * const yylocationp, glcpp_parser_t *parser)
+#else
+static void
+yy_symbol_value_print (yyoutput, yytype, yyvaluep, yylocationp, parser)
+    FILE *yyoutput;
+    int yytype;
+    YYSTYPE const * const yyvaluep;
+    YYLTYPE const * const yylocationp;
+    glcpp_parser_t *parser;
+#endif
 {
-  FILE *yyo = yyoutput;
-  YYUSE (yyo);
-  YYUSE (yylocationp);
-  YYUSE (parser);
   if (!yyvaluep)
     return;
+  YYUSE (yylocationp);
+  YYUSE (parser);
 # ifdef YYPRINT
   if (yytype < YYNTOKENS)
     YYPRINT (yyoutput, yytoknum[yytype], *yyvaluep);
+# else
+  YYUSE (yyoutput);
 # endif
-  YYUSE (yytype);
+  switch (yytype)
+    {
+      default:
+	break;
+    }
 }
 
 
@@ -1123,11 +1178,24 @@ yy_symbol_value_print (FILE *yyoutput, int yytype, YYSTYPE const * const yyvalue
 | Print this symbol on YYOUTPUT.  |
 `--------------------------------*/
 
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 static void
 yy_symbol_print (FILE *yyoutput, int yytype, YYSTYPE const * const yyvaluep, YYLTYPE const * const yylocationp, glcpp_parser_t *parser)
+#else
+static void
+yy_symbol_print (yyoutput, yytype, yyvaluep, yylocationp, parser)
+    FILE *yyoutput;
+    int yytype;
+    YYSTYPE const * const yyvaluep;
+    YYLTYPE const * const yylocationp;
+    glcpp_parser_t *parser;
+#endif
 {
-  YYFPRINTF (yyoutput, "%s %s (",
-             yytype < YYNTOKENS ? "token" : "nterm", yytname[yytype]);
+  if (yytype < YYNTOKENS)
+    YYFPRINTF (yyoutput, "token %s (", yytname[yytype]);
+  else
+    YYFPRINTF (yyoutput, "nterm %s (", yytname[yytype]);
 
   YY_LOCATION_PRINT (yyoutput, *yylocationp);
   YYFPRINTF (yyoutput, ": ");
@@ -1140,54 +1208,68 @@ yy_symbol_print (FILE *yyoutput, int yytype, YYSTYPE const * const yyvaluep, YYL
 | TOP (included).                                                   |
 `------------------------------------------------------------------*/
 
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 static void
-yy_stack_print (yytype_int16 *yybottom, yytype_int16 *yytop)
+yy_stack_print (yytype_int16 *bottom, yytype_int16 *top)
+#else
+static void
+yy_stack_print (bottom, top)
+    yytype_int16 *bottom;
+    yytype_int16 *top;
+#endif
 {
   YYFPRINTF (stderr, "Stack now");
-  for (; yybottom <= yytop; yybottom++)
-    {
-      int yybot = *yybottom;
-      YYFPRINTF (stderr, " %d", yybot);
-    }
+  for (; bottom <= top; ++bottom)
+    YYFPRINTF (stderr, " %d", *bottom);
   YYFPRINTF (stderr, "\n");
 }
 
-# define YY_STACK_PRINT(Bottom, Top)                            \
-do {                                                            \
-  if (yydebug)                                                  \
-    yy_stack_print ((Bottom), (Top));                           \
-} while (0)
+# define YY_STACK_PRINT(Bottom, Top)				\
+do {								\
+  if (yydebug)							\
+    yy_stack_print ((Bottom), (Top));				\
+} while (YYID (0))
 
 
 /*------------------------------------------------.
 | Report that the YYRULE is going to be reduced.  |
 `------------------------------------------------*/
 
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 static void
-yy_reduce_print (yytype_int16 *yyssp, YYSTYPE *yyvsp, YYLTYPE *yylsp, int yyrule, glcpp_parser_t *parser)
+yy_reduce_print (YYSTYPE *yyvsp, YYLTYPE *yylsp, int yyrule, glcpp_parser_t *parser)
+#else
+static void
+yy_reduce_print (yyvsp, yylsp, yyrule, parser)
+    YYSTYPE *yyvsp;
+    YYLTYPE *yylsp;
+    int yyrule;
+    glcpp_parser_t *parser;
+#endif
 {
-  unsigned long int yylno = yyrline[yyrule];
   int yynrhs = yyr2[yyrule];
   int yyi;
+  unsigned long int yylno = yyrline[yyrule];
   YYFPRINTF (stderr, "Reducing stack by rule %d (line %lu):\n",
-             yyrule - 1, yylno);
+	     yyrule - 1, yylno);
   /* The symbols being reduced.  */
   for (yyi = 0; yyi < yynrhs; yyi++)
     {
-      YYFPRINTF (stderr, "   $%d = ", yyi + 1);
-      yy_symbol_print (stderr,
-                       yystos[yyssp[yyi + 1 - yynrhs]],
-                       &(yyvsp[(yyi + 1) - (yynrhs)])
-                       , &(yylsp[(yyi + 1) - (yynrhs)])                       , parser);
-      YYFPRINTF (stderr, "\n");
+      fprintf (stderr, "   $%d = ", yyi + 1);
+      yy_symbol_print (stderr, yyrhs[yyprhs[yyrule] + yyi],
+		       &(yyvsp[(yyi + 1) - (yynrhs)])
+		       , &(yylsp[(yyi + 1) - (yynrhs)])		       , parser);
+      fprintf (stderr, "\n");
     }
 }
 
-# define YY_REDUCE_PRINT(Rule)          \
-do {                                    \
-  if (yydebug)                          \
-    yy_reduce_print (yyssp, yyvsp, yylsp, Rule, parser); \
-} while (0)
+# define YY_REDUCE_PRINT(Rule)		\
+do {					\
+  if (yydebug)				\
+    yy_reduce_print (yyvsp, yylsp, Rule, parser); \
+} while (YYID (0))
 
 /* Nonzero means print parse trace.  It is left uninitialized so that
    multiple parsers can coexist.  */
@@ -1201,7 +1283,7 @@ int yydebug;
 
 
 /* YYINITDEPTH -- initial size of the parser's stacks.  */
-#ifndef YYINITDEPTH
+#ifndef	YYINITDEPTH
 # define YYINITDEPTH 200
 #endif
 
@@ -1216,6 +1298,7 @@ int yydebug;
 # define YYMAXDEPTH 10000
 #endif
 
+
 
 #if YYERROR_VERBOSE
 
@@ -1224,8 +1307,15 @@ int yydebug;
 #   define yystrlen strlen
 #  else
 /* Return the length of YYSTR.  */
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 static YYSIZE_T
 yystrlen (const char *yystr)
+#else
+static YYSIZE_T
+yystrlen (yystr)
+    const char *yystr;
+#endif
 {
   YYSIZE_T yylen;
   for (yylen = 0; yystr[yylen]; yylen++)
@@ -1241,8 +1331,16 @@ yystrlen (const char *yystr)
 #  else
 /* Copy YYSRC to YYDEST, returning the address of the terminating '\0' in
    YYDEST.  */
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 static char *
 yystpcpy (char *yydest, const char *yysrc)
+#else
+static char *
+yystpcpy (yydest, yysrc)
+    char *yydest;
+    const char *yysrc;
+#endif
 {
   char *yyd = yydest;
   const char *yys = yysrc;
@@ -1272,27 +1370,27 @@ yytnamerr (char *yyres, const char *yystr)
       char const *yyp = yystr;
 
       for (;;)
-        switch (*++yyp)
-          {
-          case '\'':
-          case ',':
-            goto do_not_strip_quotes;
+	switch (*++yyp)
+	  {
+	  case '\'':
+	  case ',':
+	    goto do_not_strip_quotes;
 
-          case '\\':
-            if (*++yyp != '\\')
-              goto do_not_strip_quotes;
-            /* Fall through.  */
-          default:
-            if (yyres)
-              yyres[yyn] = *yyp;
-            yyn++;
-            break;
+	  case '\\':
+	    if (*++yyp != '\\')
+	      goto do_not_strip_quotes;
+	    /* Fall through.  */
+	  default:
+	    if (yyres)
+	      yyres[yyn] = *yyp;
+	    yyn++;
+	    break;
 
-          case '"':
-            if (yyres)
-              yyres[yyn] = '\0';
-            return yyn;
-          }
+	  case '"':
+	    if (yyres)
+	      yyres[yyn] = '\0';
+	    return yyn;
+	  }
     do_not_strip_quotes: ;
     }
 
@@ -1303,160 +1401,169 @@ yytnamerr (char *yyres, const char *yystr)
 }
 # endif
 
-/* Copy into *YYMSG, which is of size *YYMSG_ALLOC, an error message
-   about the unexpected token YYTOKEN for the state stack whose top is
-   YYSSP.
-
-   Return 0 if *YYMSG was successfully written.  Return 1 if *YYMSG is
-   not large enough to hold the message.  In that case, also set
-   *YYMSG_ALLOC to the required number of bytes.  Return 2 if the
-   required number of bytes is too large to store.  */
-static int
-yysyntax_error (YYSIZE_T *yymsg_alloc, char **yymsg,
-                yytype_int16 *yyssp, int yytoken)
+/* Copy into YYRESULT an error message about the unexpected token
+   YYCHAR while in state YYSTATE.  Return the number of bytes copied,
+   including the terminating null byte.  If YYRESULT is null, do not
+   copy anything; just return the number of bytes that would be
+   copied.  As a special case, return 0 if an ordinary "syntax error"
+   message will do.  Return YYSIZE_MAXIMUM if overflow occurs during
+   size calculation.  */
+static YYSIZE_T
+yysyntax_error (char *yyresult, int yystate, int yychar)
 {
-  YYSIZE_T yysize0 = yytnamerr (YY_NULLPTR, yytname[yytoken]);
-  YYSIZE_T yysize = yysize0;
-  enum { YYERROR_VERBOSE_ARGS_MAXIMUM = 5 };
-  /* Internationalized format string. */
-  const char *yyformat = YY_NULLPTR;
-  /* Arguments of yyformat. */
-  char const *yyarg[YYERROR_VERBOSE_ARGS_MAXIMUM];
-  /* Number of reported tokens (one for the "unexpected", one per
-     "expected"). */
-  int yycount = 0;
+  int yyn = yypact[yystate];
 
-  /* There are many possibilities here to consider:
-     - If this state is a consistent state with a default action, then
-       the only way this function was invoked is if the default action
-       is an error action.  In that case, don't check for expected
-       tokens because there are none.
-     - The only way there can be no lookahead present (in yychar) is if
-       this state is a consistent state with a default action.  Thus,
-       detecting the absence of a lookahead is sufficient to determine
-       that there is no unexpected or expected token to report.  In that
-       case, just report a simple "syntax error".
-     - Don't assume there isn't a lookahead just because this state is a
-       consistent state with a default action.  There might have been a
-       previous inconsistent state, consistent state with a non-default
-       action, or user semantic action that manipulated yychar.
-     - Of course, the expected token list depends on states to have
-       correct lookahead information, and it depends on the parser not
-       to perform extra reductions after fetching a lookahead from the
-       scanner and before detecting a syntax error.  Thus, state merging
-       (from LALR or IELR) and default reductions corrupt the expected
-       token list.  However, the list is correct for canonical LR with
-       one exception: it will still contain any token that will not be
-       accepted due to an error action in a later state.
-  */
-  if (yytoken != YYEMPTY)
+  if (! (YYPACT_NINF < yyn && yyn <= YYLAST))
+    return 0;
+  else
     {
-      int yyn = yypact[*yyssp];
-      yyarg[yycount++] = yytname[yytoken];
-      if (!yypact_value_is_default (yyn))
-        {
-          /* Start YYX at -YYN if negative to avoid negative indexes in
-             YYCHECK.  In other words, skip the first -YYN actions for
-             this state because they are default actions.  */
-          int yyxbegin = yyn < 0 ? -yyn : 0;
-          /* Stay within bounds of both yycheck and yytname.  */
-          int yychecklim = YYLAST - yyn + 1;
-          int yyxend = yychecklim < YYNTOKENS ? yychecklim : YYNTOKENS;
-          int yyx;
+      int yytype = YYTRANSLATE (yychar);
+      YYSIZE_T yysize0 = yytnamerr (0, yytname[yytype]);
+      YYSIZE_T yysize = yysize0;
+      YYSIZE_T yysize1;
+      int yysize_overflow = 0;
+      enum { YYERROR_VERBOSE_ARGS_MAXIMUM = 5 };
+      char const *yyarg[YYERROR_VERBOSE_ARGS_MAXIMUM];
+      int yyx;
 
-          for (yyx = yyxbegin; yyx < yyxend; ++yyx)
-            if (yycheck[yyx + yyn] == yyx && yyx != YYTERROR
-                && !yytable_value_is_error (yytable[yyx + yyn]))
-              {
-                if (yycount == YYERROR_VERBOSE_ARGS_MAXIMUM)
-                  {
-                    yycount = 1;
-                    yysize = yysize0;
-                    break;
-                  }
-                yyarg[yycount++] = yytname[yyx];
-                {
-                  YYSIZE_T yysize1 = yysize + yytnamerr (YY_NULLPTR, yytname[yyx]);
-                  if (! (yysize <= yysize1
-                         && yysize1 <= YYSTACK_ALLOC_MAXIMUM))
-                    return 2;
-                  yysize = yysize1;
-                }
-              }
-        }
+# if 0
+      /* This is so xgettext sees the translatable formats that are
+	 constructed on the fly.  */
+      YY_("syntax error, unexpected %s");
+      YY_("syntax error, unexpected %s, expecting %s");
+      YY_("syntax error, unexpected %s, expecting %s or %s");
+      YY_("syntax error, unexpected %s, expecting %s or %s or %s");
+      YY_("syntax error, unexpected %s, expecting %s or %s or %s or %s");
+# endif
+      char *yyfmt;
+      char const *yyf;
+      static char const yyunexpected[] = "syntax error, unexpected %s";
+      static char const yyexpecting[] = ", expecting %s";
+      static char const yyor[] = " or %s";
+      char yyformat[sizeof yyunexpected
+		    + sizeof yyexpecting - 1
+		    + ((YYERROR_VERBOSE_ARGS_MAXIMUM - 2)
+		       * (sizeof yyor - 1))];
+      char const *yyprefix = yyexpecting;
+
+      /* Start YYX at -YYN if negative to avoid negative indexes in
+	 YYCHECK.  */
+      int yyxbegin = yyn < 0 ? -yyn : 0;
+
+      /* Stay within bounds of both yycheck and yytname.  */
+      int yychecklim = YYLAST - yyn + 1;
+      int yyxend = yychecklim < YYNTOKENS ? yychecklim : YYNTOKENS;
+      int yycount = 1;
+
+      yyarg[0] = yytname[yytype];
+      yyfmt = yystpcpy (yyformat, yyunexpected);
+
+      for (yyx = yyxbegin; yyx < yyxend; ++yyx)
+	if (yycheck[yyx + yyn] == yyx && yyx != YYTERROR)
+	  {
+	    if (yycount == YYERROR_VERBOSE_ARGS_MAXIMUM)
+	      {
+		yycount = 1;
+		yysize = yysize0;
+		yyformat[sizeof yyunexpected - 1] = '\0';
+		break;
+	      }
+	    yyarg[yycount++] = yytname[yyx];
+	    yysize1 = yysize + yytnamerr (0, yytname[yyx]);
+	    yysize_overflow |= (yysize1 < yysize);
+	    yysize = yysize1;
+	    yyfmt = yystpcpy (yyfmt, yyprefix);
+	    yyprefix = yyor;
+	  }
+
+      yyf = YY_(yyformat);
+      yysize1 = yysize + yystrlen (yyf);
+      yysize_overflow |= (yysize1 < yysize);
+      yysize = yysize1;
+
+      if (yysize_overflow)
+	return YYSIZE_MAXIMUM;
+
+      if (yyresult)
+	{
+	  /* Avoid sprintf, as that infringes on the user's name space.
+	     Don't have undefined behavior even if the translation
+	     produced a string with the wrong number of "%s"s.  */
+	  char *yyp = yyresult;
+	  int yyi = 0;
+	  while ((*yyp = *yyf) != '\0')
+	    {
+	      if (*yyp == '%' && yyf[1] == 's' && yyi < yycount)
+		{
+		  yyp += yytnamerr (yyp, yyarg[yyi++]);
+		  yyf += 2;
+		}
+	      else
+		{
+		  yyp++;
+		  yyf++;
+		}
+	    }
+	}
+      return yysize;
     }
-
-  switch (yycount)
-    {
-# define YYCASE_(N, S)                      \
-      case N:                               \
-        yyformat = S;                       \
-      break
-      YYCASE_(0, YY_("syntax error"));
-      YYCASE_(1, YY_("syntax error, unexpected %s"));
-      YYCASE_(2, YY_("syntax error, unexpected %s, expecting %s"));
-      YYCASE_(3, YY_("syntax error, unexpected %s, expecting %s or %s"));
-      YYCASE_(4, YY_("syntax error, unexpected %s, expecting %s or %s or %s"));
-      YYCASE_(5, YY_("syntax error, unexpected %s, expecting %s or %s or %s or %s"));
-# undef YYCASE_
-    }
-
-  {
-    YYSIZE_T yysize1 = yysize + yystrlen (yyformat);
-    if (! (yysize <= yysize1 && yysize1 <= YYSTACK_ALLOC_MAXIMUM))
-      return 2;
-    yysize = yysize1;
-  }
-
-  if (*yymsg_alloc < yysize)
-    {
-      *yymsg_alloc = 2 * yysize;
-      if (! (yysize <= *yymsg_alloc
-             && *yymsg_alloc <= YYSTACK_ALLOC_MAXIMUM))
-        *yymsg_alloc = YYSTACK_ALLOC_MAXIMUM;
-      return 1;
-    }
-
-  /* Avoid sprintf, as that infringes on the user's name space.
-     Don't have undefined behavior even if the translation
-     produced a string with the wrong number of "%s"s.  */
-  {
-    char *yyp = *yymsg;
-    int yyi = 0;
-    while ((*yyp = *yyformat) != '\0')
-      if (*yyp == '%' && yyformat[1] == 's' && yyi < yycount)
-        {
-          yyp += yytnamerr (yyp, yyarg[yyi++]);
-          yyformat += 2;
-        }
-      else
-        {
-          yyp++;
-          yyformat++;
-        }
-  }
-  return 0;
 }
 #endif /* YYERROR_VERBOSE */
+
 
 /*-----------------------------------------------.
 | Release the memory associated to this symbol.  |
 `-----------------------------------------------*/
 
+/*ARGSUSED*/
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 static void
 yydestruct (const char *yymsg, int yytype, YYSTYPE *yyvaluep, YYLTYPE *yylocationp, glcpp_parser_t *parser)
+#else
+static void
+yydestruct (yymsg, yytype, yyvaluep, yylocationp, parser)
+    const char *yymsg;
+    int yytype;
+    YYSTYPE *yyvaluep;
+    YYLTYPE *yylocationp;
+    glcpp_parser_t *parser;
+#endif
 {
   YYUSE (yyvaluep);
   YYUSE (yylocationp);
   YYUSE (parser);
+
   if (!yymsg)
     yymsg = "Deleting";
   YY_SYMBOL_PRINT (yymsg, yytype, yyvaluep, yylocationp);
 
-  YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
-  YYUSE (yytype);
-  YY_IGNORE_MAYBE_UNINITIALIZED_END
+  switch (yytype)
+    {
+
+      default:
+	break;
+    }
 }
+
+
+/* Prevent warnings from -Wmissing-prototypes.  */
+
+#ifdef YYPARSE_PARAM
+#if defined __STDC__ || defined __cplusplus
+int yyparse (void *YYPARSE_PARAM);
+#else
+int yyparse ();
+#endif
+#else /* ! YYPARSE_PARAM */
+#if defined __STDC__ || defined __cplusplus
+int yyparse (glcpp_parser_t *parser);
+#else
+int yyparse ();
+#endif
+#endif /* ! YYPARSE_PARAM */
+
+
 
 
 
@@ -1465,71 +1572,46 @@ yydestruct (const char *yymsg, int yytype, YYSTYPE *yyvaluep, YYLTYPE *yylocatio
 | yyparse.  |
 `----------*/
 
+#ifdef YYPARSE_PARAM
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
+int
+yyparse (void *YYPARSE_PARAM)
+#else
+int
+yyparse (YYPARSE_PARAM)
+    void *YYPARSE_PARAM;
+#endif
+#else /* ! YYPARSE_PARAM */
+#if (defined __STDC__ || defined __C99__FUNC__ \
+     || defined __cplusplus || defined _MSC_VER)
 int
 yyparse (glcpp_parser_t *parser)
+#else
+int
+yyparse (parser)
+    glcpp_parser_t *parser;
+#endif
+#endif
 {
-/* The lookahead symbol.  */
+  /* The look-ahead symbol.  */
 int yychar;
 
+/* The semantic value of the look-ahead symbol.  */
+YYSTYPE yylval;
 
-/* The semantic value of the lookahead symbol.  */
-/* Default value used for initialization, for pacifying older GCCs
-   or non-GCC compilers.  */
-YY_INITIAL_VALUE (static YYSTYPE yyval_default;)
-YYSTYPE yylval YY_INITIAL_VALUE (= yyval_default);
+/* Number of syntax errors so far.  */
+int yynerrs;
+/* Location data for the look-ahead symbol.  */
+YYLTYPE yylloc;
 
-/* Location data for the lookahead symbol.  */
-static YYLTYPE yyloc_default
-# if defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL
-  = { 1, 1, 1, 1 }
-# endif
-;
-YYLTYPE yylloc = yyloc_default;
-
-    /* Number of syntax errors so far.  */
-    int yynerrs;
-
-    int yystate;
-    /* Number of tokens to shift before error messages enabled.  */
-    int yyerrstatus;
-
-    /* The stacks and their tools:
-       'yyss': related to states.
-       'yyvs': related to semantic values.
-       'yyls': related to locations.
-
-       Refer to the stacks through separate pointers, to allow yyoverflow
-       to reallocate them elsewhere.  */
-
-    /* The state stack.  */
-    yytype_int16 yyssa[YYINITDEPTH];
-    yytype_int16 *yyss;
-    yytype_int16 *yyssp;
-
-    /* The semantic value stack.  */
-    YYSTYPE yyvsa[YYINITDEPTH];
-    YYSTYPE *yyvs;
-    YYSTYPE *yyvsp;
-
-    /* The location stack.  */
-    YYLTYPE yylsa[YYINITDEPTH];
-    YYLTYPE *yyls;
-    YYLTYPE *yylsp;
-
-    /* The locations where the error started and ended.  */
-    YYLTYPE yyerror_range[3];
-
-    YYSIZE_T yystacksize;
-
+  int yystate;
   int yyn;
   int yyresult;
-  /* Lookahead token as an internal (translated) token number.  */
+  /* Number of tokens to shift before error messages enabled.  */
+  int yyerrstatus;
+  /* Look-ahead token as an internal (translated) token number.  */
   int yytoken = 0;
-  /* The variables used to return semantic value and location from the
-     action routines.  */
-  YYSTYPE yyval;
-  YYLTYPE yyloc;
-
 #if YYERROR_VERBOSE
   /* Buffer for error messages, and its allocated size.  */
   char yymsgbuf[128];
@@ -1537,26 +1619,68 @@ YYLTYPE yylloc = yyloc_default;
   YYSIZE_T yymsg_alloc = sizeof yymsgbuf;
 #endif
 
+  /* Three stacks and their tools:
+     `yyss': related to states,
+     `yyvs': related to semantic values,
+     `yyls': related to locations.
+
+     Refer to the stacks thru separate pointers, to allow yyoverflow
+     to reallocate them elsewhere.  */
+
+  /* The state stack.  */
+  yytype_int16 yyssa[YYINITDEPTH];
+  yytype_int16 *yyss = yyssa;
+  yytype_int16 *yyssp;
+
+  /* The semantic value stack.  */
+  YYSTYPE yyvsa[YYINITDEPTH];
+  YYSTYPE *yyvs = yyvsa;
+  YYSTYPE *yyvsp;
+
+  /* The location stack.  */
+  YYLTYPE yylsa[YYINITDEPTH];
+  YYLTYPE *yyls = yylsa;
+  YYLTYPE *yylsp;
+  /* The locations where the error started and ended.  */
+  YYLTYPE yyerror_range[2];
+
 #define YYPOPSTACK(N)   (yyvsp -= (N), yyssp -= (N), yylsp -= (N))
+
+  YYSIZE_T yystacksize = YYINITDEPTH;
+
+  /* The variables used to return semantic value and location from the
+     action routines.  */
+  YYSTYPE yyval;
+  YYLTYPE yyloc;
 
   /* The number of symbols on the RHS of the reduced rule.
      Keep to zero when no symbol should be popped.  */
   int yylen = 0;
-
-  yyssp = yyss = yyssa;
-  yyvsp = yyvs = yyvsa;
-  yylsp = yyls = yylsa;
-  yystacksize = YYINITDEPTH;
 
   YYDPRINTF ((stderr, "Starting parse\n"));
 
   yystate = 0;
   yyerrstatus = 0;
   yynerrs = 0;
-  yychar = YYEMPTY; /* Cause a token to be read.  */
+  yychar = YYEMPTY;		/* Cause a token to be read.  */
 
-/* User initialization code.  */
-#line 162 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1429  */
+  /* Initialize stack pointers.
+     Waste one element of value and location stack
+     so that they stay on the same level as the state stack.
+     The wasted elements are never initialized.  */
+
+  yyssp = yyss;
+  yyvsp = yyvs;
+  yylsp = yyls;
+#if defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL
+  /* Initialize the default location before parsing starts.  */
+  yylloc.first_line   = yylloc.last_line   = 1;
+  yylloc.first_column = yylloc.last_column = 0;
+#endif
+
+
+  /* User initialization code.  */
+#line 161 "./glsl/glcpp/glcpp-parse.y"
 {
    yylloc.first_line = 1;
    yylloc.first_column = 1;
@@ -1564,8 +1688,8 @@ YYLTYPE yylloc = yyloc_default;
    yylloc.last_column = 1;
    yylloc.source = 0;
 }
-
-#line 1569 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1429  */
+/* Line 1078 of yacc.c.  */
+#line 1693 "glsl/glcpp/glcpp-parse.c"
   yylsp[0] = yylloc;
   goto yysetstate;
 
@@ -1587,26 +1711,25 @@ YYLTYPE yylloc = yyloc_default;
 
 #ifdef yyoverflow
       {
-        /* Give user a chance to reallocate the stack.  Use copies of
-           these so that the &'s don't force the real ones into
-           memory.  */
-        YYSTYPE *yyvs1 = yyvs;
-        yytype_int16 *yyss1 = yyss;
-        YYLTYPE *yyls1 = yyls;
+	/* Give user a chance to reallocate the stack.  Use copies of
+	   these so that the &'s don't force the real ones into
+	   memory.  */
+	YYSTYPE *yyvs1 = yyvs;
+	yytype_int16 *yyss1 = yyss;
+	YYLTYPE *yyls1 = yyls;
 
-        /* Each stack pointer address is followed by the size of the
-           data in use in that stack, in bytes.  This used to be a
-           conditional around just the two extra args, but that might
-           be undefined if yyoverflow is a macro.  */
-        yyoverflow (YY_("memory exhausted"),
-                    &yyss1, yysize * sizeof (*yyssp),
-                    &yyvs1, yysize * sizeof (*yyvsp),
-                    &yyls1, yysize * sizeof (*yylsp),
-                    &yystacksize);
-
-        yyls = yyls1;
-        yyss = yyss1;
-        yyvs = yyvs1;
+	/* Each stack pointer address is followed by the size of the
+	   data in use in that stack, in bytes.  This used to be a
+	   conditional around just the two extra args, but that might
+	   be undefined if yyoverflow is a macro.  */
+	yyoverflow (YY_("memory exhausted"),
+		    &yyss1, yysize * sizeof (*yyssp),
+		    &yyvs1, yysize * sizeof (*yyvsp),
+		    &yyls1, yysize * sizeof (*yylsp),
+		    &yystacksize);
+	yyls = yyls1;
+	yyss = yyss1;
+	yyvs = yyvs1;
       }
 #else /* no yyoverflow */
 # ifndef YYSTACK_RELOCATE
@@ -1614,23 +1737,23 @@ YYLTYPE yylloc = yyloc_default;
 # else
       /* Extend the stack our own way.  */
       if (YYMAXDEPTH <= yystacksize)
-        goto yyexhaustedlab;
+	goto yyexhaustedlab;
       yystacksize *= 2;
       if (YYMAXDEPTH < yystacksize)
-        yystacksize = YYMAXDEPTH;
+	yystacksize = YYMAXDEPTH;
 
       {
-        yytype_int16 *yyss1 = yyss;
-        union yyalloc *yyptr =
-          (union yyalloc *) YYSTACK_ALLOC (YYSTACK_BYTES (yystacksize));
-        if (! yyptr)
-          goto yyexhaustedlab;
-        YYSTACK_RELOCATE (yyss_alloc, yyss);
-        YYSTACK_RELOCATE (yyvs_alloc, yyvs);
-        YYSTACK_RELOCATE (yyls_alloc, yyls);
+	yytype_int16 *yyss1 = yyss;
+	union yyalloc *yyptr =
+	  (union yyalloc *) YYSTACK_ALLOC (YYSTACK_BYTES (yystacksize));
+	if (! yyptr)
+	  goto yyexhaustedlab;
+	YYSTACK_RELOCATE (yyss);
+	YYSTACK_RELOCATE (yyvs);
+	YYSTACK_RELOCATE (yyls);
 #  undef YYSTACK_RELOCATE
-        if (yyss1 != yyssa)
-          YYSTACK_FREE (yyss1);
+	if (yyss1 != yyssa)
+	  YYSTACK_FREE (yyss1);
       }
 # endif
 #endif /* no yyoverflow */
@@ -1640,16 +1763,13 @@ YYLTYPE yylloc = yyloc_default;
       yylsp = yyls + yysize - 1;
 
       YYDPRINTF ((stderr, "Stack size increased to %lu\n",
-                  (unsigned long int) yystacksize));
+		  (unsigned long int) yystacksize));
 
       if (yyss + yystacksize - 1 <= yyssp)
-        YYABORT;
+	YYABORT;
     }
 
   YYDPRINTF ((stderr, "Entering state %d\n", yystate));
-
-  if (yystate == YYFINAL)
-    YYACCEPT;
 
   goto yybackup;
 
@@ -1659,20 +1779,20 @@ YYLTYPE yylloc = yyloc_default;
 yybackup:
 
   /* Do appropriate processing given the current state.  Read a
-     lookahead token if we need one and don't already have one.  */
+     look-ahead token if we need one and don't already have one.  */
 
-  /* First try to decide what to do without reference to lookahead token.  */
+  /* First try to decide what to do without reference to look-ahead token.  */
   yyn = yypact[yystate];
-  if (yypact_value_is_default (yyn))
+  if (yyn == YYPACT_NINF)
     goto yydefault;
 
-  /* Not known => get a lookahead token if don't already have one.  */
+  /* Not known => get a look-ahead token if don't already have one.  */
 
-  /* YYCHAR is either YYEMPTY or YYEOF or a valid lookahead symbol.  */
+  /* YYCHAR is either YYEMPTY or YYEOF or a valid look-ahead symbol.  */
   if (yychar == YYEMPTY)
     {
       YYDPRINTF ((stderr, "Reading a token: "));
-      yychar = yylex (&yylval, &yylloc, parser);
+      yychar = YYLEX;
     }
 
   if (yychar <= YYEOF)
@@ -1694,27 +1814,29 @@ yybackup:
   yyn = yytable[yyn];
   if (yyn <= 0)
     {
-      if (yytable_value_is_error (yyn))
-        goto yyerrlab;
+      if (yyn == 0 || yyn == YYTABLE_NINF)
+	goto yyerrlab;
       yyn = -yyn;
       goto yyreduce;
     }
+
+  if (yyn == YYFINAL)
+    YYACCEPT;
 
   /* Count tokens shifted since error; after three, turn off error
      status.  */
   if (yyerrstatus)
     yyerrstatus--;
 
-  /* Shift the lookahead token.  */
+  /* Shift the look-ahead token.  */
   YY_SYMBOL_PRINT ("Shifting", yytoken, &yylval, &yylloc);
 
-  /* Discard the shifted token.  */
-  yychar = YYEMPTY;
+  /* Discard the shifted token unless it is eof.  */
+  if (yychar != YYEOF)
+    yychar = YYEMPTY;
 
   yystate = yyn;
-  YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
   *++yyvsp = yylval;
-  YY_IGNORE_MAYBE_UNINITIALIZED_END
   *++yylsp = yylloc;
   goto yynewstate;
 
@@ -1737,7 +1859,7 @@ yyreduce:
   yylen = yyr2[yyn];
 
   /* If YYLEN is nonzero, implement the default value of the action:
-     '$$ = $1'.
+     `$$ = $1'.
 
      Otherwise, the following line sets YYVAL to garbage.
      This behavior is undocumented and Bison
@@ -1752,107 +1874,97 @@ yyreduce:
   switch (yyn)
     {
         case 6:
-#line 210 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 209 "./glsl/glcpp/glcpp-parse.y"
     {
-		_glcpp_parser_print_expanded_token_list (parser, (yyvsp[0].token_list));
+		_glcpp_parser_print_expanded_token_list (parser, (yyvsp[(1) - (1)].token_list));
 		_mesa_string_buffer_append_char(parser->output, '\n');
-	}
-#line 1761 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 8:
-#line 218 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 217 "./glsl/glcpp/glcpp-parse.y"
     {
-		if (parser->is_gles && (yyvsp[-1].expression_value).undefined_macro)
-			glcpp_error(& (yylsp[-2]), parser, "undefined macro %s in expression (illegal in GLES)", (yyvsp[-1].expression_value).undefined_macro);
-		_glcpp_parser_skip_stack_push_if (parser, & (yylsp[-2]), (yyvsp[-1].expression_value).value);
-	}
-#line 1771 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		if (parser->is_gles && (yyvsp[(2) - (3)].expression_value).undefined_macro)
+			glcpp_error(& (yylsp[(1) - (3)]), parser, "undefined macro %s in expression (illegal in GLES)", (yyvsp[(2) - (3)].expression_value).undefined_macro);
+		_glcpp_parser_skip_stack_push_if (parser, & (yylsp[(1) - (3)]), (yyvsp[(2) - (3)].expression_value).value);
+	;}
     break;
 
   case 9:
-#line 223 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 222 "./glsl/glcpp/glcpp-parse.y"
     {
-		if (parser->is_gles && (yyvsp[-1].expression_value).undefined_macro)
-			glcpp_error(& (yylsp[-2]), parser, "undefined macro %s in expression (illegal in GLES)", (yyvsp[-1].expression_value).undefined_macro);
-		_glcpp_parser_skip_stack_change_if (parser, & (yylsp[-2]), "elif", (yyvsp[-1].expression_value).value);
-	}
-#line 1781 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		if (parser->is_gles && (yyvsp[(2) - (3)].expression_value).undefined_macro)
+			glcpp_error(& (yylsp[(1) - (3)]), parser, "undefined macro %s in expression (illegal in GLES)", (yyvsp[(2) - (3)].expression_value).undefined_macro);
+		_glcpp_parser_skip_stack_change_if (parser, & (yylsp[(1) - (3)]), "elif", (yyvsp[(2) - (3)].expression_value).value);
+	;}
     break;
 
   case 10:
-#line 228 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 227 "./glsl/glcpp/glcpp-parse.y"
     {
 		parser->has_new_line_number = 1;
-		parser->new_line_number = (yyvsp[-1].ival);
-		_mesa_string_buffer_printf(parser->output, "#line %" PRIiMAX "\n", (yyvsp[-1].ival));
-	}
-#line 1791 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		parser->new_line_number = (yyvsp[(2) - (3)].ival);
+		_mesa_string_buffer_printf(parser->output, "#line %" PRIiMAX "\n", (yyvsp[(2) - (3)].ival));
+	;}
     break;
 
   case 11:
-#line 233 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 232 "./glsl/glcpp/glcpp-parse.y"
     {
 		parser->has_new_line_number = 1;
-		parser->new_line_number = (yyvsp[-2].ival);
+		parser->new_line_number = (yyvsp[(2) - (4)].ival);
 		parser->has_new_source_number = 1;
-		parser->new_source_number = (yyvsp[-1].ival);
+		parser->new_source_number = (yyvsp[(3) - (4)].ival);
 		_mesa_string_buffer_printf(parser->output,
 					   "#line %" PRIiMAX " %" PRIiMAX "\n",
-					    (yyvsp[-2].ival), (yyvsp[-1].ival));
-	}
-#line 1805 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+					    (yyvsp[(2) - (4)].ival), (yyvsp[(3) - (4)].ival));
+	;}
     break;
 
   case 12:
-#line 245 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 244 "./glsl/glcpp/glcpp-parse.y"
     {
-		_define_object_macro (parser, & (yylsp[-2]), (yyvsp[-2].str), (yyvsp[-1].token_list));
-	}
-#line 1813 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_define_object_macro (parser, & (yylsp[(1) - (3)]), (yyvsp[(1) - (3)].str), (yyvsp[(2) - (3)].token_list));
+	;}
     break;
 
   case 13:
-#line 248 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 247 "./glsl/glcpp/glcpp-parse.y"
     {
-		_define_function_macro (parser, & (yylsp[-4]), (yyvsp[-4].str), NULL, (yyvsp[-1].token_list));
-	}
-#line 1821 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_define_function_macro (parser, & (yylsp[(1) - (5)]), (yyvsp[(1) - (5)].str), NULL, (yyvsp[(4) - (5)].token_list));
+	;}
     break;
 
   case 14:
-#line 251 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 250 "./glsl/glcpp/glcpp-parse.y"
     {
-		_define_function_macro (parser, & (yylsp[-5]), (yyvsp[-5].str), (yyvsp[-3].string_list), (yyvsp[-1].token_list));
-	}
-#line 1829 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_define_function_macro (parser, & (yylsp[(1) - (6)]), (yyvsp[(1) - (6)].str), (yyvsp[(3) - (6)].string_list), (yyvsp[(5) - (6)].token_list));
+	;}
     break;
 
   case 15:
-#line 257 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 256 "./glsl/glcpp/glcpp-parse.y"
     {
 		_mesa_string_buffer_append_char(parser->output, '\n');
-	}
-#line 1837 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 17:
-#line 261 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 260 "./glsl/glcpp/glcpp-parse.y"
     {
 
 		if (parser->skip_stack == NULL ||
 		    parser->skip_stack->type == SKIP_NO_SKIP)
 		{
 			_glcpp_parser_expand_and_lex_from (parser,
-							   LINE_EXPANDED, (yyvsp[-1].token_list),
+							   LINE_EXPANDED, (yyvsp[(3) - (4)].token_list),
 							   EXPANSION_MODE_IGNORE_DEFINED);
 		}
-	}
-#line 1852 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 19:
-#line 275 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 274 "./glsl/glcpp/glcpp-parse.y"
     {
 		struct hash_entry *entry;
 
@@ -1878,38 +1990,37 @@ yyreduce:
                  *
                  * The code below implements the same checks as GLSLang.
                  */
-		if (strncmp("GL_", (yyvsp[-1].str), 3) == 0)
-			glcpp_error(& (yylsp[-3]), parser, "Built-in (pre-defined)"
+		if (strncmp("GL_", (yyvsp[(3) - (4)].str), 3) == 0)
+			glcpp_error(& (yylsp[(1) - (4)]), parser, "Built-in (pre-defined)"
 				    " names beginning with GL_ cannot be undefined.");
-		else if (strstr((yyvsp[-1].str), "__") != NULL) {
+		else if (strstr((yyvsp[(3) - (4)].str), "__") != NULL) {
 			if (parser->is_gles
 			    && parser->version >= 300
-			    && (strcmp("__LINE__", (yyvsp[-1].str)) == 0
-				|| strcmp("__FILE__", (yyvsp[-1].str)) == 0
-				|| strcmp("__VERSION__", (yyvsp[-1].str)) == 0)) {
-				glcpp_error(& (yylsp[-3]), parser, "Built-in (pre-defined)"
+			    && (strcmp("__LINE__", (yyvsp[(3) - (4)].str)) == 0
+				|| strcmp("__FILE__", (yyvsp[(3) - (4)].str)) == 0
+				|| strcmp("__VERSION__", (yyvsp[(3) - (4)].str)) == 0)) {
+				glcpp_error(& (yylsp[(1) - (4)]), parser, "Built-in (pre-defined)"
 					    " names cannot be undefined.");
 			} else if (parser->is_gles && parser->version <= 300) {
-				glcpp_error(& (yylsp[-3]), parser,
+				glcpp_error(& (yylsp[(1) - (4)]), parser,
 					    " names containing consecutive underscores"
 					    " are reserved.");
 			} else {
-				glcpp_warning(& (yylsp[-3]), parser,
+				glcpp_warning(& (yylsp[(1) - (4)]), parser,
 					      " names containing consecutive underscores"
 					      " are reserved.");
 			}
 		}
 
-		entry = _mesa_hash_table_search (parser->defines, (yyvsp[-1].str));
+		entry = _mesa_hash_table_search (parser->defines, (yyvsp[(3) - (4)].str));
 		if (entry) {
 			_mesa_hash_table_remove (parser->defines, entry);
 		}
-	}
-#line 1909 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 20:
-#line 327 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 326 "./glsl/glcpp/glcpp-parse.y"
     {
 		/* Be careful to only evaluate the 'if' expression if
 		 * we are not skipping. When we are skipping, we
@@ -1922,57 +2033,53 @@ yyreduce:
 		    parser->skip_stack->type == SKIP_NO_SKIP)
 		{
 			_glcpp_parser_expand_and_lex_from (parser,
-							   IF_EXPANDED, (yyvsp[-1].token_list),
+							   IF_EXPANDED, (yyvsp[(3) - (4)].token_list),
 							   EXPANSION_MODE_EVALUATE_DEFINED);
 		}	
 		else
 		{
-			_glcpp_parser_skip_stack_push_if (parser, & (yylsp[-3]), 0);
+			_glcpp_parser_skip_stack_push_if (parser, & (yylsp[(1) - (4)]), 0);
 			parser->skip_stack->type = SKIP_TO_ENDIF;
 		}
-	}
-#line 1935 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 21:
-#line 348 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 347 "./glsl/glcpp/glcpp-parse.y"
     {
 		/* #if without an expression is only an error if we
 		 *  are not skipping */
 		if (parser->skip_stack == NULL ||
 		    parser->skip_stack->type == SKIP_NO_SKIP)
 		{
-			glcpp_error(& (yylsp[-2]), parser, "#if with no expression");
+			glcpp_error(& (yylsp[(1) - (3)]), parser, "#if with no expression");
 		}	
-		_glcpp_parser_skip_stack_push_if (parser, & (yylsp[-2]), 0);
-	}
-#line 1950 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_glcpp_parser_skip_stack_push_if (parser, & (yylsp[(1) - (3)]), 0);
+	;}
     break;
 
   case 22:
-#line 358 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 357 "./glsl/glcpp/glcpp-parse.y"
     {
 		struct hash_entry *entry =
-				_mesa_hash_table_search(parser->defines, (yyvsp[-2].str));
+				_mesa_hash_table_search(parser->defines, (yyvsp[(3) - (5)].str));
 		macro_t *macro = entry ? entry->data : NULL;
-		_glcpp_parser_skip_stack_push_if (parser, & (yylsp[-4]), macro != NULL);
-	}
-#line 1961 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_glcpp_parser_skip_stack_push_if (parser, & (yylsp[(1) - (5)]), macro != NULL);
+	;}
     break;
 
   case 23:
-#line 364 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 363 "./glsl/glcpp/glcpp-parse.y"
     {
 		struct hash_entry *entry =
-				_mesa_hash_table_search(parser->defines, (yyvsp[-2].str));
+				_mesa_hash_table_search(parser->defines, (yyvsp[(3) - (5)].str));
 		macro_t *macro = entry ? entry->data : NULL;
-		_glcpp_parser_skip_stack_push_if (parser, & (yylsp[-2]), macro == NULL);
-	}
-#line 1972 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_glcpp_parser_skip_stack_push_if (parser, & (yylsp[(3) - (5)]), macro == NULL);
+	;}
     break;
 
   case 24:
-#line 370 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 369 "./glsl/glcpp/glcpp-parse.y"
     {
 		/* Be careful to only evaluate the 'elif' expression
 		 * if we are not skipping. When we are skipping, we
@@ -1985,801 +2092,700 @@ yyreduce:
 		    parser->skip_stack->type == SKIP_TO_ELSE)
 		{
 			_glcpp_parser_expand_and_lex_from (parser,
-							   ELIF_EXPANDED, (yyvsp[-1].token_list),
+							   ELIF_EXPANDED, (yyvsp[(3) - (4)].token_list),
 							   EXPANSION_MODE_EVALUATE_DEFINED);
 		}
 		else if (parser->skip_stack &&
 		    parser->skip_stack->has_else)
 		{
-			glcpp_error(& (yylsp[-3]), parser, "#elif after #else");
+			glcpp_error(& (yylsp[(1) - (4)]), parser, "#elif after #else");
 		}
 		else
 		{
-			_glcpp_parser_skip_stack_change_if (parser, & (yylsp[-3]),
+			_glcpp_parser_skip_stack_change_if (parser, & (yylsp[(1) - (4)]),
 							    "elif", 0);
 		}
-	}
-#line 2003 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 25:
-#line 396 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 395 "./glsl/glcpp/glcpp-parse.y"
     {
 		/* #elif without an expression is an error unless we
 		 * are skipping. */
 		if (parser->skip_stack &&
 		    parser->skip_stack->type == SKIP_TO_ELSE)
 		{
-			glcpp_error(& (yylsp[-2]), parser, "#elif with no expression");
+			glcpp_error(& (yylsp[(1) - (3)]), parser, "#elif with no expression");
 		}
 		else if (parser->skip_stack &&
 		    parser->skip_stack->has_else)
 		{
-			glcpp_error(& (yylsp[-2]), parser, "#elif after #else");
+			glcpp_error(& (yylsp[(1) - (3)]), parser, "#elif after #else");
 		}
 		else
 		{
-			_glcpp_parser_skip_stack_change_if (parser, & (yylsp[-2]),
+			_glcpp_parser_skip_stack_change_if (parser, & (yylsp[(1) - (3)]),
 							    "elif", 0);
-			glcpp_warning(& (yylsp[-2]), parser, "ignoring illegal #elif without expression");
+			glcpp_warning(& (yylsp[(1) - (3)]), parser, "ignoring illegal #elif without expression");
 		}
-	}
-#line 2028 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 26:
-#line 416 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { parser->lexing_directive = 1; }
-#line 2034 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 415 "./glsl/glcpp/glcpp-parse.y"
+    { parser->lexing_directive = 1; ;}
     break;
 
   case 27:
-#line 416 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 415 "./glsl/glcpp/glcpp-parse.y"
     {
 		if (parser->skip_stack &&
 		    parser->skip_stack->has_else)
 		{
-			glcpp_error(& (yylsp[-3]), parser, "multiple #else");
+			glcpp_error(& (yylsp[(1) - (4)]), parser, "multiple #else");
 		}
 		else
 		{
-			_glcpp_parser_skip_stack_change_if (parser, & (yylsp[-3]), "else", 1);
+			_glcpp_parser_skip_stack_change_if (parser, & (yylsp[(1) - (4)]), "else", 1);
 			if (parser->skip_stack)
 				parser->skip_stack->has_else = true;
 		}
-	}
-#line 2052 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 28:
-#line 429 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 428 "./glsl/glcpp/glcpp-parse.y"
     {
-		_glcpp_parser_skip_stack_pop (parser, & (yylsp[-1]));
-	}
-#line 2060 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_glcpp_parser_skip_stack_pop (parser, & (yylsp[(1) - (2)]));
+	;}
     break;
 
   case 30:
-#line 432 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 431 "./glsl/glcpp/glcpp-parse.y"
     {
 		if (parser->version_set) {
-			glcpp_error(& (yylsp[-3]), parser, "#version must appear on the first line");
+			glcpp_error(& (yylsp[(1) - (4)]), parser, "#version must appear on the first line");
 		}
-		_glcpp_parser_handle_version_declaration(parser, (yyvsp[-1].ival), NULL, true);
-	}
-#line 2071 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_glcpp_parser_handle_version_declaration(parser, (yyvsp[(3) - (4)].ival), NULL, true);
+	;}
     break;
 
   case 31:
-#line 438 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 437 "./glsl/glcpp/glcpp-parse.y"
     {
 		if (parser->version_set) {
-			glcpp_error(& (yylsp[-4]), parser, "#version must appear on the first line");
+			glcpp_error(& (yylsp[(1) - (5)]), parser, "#version must appear on the first line");
 		}
-		_glcpp_parser_handle_version_declaration(parser, (yyvsp[-2].ival), (yyvsp[-1].str), true);
-	}
-#line 2082 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_glcpp_parser_handle_version_declaration(parser, (yyvsp[(3) - (5)].ival), (yyvsp[(4) - (5)].str), true);
+	;}
     break;
 
   case 32:
-#line 444 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 443 "./glsl/glcpp/glcpp-parse.y"
     {
 		glcpp_parser_resolve_implicit_version(parser);
-	}
-#line 2090 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 33:
-#line 447 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 446 "./glsl/glcpp/glcpp-parse.y"
     {
-		_mesa_string_buffer_printf(parser->output, "#%s", (yyvsp[-1].str));
-	}
-#line 2098 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_mesa_string_buffer_printf(parser->output, "#%s", (yyvsp[(2) - (3)].str));
+	;}
     break;
 
   case 34:
-#line 453 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 452 "./glsl/glcpp/glcpp-parse.y"
     {
-		glcpp_error(& (yylsp[-2]), parser, "#%s", (yyvsp[-1].str));
-	}
-#line 2106 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		glcpp_error(& (yylsp[(1) - (3)]), parser, "#%s", (yyvsp[(2) - (3)].str));
+	;}
     break;
 
   case 35:
-#line 456 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 455 "./glsl/glcpp/glcpp-parse.y"
     {
-		glcpp_error (& (yylsp[-2]), parser, "#define without macro name");
-	}
-#line 2114 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		glcpp_error (& (yylsp[(1) - (3)]), parser, "#define without macro name");
+	;}
     break;
 
   case 36:
-#line 459 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 458 "./glsl/glcpp/glcpp-parse.y"
     {
-		glcpp_error (& (yylsp[-3]), parser, "Illegal non-directive after #");
-	}
-#line 2122 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		glcpp_error (& (yylsp[(1) - (4)]), parser, "Illegal non-directive after #");
+	;}
     break;
 
   case 37:
-#line 465 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 464 "./glsl/glcpp/glcpp-parse.y"
     {
-		if (strlen ((yyvsp[0].str)) >= 3 && strncmp ((yyvsp[0].str), "0x", 2) == 0) {
-			(yyval.ival) = strtoll ((yyvsp[0].str) + 2, NULL, 16);
-		} else if ((yyvsp[0].str)[0] == '0') {
-			(yyval.ival) = strtoll ((yyvsp[0].str), NULL, 8);
-		} else {
-			(yyval.ival) = strtoll ((yyvsp[0].str), NULL, 10);
-		}
-	}
-#line 2136 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		/* let strtoll detect the base */
+		(yyval.ival) = strtoll ((yyvsp[(1) - (1)].str), NULL, 0);
+	;}
     break;
 
   case 38:
-#line 474 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 468 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.ival) = (yyvsp[0].ival);
-	}
-#line 2144 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		(yyval.ival) = (yyvsp[(1) - (1)].ival);
+	;}
     break;
 
   case 39:
-#line 479 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 473 "./glsl/glcpp/glcpp-parse.y"
     {
 	   /* Both octal and hexadecimal constants begin with 0. */
-	   if ((yyvsp[0].str)[0] == '0' && (yyvsp[0].str)[1] != '\0') {
-		glcpp_error(&(yylsp[0]), parser, "invalid #version \"%s\" (not a decimal constant)", (yyvsp[0].str));
+	   if ((yyvsp[(1) - (1)].str)[0] == '0' && (yyvsp[(1) - (1)].str)[1] != '\0') {
+		glcpp_error(&(yylsp[(1) - (1)]), parser, "invalid #version \"%s\" (not a decimal constant)", (yyvsp[(1) - (1)].str));
 		(yyval.ival) = 0;
 	   } else {
-		(yyval.ival) = strtoll((yyvsp[0].str), NULL, 10);
+		(yyval.ival) = strtoll((yyvsp[(1) - (1)].str), NULL, 10);
 	   }
-	}
-#line 2158 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 40:
-#line 490 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 484 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[0].ival);
+		(yyval.expression_value).value = (yyvsp[(1) - (1)].ival);
 		(yyval.expression_value).undefined_macro = NULL;
-	}
-#line 2167 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 41:
-#line 494 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 488 "./glsl/glcpp/glcpp-parse.y"
     {
 		(yyval.expression_value).value = 0;
 		if (parser->is_gles)
-			(yyval.expression_value).undefined_macro = linear_strdup(parser->linalloc, (yyvsp[0].str));
+			(yyval.expression_value).undefined_macro = linear_strdup(parser->linalloc, (yyvsp[(1) - (1)].str));
 		else
 			(yyval.expression_value).undefined_macro = NULL;
-	}
-#line 2179 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 42:
-#line 501 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 495 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value || (yyvsp[0].expression_value).value;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value || (yyvsp[(3) - (3)].expression_value).value;
 
 		/* Short-circuit: Only flag undefined from right side
 		 * if left side evaluates to false.
 		 */
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
-                else if (! (yyvsp[-2].expression_value).value)
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2195 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
+                else if (! (yyvsp[(1) - (3)].expression_value).value)
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 43:
-#line 512 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 506 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value && (yyvsp[0].expression_value).value;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value && (yyvsp[(3) - (3)].expression_value).value;
 
 		/* Short-circuit: Only flag undefined from right-side
 		 * if left side evaluates to true.
 		 */
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
-                else if ((yyvsp[-2].expression_value).value)
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2211 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
+                else if ((yyvsp[(1) - (3)].expression_value).value)
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 44:
-#line 523 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 517 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value | (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value | (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2223 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 45:
-#line 530 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 524 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value ^ (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value ^ (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2235 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 46:
-#line 537 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 531 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value & (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value & (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2247 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 47:
-#line 544 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 538 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value != (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value != (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2259 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 48:
-#line 551 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 545 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value == (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value == (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2271 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 49:
-#line 558 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 552 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value >= (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value >= (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2283 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 50:
-#line 565 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 559 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value <= (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value <= (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2295 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 51:
-#line 572 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 566 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value > (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value > (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2307 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 52:
-#line 579 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 573 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value < (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value < (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2319 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 53:
-#line 586 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 580 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value >> (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value >> (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2331 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 54:
-#line 593 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 587 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value << (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value << (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2343 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 55:
-#line 600 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 594 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value - (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value - (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2355 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 56:
-#line 607 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 601 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value + (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value + (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2367 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 57:
-#line 614 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 608 "./glsl/glcpp/glcpp-parse.y"
     {
-		if ((yyvsp[0].expression_value).value == 0) {
-			yyerror (& (yylsp[-2]), parser,
+		if ((yyvsp[(3) - (3)].expression_value).value == 0) {
+			yyerror (& (yylsp[(1) - (3)]), parser,
 				 "zero modulus in preprocessor directive");
 		} else {
-			(yyval.expression_value).value = (yyvsp[-2].expression_value).value % (yyvsp[0].expression_value).value;
+			(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value % (yyvsp[(3) - (3)].expression_value).value;
 		}
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2384 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 58:
-#line 626 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 620 "./glsl/glcpp/glcpp-parse.y"
     {
-		if ((yyvsp[0].expression_value).value == 0) {
-			yyerror (& (yylsp[-2]), parser,
+		if ((yyvsp[(3) - (3)].expression_value).value == 0) {
+			yyerror (& (yylsp[(1) - (3)]), parser,
 				 "division by 0 in preprocessor directive");
 		} else {
-			(yyval.expression_value).value = (yyvsp[-2].expression_value).value / (yyvsp[0].expression_value).value;
+			(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value / (yyvsp[(3) - (3)].expression_value).value;
 		}
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2401 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 59:
-#line 638 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 632 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = (yyvsp[-2].expression_value).value * (yyvsp[0].expression_value).value;
-		if ((yyvsp[-2].expression_value).undefined_macro)
-			(yyval.expression_value).undefined_macro = (yyvsp[-2].expression_value).undefined_macro;
+		(yyval.expression_value).value = (yyvsp[(1) - (3)].expression_value).value * (yyvsp[(3) - (3)].expression_value).value;
+		if ((yyvsp[(1) - (3)].expression_value).undefined_macro)
+			(yyval.expression_value).undefined_macro = (yyvsp[(1) - (3)].expression_value).undefined_macro;
                 else
-			(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2413 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+			(yyval.expression_value).undefined_macro = (yyvsp[(3) - (3)].expression_value).undefined_macro;
+	;}
     break;
 
   case 60:
-#line 645 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 639 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = ! (yyvsp[0].expression_value).value;
-		(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2422 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		(yyval.expression_value).value = ! (yyvsp[(2) - (2)].expression_value).value;
+		(yyval.expression_value).undefined_macro = (yyvsp[(2) - (2)].expression_value).undefined_macro;
+	;}
     break;
 
   case 61:
-#line 649 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 643 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = ~ (yyvsp[0].expression_value).value;
-		(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2431 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		(yyval.expression_value).value = ~ (yyvsp[(2) - (2)].expression_value).value;
+		(yyval.expression_value).undefined_macro = (yyvsp[(2) - (2)].expression_value).undefined_macro;
+	;}
     break;
 
   case 62:
-#line 653 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 647 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = - (yyvsp[0].expression_value).value;
-		(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2440 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		(yyval.expression_value).value = - (yyvsp[(2) - (2)].expression_value).value;
+		(yyval.expression_value).undefined_macro = (yyvsp[(2) - (2)].expression_value).undefined_macro;
+	;}
     break;
 
   case 63:
-#line 657 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 651 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value).value = + (yyvsp[0].expression_value).value;
-		(yyval.expression_value).undefined_macro = (yyvsp[0].expression_value).undefined_macro;
-	}
-#line 2449 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		(yyval.expression_value).value = + (yyvsp[(2) - (2)].expression_value).value;
+		(yyval.expression_value).undefined_macro = (yyvsp[(2) - (2)].expression_value).undefined_macro;
+	;}
     break;
 
   case 64:
-#line 661 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 655 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.expression_value) = (yyvsp[-1].expression_value);
-	}
-#line 2457 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		(yyval.expression_value) = (yyvsp[(2) - (3)].expression_value);
+	;}
     break;
 
   case 65:
-#line 667 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 661 "./glsl/glcpp/glcpp-parse.y"
     {
 		(yyval.string_list) = _string_list_create (parser);
-		_string_list_append_item (parser, (yyval.string_list), (yyvsp[0].str));
-	}
-#line 2466 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_string_list_append_item (parser, (yyval.string_list), (yyvsp[(1) - (1)].str));
+	;}
     break;
 
   case 66:
-#line 671 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 665 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.string_list) = (yyvsp[-2].string_list);	
-		_string_list_append_item (parser, (yyval.string_list), (yyvsp[0].str));
-	}
-#line 2475 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		(yyval.string_list) = (yyvsp[(1) - (3)].string_list);	
+		_string_list_append_item (parser, (yyval.string_list), (yyvsp[(3) - (3)].str));
+	;}
     break;
 
   case 67:
-#line 678 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.token_list) = NULL; }
-#line 2481 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 672 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.token_list) = NULL; ;}
     break;
 
   case 69:
-#line 683 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.token_list) = NULL; }
-#line 2487 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 677 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.token_list) = NULL; ;}
     break;
 
   case 72:
-#line 689 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 683 "./glsl/glcpp/glcpp-parse.y"
     {
-		glcpp_error(&(yylsp[0]), parser, "extra tokens at end of directive");
-	}
-#line 2495 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		glcpp_error(&(yylsp[(1) - (1)]), parser, "extra tokens at end of directive");
+	;}
     break;
 
   case 73:
-#line 695 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 689 "./glsl/glcpp/glcpp-parse.y"
     {
 		parser->space_tokens = 1;
 		(yyval.token_list) = _token_list_create (parser);
-		_token_list_append (parser, (yyval.token_list), (yyvsp[0].token));
-	}
-#line 2505 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		_token_list_append (parser, (yyval.token_list), (yyvsp[(1) - (1)].token));
+	;}
     break;
 
   case 74:
-#line 700 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 694 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.token_list) = (yyvsp[-1].token_list);
-		_token_list_append (parser, (yyval.token_list), (yyvsp[0].token));
-	}
-#line 2514 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+		(yyval.token_list) = (yyvsp[(1) - (2)].token_list);
+		_token_list_append (parser, (yyval.token_list), (yyvsp[(2) - (2)].token));
+	;}
     break;
 
   case 75:
-#line 707 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 701 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.token) = _token_create_str (parser, IDENTIFIER, (yyvsp[0].str));
+		(yyval.token) = _token_create_str (parser, IDENTIFIER, (yyvsp[(1) - (1)].str));
 		(yyval.token)->location = yylloc;
-	}
-#line 2523 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 76:
-#line 711 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 705 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.token) = _token_create_str (parser, INTEGER_STRING, (yyvsp[0].str));
+		(yyval.token) = _token_create_str (parser, INTEGER_STRING, (yyvsp[(1) - (1)].str));
 		(yyval.token)->location = yylloc;
-	}
-#line 2532 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 77:
-#line 715 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 709 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.token) = _token_create_ival (parser, (yyvsp[0].ival), (yyvsp[0].ival));
+		(yyval.token) = _token_create_ival (parser, (yyvsp[(1) - (1)].ival), (yyvsp[(1) - (1)].ival));
 		(yyval.token)->location = yylloc;
-	}
-#line 2541 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 78:
-#line 719 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 713 "./glsl/glcpp/glcpp-parse.y"
     {
 		(yyval.token) = _token_create_ival (parser, DEFINED, DEFINED);
 		(yyval.token)->location = yylloc;
-	}
-#line 2550 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 79:
-#line 723 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 717 "./glsl/glcpp/glcpp-parse.y"
     {
-		(yyval.token) = _token_create_str (parser, OTHER, (yyvsp[0].str));
+		(yyval.token) = _token_create_str (parser, OTHER, (yyvsp[(1) - (1)].str));
 		(yyval.token)->location = yylloc;
-	}
-#line 2559 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 80:
-#line 727 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
+#line 721 "./glsl/glcpp/glcpp-parse.y"
     {
 		(yyval.token) = _token_create_ival (parser, SPACE, SPACE);
 		(yyval.token)->location = yylloc;
-	}
-#line 2568 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+	;}
     break;
 
   case 81:
-#line 734 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '['; }
-#line 2574 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 728 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '['; ;}
     break;
 
   case 82:
-#line 735 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = ']'; }
-#line 2580 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 729 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = ']'; ;}
     break;
 
   case 83:
-#line 736 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '('; }
-#line 2586 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 730 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '('; ;}
     break;
 
   case 84:
-#line 737 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = ')'; }
-#line 2592 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 731 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = ')'; ;}
     break;
 
   case 85:
-#line 738 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '{'; }
-#line 2598 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 732 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '{'; ;}
     break;
 
   case 86:
-#line 739 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '}'; }
-#line 2604 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 733 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '}'; ;}
     break;
 
   case 87:
-#line 740 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '.'; }
-#line 2610 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 734 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '.'; ;}
     break;
 
   case 88:
-#line 741 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '&'; }
-#line 2616 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 735 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '&'; ;}
     break;
 
   case 89:
-#line 742 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '*'; }
-#line 2622 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 736 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '*'; ;}
     break;
 
   case 90:
-#line 743 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '+'; }
-#line 2628 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 737 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '+'; ;}
     break;
 
   case 91:
-#line 744 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '-'; }
-#line 2634 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 738 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '-'; ;}
     break;
 
   case 92:
-#line 745 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '~'; }
-#line 2640 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 739 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '~'; ;}
     break;
 
   case 93:
-#line 746 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '!'; }
-#line 2646 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 740 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '!'; ;}
     break;
 
   case 94:
-#line 747 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '/'; }
-#line 2652 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 741 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '/'; ;}
     break;
 
   case 95:
-#line 748 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '%'; }
-#line 2658 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 742 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '%'; ;}
     break;
 
   case 96:
-#line 749 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = LEFT_SHIFT; }
-#line 2664 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 743 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = LEFT_SHIFT; ;}
     break;
 
   case 97:
-#line 750 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = RIGHT_SHIFT; }
-#line 2670 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 744 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = RIGHT_SHIFT; ;}
     break;
 
   case 98:
-#line 751 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '<'; }
-#line 2676 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 745 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '<'; ;}
     break;
 
   case 99:
-#line 752 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '>'; }
-#line 2682 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 746 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '>'; ;}
     break;
 
   case 100:
-#line 753 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = LESS_OR_EQUAL; }
-#line 2688 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 747 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = LESS_OR_EQUAL; ;}
     break;
 
   case 101:
-#line 754 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = GREATER_OR_EQUAL; }
-#line 2694 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 748 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = GREATER_OR_EQUAL; ;}
     break;
 
   case 102:
-#line 755 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = EQUAL; }
-#line 2700 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 749 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = EQUAL; ;}
     break;
 
   case 103:
-#line 756 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = NOT_EQUAL; }
-#line 2706 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 750 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = NOT_EQUAL; ;}
     break;
 
   case 104:
-#line 757 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '^'; }
-#line 2712 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 751 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '^'; ;}
     break;
 
   case 105:
-#line 758 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '|'; }
-#line 2718 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 752 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '|'; ;}
     break;
 
   case 106:
-#line 759 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = AND; }
-#line 2724 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 753 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = AND; ;}
     break;
 
   case 107:
-#line 760 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = OR; }
-#line 2730 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 754 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = OR; ;}
     break;
 
   case 108:
-#line 761 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = ';'; }
-#line 2736 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 755 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = ';'; ;}
     break;
 
   case 109:
-#line 762 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = ','; }
-#line 2742 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 756 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = ','; ;}
     break;
 
   case 110:
-#line 763 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = '='; }
-#line 2748 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 757 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = '='; ;}
     break;
 
   case 111:
-#line 764 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = PASTE; }
-#line 2754 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 758 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = PASTE; ;}
     break;
 
   case 112:
-#line 765 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = PLUS_PLUS; }
-#line 2760 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 759 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = PLUS_PLUS; ;}
     break;
 
   case 113:
-#line 766 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1646  */
-    { (yyval.ival) = MINUS_MINUS; }
-#line 2766 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+#line 760 "./glsl/glcpp/glcpp-parse.y"
+    { (yyval.ival) = MINUS_MINUS; ;}
     break;
 
 
-#line 2770 "glsl/glcpp/glcpp-parse.c" /* yacc.c:1646  */
+/* Line 1267 of yacc.c.  */
+#line 2787 "glsl/glcpp/glcpp-parse.c"
       default: break;
     }
-  /* User semantic actions sometimes alter yychar, and that requires
-     that yytoken be updated with the new translation.  We take the
-     approach of translating immediately before every use of yytoken.
-     One alternative is translating here after every semantic action,
-     but that translation would be missed if the semantic action invokes
-     YYABORT, YYACCEPT, or YYERROR immediately after altering yychar or
-     if it invokes YYBACKUP.  In the case of YYABORT or YYACCEPT, an
-     incorrect destructor might then be invoked immediately.  In the
-     case of YYERROR or YYBACKUP, subsequent parser actions might lead
-     to an incorrect destructor call or verbose syntax error message
-     before the lookahead is translated.  */
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
 
   YYPOPSTACK (yylen);
@@ -2789,7 +2795,7 @@ yyreduce:
   *++yyvsp = yyval;
   *++yylsp = yyloc;
 
-  /* Now 'shift' the result of the reduction.  Determine what state
+  /* Now `shift' the result of the reduction.  Determine what state
      that goes to, based on the state we popped back to and the rule
      number reduced by.  */
 
@@ -2804,14 +2810,10 @@ yyreduce:
   goto yynewstate;
 
 
-/*--------------------------------------.
-| yyerrlab -- here on detecting error.  |
-`--------------------------------------*/
+/*------------------------------------.
+| yyerrlab -- here on detecting error |
+`------------------------------------*/
 yyerrlab:
-  /* Make sure we have latest lookahead translation.  See comments at
-     user semantic actions for why this is necessary.  */
-  yytoken = yychar == YYEMPTY ? YYEMPTY : YYTRANSLATE (yychar);
-
   /* If not already recovering from an error, report this error.  */
   if (!yyerrstatus)
     {
@@ -2819,61 +2821,62 @@ yyerrlab:
 #if ! YYERROR_VERBOSE
       yyerror (&yylloc, parser, YY_("syntax error"));
 #else
-# define YYSYNTAX_ERROR yysyntax_error (&yymsg_alloc, &yymsg, \
-                                        yyssp, yytoken)
       {
-        char const *yymsgp = YY_("syntax error");
-        int yysyntax_error_status;
-        yysyntax_error_status = YYSYNTAX_ERROR;
-        if (yysyntax_error_status == 0)
-          yymsgp = yymsg;
-        else if (yysyntax_error_status == 1)
-          {
-            if (yymsg != yymsgbuf)
-              YYSTACK_FREE (yymsg);
-            yymsg = (char *) YYSTACK_ALLOC (yymsg_alloc);
-            if (!yymsg)
-              {
-                yymsg = yymsgbuf;
-                yymsg_alloc = sizeof yymsgbuf;
-                yysyntax_error_status = 2;
-              }
-            else
-              {
-                yysyntax_error_status = YYSYNTAX_ERROR;
-                yymsgp = yymsg;
-              }
-          }
-        yyerror (&yylloc, parser, yymsgp);
-        if (yysyntax_error_status == 2)
-          goto yyexhaustedlab;
+	YYSIZE_T yysize = yysyntax_error (0, yystate, yychar);
+	if (yymsg_alloc < yysize && yymsg_alloc < YYSTACK_ALLOC_MAXIMUM)
+	  {
+	    YYSIZE_T yyalloc = 2 * yysize;
+	    if (! (yysize <= yyalloc && yyalloc <= YYSTACK_ALLOC_MAXIMUM))
+	      yyalloc = YYSTACK_ALLOC_MAXIMUM;
+	    if (yymsg != yymsgbuf)
+	      YYSTACK_FREE (yymsg);
+	    yymsg = (char *) YYSTACK_ALLOC (yyalloc);
+	    if (yymsg)
+	      yymsg_alloc = yyalloc;
+	    else
+	      {
+		yymsg = yymsgbuf;
+		yymsg_alloc = sizeof yymsgbuf;
+	      }
+	  }
+
+	if (0 < yysize && yysize <= yymsg_alloc)
+	  {
+	    (void) yysyntax_error (yymsg, yystate, yychar);
+	    yyerror (&yylloc, parser, yymsg);
+	  }
+	else
+	  {
+	    yyerror (&yylloc, parser, YY_("syntax error"));
+	    if (yysize != 0)
+	      goto yyexhaustedlab;
+	  }
       }
-# undef YYSYNTAX_ERROR
 #endif
     }
 
-  yyerror_range[1] = yylloc;
+  yyerror_range[0] = yylloc;
 
   if (yyerrstatus == 3)
     {
-      /* If just tried and failed to reuse lookahead token after an
-         error, discard it.  */
+      /* If just tried and failed to reuse look-ahead token after an
+	 error, discard it.  */
 
       if (yychar <= YYEOF)
-        {
-          /* Return failure if at end of input.  */
-          if (yychar == YYEOF)
-            YYABORT;
-        }
+	{
+	  /* Return failure if at end of input.  */
+	  if (yychar == YYEOF)
+	    YYABORT;
+	}
       else
-        {
-          yydestruct ("Error: discarding",
-                      yytoken, &yylval, &yylloc, parser);
-          yychar = YYEMPTY;
-        }
+	{
+	  yydestruct ("Error: discarding",
+		      yytoken, &yylval, &yylloc, parser);
+	  yychar = YYEMPTY;
+	}
     }
 
-  /* Else will try to reuse lookahead token after shifting the error
+  /* Else will try to reuse look-ahead token after shifting the error
      token.  */
   goto yyerrlab1;
 
@@ -2889,8 +2892,8 @@ yyerrorlab:
   if (/*CONSTCOND*/ 0)
      goto yyerrorlab;
 
-  yyerror_range[1] = yylsp[1-yylen];
-  /* Do not reclaim the symbols of the rule whose action triggered
+  yyerror_range[0] = yylsp[1-yylen];
+  /* Do not reclaim the symbols of the rule which action triggered
      this YYERROR.  */
   YYPOPSTACK (yylen);
   yylen = 0;
@@ -2903,42 +2906,43 @@ yyerrorlab:
 | yyerrlab1 -- common code for both syntax error and YYERROR.  |
 `-------------------------------------------------------------*/
 yyerrlab1:
-  yyerrstatus = 3;      /* Each real token shifted decrements this.  */
+  yyerrstatus = 3;	/* Each real token shifted decrements this.  */
 
   for (;;)
     {
       yyn = yypact[yystate];
-      if (!yypact_value_is_default (yyn))
-        {
-          yyn += YYTERROR;
-          if (0 <= yyn && yyn <= YYLAST && yycheck[yyn] == YYTERROR)
-            {
-              yyn = yytable[yyn];
-              if (0 < yyn)
-                break;
-            }
-        }
+      if (yyn != YYPACT_NINF)
+	{
+	  yyn += YYTERROR;
+	  if (0 <= yyn && yyn <= YYLAST && yycheck[yyn] == YYTERROR)
+	    {
+	      yyn = yytable[yyn];
+	      if (0 < yyn)
+		break;
+	    }
+	}
 
       /* Pop the current state because it cannot handle the error token.  */
       if (yyssp == yyss)
-        YYABORT;
+	YYABORT;
 
-      yyerror_range[1] = *yylsp;
+      yyerror_range[0] = *yylsp;
       yydestruct ("Error: popping",
-                  yystos[yystate], yyvsp, yylsp, parser);
+		  yystos[yystate], yyvsp, yylsp, parser);
       YYPOPSTACK (1);
       yystate = *yyssp;
       YY_STACK_PRINT (yyss, yyssp);
     }
 
-  YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
-  *++yyvsp = yylval;
-  YY_IGNORE_MAYBE_UNINITIALIZED_END
+  if (yyn == YYFINAL)
+    YYACCEPT;
 
-  yyerror_range[2] = yylloc;
+  *++yyvsp = yylval;
+
+  yyerror_range[1] = yylloc;
   /* Using YYLLOC is tempting, but would change the location of
-     the lookahead.  YYLOC is available though.  */
-  YYLLOC_DEFAULT (yyloc, yyerror_range, 2);
+     the look-ahead.  YYLOC is available though.  */
+  YYLLOC_DEFAULT (yyloc, (yyerror_range - 1), 2);
   *++yylsp = yyloc;
 
   /* Shift the error token.  */
@@ -2962,7 +2966,7 @@ yyabortlab:
   yyresult = 1;
   goto yyreturn;
 
-#if !defined yyoverflow || YYERROR_VERBOSE
+#ifndef yyoverflow
 /*-------------------------------------------------.
 | yyexhaustedlab -- memory exhaustion comes here.  |
 `-------------------------------------------------*/
@@ -2973,22 +2977,17 @@ yyexhaustedlab:
 #endif
 
 yyreturn:
-  if (yychar != YYEMPTY)
-    {
-      /* Make sure we have latest lookahead translation.  See comments at
-         user semantic actions for why this is necessary.  */
-      yytoken = YYTRANSLATE (yychar);
-      yydestruct ("Cleanup: discarding lookahead",
-                  yytoken, &yylval, &yylloc, parser);
-    }
-  /* Do not reclaim the symbols of the rule whose action triggered
+  if (yychar != YYEOF && yychar != YYEMPTY)
+     yydestruct ("Cleanup: discarding lookahead",
+		 yytoken, &yylval, &yylloc, parser);
+  /* Do not reclaim the symbols of the rule which action triggered
      this YYABORT or YYACCEPT.  */
   YYPOPSTACK (yylen);
   YY_STACK_PRINT (yyss, yyssp);
   while (yyssp != yyss)
     {
       yydestruct ("Cleanup: popping",
-                  yystos[*yyssp], yyvsp, yylsp, parser);
+		  yystos[*yyssp], yyvsp, yylsp, parser);
       YYPOPSTACK (1);
     }
 #ifndef yyoverflow
@@ -2999,9 +2998,12 @@ yyreturn:
   if (yymsg != yymsgbuf)
     YYSTACK_FREE (yymsg);
 #endif
-  return yyresult;
+  /* Make sure YYID is used.  */
+  return YYID (yyresult);
 }
-#line 769 "./glsl/glcpp/glcpp-parse.y" /* yacc.c:1906  */
+
+
+#line 763 "./glsl/glcpp/glcpp-parse.y"
 
 
 string_list_t *
@@ -3316,6 +3318,20 @@ _token_list_equal_ignoring_space(token_list_t *a, token_list_t *b)
 
    while (1)
    {
+      if (node_a == NULL && node_b == NULL)
+         break;
+
+      /* Ignore trailing whitespace */
+      if (node_a == NULL && node_b->token->type == SPACE) {
+         while (node_b && node_b->token->type == SPACE)
+            node_b = node_b->next;
+      }
+
+      if (node_b == NULL && node_a->token->type == SPACE) {
+         while (node_a && node_a->token->type == SPACE)
+            node_a = node_a->next;
+      }
+
       if (node_a == NULL && node_b == NULL)
          break;
 
@@ -4559,7 +4575,7 @@ _glcpp_parser_skip_stack_pop(glcpp_parser_t *parser, YYLTYPE *loc)
 
 static void
 _glcpp_parser_handle_version_declaration(glcpp_parser_t *parser, intmax_t version,
-                                         const char *es_identifier,
+                                         const char *identifier,
                                          bool explicitly_set)
 {
    if (parser->version_set)
@@ -4571,11 +4587,15 @@ _glcpp_parser_handle_version_declaration(glcpp_parser_t *parser, intmax_t versio
    add_builtin_define (parser, "__VERSION__", version);
 
    parser->is_gles = (version == 100) ||
-                     (es_identifier && (strcmp(es_identifier, "es") == 0));
+                     (identifier && (strcmp(identifier, "es") == 0));
+   bool is_compat = version >= 150 && identifier &&
+                    strcmp(identifier, "compatibility") == 0;
 
    /* Add pre-defined macros. */
    if (parser->is_gles)
       add_builtin_define(parser, "GL_ES", 1);
+   else if (is_compat)
+      add_builtin_define(parser, "GL_compatibility_profile", 1);
    else if (version >= 150)
       add_builtin_define(parser, "GL_core_profile", 1);
 
@@ -4610,8 +4630,8 @@ _glcpp_parser_handle_version_declaration(glcpp_parser_t *parser, intmax_t versio
    if (explicitly_set) {
       _mesa_string_buffer_printf(parser->output,
                                  "#version %" PRIiMAX "%s%s", version,
-                                 es_identifier ? " " : "",
-                                 es_identifier ? es_identifier : "");
+                                 identifier ? " " : "",
+                                 identifier ? identifier : "");
    }
 }
 
@@ -4630,3 +4650,4 @@ glcpp_parser_resolve_implicit_version(glcpp_parser_t *parser)
    _glcpp_parser_handle_version_declaration(parser, language_version,
                                             NULL, false);
 }
+

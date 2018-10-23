@@ -48,6 +48,7 @@ clamp_int64(int64_t x, int64_t min, int64_t max)
 void
 gen7_cmd_buffer_emit_scissor(struct anv_cmd_buffer *cmd_buffer)
 {
+   struct anv_framebuffer *fb = cmd_buffer->state.framebuffer;
    uint32_t count = cmd_buffer->state.gfx.dynamic.scissor.count;
    const VkRect2D *scissors = cmd_buffer->state.gfx.dynamic.scissor.scissors;
    struct anv_state scissor_state =
@@ -73,8 +74,8 @@ gen7_cmd_buffer_emit_scissor(struct anv_cmd_buffer *cmd_buffer)
          /* Do this math using int64_t so overflow gets clamped correctly. */
          .ScissorRectangleYMin = clamp_int64(s->offset.y, 0, max),
          .ScissorRectangleXMin = clamp_int64(s->offset.x, 0, max),
-         .ScissorRectangleYMax = clamp_int64((uint64_t) s->offset.y + s->extent.height - 1, 0, max),
-         .ScissorRectangleXMax = clamp_int64((uint64_t) s->offset.x + s->extent.width - 1, 0, max)
+         .ScissorRectangleYMax = clamp_int64((uint64_t) s->offset.y + s->extent.height - 1, 0, fb->height - 1),
+         .ScissorRectangleXMax = clamp_int64((uint64_t) s->offset.x + s->extent.width - 1, 0, fb->width - 1)
       };
 
       if (s->extent.width <= 0 || s->extent.height <= 0) {
@@ -127,11 +128,11 @@ get_depth_format(struct anv_cmd_buffer *cmd_buffer)
    const struct anv_render_pass *pass = cmd_buffer->state.pass;
    const struct anv_subpass *subpass = cmd_buffer->state.subpass;
 
-   if (subpass->depth_stencil_attachment.attachment >= pass->attachment_count)
+   if (!subpass->depth_stencil_attachment)
       return D16_UNORM;
 
    struct anv_render_pass_attachment *att =
-      &pass->attachments[subpass->depth_stencil_attachment.attachment];
+      &pass->attachments[subpass->depth_stencil_attachment->attachment];
 
    switch (att->format) {
    case VK_FORMAT_D16_UNORM:
@@ -245,12 +246,13 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
          ib.CutIndexEnable             = pipeline->primitive_restart;
 #endif
          ib.IndexFormat                = cmd_buffer->state.gfx.gen7.index_type;
-         ib.MemoryObjectControlState   = GENX(MOCS);
+         ib.IndexBufferMOCS            = anv_mocs_for_bo(cmd_buffer->device,
+                                                         buffer->address.bo);
 
-         ib.BufferStartingAddress =
-            (struct anv_address) { buffer->bo, buffer->offset + offset };
-         ib.BufferEndingAddress =
-            (struct anv_address) { buffer->bo, buffer->offset + buffer->size };
+         ib.BufferStartingAddress      = anv_address_add(buffer->address,
+                                                         offset);
+         ib.BufferEndingAddress        = anv_address_add(buffer->address,
+                                                         buffer->size);
       }
    }
 

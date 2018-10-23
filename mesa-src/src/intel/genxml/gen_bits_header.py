@@ -25,7 +25,6 @@ from __future__ import (
 
 import argparse
 import os
-import sys
 import xml.parsers.expat
 
 from mako.template import Template
@@ -108,13 +107,13 @@ ${item.token_name}_${prop}(const struct gen_device_info *devinfo)
 #ifdef __cplusplus
 extern "C" {
 #endif
-% for _, container in sorted(containers.iteritems(), key=itemgetter(0)):
+% for _, container in sorted(containers.items(), key=itemgetter(0)):
 
 /* ${container.name} */
 
 ${emit_per_gen_prop_func(container, 'length')}
 
-% for _, field in sorted(container.fields.iteritems(), key=itemgetter(0)):
+% for _, field in sorted(container.fields.items(), key=itemgetter(0)):
 
 /* ${container.name}::${field.name} */
 
@@ -220,7 +219,7 @@ class Container(object):
 
     def iter_prop(self, prop):
         if prop == 'length':
-            return self.length_by_gen.iteritems()
+            return self.length_by_gen.items()
         else:
             raise ValueError('Invalid property: "{0}"'.format(prop))
 
@@ -253,9 +252,9 @@ class Field(object):
 
     def iter_prop(self, prop):
         if prop == 'bits':
-            return self.bits_by_gen.iteritems()
+            return self.bits_by_gen.items()
         elif prop == 'start':
-            return self.start_by_gen.iteritems()
+            return self.start_by_gen.items()
         else:
             raise ValueError('Invalid property: "{0}"'.format(prop))
 
@@ -282,7 +281,7 @@ class XmlParser(object):
         self.container = None
 
     def parse(self, filename):
-        with open(filename) as f:
+        with open(filename, 'rb') as f:
             self.parser.ParseFile(f)
 
     def start_element(self, name, attrs):

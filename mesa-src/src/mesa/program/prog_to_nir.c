@@ -27,6 +27,7 @@
 #include "compiler/nir/nir_builder.h"
 #include "compiler/glsl/list.h"
 #include "main/imports.h"
+#include "main/mtypes.h"
 #include "util/ralloc.h"
 
 #include "prog_to_nir.h"
@@ -51,6 +52,7 @@ struct ptn_compile {
    nir_variable *parameters;
    nir_variable *input_vars[VARYING_SLOT_MAX];
    nir_variable *output_vars[VARYING_SLOT_MAX];
+   nir_variable *sampler_vars[32]; /* matches number of bits in TexSrcUnit */
    nir_register **output_regs;
    nir_register **temp_regs;
 
@@ -163,43 +165,14 @@ ptn_get_src(struct ptn_compile *c, const struct prog_src_register *prog_src)
       case PROGRAM_STATE_VAR: {
          assert(c->parameters != NULL);
 
-         nir_intrinsic_instr *load =
-            nir_intrinsic_instr_create(b->shader, nir_intrinsic_load_var);
-         nir_ssa_dest_init(&load->instr, &load->dest, 4, 32, NULL);
-         load->num_components = 4;
+         nir_deref_instr *deref = nir_build_deref_var(b, c->parameters);
 
-         load->variables[0] = nir_deref_var_create(load, c->parameters);
-         nir_deref_array *deref_arr =
-            nir_deref_array_create(load->variables[0]);
-         deref_arr->deref.type = glsl_vec4_type();
-         load->variables[0]->deref.child = &deref_arr->deref;
+         nir_ssa_def *index = nir_imm_int(b, prog_src->Index);
+         if (prog_src->RelAddr)
+            index = nir_iadd(b, index, nir_load_reg(b, c->addr_reg));
+         deref = nir_build_deref_array(b, deref, nir_channel(b, index, 0));
 
-         if (prog_src->RelAddr) {
-            deref_arr->deref_array_type = nir_deref_array_type_indirect;
-
-            nir_alu_src addr_src = { NIR_SRC_INIT };
-            addr_src.src = nir_src_for_reg(c->addr_reg);
-            nir_ssa_def *reladdr = nir_imov_alu(b, addr_src, 1);
-
-            if (prog_src->Index < 0) {
-               /* This is a negative offset which should be added to the address
-                * register's value.
-                */
-               reladdr = nir_iadd(b, reladdr, nir_imm_int(b, prog_src->Index));
-
-               deref_arr->base_offset = 0;
-            } else {
-               deref_arr->base_offset = prog_src->Index;
-            }
-            deref_arr->indirect = nir_src_for_ssa(reladdr);
-         } else {
-            deref_arr->deref_array_type = nir_deref_array_type_direct;
-            deref_arr->base_offset = prog_src->Index;
-         }
-
-         nir_builder_instr_insert(b, &load->instr);
-
-         src.src = nir_src_for_ssa(&load->dest.ssa);
+         src.src = nir_src_for_ssa(nir_load_deref(b, deref));
          break;
       }
       default:
@@ -512,9 +485,10 @@ ptn_kil(nir_builder *b, nir_ssa_def **src)
 }
 
 static void
-ptn_tex(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src,
+ptn_tex(struct ptn_compile *c, nir_alu_dest dest, nir_ssa_def **src,
         struct prog_instruction *prog_inst)
 {
+   nir_builder *b = &c->build;
    nir_tex_instr *instr;
    nir_texop op;
    unsigned num_srcs;
@@ -594,6 +568,15 @@ ptn_tex(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src,
    case GLSL_SAMPLER_DIM_SUBPASS:
    case GLSL_SAMPLER_DIM_SUBPASS_MS:
       unreachable("can't reach");
+   }
+
+   if (!c->sampler_vars[prog_inst->TexSrcUnit]) {
+      const struct glsl_type *type =
+         glsl_sampler_type(instr->sampler_dim, false, false, GLSL_TYPE_FLOAT);
+      nir_variable *var =
+         nir_variable_create(b->shader, nir_var_uniform, type, "sampler");
+      var->data.binding = prog_inst->TexSrcUnit;
+      c->sampler_vars[prog_inst->TexSrcUnit] = var;
    }
 
    unsigned src_number = 0;
@@ -812,7 +795,7 @@ ptn_emit_instruction(struct ptn_compile *c, struct prog_instruction *prog_inst)
    case OPCODE_TXD:
    case OPCODE_TXL:
    case OPCODE_TXP:
-      ptn_tex(b, dest, src, prog_inst);
+      ptn_tex(c, dest, src, prog_inst);
       break;
 
    case OPCODE_SWZ:

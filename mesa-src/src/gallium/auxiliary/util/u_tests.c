@@ -55,6 +55,7 @@ util_create_texture2d(struct pipe_screen *screen, unsigned width,
    templ.depth0 = 1;
    templ.array_size = 1;
    templ.nr_samples = num_samples;
+   templ.nr_storage_samples = num_samples;
    templ.format = format;
    templ.usage = PIPE_USAGE_DEFAULT;
    templ.bind = PIPE_BIND_SAMPLER_VIEW |
@@ -107,7 +108,8 @@ util_set_rasterizer_normal(struct cso_context *cso)
 
    rs.half_pixel_center = 1;
    rs.bottom_edge_rule = 1;
-   rs.depth_clip = 1;
+   rs.depth_clip_near = 1;
+   rs.depth_clip_far = 1;
 
    cso_set_rasterizer(cso, &rs);
 }
@@ -621,8 +623,8 @@ test_texture_barrier(struct pipe_context *ctx, bool use_fbfetch,
 
    assert(num_samples >= 1 && num_samples <= 8);
 
-   snprintf(name, sizeof(name), "%s: %s, %u samples", __func__,
-            use_fbfetch ? "FBFETCH" : "sampler", MAX2(num_samples, 1));
+   util_snprintf(name, sizeof(name), "%s: %s, %u samples", __func__,
+                 use_fbfetch ? "FBFETCH" : "sampler", MAX2(num_samples, 1));
 
    if (!ctx->screen->get_param(ctx->screen, PIPE_CAP_TEXTURE_BARRIER)) {
       util_report_result_helper(SKIP, name);
@@ -649,7 +651,7 @@ test_texture_barrier(struct pipe_context *ctx, bool use_fbfetch,
       /* Vertex shader. */
       void *vs = util_set_passthrough_vertex_shader(cso, ctx, false);
 
-      for (int i = 0; i < num_samples / 2; i++) {
+      for (unsigned i = 0; i < num_samples / 2; i++) {
          float value;
 
          /* 2 consecutive samples should have the same color to test MSAA

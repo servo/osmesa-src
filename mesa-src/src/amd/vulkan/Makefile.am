@@ -59,6 +59,10 @@ AM_CFLAGS = \
 	$(PTHREAD_CFLAGS) \
 	$(LLVM_CFLAGS)
 
+AM_CXXFLAGS = \
+	$(VISIBILITY_CXXFLAGS) \
+	$(LLVM_CXXFLAGS)
+
 VULKAN_SOURCES = \
 	$(VULKAN_GENERATED_FILES) \
 	$(VULKAN_FILES)
@@ -79,6 +83,22 @@ VULKAN_LIB_DEPS = \
 	$(PTHREAD_LIBS) \
 	$(DLOPEN_LIBS) \
 	-lm
+
+if HAVE_PLATFORM_DRM
+AM_CPPFLAGS += \
+	-DVK_USE_PLATFORM_DISPLAY_KHR
+
+VULKAN_SOURCES += $(VULKAN_WSI_DISPLAY_FILES)
+endif
+
+if HAVE_XLIB_LEASE
+AM_CPPFLAGS += \
+	-DVK_USE_PLATFORM_XLIB_XRANDR_EXT \
+	$(XCB_RANDR_CFLAGS) \
+	$(XLIB_RANDR_CFLAGS)
+
+VULKAN_LIB_DEPS += $(XCB_RANDR_LIBS)
+endif
 
 if HAVE_PLATFORM_X11
 AM_CPPFLAGS += \
@@ -104,7 +124,7 @@ VULKAN_LIB_DEPS += \
 endif
 
 if HAVE_PLATFORM_ANDROID
-AM_CPPFLAGS += $(ANDROID_CPPFLAGS)
+AM_CPPFLAGS += $(ANDROID_CPPFLAGS) -DVK_USE_PLATFORM_ANDROID_KHR
 AM_CFLAGS += $(ANDROID_CFLAGS)
 VULKAN_LIB_DEPS += $(ANDROID_LIBS)
 VULKAN_SOURCES += $(VULKAN_ANDROID_FILES)
@@ -117,13 +137,11 @@ nodist_EXTRA_libvulkan_radeon_la_SOURCES = dummy.cpp
 libvulkan_radeon_la_SOURCES = $(VULKAN_GEM_FILES)
 
 vulkan_api_xml = $(top_srcdir)/src/vulkan/registry/vk.xml
-vk_android_native_buffer_xml = $(top_srcdir)/src/vulkan/registry/vk_android_native_buffer.xml
 
 radv_entrypoints.c: radv_entrypoints_gen.py radv_extensions.py $(vulkan_api_xml)
 	$(MKDIR_GEN)
 	$(AM_V_GEN)$(PYTHON2) $(srcdir)/radv_entrypoints_gen.py \
 		--xml $(vulkan_api_xml) \
-		--xml $(vk_android_native_buffer_xml) \
 		--outdir $(builddir)
 radv_entrypoints.h: radv_entrypoints.c
 
@@ -132,7 +150,6 @@ radv_extensions.c: radv_extensions.py \
 	$(MKDIR_GEN)
 	$(AM_V_GEN)$(PYTHON2) $(srcdir)/radv_extensions.py \
 		--xml $(vulkan_api_xml) \
-		--xml $(vk_android_native_buffer_xml) \
 		--out-c radv_extensions.c \
 		--out-h radv_extensions.h
 radv_extensions.h: radv_extensions.c

@@ -36,6 +36,8 @@
 extern "C" {
 #endif
 
+struct gl_context;
+
 extern void
 _mesa_compute_component_mapping(GLenum inFormat, GLenum outFormat, GLubyte *map);
 
@@ -153,7 +155,8 @@ _mesa_tex_format_from_format_and_type(const struct gl_context *ctx,
                                       GLenum gl_format, GLenum type);
 
 extern bool
-_mesa_is_es3_color_renderable(GLenum internal_format);
+_mesa_is_es3_color_renderable(const struct gl_context *ctx,
+                              GLenum internal_format);
 
 extern bool
 _mesa_is_es3_texture_filterable(const struct gl_context *ctx,

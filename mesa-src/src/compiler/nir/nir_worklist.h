@@ -105,8 +105,15 @@ typedef struct {
 static inline nir_instr_worklist *
 nir_instr_worklist_create() {
    nir_instr_worklist *wl = malloc(sizeof(nir_instr_worklist));
-   u_vector_init(&wl->instr_vec, sizeof(struct nir_instr *),
-                 sizeof(struct nir_instr *) * 8);
+   if (!wl)
+      return NULL;
+
+   if (!u_vector_init(&wl->instr_vec, sizeof(struct nir_instr *),
+                      sizeof(struct nir_instr *) * 8)) {
+      free(wl);
+      return NULL;
+   }
+
    return wl;
 }
 
@@ -147,8 +154,8 @@ nir_instr_worklist_pop_head(nir_instr_worklist *wl)
    return *vec_instr;
 }
 
-#define nir_instr_worklist_foreach(wl, instr)                    \
-   while ((instr = nir_instr_worklist_pop_head(wl)))
+#define nir_foreach_instr_in_worklist(instr, wl) \
+   for (nir_instr *instr; (instr = nir_instr_worklist_pop_head(wl));)
 
 #ifdef __cplusplus
 } /* extern "C" */

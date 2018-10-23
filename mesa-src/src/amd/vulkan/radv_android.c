@@ -122,7 +122,7 @@ radv_image_from_gralloc(VkDevice device_h,
 		return result;
 
 	if (gralloc_info->handle->numFds != 1) {
-		return vk_errorf(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR,
+		return vk_errorf(device->instance, VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR,
 		                 "VkNativeBufferANDROID::handle::numFds is %d, "
 		                 "expected 1", gralloc_info->handle->numFds);
 	}
@@ -230,11 +230,11 @@ VkResult radv_GetSwapchainGrallocUsageANDROID(
 	};
 
 	/* Check that requested format and usage are supported. */
-	result = radv_GetPhysicalDeviceImageFormatProperties2KHR(phys_dev_h,
-	                                                         &image_format_info, &image_format_props);
+	result = radv_GetPhysicalDeviceImageFormatProperties2(phys_dev_h,
+	                                                      &image_format_info, &image_format_props);
 	if (result != VK_SUCCESS) {
-		return vk_errorf(result,
-		                 "radv_GetPhysicalDeviceImageFormatProperties2KHR failed "
+		return vk_errorf(device->instance, result,
+		                 "radv_GetPhysicalDeviceImageFormatProperties2 failed "
 		                 "inside %s", __func__);
 	}
 
@@ -252,7 +252,7 @@ VkResult radv_GetSwapchainGrallocUsageANDROID(
 	 * gralloc swapchains.
 	 */
 	if (imageUsage != 0) {
-	return vk_errorf(VK_ERROR_FORMAT_NOT_SUPPORTED,
+	return vk_errorf(device->instance, VK_ERROR_FORMAT_NOT_SUPPORTED,
 	                "unsupported VkImageUsageFlags(0x%x) for gralloc "
 	                "swapchain", imageUsage);
 	}

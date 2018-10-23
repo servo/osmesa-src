@@ -313,7 +313,7 @@ virgl_drm_winsys_resource_cache_create(struct virgl_winsys *qws,
    struct virgl_hw_res *res, *curr_res;
    struct list_head *curr, *next;
    int64_t now;
-   int ret;
+   int ret = 0;
 
    /* only store binds for vertex/index/const buffers */
    if (bind != VIRGL_BIND_CONSTANT_BUFFER && bind != VIRGL_BIND_INDEX_BUFFER &&
@@ -398,7 +398,7 @@ virgl_drm_winsys_resource_create_handle(struct virgl_winsys *qws,
 
    mtx_lock(&qdws->bo_handles_mutex);
 
-   if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+   if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
       res = util_hash_table_get(qdws->bo_names, (void*)(uintptr_t)handle);
       if (res) {
          struct virgl_hw_res *r = NULL;
@@ -407,7 +407,7 @@ virgl_drm_winsys_resource_create_handle(struct virgl_winsys *qws,
       }
    }
 
-   if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+   if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
       int r;
       r = drmPrimeFDToHandle(qdws->fd, whandle->handle, &handle);
       if (r) {
@@ -417,7 +417,6 @@ virgl_drm_winsys_resource_create_handle(struct virgl_winsys *qws,
    }
 
    res = util_hash_table_get(qdws->bo_handles, (void*)(uintptr_t)handle);
-   fprintf(stderr, "resource %p for handle %d, pfd=%d\n", res, handle, whandle->handle);
    if (res) {
       struct virgl_hw_res *r = NULL;
       virgl_drm_resource_reference(qdws, &r, res);
@@ -428,10 +427,9 @@ virgl_drm_winsys_resource_create_handle(struct virgl_winsys *qws,
    if (!res)
       goto done;
 
-   if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+   if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
       res->bo_handle = handle;
    } else {
-      fprintf(stderr, "gem open handle %d\n", handle);
       memset(&open_arg, 0, sizeof(open_arg));
       open_arg.name = whandle->handle;
       if (drmIoctl(qdws->fd, DRM_IOCTL_GEM_OPEN, &open_arg)) {
@@ -478,7 +476,7 @@ static boolean virgl_drm_winsys_resource_get_handle(struct virgl_winsys *qws,
    if (!res)
        return FALSE;
 
-   if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+   if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
       if (!res->flinked) {
          memset(&flink, 0, sizeof(flink));
          flink.handle = res->bo_handle;
@@ -494,9 +492,9 @@ static boolean virgl_drm_winsys_resource_get_handle(struct virgl_winsys *qws,
          mtx_unlock(&qdws->bo_handles_mutex);
       }
       whandle->handle = res->flink;
-   } else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
+   } else if (whandle->type == WINSYS_HANDLE_TYPE_KMS) {
       whandle->handle = res->bo_handle;
-   } else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+   } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
       if (drmPrimeHandleToFD(qdws->fd, res->bo_handle, DRM_CLOEXEC, (int*)&whandle->handle))
             return FALSE;
       mtx_lock(&qdws->bo_handles_mutex);
@@ -619,13 +617,26 @@ static void virgl_drm_add_res(struct virgl_drm_winsys *qdws,
 {
    unsigned hash = res->res_handle & (sizeof(cbuf->is_handle_added)-1);
 
-   if (cbuf->cres > cbuf->nres) {
-      cbuf->nres += 256;
-      cbuf->res_bo = realloc(cbuf->res_bo, cbuf->nres * sizeof(struct virgl_hw_buf*));
-      if (!cbuf->res_bo) {
-          fprintf(stderr,"failure to add relocation %d, %d\n", cbuf->cres, cbuf->nres);
+   if (cbuf->cres >= cbuf->nres) {
+      unsigned new_nres = cbuf->nres + 256;
+      void *new_ptr = REALLOC(cbuf->res_bo,
+                              cbuf->nres * sizeof(struct virgl_hw_buf*),
+                              new_nres * sizeof(struct virgl_hw_buf*));
+      if (!new_ptr) {
+          fprintf(stderr,"failure to add relocation %d, %d\n", cbuf->cres, new_nres);
           return;
       }
+      cbuf->res_bo = new_ptr;
+
+      new_ptr = REALLOC(cbuf->res_hlist,
+                        cbuf->nres * sizeof(uint32_t),
+                        new_nres * sizeof(uint32_t));
+      if (!new_ptr) {
+          fprintf(stderr,"failure to add hlist relocation %d, %d\n", cbuf->cres, cbuf->nres);
+          return;
+      }
+      cbuf->res_hlist = new_ptr;
+      cbuf->nres = new_nres;
    }
 
    cbuf->res_bo[cbuf->cres] = NULL;
@@ -800,7 +811,14 @@ virgl_drm_winsys_create(int drmFD)
 {
    struct virgl_drm_winsys *qdws;
    int ret;
+   int gl = 0;
    struct drm_virtgpu_getparam getparam = {0};
+
+   getparam.param = VIRTGPU_PARAM_3D_FEATURES;
+   getparam.value = (uint64_t)(uintptr_t)&gl;
+   ret = drmIoctl(drmFD, DRM_IOCTL_VIRTGPU_GETPARAM, &getparam);
+   if (ret < 0 || !gl)
+      return NULL;
 
    qdws = CALLOC_STRUCT(virgl_drm_winsys);
    if (!qdws)
@@ -836,7 +854,7 @@ virgl_drm_winsys_create(int drmFD)
 
    qdws->base.get_caps = virgl_drm_get_caps;
 
-   uint32_t value;
+   uint32_t value = 0;
    getparam.param = VIRTGPU_PARAM_CAPSET_QUERY_FIX;
    getparam.value = (uint64_t)(uintptr_t)&value;
    ret = drmIoctl(qdws->fd, DRM_IOCTL_VIRTGPU_GETPARAM, &getparam);
@@ -914,6 +932,10 @@ virgl_drm_screen_create(int fd)
       int dup_fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
 
       vws = virgl_drm_winsys_create(dup_fd);
+      if (!vws) {
+         close(dup_fd);
+         goto unlock;
+      }
 
       pscreen = virgl_create_screen(vws);
       if (pscreen) {

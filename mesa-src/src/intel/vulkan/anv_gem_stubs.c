@@ -170,12 +170,6 @@ anv_gem_get_aperture(int fd, uint64_t *size)
    unreachable("Unused");
 }
 
-bool
-anv_gem_supports_48b_addresses(int fd)
-{
-   unreachable("Unused");
-}
-
 int
 anv_gem_gpu_get_reset_stats(struct anv_device *device,
                             uint32_t *active, uint32_t *pending)
@@ -254,6 +248,13 @@ int
 anv_gem_syncobj_wait(struct anv_device *device,
                      uint32_t *handles, uint32_t num_handles,
                      int64_t abs_timeout_ns, bool wait_all)
+{
+   unreachable("Unused");
+}
+
+int
+anv_gem_reg_read(struct anv_device *device,
+                 uint32_t offset, uint64_t *result)
 {
    unreachable("Unused");
 }

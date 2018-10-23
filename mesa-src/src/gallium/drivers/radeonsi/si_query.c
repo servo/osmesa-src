@@ -29,7 +29,7 @@
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
 #include "util/os_time.h"
-#include "tgsi/tgsi_text.h"
+#include "util/u_suballoc.h"
 #include "amd/common/sid.h"
 
 #define SI_MAX_STREAMS 4
@@ -92,6 +92,19 @@ static enum radeon_value_id winsys_id_from_type(unsigned type)
 	}
 }
 
+static int64_t si_finish_dma_get_cpu_time(struct si_context *sctx)
+{
+	struct pipe_fence_handle *fence = NULL;
+
+	si_flush_dma_cs(sctx, 0, &fence);
+	if (fence) {
+		sctx->ws->fence_wait(sctx->ws, fence, PIPE_TIMEOUT_INFINITE);
+		sctx->ws->fence_reference(&fence, NULL);
+	}
+
+	return os_time_get_nano();
+}
+
 static bool si_query_sw_begin(struct si_context *sctx,
 			      struct si_query *rquery)
 {
@@ -101,6 +114,9 @@ static bool si_query_sw_begin(struct si_context *sctx,
 	switch(query->b.type) {
 	case PIPE_QUERY_TIMESTAMP_DISJOINT:
 	case PIPE_QUERY_GPU_FINISHED:
+		break;
+	case SI_QUERY_TIME_ELAPSED_SDMA_SI:
+		query->begin_result = si_finish_dma_get_cpu_time(sctx);
 		break;
 	case SI_QUERY_DRAW_CALLS:
 		query->begin_result = sctx->num_draw_calls;
@@ -261,6 +277,9 @@ static bool si_query_sw_end(struct si_context *sctx,
 		break;
 	case PIPE_QUERY_GPU_FINISHED:
 		sctx->b.flush(&sctx->b, &query->fence, PIPE_FLUSH_DEFERRED);
+		break;
+	case SI_QUERY_TIME_ELAPSED_SDMA_SI:
+		query->end_result = si_finish_dma_get_cpu_time(sctx);
 		break;
 	case SI_QUERY_DRAW_CALLS:
 		query->end_result = sctx->num_draw_calls;
@@ -529,9 +548,9 @@ static struct r600_resource *si_new_query_buffer(struct si_screen *sscreen,
 	 * being written by the gpu, hence staging is probably a good
 	 * usage pattern.
 	 */
-	struct r600_resource *buf = (struct r600_resource*)
+	struct r600_resource *buf = r600_resource(
 		pipe_buffer_create(&sscreen->b, 0,
-				   PIPE_USAGE_STAGING, buf_size);
+				   PIPE_USAGE_STAGING, buf_size));
 	if (!buf)
 		return NULL;
 
@@ -646,15 +665,20 @@ static struct pipe_query *si_query_hw_create(struct si_screen *sscreen,
 	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		query->result_size = 16 * sscreen->info.num_render_backends;
 		query->result_size += 16; /* for the fence + alignment */
-		query->num_cs_dw_end = 6 + si_gfx_write_fence_dwords(sscreen);
+		query->num_cs_dw_end = 6 + si_cp_write_fence_dwords(sscreen);
+		break;
+	case SI_QUERY_TIME_ELAPSED_SDMA:
+		/* GET_GLOBAL_TIMESTAMP only works if the offset is a multiple of 32. */
+		query->result_size = 64;
+		query->num_cs_dw_end = 0;
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
 		query->result_size = 24;
-		query->num_cs_dw_end = 8 + si_gfx_write_fence_dwords(sscreen);
+		query->num_cs_dw_end = 8 + si_cp_write_fence_dwords(sscreen);
 		break;
 	case PIPE_QUERY_TIMESTAMP:
 		query->result_size = 16;
-		query->num_cs_dw_end = 8 + si_gfx_write_fence_dwords(sscreen);
+		query->num_cs_dw_end = 8 + si_cp_write_fence_dwords(sscreen);
 		query->flags = SI_QUERY_HW_FLAG_NO_START;
 		break;
 	case PIPE_QUERY_PRIMITIVES_EMITTED:
@@ -675,7 +699,7 @@ static struct pipe_query *si_query_hw_create(struct si_screen *sscreen,
 		/* 11 values on GCN. */
 		query->result_size = 11 * 16;
 		query->result_size += 8; /* for the fence + alignment */
-		query->num_cs_dw_end = 6 + si_gfx_write_fence_dwords(sscreen);
+		query->num_cs_dw_end = 6 + si_cp_write_fence_dwords(sscreen);
 		break;
 	default:
 		assert(0);
@@ -730,7 +754,7 @@ static unsigned event_type_for_stream(unsigned stream)
 	}
 }
 
-static void emit_sample_streamout(struct radeon_winsys_cs *cs, uint64_t va,
+static void emit_sample_streamout(struct radeon_cmdbuf *cs, uint64_t va,
 				  unsigned stream)
 {
 	radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
@@ -744,9 +768,12 @@ static void si_query_hw_do_emit_start(struct si_context *sctx,
 					struct r600_resource *buffer,
 					uint64_t va)
 {
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 
 	switch (query->b.type) {
+	case SI_QUERY_TIME_ELAPSED_SDMA:
+		si_dma_emit_timestamp(sctx, buffer, va - buffer->gpu_address);
+		return;
 	case PIPE_QUERY_OCCLUSION_COUNTER:
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
 	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
@@ -772,7 +799,7 @@ static void si_query_hw_do_emit_start(struct si_context *sctx,
 		radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
 		radeon_emit(cs, COPY_DATA_COUNT_SEL |
 				COPY_DATA_SRC_SEL(COPY_DATA_TIMESTAMP) |
-				COPY_DATA_DST_SEL(COPY_DATA_MEM_ASYNC));
+				COPY_DATA_DST_SEL(COPY_DATA_DST_MEM));
 		radeon_emit(cs, 0);
 		radeon_emit(cs, 0);
 		radeon_emit(cs, va);
@@ -802,7 +829,8 @@ static void si_query_hw_emit_start(struct si_context *sctx,
 	si_update_occlusion_query_state(sctx, query->b.type, 1);
 	si_update_prims_generated_query_state(sctx, query->b.type, 1);
 
-	si_need_gfx_cs_space(sctx);
+	if (query->b.type != SI_QUERY_TIME_ELAPSED_SDMA)
+		si_need_gfx_cs_space(sctx);
 
 	/* Get a new query buffer if needed. */
 	if (query->buffer.results_end + query->result_size > query->buffer.buf->b.b.width0) {
@@ -828,10 +856,13 @@ static void si_query_hw_do_emit_stop(struct si_context *sctx,
 				       struct r600_resource *buffer,
 				       uint64_t va)
 {
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 	uint64_t fence_va = 0;
 
 	switch (query->b.type) {
+	case SI_QUERY_TIME_ELAPSED_SDMA:
+		si_dma_emit_timestamp(sctx, buffer, va + 32 - buffer->gpu_address);
+		return;
 	case PIPE_QUERY_OCCLUSION_COUNTER:
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
 	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
@@ -859,9 +890,11 @@ static void si_query_hw_do_emit_stop(struct si_context *sctx,
 		va += 8;
 		/* fall through */
 	case PIPE_QUERY_TIMESTAMP:
-		si_gfx_write_event_eop(sctx, V_028A90_BOTTOM_OF_PIPE_TS,
-				       0, EOP_DATA_SEL_TIMESTAMP, NULL, va,
-				       0, query->b.type);
+		si_cp_release_mem(sctx, V_028A90_BOTTOM_OF_PIPE_TS,
+				  0, EOP_DST_SEL_MEM,
+				  EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM,
+				  EOP_DATA_SEL_TIMESTAMP, NULL, va,
+				  0, query->b.type);
 		fence_va = va + 8;
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS: {
@@ -882,11 +915,14 @@ static void si_query_hw_do_emit_stop(struct si_context *sctx,
 	radeon_add_to_buffer_list(sctx, sctx->gfx_cs, query->buffer.buf, RADEON_USAGE_WRITE,
 				  RADEON_PRIO_QUERY);
 
-	if (fence_va)
-		si_gfx_write_event_eop(sctx, V_028A90_BOTTOM_OF_PIPE_TS, 0,
-				       EOP_DATA_SEL_VALUE_32BIT,
-				       query->buffer.buf, fence_va, 0x80000000,
-				       query->b.type);
+	if (fence_va) {
+		si_cp_release_mem(sctx, V_028A90_BOTTOM_OF_PIPE_TS, 0,
+				  EOP_DST_SEL_MEM,
+				  EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM,
+				  EOP_DATA_SEL_VALUE_32BIT,
+				  query->buffer.buf, fence_va, 0x80000000,
+				  query->b.type);
+	}
 }
 
 static void si_query_hw_emit_stop(struct si_context *sctx,
@@ -919,7 +955,7 @@ static void emit_set_predicate(struct si_context *ctx,
 			       struct r600_resource *buf, uint64_t va,
 			       uint32_t op)
 {
-	struct radeon_winsys_cs *cs = ctx->gfx_cs;
+	struct radeon_cmdbuf *cs = ctx->gfx_cs;
 
 	if (ctx->chip_class >= GFX9) {
 		radeon_emit(cs, PKT3(PKT3_SET_PREDICATION, 2, 0));
@@ -935,8 +971,7 @@ static void emit_set_predicate(struct si_context *ctx,
 				  RADEON_PRIO_QUERY);
 }
 
-static void si_emit_query_predication(struct si_context *ctx,
-				      struct r600_atom *atom)
+static void si_emit_query_predication(struct si_context *ctx)
 {
 	struct si_query_hw *query = (struct si_query_hw *)ctx->render_cond;
 	struct si_query_buffer *qbuf;
@@ -1023,7 +1058,8 @@ static struct pipe_query *si_create_query(struct pipe_context *ctx, unsigned que
 
 	if (query_type == PIPE_QUERY_TIMESTAMP_DISJOINT ||
 	    query_type == PIPE_QUERY_GPU_FINISHED ||
-	    query_type >= PIPE_QUERY_DRIVER_SPECIFIC)
+	    (query_type >= PIPE_QUERY_DRIVER_SPECIFIC &&
+	     query_type != SI_QUERY_TIME_ELAPSED_SDMA))
 		return si_query_sw_create(query_type);
 
 	return si_query_hw_create(sscreen, query_type, index);
@@ -1182,7 +1218,6 @@ static void si_get_hw_query_params(struct si_context *sctx,
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 	{
-		/* Offsets apply to EG+ */
 		static const unsigned offsets[] = {56, 48, 24, 32, 40, 16, 8, 0, 64, 72, 80};
 		params->start_offset = offsets[index];
 		params->end_offset = 88 + offsets[index];
@@ -1239,6 +1274,9 @@ static void si_query_hw_add_result(struct si_screen *sscreen,
 	}
 	case PIPE_QUERY_TIME_ELAPSED:
 		result->u64 += si_query_read_result(buffer, 0, 2, false);
+		break;
+	case SI_QUERY_TIME_ELAPSED_SDMA:
+		result->u64 += si_query_read_result(buffer, 0, 32/4, false);
 		break;
 	case PIPE_QUERY_TIMESTAMP:
 		result->u64 = *(uint64_t*)buffer;
@@ -1384,226 +1422,11 @@ bool si_query_hw_get_result(struct si_context *sctx,
 
 	/* Convert the time to expected units. */
 	if (rquery->type == PIPE_QUERY_TIME_ELAPSED ||
+	    rquery->type == SI_QUERY_TIME_ELAPSED_SDMA ||
 	    rquery->type == PIPE_QUERY_TIMESTAMP) {
 		result->u64 = (1000000 * result->u64) / sscreen->info.clock_crystal_freq;
 	}
 	return true;
-}
-
-/* Create the compute shader that is used to collect the results.
- *
- * One compute grid with a single thread is launched for every query result
- * buffer. The thread (optionally) reads a previous summary buffer, then
- * accumulates data from the query result buffer, and writes the result either
- * to a summary buffer to be consumed by the next grid invocation or to the
- * user-supplied buffer.
- *
- * Data layout:
- *
- * CONST
- *  0.x = end_offset
- *  0.y = result_stride
- *  0.z = result_count
- *  0.w = bit field:
- *          1: read previously accumulated values
- *          2: write accumulated values for chaining
- *          4: write result available
- *          8: convert result to boolean (0/1)
- *         16: only read one dword and use that as result
- *         32: apply timestamp conversion
- *         64: store full 64 bits result
- *        128: store signed 32 bits result
- *        256: SO_OVERFLOW mode: take the difference of two successive half-pairs
- *  1.x = fence_offset
- *  1.y = pair_stride
- *  1.z = pair_count
- *
- * BUFFER[0] = query result buffer
- * BUFFER[1] = previous summary buffer
- * BUFFER[2] = next summary buffer or user-supplied buffer
- */
-static void si_create_query_result_shader(struct si_context *sctx)
-{
-	/* TEMP[0].xy = accumulated result so far
-	 * TEMP[0].z = result not available
-	 *
-	 * TEMP[1].x = current result index
-	 * TEMP[1].y = current pair index
-	 */
-	static const char text_tmpl[] =
-		"COMP\n"
-		"PROPERTY CS_FIXED_BLOCK_WIDTH 1\n"
-		"PROPERTY CS_FIXED_BLOCK_HEIGHT 1\n"
-		"PROPERTY CS_FIXED_BLOCK_DEPTH 1\n"
-		"DCL BUFFER[0]\n"
-		"DCL BUFFER[1]\n"
-		"DCL BUFFER[2]\n"
-		"DCL CONST[0][0..1]\n"
-		"DCL TEMP[0..5]\n"
-		"IMM[0] UINT32 {0, 31, 2147483647, 4294967295}\n"
-		"IMM[1] UINT32 {1, 2, 4, 8}\n"
-		"IMM[2] UINT32 {16, 32, 64, 128}\n"
-		"IMM[3] UINT32 {1000000, 0, %u, 0}\n" /* for timestamp conversion */
-		"IMM[4] UINT32 {256, 0, 0, 0}\n"
-
-		"AND TEMP[5], CONST[0][0].wwww, IMM[2].xxxx\n"
-		"UIF TEMP[5]\n"
-			/* Check result availability. */
-			"LOAD TEMP[1].x, BUFFER[0], CONST[0][1].xxxx\n"
-			"ISHR TEMP[0].z, TEMP[1].xxxx, IMM[0].yyyy\n"
-			"MOV TEMP[1], TEMP[0].zzzz\n"
-			"NOT TEMP[0].z, TEMP[0].zzzz\n"
-
-			/* Load result if available. */
-			"UIF TEMP[1]\n"
-				"LOAD TEMP[0].xy, BUFFER[0], IMM[0].xxxx\n"
-			"ENDIF\n"
-		"ELSE\n"
-			/* Load previously accumulated result if requested. */
-			"MOV TEMP[0], IMM[0].xxxx\n"
-			"AND TEMP[4], CONST[0][0].wwww, IMM[1].xxxx\n"
-			"UIF TEMP[4]\n"
-				"LOAD TEMP[0].xyz, BUFFER[1], IMM[0].xxxx\n"
-			"ENDIF\n"
-
-			"MOV TEMP[1].x, IMM[0].xxxx\n"
-			"BGNLOOP\n"
-				/* Break if accumulated result so far is not available. */
-				"UIF TEMP[0].zzzz\n"
-					"BRK\n"
-				"ENDIF\n"
-
-				/* Break if result_index >= result_count. */
-				"USGE TEMP[5], TEMP[1].xxxx, CONST[0][0].zzzz\n"
-				"UIF TEMP[5]\n"
-					"BRK\n"
-				"ENDIF\n"
-
-				/* Load fence and check result availability */
-				"UMAD TEMP[5].x, TEMP[1].xxxx, CONST[0][0].yyyy, CONST[0][1].xxxx\n"
-				"LOAD TEMP[5].x, BUFFER[0], TEMP[5].xxxx\n"
-				"ISHR TEMP[0].z, TEMP[5].xxxx, IMM[0].yyyy\n"
-				"NOT TEMP[0].z, TEMP[0].zzzz\n"
-				"UIF TEMP[0].zzzz\n"
-					"BRK\n"
-				"ENDIF\n"
-
-				"MOV TEMP[1].y, IMM[0].xxxx\n"
-				"BGNLOOP\n"
-					/* Load start and end. */
-					"UMUL TEMP[5].x, TEMP[1].xxxx, CONST[0][0].yyyy\n"
-					"UMAD TEMP[5].x, TEMP[1].yyyy, CONST[0][1].yyyy, TEMP[5].xxxx\n"
-					"LOAD TEMP[2].xy, BUFFER[0], TEMP[5].xxxx\n"
-
-					"UADD TEMP[5].y, TEMP[5].xxxx, CONST[0][0].xxxx\n"
-					"LOAD TEMP[3].xy, BUFFER[0], TEMP[5].yyyy\n"
-
-					"U64ADD TEMP[4].xy, TEMP[3], -TEMP[2]\n"
-
-					"AND TEMP[5].z, CONST[0][0].wwww, IMM[4].xxxx\n"
-					"UIF TEMP[5].zzzz\n"
-						/* Load second start/end half-pair and
-						 * take the difference
-						 */
-						"UADD TEMP[5].xy, TEMP[5], IMM[1].wwww\n"
-						"LOAD TEMP[2].xy, BUFFER[0], TEMP[5].xxxx\n"
-						"LOAD TEMP[3].xy, BUFFER[0], TEMP[5].yyyy\n"
-
-						"U64ADD TEMP[3].xy, TEMP[3], -TEMP[2]\n"
-						"U64ADD TEMP[4].xy, TEMP[4], -TEMP[3]\n"
-					"ENDIF\n"
-
-					"U64ADD TEMP[0].xy, TEMP[0], TEMP[4]\n"
-
-					/* Increment pair index */
-					"UADD TEMP[1].y, TEMP[1].yyyy, IMM[1].xxxx\n"
-					"USGE TEMP[5], TEMP[1].yyyy, CONST[0][1].zzzz\n"
-					"UIF TEMP[5]\n"
-						"BRK\n"
-					"ENDIF\n"
-				"ENDLOOP\n"
-
-				/* Increment result index */
-				"UADD TEMP[1].x, TEMP[1].xxxx, IMM[1].xxxx\n"
-			"ENDLOOP\n"
-		"ENDIF\n"
-
-		"AND TEMP[4], CONST[0][0].wwww, IMM[1].yyyy\n"
-		"UIF TEMP[4]\n"
-			/* Store accumulated data for chaining. */
-			"STORE BUFFER[2].xyz, IMM[0].xxxx, TEMP[0]\n"
-		"ELSE\n"
-			"AND TEMP[4], CONST[0][0].wwww, IMM[1].zzzz\n"
-			"UIF TEMP[4]\n"
-				/* Store result availability. */
-				"NOT TEMP[0].z, TEMP[0]\n"
-				"AND TEMP[0].z, TEMP[0].zzzz, IMM[1].xxxx\n"
-				"STORE BUFFER[2].x, IMM[0].xxxx, TEMP[0].zzzz\n"
-
-				"AND TEMP[4], CONST[0][0].wwww, IMM[2].zzzz\n"
-				"UIF TEMP[4]\n"
-					"STORE BUFFER[2].y, IMM[0].xxxx, IMM[0].xxxx\n"
-				"ENDIF\n"
-			"ELSE\n"
-				/* Store result if it is available. */
-				"NOT TEMP[4], TEMP[0].zzzz\n"
-				"UIF TEMP[4]\n"
-					/* Apply timestamp conversion */
-					"AND TEMP[4], CONST[0][0].wwww, IMM[2].yyyy\n"
-					"UIF TEMP[4]\n"
-						"U64MUL TEMP[0].xy, TEMP[0], IMM[3].xyxy\n"
-						"U64DIV TEMP[0].xy, TEMP[0], IMM[3].zwzw\n"
-					"ENDIF\n"
-
-					/* Convert to boolean */
-					"AND TEMP[4], CONST[0][0].wwww, IMM[1].wwww\n"
-					"UIF TEMP[4]\n"
-						"U64SNE TEMP[0].x, TEMP[0].xyxy, IMM[4].zwzw\n"
-						"AND TEMP[0].x, TEMP[0].xxxx, IMM[1].xxxx\n"
-						"MOV TEMP[0].y, IMM[0].xxxx\n"
-					"ENDIF\n"
-
-					"AND TEMP[4], CONST[0][0].wwww, IMM[2].zzzz\n"
-					"UIF TEMP[4]\n"
-						"STORE BUFFER[2].xy, IMM[0].xxxx, TEMP[0].xyxy\n"
-					"ELSE\n"
-						/* Clamping */
-						"UIF TEMP[0].yyyy\n"
-							"MOV TEMP[0].x, IMM[0].wwww\n"
-						"ENDIF\n"
-
-						"AND TEMP[4], CONST[0][0].wwww, IMM[2].wwww\n"
-						"UIF TEMP[4]\n"
-							"UMIN TEMP[0].x, TEMP[0].xxxx, IMM[0].zzzz\n"
-						"ENDIF\n"
-
-						"STORE BUFFER[2].x, IMM[0].xxxx, TEMP[0].xxxx\n"
-					"ENDIF\n"
-				"ENDIF\n"
-			"ENDIF\n"
-		"ENDIF\n"
-
-		"END\n";
-
-	char text[sizeof(text_tmpl) + 32];
-	struct tgsi_token tokens[1024];
-	struct pipe_compute_state state = {};
-
-	/* Hard code the frequency into the shader so that the backend can
-	 * use the full range of optimizations for divide-by-constant.
-	 */
-	snprintf(text, sizeof(text), text_tmpl,
-		 sctx->screen->info.clock_crystal_freq);
-
-	if (!tgsi_text_translate(text, tokens, ARRAY_SIZE(tokens))) {
-		assert(false);
-		return;
-	}
-
-	state.ir_type = PIPE_SHADER_IR_TGSI;
-	state.prog = tokens;
-
-	sctx->query_result_shader = sctx->b.create_compute_state(&sctx->b, &state);
 }
 
 static void si_restore_qbo_state(struct si_context *sctx,
@@ -1648,7 +1471,7 @@ static void si_query_hw_get_result_resource(struct si_context *sctx,
 	} consts;
 
 	if (!sctx->query_result_shader) {
-		si_create_query_result_shader(sctx);
+		sctx->query_result_shader = si_create_query_result_cs(sctx);
 		if (!sctx->query_result_shader)
 			return;
 	}
@@ -1742,7 +1565,7 @@ static void si_query_hw_get_result_resource(struct si_context *sctx,
 			ssbo[2].buffer_offset = offset;
 			ssbo[2].buffer_size = 8;
 
-			((struct r600_resource *)resource)->TC_L2_dirty = true;
+			r600_resource(resource)->TC_L2_dirty = true;
 		}
 
 		sctx->b.set_shader_buffers(&sctx->b, PIPE_SHADER_COMPUTE, 0, 3, ssbo);
@@ -1757,7 +1580,7 @@ static void si_query_hw_get_result_resource(struct si_context *sctx,
 			va = qbuf->buf->gpu_address + qbuf->results_end - query->result_size;
 			va += params.fence_offset;
 
-			si_gfx_wait_fence(sctx, va, 0x80000000, 0x80000000);
+			si_cp_wait_mem(sctx, va, 0x80000000, 0x80000000, 0);
 		}
 
 		sctx->b.launch_grid(&sctx->b, &grid);
@@ -1775,7 +1598,7 @@ static void si_render_condition(struct pipe_context *ctx,
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_query_hw *rquery = (struct si_query_hw *)query;
-	struct r600_atom *atom = &sctx->render_cond_atom;
+	struct si_atom *atom = &sctx->atoms.s.render_cond;
 
 	if (query) {
 		bool needs_workaround = false;
@@ -1942,7 +1765,11 @@ static struct pipe_driver_query_info si_driver_query_list[] = {
 	X("GPU-db-busy",		GPU_DB_BUSY,		UINT64, AVERAGE),
 	X("GPU-cp-busy",		GPU_CP_BUSY,		UINT64, AVERAGE),
 	X("GPU-cb-busy",		GPU_CB_BUSY,		UINT64, AVERAGE),
+
+	/* SRBM_STATUS2 */
 	X("GPU-sdma-busy",		GPU_SDMA_BUSY,		UINT64, AVERAGE),
+
+	/* CP_STAT */
 	X("GPU-pfp-busy",		GPU_PFP_BUSY,		UINT64, AVERAGE),
 	X("GPU-meq-busy",		GPU_MEQ_BUSY,		UINT64, AVERAGE),
 	X("GPU-me-busy",		GPU_ME_BUSY,		UINT64, AVERAGE),
@@ -1957,16 +1784,23 @@ static struct pipe_driver_query_info si_driver_query_list[] = {
 
 static unsigned si_get_num_queries(struct si_screen *sscreen)
 {
-	if (sscreen->info.drm_major == 2 && sscreen->info.drm_minor >= 42)
-		return ARRAY_SIZE(si_driver_query_list);
-	else if (sscreen->info.drm_major == 3) {
+	/* amdgpu */
+	if (sscreen->info.drm_major == 3) {
 		if (sscreen->info.chip_class >= VI)
 			return ARRAY_SIZE(si_driver_query_list);
 		else
 			return ARRAY_SIZE(si_driver_query_list) - 7;
 	}
-	else
-		return ARRAY_SIZE(si_driver_query_list) - 25;
+
+	/* radeon */
+	if (sscreen->info.has_read_registers_query) {
+		if (sscreen->info.chip_class == CIK)
+			return ARRAY_SIZE(si_driver_query_list) - 6;
+		else
+			return ARRAY_SIZE(si_driver_query_list) - 7;
+	}
+
+	return ARRAY_SIZE(si_driver_query_list) - 21;
 }
 
 static int si_get_driver_query_info(struct pipe_screen *screen,
@@ -2052,7 +1886,7 @@ void si_init_query_functions(struct si_context *sctx)
 	sctx->b.end_query = si_end_query;
 	sctx->b.get_query_result = si_get_query_result;
 	sctx->b.get_query_result_resource = si_get_query_result_resource;
-	sctx->render_cond_atom.emit = si_emit_query_predication;
+	sctx->atoms.s.render_cond.emit = si_emit_query_predication;
 
 	if (((struct si_screen*)sctx->b.screen)->info.num_render_backends > 0)
 	    sctx->b.render_condition = si_render_condition;

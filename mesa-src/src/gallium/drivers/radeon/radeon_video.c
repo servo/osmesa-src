@@ -63,9 +63,8 @@ bool si_vid_create_buffer(struct pipe_screen *screen, struct rvid_buffer *buffer
 	 * able to move buffers around individually, so request a
 	 * non-sub-allocated buffer.
 	 */
-	buffer->res = (struct r600_resource *)
-		pipe_buffer_create(screen, PIPE_BIND_SHARED,
-				   usage, size);
+	buffer->res = r600_resource(pipe_buffer_create(screen, PIPE_BIND_SHARED,
+						       usage, size));
 
 	return buffer->res != NULL;
 }
@@ -77,7 +76,7 @@ void si_vid_destroy_buffer(struct rvid_buffer *buffer)
 }
 
 /* reallocate a buffer, preserving its content */
-bool si_vid_resize_buffer(struct pipe_screen *screen, struct radeon_winsys_cs *cs,
+bool si_vid_resize_buffer(struct pipe_screen *screen, struct radeon_cmdbuf *cs,
 			  struct rvid_buffer *new_buf, unsigned new_size)
 {
 	struct si_screen *sscreen = (struct si_screen *)screen;
@@ -121,8 +120,7 @@ void si_vid_clear_buffer(struct pipe_context *context, struct rvid_buffer* buffe
 {
 	struct si_context *sctx = (struct si_context*)context;
 
-	sctx->dma_clear_buffer(sctx, &buffer->res->b.b, 0,
-			       buffer->res->buf->size, 0);
+	si_sdma_clear_buffer(sctx, &buffer->res->b.b, 0, buffer->res->buf->size, 0);
 	context->flush(context, NULL, 0);
 }
 

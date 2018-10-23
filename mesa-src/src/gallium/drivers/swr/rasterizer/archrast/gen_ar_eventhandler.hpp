@@ -1,42 +1,43 @@
 /****************************************************************************
-* Copyright (C) 2016 Intel Corporation.   All Rights Reserved.
-*
-* Permission is hereby granted, free of charge, to any person obtaining a
-* copy of this software and associated documentation files (the "Software"),
-* to deal in the Software without restriction, including without limitation
-* the rights to use, copy, modify, merge, publish, distribute, sublicense,
-* and/or sell copies of the Software, and to permit persons to whom the
-* Software is furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice (including the next
-* paragraph) shall be included in all copies or substantial portions of the
-* Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-* IN THE SOFTWARE.
-*
-* @file gen_ar_eventhandler.hpp
-*
-* @brief Event handler interface.  auto-generated file
-* 
-* DO NOT EDIT
-*
-* Generation Command Line:
-*  ./rasterizer/codegen/gen_archrast.py
-*    --proto
-*    ./rasterizer/archrast/events.proto
-*    --proto_private
-*    ./rasterizer/archrast/events_private.proto
-*    --output
-*    rasterizer/archrast/gen_ar_eventhandler.hpp
-*    --gen_eventhandler_hpp
-*
-******************************************************************************/
+ * Copyright (C) 2016 Intel Corporation.   All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ *
+ * @file gen_ar_eventhandler.hpp
+ *
+ * @brief Event handler interface.  auto-generated file
+ *
+ * DO NOT EDIT
+ *
+ * Generation Command Line:
+ *  ./rasterizer/codegen/gen_archrast.py
+ *    --proto
+ *    ./rasterizer/archrast/events.proto
+ *    --proto_private
+ *    ./rasterizer/archrast/events_private.proto
+ *    --output
+ *    rasterizer/archrast/gen_ar_eventhandler.hpp
+ *    --gen_eventhandler_hpp
+ *
+ ******************************************************************************/
+// clang-format on
 #pragma once
 
 #include "gen_ar_event.hpp"
@@ -91,6 +92,14 @@ namespace ArchRast
         virtual void Handle(const TessPrims& event) {}
         virtual void Handle(const RasterTiles& event) {}
         virtual void Handle(const ClipperEvent& event) {}
+        virtual void Handle(const CullEvent& event) {}
+        virtual void Handle(const AlphaEvent& event) {}
+        virtual void Handle(const VSInfo& event) {}
+        virtual void Handle(const HSInfo& event) {}
+        virtual void Handle(const DSInfo& event) {}
+        virtual void Handle(const GSInfo& event) {}
+        virtual void Handle(const PSInfo& event) {}
+        virtual void Handle(const CSInfo& event) {}
         virtual void Handle(const EarlyDepthStencilInfoSingleSample& event) {}
         virtual void Handle(const EarlyDepthStencilInfoSampleRate& event) {}
         virtual void Handle(const EarlyDepthStencilInfoNullPS& event) {}
@@ -105,7 +114,16 @@ namespace ArchRast
         virtual void Handle(const RasterTileCount& event) {}
         virtual void Handle(const GSPrimInfo& event) {}
         virtual void Handle(const ClipInfoEvent& event) {}
+        virtual void Handle(const CullInfoEvent& event) {}
+        virtual void Handle(const AlphaInfoEvent& event) {}
         virtual void Handle(const DrawInstancedEvent& event) {}
         virtual void Handle(const DrawIndexedInstancedEvent& event) {}
+        virtual void Handle(const VSStats& event) {}
+        virtual void Handle(const HSStats& event) {}
+        virtual void Handle(const DSStats& event) {}
+        virtual void Handle(const GSStats& event) {}
+        virtual void Handle(const PSStats& event) {}
+        virtual void Handle(const CSStats& event) {}
     };
-}
+} // namespace ArchRast
+// clan-format off

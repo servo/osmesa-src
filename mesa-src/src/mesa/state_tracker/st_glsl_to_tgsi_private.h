@@ -26,10 +26,11 @@
 #ifndef ST_GLSL_TO_TGSI_PRIVATE_H
 #define ST_GLSL_TO_TGSI_PRIVATE_H
 
-#include <mesa/main/mtypes.h>
-#include <compiler/glsl_types.h>
-#include <compiler/glsl/ir.h>
-#include <tgsi/tgsi_info.h>
+#include "mesa/main/mtypes.h"
+#include "program/prog_parameter.h"
+#include "compiler/glsl_types.h"
+#include "compiler/glsl/ir.h"
+#include "tgsi/tgsi_info.h"
 #include <ostream>
 
 int swizzle_for_size(int size);
@@ -144,6 +145,7 @@ public:
    unsigned tex_offset_num_offset:3;
    unsigned dead_mask:4; /**< Used in dead code elimination */
    unsigned buffer_access:3; /**< bitmask of TGSI_MEMORY_x bits */
+   unsigned read_only:1;
 
    const struct tgsi_opcode_info *info;
 
@@ -178,6 +180,7 @@ is_resource_instruction(unsigned opcode)
    case TGSI_OPCODE_ATOMUMAX:
    case TGSI_OPCODE_ATOMIMIN:
    case TGSI_OPCODE_ATOMIMAX:
+   case TGSI_OPCODE_IMG2HND:
       return true;
    default:
       return false;

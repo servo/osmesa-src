@@ -38,6 +38,7 @@
 #include "vc4_context.h"
 #include "vc4_qpu.h"
 #include "vc4_qir.h"
+#include "mesa/state_tracker/st_glsl_types.h"
 
 static struct qreg
 ntq_get_src(struct vc4_compile *c, nir_src src, int i);
@@ -48,6 +49,12 @@ static int
 type_size(const struct glsl_type *type)
 {
    return glsl_count_attribute_slots(type, false);
+}
+
+static int
+uniforms_type_size(const struct glsl_type *type)
+{
+        return st_glsl_storage_type_size(type, false);
 }
 
 static void
@@ -680,24 +687,44 @@ ntq_fceil(struct vc4_compile *c, struct qreg src)
 }
 
 static struct qreg
+ntq_shrink_sincos_input_range(struct vc4_compile *c, struct qreg x)
+{
+        /* Since we're using a Taylor approximation, we want to have a small
+         * number of coefficients and take advantage of sin/cos repeating
+         * every 2pi.  We keep our x as close to 0 as we can, since the series
+         * will be less accurate as |x| increases.  (Also, be careful of
+         * shifting the input x value to be tricky with sin/cos relations,
+         * because getting accurate values for x==0 is very important for SDL
+         * rendering)
+         */
+        struct qreg scaled_x =
+                qir_FMUL(c, x,
+                         qir_uniform_f(c, 1.0f / (M_PI * 2.0f)));
+        /* Note: FTOI truncates toward 0. */
+        struct qreg x_frac = qir_FSUB(c, scaled_x,
+                                      qir_ITOF(c, qir_FTOI(c, scaled_x)));
+        /* Map [0.5, 1] to [-0.5, 0] */
+        qir_SF(c, qir_FSUB(c, x_frac, qir_uniform_f(c, 0.5)));
+        qir_FSUB_dest(c, x_frac, x_frac, qir_uniform_f(c, 1.0))->cond = QPU_COND_NC;
+        /* Map [-1, -0.5] to [0, 0.5] */
+        qir_SF(c, qir_FADD(c, x_frac, qir_uniform_f(c, 0.5)));
+        qir_FADD_dest(c, x_frac, x_frac, qir_uniform_f(c, 1.0))->cond = QPU_COND_NS;
+
+        return x_frac;
+}
+
+static struct qreg
 ntq_fsin(struct vc4_compile *c, struct qreg src)
 {
         float coeff[] = {
-                -2.0 * M_PI,
-                pow(2.0 * M_PI, 3) / (3 * 2 * 1),
-                -pow(2.0 * M_PI, 5) / (5 * 4 * 3 * 2 * 1),
-                pow(2.0 * M_PI, 7) / (7 * 6 * 5 * 4 * 3 * 2 * 1),
-                -pow(2.0 * M_PI, 9) / (9 * 8 * 7 * 6 * 5 * 4 * 3 * 2 * 1),
+                2.0 * M_PI,
+                -pow(2.0 * M_PI, 3) / (3 * 2 * 1),
+                pow(2.0 * M_PI, 5) / (5 * 4 * 3 * 2 * 1),
+                -pow(2.0 * M_PI, 7) / (7 * 6 * 5 * 4 * 3 * 2 * 1),
+                pow(2.0 * M_PI, 9) / (9 * 8 * 7 * 6 * 5 * 4 * 3 * 2 * 1),
         };
 
-        struct qreg scaled_x =
-                qir_FMUL(c,
-                         src,
-                         qir_uniform_f(c, 1.0 / (M_PI * 2.0)));
-
-        struct qreg x = qir_FADD(c,
-                                 ntq_ffract(c, scaled_x),
-                                 qir_uniform_f(c, -0.5));
+        struct qreg x = ntq_shrink_sincos_input_range(c, src);
         struct qreg x2 = qir_FMUL(c, x, x);
         struct qreg sum = qir_FMUL(c, x, qir_uniform_f(c, coeff[0]));
         for (int i = 1; i < ARRAY_SIZE(coeff); i++) {
@@ -715,21 +742,15 @@ static struct qreg
 ntq_fcos(struct vc4_compile *c, struct qreg src)
 {
         float coeff[] = {
-                -1.0f,
-                pow(2.0 * M_PI, 2) / (2 * 1),
-                -pow(2.0 * M_PI, 4) / (4 * 3 * 2 * 1),
-                pow(2.0 * M_PI, 6) / (6 * 5 * 4 * 3 * 2 * 1),
-                -pow(2.0 * M_PI, 8) / (8 * 7 * 6 * 5 * 4 * 3 * 2 * 1),
-                pow(2.0 * M_PI, 10) / (10 * 9 * 8 * 7 * 6 * 5 * 4 * 3 * 2 * 1),
+                1.0f,
+                -pow(2.0 * M_PI, 2) / (2 * 1),
+                pow(2.0 * M_PI, 4) / (4 * 3 * 2 * 1),
+                -pow(2.0 * M_PI, 6) / (6 * 5 * 4 * 3 * 2 * 1),
+                pow(2.0 * M_PI, 8) / (8 * 7 * 6 * 5 * 4 * 3 * 2 * 1),
+                -pow(2.0 * M_PI, 10) / (10 * 9 * 8 * 7 * 6 * 5 * 4 * 3 * 2 * 1),
         };
 
-        struct qreg scaled_x =
-                qir_FMUL(c, src,
-                         qir_uniform_f(c, 1.0f / (M_PI * 2.0f)));
-        struct qreg x_frac = qir_FADD(c,
-                                      ntq_ffract(c, scaled_x),
-                                      qir_uniform_f(c, -0.5));
-
+        struct qreg x_frac = ntq_shrink_sincos_input_range(c, src);
         struct qreg sum = qir_uniform_f(c, coeff[0]);
         struct qreg x2 = qir_FMUL(c, x_frac, x_frac);
         struct qreg x = x2; /* Current x^2, x^4, or x^6 */
@@ -737,13 +758,10 @@ ntq_fcos(struct vc4_compile *c, struct qreg src)
                 if (i != 1)
                         x = qir_FMUL(c, x, x2);
 
-                struct qreg mul = qir_FMUL(c,
+                sum = qir_FADD(c, qir_FMUL(c,
                                            x,
-                                           qir_uniform_f(c, coeff[i]));
-                if (i == 0)
-                        sum = mul;
-                else
-                        sum = qir_FADD(c, sum, mul);
+                                           qir_uniform_f(c, coeff[i])),
+                               sum);
         }
         return sum;
 }
@@ -1685,7 +1703,7 @@ static void
 ntq_setup_uniforms(struct vc4_compile *c)
 {
         nir_foreach_variable(var, &c->s->uniforms) {
-                uint32_t vec4_count = type_size(var->type);
+                uint32_t vec4_count = uniforms_type_size(var->type);
                 unsigned vec4_size = 4 * sizeof(float);
 
                 declare_uniform_range(c, var->data.driver_location * vec4_size,
@@ -2214,6 +2232,7 @@ static const nir_shader_compiler_options nir_options = {
         .lower_all_io_to_temps = true,
         .lower_extract_byte = true,
         .lower_extract_word = true,
+        .lower_fdiv = true,
         .lower_ffma = true,
         .lower_flrp32 = true,
         .lower_fpow = true,
@@ -2468,9 +2487,10 @@ vc4_shader_state_create(struct pipe_context *pctx,
                  */
                 s = cso->ir.nir;
 
-                NIR_PASS_V(s, nir_lower_io, nir_var_all, type_size,
+                NIR_PASS_V(s, nir_lower_io, nir_var_uniform,
+                           uniforms_type_size,
                            (nir_lower_io_options)0);
-        } else {
+       } else {
                 assert(cso->type == PIPE_SHADER_IR_TGSI);
 
                 if (vc4_debug & VC4_DEBUG_TGSI) {
@@ -2481,6 +2501,10 @@ vc4_shader_state_create(struct pipe_context *pctx,
                 }
                 s = tgsi_to_nir(cso->tokens, &nir_options);
         }
+
+        NIR_PASS_V(s, nir_lower_io, nir_var_all & ~nir_var_uniform,
+                   type_size,
+                   (nir_lower_io_options)0);
 
         NIR_PASS_V(s, nir_opt_global_to_local);
         NIR_PASS_V(s, nir_lower_regs_to_ssa);

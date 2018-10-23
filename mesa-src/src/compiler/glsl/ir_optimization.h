@@ -30,6 +30,9 @@
 #ifndef GLSL_IR_OPTIMIZATION_H
 #define GLSL_IR_OPTIMIZATION_H
 
+struct gl_linked_shader;
+struct gl_shader_program;
+
 /* Operations for lower_instructions() */
 #define SUB_TO_ADD_NEG     0x01
 #define FDIV_TO_MUL_RCP    0x02
@@ -100,7 +103,6 @@ bool opt_conditional_discard(exec_list *instructions);
 bool do_constant_folding(exec_list *instructions);
 bool do_constant_variable(exec_list *instructions);
 bool do_constant_variable_unlinked(exec_list *instructions);
-bool do_copy_propagation(exec_list *instructions);
 bool do_copy_propagation_elements(exec_list *instructions);
 bool do_constant_propagation(exec_list *instructions);
 void do_dead_builtin_varyings(struct gl_context *ctx,

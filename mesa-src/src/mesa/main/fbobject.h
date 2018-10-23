@@ -95,7 +95,8 @@ _mesa_framebuffer_renderbuffer(struct gl_context *ctx,
 extern void
 _mesa_renderbuffer_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
                            GLenum internalFormat, GLsizei width,
-                           GLsizei height, GLsizei samples);
+                           GLsizei height, GLsizei samples,
+                           GLsizei storageSamples);
 
 extern void
 _mesa_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb);
@@ -173,6 +174,11 @@ _mesa_RenderbufferStorageMultisample(GLenum target, GLsizei samples,
                                      GLsizei width, GLsizei height);
 
 extern void GLAPIENTRY
+_mesa_RenderbufferStorageMultisampleAdvancedAMD(
+      GLenum target, GLsizei samples, GLsizei storageSamples,
+      GLenum internalFormat, GLsizei width, GLsizei height);
+
+extern void GLAPIENTRY
 _es_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
 			   GLsizei width, GLsizei height);
 
@@ -184,6 +190,11 @@ extern void GLAPIENTRY
 _mesa_NamedRenderbufferStorageMultisample(GLuint renderbuffer, GLsizei samples,
                                           GLenum internalformat,
                                           GLsizei width, GLsizei height);
+
+extern void GLAPIENTRY
+_mesa_NamedRenderbufferStorageMultisampleAdvancedAMD(
+      GLuint renderbuffer, GLsizei samples, GLsizei storageSamples,
+      GLenum internalformat, GLsizei width, GLsizei height);
 
 extern void GLAPIENTRY
 _mesa_EGLImageTargetRenderbufferStorageOES(GLenum target, GLeglImageOES image);
@@ -354,5 +365,25 @@ _mesa_FramebufferParameteri(GLenum target, GLenum pname, GLint param);
 
 extern void GLAPIENTRY
 _mesa_GetFramebufferParameteriv(GLenum target, GLenum pname, GLint *params);
+
+extern void GLAPIENTRY
+_mesa_FramebufferSampleLocationsfvARB(GLenum target, GLuint start,
+                                      GLsizei count, const GLfloat *v);
+
+extern void GLAPIENTRY
+_mesa_NamedFramebufferSampleLocationsfvARB(GLuint framebuffer, GLuint start,
+                                           GLsizei count, const GLfloat *v);
+
+extern void GLAPIENTRY
+_mesa_FramebufferSampleLocationsfvARB_no_error(GLenum target, GLuint start,
+                                               GLsizei count, const GLfloat *v);
+
+extern void GLAPIENTRY
+_mesa_NamedFramebufferSampleLocationsfvARB_no_error(GLuint framebuffer,
+                                                    GLuint start, GLsizei count,
+                                                    const GLfloat *v);
+
+extern void GLAPIENTRY
+_mesa_EvaluateDepthValuesARB(void);
 
 #endif /* FBOBJECT_H */

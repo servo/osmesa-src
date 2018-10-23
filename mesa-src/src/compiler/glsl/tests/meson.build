@@ -83,4 +83,22 @@ test(
   )
 )
 
-# TODO: figure out how to get the shell based tests to work?
+test(
+  'glsl compiler warnings',
+  prog_python,
+  args : [
+    join_paths(meson.current_source_dir(), 'warnings_test.py'),
+    '--glsl-compiler', glsl_compiler,
+    '--test-directory', join_paths(
+      meson.source_root(), 'src', 'compiler', 'glsl', 'tests', 'warnings'
+    ),
+  ],
+)
+test(
+  'glsl optimization',
+  prog_python,
+  args : [
+    join_paths(meson.current_source_dir(), 'optimization_test.py'),
+    '--test-runner', glsl_test
+  ],
+)

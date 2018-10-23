@@ -474,7 +474,13 @@ enum {
 
 struct ast_type_qualifier {
    DECLARE_RALLOC_CXX_OPERATORS(ast_type_qualifier);
-   DECLARE_BITSET_T(bitset_t, 128);
+   /* Note: this bitset needs to have at least as many bits as the 'q'
+    * struct has flags, below.  Previously, the size was 128 instead of 96.
+    * But an apparent bug in GCC 5.4.0 causes bad SSE code generation
+    * elsewhere, leading to a crash.  96 bits works around the issue.
+    * See https://bugs.freedesktop.org/show_bug.cgi?id=105497
+    */
+   DECLARE_BITSET_T(bitset_t, 96);
 
    union flags {
       struct {
@@ -620,6 +626,16 @@ struct ast_type_qualifier {
           * Flag set if GL_ARB_post_depth_coverage layout qualifier is used.
           */
          unsigned post_depth_coverage:1;
+
+         /**
+          * Flags for the layout qualifers added by ARB_fragment_shader_interlock
+          */
+
+         unsigned pixel_interlock_ordered:1;
+         unsigned pixel_interlock_unordered:1;
+         unsigned sample_interlock_ordered:1;
+         unsigned sample_interlock_unordered:1;
+
          /**
           * Flag set if GL_INTEL_conservartive_rasterization layout qualifier
           * is used.

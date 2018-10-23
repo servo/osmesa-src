@@ -198,9 +198,7 @@ do {                       \
 #         define HAS_TRIVIAL_DESTRUCTOR(T) __has_trivial_destructor(T)
 #      endif
 #   elif defined(_MSC_VER) && !defined(__INTEL_COMPILER)
-#      if _MSC_VER >= 1800
-#         define HAS_TRIVIAL_DESTRUCTOR(T) __has_trivial_destructor(T)
-#      endif
+#      define HAS_TRIVIAL_DESTRUCTOR(T) __has_trivial_destructor(T)
 #   endif
 #   ifndef HAS_TRIVIAL_DESTRUCTOR
        /* It's always safe (if inefficient) to assume that a
@@ -284,6 +282,9 @@ do {                       \
 /** Minimum and maximum of three values: */
 #define MIN3( A, B, C ) ((A) < (B) ? MIN2(A, C) : MIN2(B, C))
 #define MAX3( A, B, C ) ((A) > (B) ? MAX2(A, C) : MAX2(B, C))
+
+/** Align a value to a power of two */
+#define ALIGN_POT(x, pot_align) (((x) + (pot_align) - 1) & ~((pot_align) - 1))
 
 /**
  * Macro for declaring an explicit conversion operator.  Defaults to an

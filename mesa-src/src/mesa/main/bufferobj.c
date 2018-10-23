@@ -129,8 +129,7 @@ get_buffer_target(struct gl_context *ctx, GLenum target)
          return &ctx->QueryBuffer;
       break;
    case GL_DRAW_INDIRECT_BUFFER:
-      if ((ctx->API == API_OPENGL_CORE &&
-           ctx->Extensions.ARB_draw_indirect) ||
+      if ((_mesa_is_desktop_gl(ctx) && ctx->Extensions.ARB_draw_indirect) ||
            _mesa_is_gles31(ctx)) {
          return &ctx->DrawIndirectBuffer;
       }
@@ -598,7 +597,7 @@ _mesa_total_buffer_object_memory(struct gl_context *ctx)
  * \sa glBufferDataARB, dd_function_table::BufferData.
  */
 static GLboolean
-buffer_data_fallback(struct gl_context *ctx, GLenum target, GLsizeiptr size,
+buffer_data_fallback(struct gl_context *ctx, GLenum target, GLsizeiptrARB size,
                      const GLvoid *data, GLenum usage, GLenum storageFlags,
                      struct gl_buffer_object *bufObj)
 {
@@ -644,8 +643,8 @@ buffer_data_fallback(struct gl_context *ctx, GLenum target, GLsizeiptr size,
  * \sa glBufferSubDataARB, dd_function_table::BufferSubData.
  */
 static void
-buffer_sub_data_fallback(struct gl_context *ctx, GLintptr offset,
-                         GLsizeiptr size, const GLvoid *data,
+buffer_sub_data_fallback(struct gl_context *ctx, GLintptrARB offset,
+                         GLsizeiptrARB size, const GLvoid *data,
                          struct gl_buffer_object *bufObj)
 {
    (void) ctx;
@@ -1167,7 +1166,7 @@ unbind(struct gl_context *ctx,
    if (vao->BufferBinding[index].BufferObj == obj) {
       _mesa_bind_vertex_buffer(ctx, vao, index, ctx->Shared->NullBufferObj,
                                vao->BufferBinding[index].Offset,
-                               vao->BufferBinding[index].Stride, true);
+                               vao->BufferBinding[index].Stride);
    }
 }
 

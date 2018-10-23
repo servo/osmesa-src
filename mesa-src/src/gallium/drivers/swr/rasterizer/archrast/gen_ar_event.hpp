@@ -1,42 +1,43 @@
 /****************************************************************************
-* Copyright (C) 2016 Intel Corporation.   All Rights Reserved.
-*
-* Permission is hereby granted, free of charge, to any person obtaining a
-* copy of this software and associated documentation files (the "Software"),
-* to deal in the Software without restriction, including without limitation
-* the rights to use, copy, modify, merge, publish, distribute, sublicense,
-* and/or sell copies of the Software, and to permit persons to whom the
-* Software is furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice (including the next
-* paragraph) shall be included in all copies or substantial portions of the
-* Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-* IN THE SOFTWARE.
-*
-* @file gen_ar_event.hpp
-*
-* @brief Definitions for events.  auto-generated file
-* 
-* DO NOT EDIT
-*
-* Generation Command Line:
-*  ./rasterizer/codegen/gen_archrast.py
-*    --proto
-*    ./rasterizer/archrast/events.proto
-*    --proto_private
-*    ./rasterizer/archrast/events_private.proto
-*    --output
-*    rasterizer/archrast/gen_ar_event.hpp
-*    --gen_event_hpp
-* 
-******************************************************************************/
+ * Copyright (C) 2016 Intel Corporation.   All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ *
+ * @file gen_ar_event.hpp
+ *
+ * @brief Definitions for events.  auto-generated file
+ *
+ * DO NOT EDIT
+ *
+ * Generation Command Line:
+ *  ./rasterizer/codegen/gen_archrast.py
+ *    --proto
+ *    ./rasterizer/archrast/events.proto
+ *    --proto_private
+ *    ./rasterizer/archrast/events_private.proto
+ *    --output
+ *    rasterizer/archrast/gen_ar_event.hpp
+ *    --gen_event_hpp
+ *
+ ******************************************************************************/
+// clang-format off
 #pragma once
 
 #include "common/os.h"
@@ -52,7 +53,7 @@ namespace ArchRast
         IndexedInstancedSplit = 3
     };
 
-    //Forward decl
+    // Forward decl
     class EventHandler;
 
     //////////////////////////////////////////////////////////////////////////
@@ -1389,6 +1390,268 @@ namespace ArchRast
     };
 
     //////////////////////////////////////////////////////////////////////////
+    /// CullEventData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct CullEventData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t backfacePrimCount;
+        uint64_t degeneratePrimCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// CullEvent
+    //////////////////////////////////////////////////////////////////////////
+    struct CullEvent : Event
+    {
+        CullEventData data;
+
+        // Constructor
+        CullEvent(
+            uint32_t drawId,
+            uint64_t backfacePrimCount,
+            uint64_t degeneratePrimCount
+        )
+        {
+            data.drawId = drawId;
+            data.backfacePrimCount = backfacePrimCount;
+            data.degeneratePrimCount = degeneratePrimCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// AlphaEventData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct AlphaEventData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t alphaTestCount;
+        uint32_t alphaBlendCount;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// AlphaEvent
+    //////////////////////////////////////////////////////////////////////////
+    struct AlphaEvent : Event
+    {
+        AlphaEventData data;
+
+        // Constructor
+        AlphaEvent(
+            uint32_t drawId,
+            uint32_t alphaTestCount,
+            uint32_t alphaBlendCount
+        )
+        {
+            data.drawId = drawId;
+            data.alphaTestCount = alphaTestCount;
+            data.alphaBlendCount = alphaBlendCount;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// VSInfoData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct VSInfoData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// VSInfo
+    //////////////////////////////////////////////////////////////////////////
+    struct VSInfo : Event
+    {
+        VSInfoData data;
+
+        // Constructor
+        VSInfo(
+            uint32_t drawId,
+            uint32_t numInstExecuted
+        )
+        {
+            data.drawId = drawId;
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// HSInfoData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct HSInfoData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// HSInfo
+    //////////////////////////////////////////////////////////////////////////
+    struct HSInfo : Event
+    {
+        HSInfoData data;
+
+        // Constructor
+        HSInfo(
+            uint32_t drawId,
+            uint32_t numInstExecuted
+        )
+        {
+            data.drawId = drawId;
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// DSInfoData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct DSInfoData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// DSInfo
+    //////////////////////////////////////////////////////////////////////////
+    struct DSInfo : Event
+    {
+        DSInfoData data;
+
+        // Constructor
+        DSInfo(
+            uint32_t drawId,
+            uint32_t numInstExecuted
+        )
+        {
+            data.drawId = drawId;
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSInfoData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct GSInfoData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSInfo
+    //////////////////////////////////////////////////////////////////////////
+    struct GSInfo : Event
+    {
+        GSInfoData data;
+
+        // Constructor
+        GSInfo(
+            uint32_t drawId,
+            uint32_t numInstExecuted
+        )
+        {
+            data.drawId = drawId;
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// PSInfoData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct PSInfoData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// PSInfo
+    //////////////////////////////////////////////////////////////////////////
+    struct PSInfo : Event
+    {
+        PSInfoData data;
+
+        // Constructor
+        PSInfo(
+            uint32_t drawId,
+            uint32_t numInstExecuted
+        )
+        {
+            data.drawId = drawId;
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// CSInfoData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct CSInfoData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// CSInfo
+    //////////////////////////////////////////////////////////////////////////
+    struct CSInfo : Event
+    {
+        CSInfoData data;
+
+        // Constructor
+        CSInfo(
+            uint32_t drawId,
+            uint32_t numInstExecuted
+        )
+        {
+            data.drawId = drawId;
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
     /// EarlyDepthStencilInfoSingleSampleData
     //////////////////////////////////////////////////////////////////////////
 #pragma pack(push, 1)
@@ -1852,6 +2115,79 @@ namespace ArchRast
     };
 
     //////////////////////////////////////////////////////////////////////////
+    /// CullInfoEventData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct CullInfoEventData
+    {
+        // Fields
+        uint32_t drawId;
+        uint64_t degeneratePrimMask;
+        uint64_t backfacePrimMask;
+        uint32_t validMask;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// CullInfoEvent
+    //////////////////////////////////////////////////////////////////////////
+    struct CullInfoEvent : Event
+    {
+        CullInfoEventData data;
+
+        // Constructor
+        CullInfoEvent(
+            uint32_t drawId,
+            uint64_t degeneratePrimMask,
+            uint64_t backfacePrimMask,
+            uint32_t validMask
+        )
+        {
+            data.drawId = drawId;
+            data.degeneratePrimMask = degeneratePrimMask;
+            data.backfacePrimMask = backfacePrimMask;
+            data.validMask = validMask;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// AlphaInfoEventData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct AlphaInfoEventData
+    {
+        // Fields
+        uint32_t drawId;
+        uint32_t alphaTestEnable;
+        uint32_t alphaBlendEnable;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// AlphaInfoEvent
+    //////////////////////////////////////////////////////////////////////////
+    struct AlphaInfoEvent : Event
+    {
+        AlphaInfoEventData data;
+
+        // Constructor
+        AlphaInfoEvent(
+            uint32_t drawId,
+            uint32_t alphaTestEnable,
+            uint32_t alphaBlendEnable
+        )
+        {
+            data.drawId = drawId;
+            data.alphaTestEnable = alphaTestEnable;
+            data.alphaBlendEnable = alphaBlendEnable;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
     /// DrawInstancedEventData
     //////////////////////////////////////////////////////////////////////////
 #pragma pack(push, 1)
@@ -1971,4 +2307,179 @@ namespace ArchRast
 
         virtual void Accept(EventHandler* pHandler) const;
     };
-}
+
+    //////////////////////////////////////////////////////////////////////////
+    /// VSStatsData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct VSStatsData
+    {
+        // Fields
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// VSStats
+    //////////////////////////////////////////////////////////////////////////
+    struct VSStats : Event
+    {
+        VSStatsData data;
+
+        // Constructor
+        VSStats(
+            uint32_t numInstExecuted
+        )
+        {
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// HSStatsData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct HSStatsData
+    {
+        // Fields
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// HSStats
+    //////////////////////////////////////////////////////////////////////////
+    struct HSStats : Event
+    {
+        HSStatsData data;
+
+        // Constructor
+        HSStats(
+            uint32_t numInstExecuted
+        )
+        {
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// DSStatsData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct DSStatsData
+    {
+        // Fields
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// DSStats
+    //////////////////////////////////////////////////////////////////////////
+    struct DSStats : Event
+    {
+        DSStatsData data;
+
+        // Constructor
+        DSStats(
+            uint32_t numInstExecuted
+        )
+        {
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSStatsData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct GSStatsData
+    {
+        // Fields
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// GSStats
+    //////////////////////////////////////////////////////////////////////////
+    struct GSStats : Event
+    {
+        GSStatsData data;
+
+        // Constructor
+        GSStats(
+            uint32_t numInstExecuted
+        )
+        {
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// PSStatsData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct PSStatsData
+    {
+        // Fields
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// PSStats
+    //////////////////////////////////////////////////////////////////////////
+    struct PSStats : Event
+    {
+        PSStatsData data;
+
+        // Constructor
+        PSStats(
+            uint32_t numInstExecuted
+        )
+        {
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    /// CSStatsData
+    //////////////////////////////////////////////////////////////////////////
+#pragma pack(push, 1)
+    struct CSStatsData
+    {
+        // Fields
+        uint32_t numInstExecuted;
+    };
+#pragma pack(pop)
+
+    //////////////////////////////////////////////////////////////////////////
+    /// CSStats
+    //////////////////////////////////////////////////////////////////////////
+    struct CSStats : Event
+    {
+        CSStatsData data;
+
+        // Constructor
+        CSStats(
+            uint32_t numInstExecuted
+        )
+        {
+            data.numInstExecuted = numInstExecuted;
+        }
+
+        virtual void Accept(EventHandler* pHandler) const;
+    };
+} // namespace ArchRast
+// clang-format on

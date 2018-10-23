@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -35,6 +33,7 @@
 #include "util/u_inlines.h"
 #include "util/u_format.h"
 #include "util/u_format_s3tc.h"
+#include "util/u_screen.h"
 #include "util/u_string.h"
 #include "util/u_debug.h"
 
@@ -55,6 +54,8 @@
 #include "a3xx/fd3_screen.h"
 #include "a4xx/fd4_screen.h"
 #include "a5xx/fd5_screen.h"
+#include "a6xx/fd6_screen.h"
+
 
 #include "ir3/ir3_nir.h"
 
@@ -84,6 +85,7 @@ static const struct debug_named_value debug_options[] = {
 		{"noblit",    FD_DBG_NOBLIT, "Disable blitter (fallback to generic blit path)"},
 		{"hiprio",    FD_DBG_HIPRIO, "Force high-priority context"},
 		{"ttile",     FD_DBG_TTILE,  "Enable texture tiling (a5xx)"},
+		{"perfcntrs", FD_DBG_PERFC,  "Expose performance counters"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -92,6 +94,17 @@ DEBUG_GET_ONCE_FLAGS_OPTION(fd_mesa_debug, "FD_MESA_DEBUG", debug_options, 0)
 int fd_mesa_debug = 0;
 bool fd_binning_enabled = true;
 static bool glsl120 = false;
+
+static const struct debug_named_value shader_debug_options[] = {
+		{"vs", FD_DBG_SHADER_VS, "Print shader disasm for vertex shaders"},
+		{"fs", FD_DBG_SHADER_FS, "Print shader disasm for fragment shaders"},
+		{"cs", FD_DBG_SHADER_CS, "Print shader disasm for compute shaders"},
+		DEBUG_NAMED_VALUE_END
+};
+
+DEBUG_GET_ONCE_FLAGS_OPTION(fd_shader_debug, "FD_SHADER_DEBUG", shader_debug_options, 0)
+
+enum fd_shader_debug fd_shader_debug = 0;
 
 static const char *
 fd_screen_get_name(struct pipe_screen *pscreen)
@@ -151,6 +164,7 @@ fd_screen_destroy(struct pipe_screen *pscreen)
 
 	ralloc_free(screen->compiler);
 
+	free(screen->perfcntr_queries);
 	free(screen);
 }
 
@@ -194,16 +208,12 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_COMPUTE:
 		return has_compute(screen);
 
-	case PIPE_CAP_SHADER_STENCIL_EXPORT:
-	case PIPE_CAP_TGSI_TEXCOORD:
 	case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
-	case PIPE_CAP_TEXTURE_MULTISAMPLE:
-	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-	case PIPE_CAP_QUERY_MEMORY_INFO:
 	case PIPE_CAP_PCI_GROUP:
 	case PIPE_CAP_PCI_BUS:
 	case PIPE_CAP_PCI_DEVICE:
 	case PIPE_CAP_PCI_FUNCTION:
+	case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
 		return 0;
 
 	case PIPE_CAP_SM3:
@@ -216,23 +226,27 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
 	case PIPE_CAP_CONDITIONAL_RENDER:
 	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
-	case PIPE_CAP_FAKE_SW_MSAA:
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_CLIP_HALFZ:
-		return is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen);
+		return is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen);
+
+	case PIPE_CAP_FAKE_SW_MSAA:
+		return !fd_screen_get_param(pscreen, PIPE_CAP_TEXTURE_MULTISAMPLE);
+
+	case PIPE_CAP_TEXTURE_MULTISAMPLE:
+		return is_a5xx(screen) || is_a6xx(screen);
 
 	case PIPE_CAP_DEPTH_CLIP_DISABLE:
 		return is_a3xx(screen) || is_a4xx(screen);
 
 	case PIPE_CAP_POLYGON_OFFSET_CLAMP:
-		return is_a5xx(screen);
+		return is_a5xx(screen) || is_a6xx(screen);
 
-	case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
-		return 0;
 	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
 		if (is_a3xx(screen)) return 16;
 		if (is_a4xx(screen)) return 32;
 		if (is_a5xx(screen)) return 32;
+		if (is_a6xx(screen)) return 32;
 		return 0;
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 		/* We could possibly emulate more by pretending 2d/rect textures and
@@ -241,13 +255,14 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		if (is_a3xx(screen)) return 8192;
 		if (is_a4xx(screen)) return 16384;
 		if (is_a5xx(screen)) return 16384;
+		if (is_a6xx(screen)) return 16384;
 		return 0;
 
 	case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
 	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 	case PIPE_CAP_TEXTURE_QUERY_LOD:
-		return is_a4xx(screen) || is_a5xx(screen);
+		return is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen);
 
 	case PIPE_CAP_START_INSTANCE:
 		/* Note that a5xx can do this, it just can't (at least with
@@ -261,97 +276,38 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 64;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
+	case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
 		if (glsl120)
 			return 120;
 		return is_ir3(screen) ? 140 : 120;
 
 	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
-		if (is_a5xx(screen))
+		if (is_a5xx(screen) || is_a6xx(screen))
 			return 4;
 		return 0;
 
 	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
-		if (is_a4xx(screen) || is_a5xx(screen))
+		if (is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen))
 			return 4;
 		return 0;
 
-	/* Unsupported features. */
-	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
-	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
-	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
-	case PIPE_CAP_USER_VERTEX_BUFFERS:
-	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
-	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
-	case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
-	case PIPE_CAP_TEXTURE_GATHER_SM5:
-	case PIPE_CAP_SAMPLE_SHADING:
-	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
-	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
-	case PIPE_CAP_MULTI_DRAW_INDIRECT:
-	case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
-	case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
-	case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
-	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
-	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
-	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
-	case PIPE_CAP_DEPTH_BOUNDS_TEST:
-	case PIPE_CAP_TGSI_TXQS:
 	/* TODO if we need this, do it in nir/ir3 backend to avoid breaking precompile: */
 	case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
-	case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
-	case PIPE_CAP_CLEAR_TEXTURE:
-	case PIPE_CAP_DRAW_PARAMETERS:
-	case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
-	case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
-	case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
-	case PIPE_CAP_GENERATE_MIPMAP:
-	case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
-	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
-	case PIPE_CAP_CULL_DISTANCE:
-	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
-	case PIPE_CAP_TGSI_VOTE:
-	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
-	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
-	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
-	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
-	case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
-	case PIPE_CAP_TGSI_FS_FBFETCH:
-	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
-	case PIPE_CAP_DOUBLES:
-	case PIPE_CAP_INT64:
-	case PIPE_CAP_INT64_DIVMOD:
-	case PIPE_CAP_TGSI_TEX_TXF_LZ:
-	case PIPE_CAP_TGSI_CLOCK:
-	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
-	case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
-	case PIPE_CAP_TGSI_BALLOT:
-	case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
-	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
+		return 0;
+
 	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
-	case PIPE_CAP_POST_DEPTH_COVERAGE:
-	case PIPE_CAP_BINDLESS_TEXTURE:
-	case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
-	case PIPE_CAP_QUERY_SO_OVERFLOW:
-	case PIPE_CAP_MEMOBJ:
-	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
-	case PIPE_CAP_TILE_RASTER_ORDER:
-	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
-	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
-	case PIPE_CAP_FENCE_SIGNAL:
-	case PIPE_CAP_CONSTBUF0_FLAGS:
-	case PIPE_CAP_PACKED_UNIFORMS:
 		return 0;
 
 	case PIPE_CAP_CONTEXT_PRIORITY_MASK:
 		return screen->priority_mask;
 
 	case PIPE_CAP_DRAW_INDIRECT:
-		if (is_a4xx(screen) || is_a5xx(screen))
+		if (is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen))
 			return 1;
 		return 0;
 
 	case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
-		if (is_a4xx(screen) || is_a5xx(screen))
+		if (is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen))
 			return 1;
 		return 0;
 
@@ -389,15 +345,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 			return 16 * 4;   /* should only be shader out limit? */
 		return 0;
 
-	/* Geometry shader output, unsupported. */
-	case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
-	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
-	case PIPE_CAP_MAX_VERTEX_STREAMS:
-		return 0;
-
-	case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
-		return 2048;
-
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
 	case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
@@ -406,7 +353,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 11;
 
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-		return (is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen)) ? 256 : 0;
+		return (is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen)) ? 256 : 0;
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:
@@ -415,28 +362,12 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return is_a3xx(screen) ? 1 : 0;
 
 	/* Queries. */
-	case PIPE_CAP_QUERY_BUFFER_OBJECT:
-		return 0;
 	case PIPE_CAP_OCCLUSION_QUERY:
-		return is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen);
+		return is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen);
 	case PIPE_CAP_QUERY_TIMESTAMP:
 	case PIPE_CAP_QUERY_TIME_ELAPSED:
 		/* only a4xx, requires new enough kernel so we know max_freq: */
-		return (screen->max_freq > 0) && (is_a4xx(screen) || is_a5xx(screen));
-
-	case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
-	case PIPE_CAP_MIN_TEXEL_OFFSET:
-		return -8;
-
-	case PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET:
-	case PIPE_CAP_MAX_TEXEL_OFFSET:
-		return 7;
-
-	case PIPE_CAP_ENDIANNESS:
-		return PIPE_ENDIAN_LITTLE;
-
-	case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
-		return 64;
+		return (screen->max_freq > 0) && (is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen));
 
 	case PIPE_CAP_VENDOR_ID:
 		return 0x5143;
@@ -451,9 +382,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 1;
 	case PIPE_CAP_NATIVE_FENCE_FD:
 		return fd_device_version(screen->dev) >= FD_VERSION_FENCE_FD;
+	default:
+		return u_pipe_screen_get_param_defaults(pscreen, param);
 	}
-	debug_printf("unknown param %d\n", param);
-	return 0;
 }
 
 static float
@@ -479,6 +410,10 @@ fd_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 		return 16.0f;
 	case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
 		return 15.0f;
+	case PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE:
+	case PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE:
+	case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
+		return 0.0f;
 	}
 	debug_printf("unknown paramf %d\n", param);
 	return 0;
@@ -527,7 +462,7 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 		 * split between VS and FS.  Use lower limit of 256 to
 		 * avoid getting into impossible situations:
 		 */
-		return ((is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen)) ? 4096 : 64) * sizeof(float[4]);
+		return ((is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen)) ? 4096 : 64) * sizeof(float[4]);
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return is_ir3(screen) ? 16 : 1;
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
@@ -550,6 +485,10 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 	case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
+	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
+	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
+	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
 		return 0;
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
 		return 1;
@@ -577,14 +516,11 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 		return 0;
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
 		return 32;
-	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
-	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
-	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
-		return 0;
+	case PIPE_SHADER_CAP_SCALAR_ISA:
+		return is_ir3(screen) ? 1 : 0;
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-		if (is_a5xx(screen)) {
+		if (is_a5xx(screen) || is_a6xx(screen)) {
 			/* a5xx (and a4xx for that matter) has one state-block
 			 * for compute-shader SSBO's and another that is shared
 			 * by VS/HS/DS/GS/FS..  so to simplify things for now
@@ -719,12 +655,12 @@ fd_screen_bo_get_handle(struct pipe_screen *pscreen,
 {
 	whandle->stride = stride;
 
-	if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+	if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
 		return fd_bo_get_name(bo, &whandle->handle) == 0;
-	} else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
+	} else if (whandle->type == WINSYS_HANDLE_TYPE_KMS) {
 		whandle->handle = fd_bo_handle(bo);
 		return TRUE;
-	} else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+	} else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
 		whandle->handle = fd_bo_dmabuf(bo);
 		return TRUE;
 	} else {
@@ -739,11 +675,11 @@ fd_screen_bo_from_handle(struct pipe_screen *pscreen,
 	struct fd_screen *screen = fd_screen(pscreen);
 	struct fd_bo *bo;
 
-	if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+	if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
 		bo = fd_bo_from_name(screen->dev, whandle->handle);
-	} else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
+	} else if (whandle->type == WINSYS_HANDLE_TYPE_KMS) {
 		bo = fd_bo_from_handle(screen->dev, whandle->handle, 0);
-	} else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+	} else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
 		bo = fd_bo_from_dmabuf(screen->dev, whandle->handle);
 	} else {
 		DBG("Attempt to import unsupported handle type %d", whandle->type);
@@ -766,6 +702,7 @@ fd_screen_create(struct fd_device *dev)
 	uint64_t val;
 
 	fd_mesa_debug = debug_get_option_fd_mesa_debug();
+	fd_shader_debug = debug_get_option_fd_shader_debug();
 
 	if (fd_mesa_debug & FD_DBG_NOBIN)
 		fd_binning_enabled = false;
@@ -858,6 +795,7 @@ fd_screen_create(struct fd_device *dev)
 	 * send a patch ;-)
 	 */
 	switch (screen->gpu_id) {
+	case 205:
 	case 220:
 		fd2_screen_init(pscreen);
 		break;
@@ -874,12 +812,19 @@ fd_screen_create(struct fd_device *dev)
 	case 530:
 		fd5_screen_init(pscreen);
 		break;
+	case 630:
+		fd6_screen_init(pscreen);
+		break;
 	default:
 		debug_printf("unsupported GPU: a%03d\n", screen->gpu_id);
 		goto fail;
 	}
 
-	if (screen->gpu_id >= 500) {
+	if (screen->gpu_id >= 600) {
+		screen->gmem_alignw = 32;
+		screen->gmem_alignh = 32;
+		screen->num_vsc_pipes = 32;
+	} else if (screen->gpu_id >= 500) {
 		screen->gmem_alignw = 64;
 		screen->gmem_alignh = 32;
 		screen->num_vsc_pipes = 16;

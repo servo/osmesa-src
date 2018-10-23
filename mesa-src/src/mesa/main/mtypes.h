@@ -39,6 +39,7 @@
 #include "c11/threads.h"
 
 #include "main/glheader.h"
+#include "main/menums.h"
 #include "main/config.h"
 #include "glapi/glapi.h"
 #include "math/m_matrix.h"	/* GLmatrix */
@@ -53,33 +54,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-
-/** Set a single bit */
-#define BITFIELD_BIT(b)      ((GLbitfield)1 << (b))
-/** Set all bits up to excluding bit b */
-#define BITFIELD_MASK(b)      \
-   ((b) == 32 ? (~(GLbitfield)0) : BITFIELD_BIT((b) % 32) - 1)
-/** Set count bits starting from bit b  */
-#define BITFIELD_RANGE(b, count) \
-   (BITFIELD_MASK((b) + (count)) & ~BITFIELD_MASK(b))
-
-
-/**
- * \name 64-bit extension of GLbitfield.
- */
-/*@{*/
-typedef GLuint64 GLbitfield64;
-
-/** Set a single bit */
-#define BITFIELD64_BIT(b)      ((GLbitfield64)1 << (b))
-/** Set all bits up to excluding bit b */
-#define BITFIELD64_MASK(b)      \
-   ((b) == 64 ? (~(GLbitfield64)0) : BITFIELD64_BIT(b) - 1)
-/** Set count bits starting from bit b  */
-#define BITFIELD64_RANGE(b, count) \
-   (BITFIELD64_MASK((b) + (count)) & ~BITFIELD64_MASK(b))
-
 
 #define GET_COLORMASK_BIT(mask, buf, chan) (((mask) >> (4 * (buf) + (chan))) & 0x1)
 #define GET_COLORMASK(mask, buf) (((mask) >> (4 * (buf))) & 0xf)
@@ -134,34 +108,6 @@ _mesa_varying_slot_in_fs(gl_varying_slot slot)
       return GL_TRUE;
    }
 }
-
-/**
- * Indexes for all renderbuffers
- */
-typedef enum
-{
-   /* the four standard color buffers */
-   BUFFER_FRONT_LEFT,
-   BUFFER_BACK_LEFT,
-   BUFFER_FRONT_RIGHT,
-   BUFFER_BACK_RIGHT,
-   BUFFER_DEPTH,
-   BUFFER_STENCIL,
-   BUFFER_ACCUM,
-   /* optional aux buffer */
-   BUFFER_AUX0,
-   /* generic renderbuffers */
-   BUFFER_COLOR0,
-   BUFFER_COLOR1,
-   BUFFER_COLOR2,
-   BUFFER_COLOR3,
-   BUFFER_COLOR4,
-   BUFFER_COLOR5,
-   BUFFER_COLOR6,
-   BUFFER_COLOR7,
-   BUFFER_COUNT,
-   BUFFER_NONE = -1,
-} gl_buffer_index;
 
 /**
  * Bit flags for all renderbuffers
@@ -267,6 +213,9 @@ struct gl_config
 
    /* EXT_framebuffer_sRGB */
    GLint sRGBCapable;
+
+   /* EGL_KHR_mutable_render_buffer */
+   GLuint mutableRenderBuffer; /* bool */
 };
 
 
@@ -417,43 +366,6 @@ union gl_color_union
    GLuint ui[4];
 };
 
-/**
- * Remapped color logical operations
- *
- * With the exception of NVIDIA hardware, which consumes the OpenGL enumerants
- * directly, everything wants this mapping of color logical operations.
- *
- * Fun fact: These values are just the bit-reverse of the low-nibble of the GL
- * enumerant values (i.e., `GL_NOOP & 0x0f` is `b0101' while
- * \c COLOR_LOGICOP_NOOP is `b1010`).
- *
- * Fun fact #2: These values are just an encoding of the operation as a table
- * of bit values. The result of the logic op is:
- *
- *    result_bit = (logic_op >> (2 * src_bit + dst_bit)) & 1
- *
- * For the GL enums, the result is:
- *
- *    result_bit = logic_op & (1 << (2 * src_bit + dst_bit))
- */
-enum PACKED gl_logicop_mode {
-   COLOR_LOGICOP_CLEAR = 0,
-   COLOR_LOGICOP_NOR = 1,
-   COLOR_LOGICOP_AND_INVERTED = 2,
-   COLOR_LOGICOP_COPY_INVERTED = 3,
-   COLOR_LOGICOP_AND_REVERSE = 4,
-   COLOR_LOGICOP_INVERT = 5,
-   COLOR_LOGICOP_XOR = 6,
-   COLOR_LOGICOP_NAND = 7,
-   COLOR_LOGICOP_AND = 8,
-   COLOR_LOGICOP_EQUIV = 9,
-   COLOR_LOGICOP_NOOP = 10,
-   COLOR_LOGICOP_OR_INVERTED = 11,
-   COLOR_LOGICOP_COPY = 12,
-   COLOR_LOGICOP_OR_REVERSE = 13,
-   COLOR_LOGICOP_OR = 14,
-   COLOR_LOGICOP_SET = 15
-};
 
 /**
  * Color buffer attribute group (GL_COLOR_BUFFER_BIT).
@@ -918,29 +830,6 @@ struct gl_stencil_attrib
 
 
 /**
- * An index for each type of texture object.  These correspond to the GL
- * texture target enums, such as GL_TEXTURE_2D, GL_TEXTURE_CUBE_MAP, etc.
- * Note: the order is from highest priority to lowest priority.
- */
-typedef enum
-{
-   TEXTURE_2D_MULTISAMPLE_INDEX,
-   TEXTURE_2D_MULTISAMPLE_ARRAY_INDEX,
-   TEXTURE_CUBE_ARRAY_INDEX,
-   TEXTURE_BUFFER_INDEX,
-   TEXTURE_2D_ARRAY_INDEX,
-   TEXTURE_1D_ARRAY_INDEX,
-   TEXTURE_EXTERNAL_INDEX,
-   TEXTURE_CUBE_INDEX,
-   TEXTURE_3D_INDEX,
-   TEXTURE_RECT_INDEX,
-   TEXTURE_2D_INDEX,
-   TEXTURE_1D_INDEX,
-   NUM_TEXTURE_TARGETS
-} gl_texture_index;
-
-
-/**
  * Bit flags for each type of texture object
  */
 /*@{*/
@@ -1393,7 +1282,8 @@ struct gl_transform_attrib
    GLboolean Normalize;				/**< Normalize all normals? */
    GLboolean RescaleNormals;			/**< GL_EXT_rescale_normal */
    GLboolean RasterPositionUnclipped;           /**< GL_IBM_rasterpos_clip */
-   GLboolean DepthClamp;			/**< GL_ARB_depth_clamp */
+   GLboolean DepthClampNear;			/**< GL_AMD_depth_clamp_separate */
+   GLboolean DepthClampFar;			/**< GL_AMD_depth_clamp_separate */
    /** GL_ARB_clip_control */
    GLenum16 ClipOrigin;   /**< GL_LOWER_LEFT or GL_UPPER_LEFT */
    GLenum16 ClipDepthMode;/**< GL_NEGATIVE_ONE_TO_ONE or GL_ZERO_TO_ONE */
@@ -1409,14 +1299,6 @@ struct gl_viewport_attrib
    GLfloat Width, Height;	/**< size */
    GLfloat Near, Far;		/**< Depth buffer range */
 };
-
-
-typedef enum
-{
-   MAP_USER,
-   MAP_INTERNAL,
-   MAP_COUNT
-} gl_map_buffer_index;
 
 
 /**
@@ -1548,6 +1430,32 @@ struct gl_array_attributes
    unsigned _ElementSize:8; /**< Size of each element in bytes */
    /** Index into gl_vertex_array_object::BufferBinding[] array */
    unsigned BufferBindingIndex:6;
+
+   /**
+    * Derived effective buffer binding index
+    *
+    * Index into the gl_vertex_buffer_binding array of the vao.
+    * Similar to BufferBindingIndex, but with the mapping of the
+    * position/generic0 attributes applied and with identical
+    * gl_vertex_buffer_binding entries collapsed to a single
+    * entry within the vao.
+    *
+    * The value is valid past calling _mesa_update_vao_derived_arrays.
+    * Note that _mesa_update_vao_derived_arrays is called when binding
+    * the VAO to Array._DrawVAO.
+    */
+   unsigned _EffBufferBindingIndex:6;
+   /**
+    * Derived effective relative offset.
+    *
+    * Relative offset to the effective buffers offset in
+    * gl_vertex_buffer_binding::_EffOffset.
+    *
+    * The value is valid past calling _mesa_update_vao_derived_arrays.
+    * Note that _mesa_update_vao_derived_arrays is called when binding
+    * the VAO to Array._DrawVAO.
+    */
+   GLushort _EffRelativeOffset;
 };
 
 
@@ -1563,20 +1471,35 @@ struct gl_vertex_buffer_binding
    GLuint InstanceDivisor;             /**< GL_ARB_instanced_arrays */
    struct gl_buffer_object *BufferObj; /**< GL_ARB_vertex_buffer_object */
    GLbitfield _BoundArrays;            /**< Arrays bound to this binding point */
-};
 
-
-/**
- * Vertex array information which is derived from gl_array_attributes
- * and gl_vertex_buffer_binding information.  Used by the VBO module and
- * device drivers.
- */
-struct gl_vertex_array
-{
-   /** Vertex attribute array */
-   const struct gl_array_attributes *VertexAttrib;
-   /** Vertex buffer binding */
-   const struct gl_vertex_buffer_binding *BufferBinding;
+   /**
+    * Derived effective bound arrays.
+    *
+    * The effective binding handles enabled arrays past the
+    * position/generic0 attribute mapping and reduces the refered
+    * gl_vertex_buffer_binding entries to a unique subset.
+    *
+    * The value is valid past calling _mesa_update_vao_derived_arrays.
+    * Note that _mesa_update_vao_derived_arrays is called when binding
+    * the VAO to Array._DrawVAO.
+    */
+   GLbitfield _EffBoundArrays;
+   /**
+    * Derived offset.
+    *
+    * The absolute offset to that we can collapse some attributes
+    * to this unique effective binding.
+    * For user space array bindings this contains the smallest pointer value
+    * in the bound and interleaved arrays.
+    * For VBO bindings this contains an offset that lets the attributes
+    * _EffRelativeOffset stay positive and in bounds with
+    * Const.MaxVertexAttribRelativeOffset
+    *
+    * The value is valid past calling _mesa_update_vao_derived_arrays.
+    * Note that _mesa_update_vao_derived_arrays is called when binding
+    * the VAO to Array._DrawVAO.
+    */
+   GLintptr _EffOffset;
 };
 
 
@@ -1617,6 +1540,15 @@ struct gl_vertex_array_object
    /** Mask of VERT_BIT_* values indicating which arrays are enabled */
    GLbitfield _Enabled;
 
+   /**
+    * Mask of VERT_BIT_* enabled arrays past position/generic0 mapping
+    *
+    * The value is valid past calling _mesa_update_vao_derived_arrays.
+    * Note that _mesa_update_vao_derived_arrays is called when binding
+    * the VAO to Array._DrawVAO.
+    */
+   GLbitfield _EffEnabledVBO;
+
    /** Denotes the way the position/generic0 attribute is mapped */
    gl_attribute_map_mode _AttributeMapMode;
 
@@ -1626,22 +1558,6 @@ struct gl_vertex_array_object
    /** The index buffer (also known as the element array buffer in OpenGL). */
    struct gl_buffer_object *IndexBufferObj;
 };
-
-
-/**
- * Enum for the OpenGL APIs we know about and may support.
- *
- * NOTE: This must match the api_enum table in
- * src/mesa/main/get_hash_generator.py
- */
-typedef enum
-{
-   API_OPENGL_COMPAT,      /* legacy / compatibility contexts */
-   API_OPENGLES,
-   API_OPENGLES2,
-   API_OPENGL_CORE,
-   API_OPENGL_LAST = API_OPENGL_CORE
-} gl_api;
 
 
 /**
@@ -1702,12 +1618,6 @@ struct gl_array_attrib
     * pointer is set to the _EmptyVAO which is just an empty VAO all the time.
     */
    struct gl_vertex_array_object *_EmptyVAO;
-
-   /**
-    * Vertex arrays as consumed by a driver.
-    * The array pointer is set up only by the VBO module.
-    */
-   const struct gl_vertex_array *_DrawArrays; /**< 0..VERT_ATTRIB_MAX-1 */
 
    /** Legal array datatypes and the API for which they have been computed */
    GLbitfield LegalTypesMask;
@@ -2104,45 +2014,14 @@ struct gl_bindless_image
    /** Whether this bindless image is bound to a unit. */
    GLboolean bound;
 
-   /** Access qualifier (GL_READ_WRITE, GL_READ_ONLY, GL_WRITE_ONLY) */
+   /** Access qualifier (GL_READ_WRITE, GL_READ_ONLY, GL_WRITE_ONLY, or
+    * GL_NONE to indicate both read-only and write-only)
+    */
    GLenum16 access;
 
    /** Pointer to the base of the data. */
    GLvoid *data;
 };
-
-
-/**
- * Names of the various vertex/fragment program register files, etc.
- *
- * NOTE: first four tokens must fit into 2 bits (see t_vb_arbprogram.c)
- * All values should fit in a 4-bit field.
- *
- * NOTE: PROGRAM_STATE_VAR, PROGRAM_CONSTANT, and PROGRAM_UNIFORM can all be
- * considered to be "uniform" variables since they can only be set outside
- * glBegin/End.  They're also all stored in the same Parameters array.
- */
-typedef enum
-{
-   PROGRAM_TEMPORARY,   /**< machine->Temporary[] */
-   PROGRAM_ARRAY,       /**< Arrays & Matrixes */
-   PROGRAM_INPUT,       /**< machine->Inputs[] */
-   PROGRAM_OUTPUT,      /**< machine->Outputs[] */
-   PROGRAM_STATE_VAR,   /**< gl_program->Parameters[] */
-   PROGRAM_CONSTANT,    /**< gl_program->Parameters[] */
-   PROGRAM_UNIFORM,     /**< gl_program->Parameters[] */
-   PROGRAM_WRITE_ONLY,  /**< A dummy, write-only register */
-   PROGRAM_ADDRESS,     /**< machine->AddressReg */
-   PROGRAM_SAMPLER,     /**< for shader samplers, compile-time only */
-   PROGRAM_SYSTEM_VALUE,/**< InstanceId, PrimitiveID, etc. */
-   PROGRAM_UNDEFINED,   /**< Invalid/TBD value */
-   PROGRAM_IMMEDIATE,   /**< Immediate value, used by TGSI */
-   PROGRAM_BUFFER,      /**< for shader buffers, compile-time only */
-   PROGRAM_MEMORY,      /**< for shared, global and local memory */
-   PROGRAM_IMAGE,       /**< for shader images, compile-time only */
-   PROGRAM_HW_ATOMIC,   /**< for hw atomic counters, compile-time only */
-   PROGRAM_FILE_MAX
-} gl_register_file;
 
 
 /**
@@ -2187,6 +2066,21 @@ struct gl_program
    /** Is this program written to on disk shader cache */
    bool program_written_to_cache;
 
+   /** A bitfield indicating which vertex shader inputs consume two slots
+    *
+    * This is used for mapping from single-slot input locations in the GL API
+    * to dual-slot double input locations in the shader.  This field is set
+    * once as part of linking and never updated again to ensure the mapping
+    * remains consistent.
+    *
+    * Note: There may be dual-slot variables in the original shader source
+    * which do not appear in this bitfield due to having been eliminated by
+    * the compiler prior to DualSlotInputs being calculated.  There may also
+    * be bits set in this bitfield which are set but which the shader never
+    * reads due to compiler optimizations eliminating such variables after
+    * DualSlotInputs is calculated.
+    */
+   GLbitfield64 DualSlotInputs;
    /** Subset of OutputsWritten outputs written with non-zero index. */
    GLbitfield64 SecondaryOutputsWritten;
    /** TEXTURE_x_BIT bitmask */
@@ -2254,8 +2148,9 @@ struct gl_program
 
          /**
           * Access qualifier specified in the shader for each image uniform
-          * index.  Either \c GL_READ_ONLY, \c GL_WRITE_ONLY or \c
-          * GL_READ_WRITE.
+          * index.  Either \c GL_READ_ONLY, \c GL_WRITE_ONLY, \c
+          * GL_READ_WRITE, or \c GL_NONE to indicate both read-only and
+          * write-only.
           *
           * It may be different, though only more strict than the value of
           * \c gl_image_unit::Access for the corresponding image unit.
@@ -2575,7 +2470,7 @@ struct gl_shader_info
       GLint VerticesOut;
       /**
        * 0 - Invocations count not declared in shader, or
-       * 1 .. MAX_GEOMETRY_SHADER_INVOCATIONS
+       * 1 .. Const.MaxGeometryShaderInvocations
        */
       GLint Invocations;
       /**
@@ -2726,6 +2621,10 @@ struct gl_shader
    bool uses_gl_fragcoord;
 
    bool PostDepthCoverage;
+   bool PixelInterlockOrdered;
+   bool PixelInterlockUnordered;
+   bool SampleInterlockOrdered;
+   bool SampleInterlockUnordered;
    bool InnerCoverage;
 
    /**
@@ -3016,6 +2915,12 @@ struct gl_shader_program_data
 
    /* Mask of stages this program was linked against */
    unsigned linked_stages;
+
+   /* Whether the shaders of this program are loaded from SPIR-V binaries
+    * (all have the SPIR_V_BINARY_ARB state). This was introduced by the
+    * ARB_gl_spirv extension.
+    */
+   bool spirv;
 };
 
 /**
@@ -3453,6 +3358,7 @@ struct gl_renderbuffer
     */
    GLboolean NeedsFinishRenderTexture;
    GLubyte NumSamples;    /**< zero means not multisampled */
+   GLubyte NumStorageSamples; /**< for AMD_framebuffer_multisample_advanced */
    GLenum16 InternalFormat; /**< The user-specified format */
    GLenum16 _BaseFormat;    /**< Either GL_RGB, GL_RGBA, GL_DEPTH_COMPONENT or
                                GL_STENCIL_INDEX. */
@@ -3612,12 +3518,20 @@ struct gl_framebuffer
    GLenum16 ColorDrawBuffer[MAX_DRAW_BUFFERS];
    GLenum16 ColorReadBuffer;
 
+   /* GL_ARB_sample_locations */
+   GLfloat *SampleLocationTable; /**< If NULL, no table has been specified */
+   GLboolean ProgrammableSampleLocations;
+   GLboolean SampleLocationPixelGrid;
+
    /** Computed from ColorDraw/ReadBuffer above */
    GLuint _NumColorDrawBuffers;
    gl_buffer_index _ColorDrawBufferIndexes[MAX_DRAW_BUFFERS];
    gl_buffer_index _ColorReadBufferIndex;
    struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS];
    struct gl_renderbuffer *_ColorReadBuffer;
+
+   /* GL_MESA_framebuffer_flip_y */
+   bool FlipY;
 
    /** Delete this framebuffer */
    void (*Delete)(struct gl_framebuffer *fb);
@@ -3692,7 +3606,7 @@ struct gl_program_constants
    struct gl_precision LowInt, MediumInt, HighInt;
    /* GL_ARB_uniform_buffer_object */
    GLuint MaxUniformBlocks;
-   GLuint MaxCombinedUniformComponents;
+   uint64_t MaxCombinedUniformComponents;
    GLuint MaxTextureImageUnits;
 
    /* GL_ARB_shader_atomic_counters */
@@ -3818,8 +3732,10 @@ struct gl_constants
    /** geometry shader */
    GLuint MaxGeometryOutputVertices;
    GLuint MaxGeometryTotalOutputComponents;
+   GLuint MaxGeometryShaderInvocations;
 
    GLuint GLSLVersion;  /**< Desktop GLSL version supported (ex: 120 = 1.20) */
+   GLuint GLSLVersionCompat;  /**< Desktop compat GLSL version supported  */
 
    /**
     * Changes default GLSL extension behavior from "error" to "warn".  It's out
@@ -3839,6 +3755,18 @@ struct gl_constants
    GLboolean AllowGLSLExtensionDirectiveMidShader;
 
    /**
+    * Allow builtins as part of constant expressions. This was not allowed
+    * until GLSL 1.20 this allows it everywhere.
+    */
+   GLboolean AllowGLSLBuiltinConstantExpression;
+
+   /**
+    * Allow some relaxation of GLSL ES shader restrictions. This encompasses
+    * a number of relaxations to the ES shader rules.
+    */
+   GLboolean AllowGLSLRelaxedES;
+
+   /**
     * Allow GLSL built-in variables to be redeclared verbatim
     */
    GLboolean AllowGLSLBuiltinVariableRedeclaration;
@@ -3854,6 +3782,11 @@ struct gl_constants
     * features are unimplemented and might not work correctly.
     */
    GLboolean AllowHigherCompatVersion;
+
+   /**
+    * Allow layout qualifiers on function parameters.
+    */
+   GLboolean AllowLayoutQualifiersOnFunctionParameters;
 
    /**
     * Force computing the absolute value for sqrt() and inversesqrt() to follow
@@ -4033,6 +3966,21 @@ struct gl_constants
    GLint MaxDepthTextureSamples;
    GLint MaxIntegerSamples;
 
+   /** GL_AMD_framebuffer_multisample_advanced */
+   GLint MaxColorFramebufferSamples;
+   GLint MaxColorFramebufferStorageSamples;
+   GLint MaxDepthStencilFramebufferSamples;
+
+   /* An array of supported MSAA modes allowing different sample
+    * counts per attachment type.
+    */
+   struct {
+      GLint NumColorSamples;
+      GLint NumColorStorageSamples;
+      GLint NumDepthStencilSamples;
+   } SupportedMultisampleModes[40];
+   GLint NumSupportedMultisampleModes;
+
    /**
     * GL_EXT_texture_multisample_blit_scaled implementation assumes that
     * samples are laid out in a rectangular grid roughly corresponding to
@@ -4141,6 +4089,13 @@ struct gl_constants
    /** GL_ARB_get_program_binary */
    GLuint NumProgramBinaryFormats;
 
+   /** GL_NV_conservative_raster */
+   GLuint MaxSubpixelPrecisionBiasBits;
+
+   /** GL_NV_conservative_raster_dilate */
+   GLfloat ConservativeRasterDilateRange[2];
+   GLfloat ConservativeRasterDilateGranularity;
+
    /** Is the drivers uniform storage packed or padded to 16 bytes. */
    bool PackedDriverUniformStorage;
 
@@ -4193,6 +4148,7 @@ struct gl_extensions
    GLboolean ARB_fragment_shader;
    GLboolean ARB_framebuffer_no_attachments;
    GLboolean ARB_framebuffer_object;
+   GLboolean ARB_fragment_shader_interlock;
    GLboolean ARB_enhanced_layouts;
    GLboolean ARB_explicit_attrib_location;
    GLboolean ARB_explicit_uniform_location;
@@ -4214,6 +4170,7 @@ struct gl_extensions
    GLboolean ARB_post_depth_coverage;
    GLboolean ARB_query_buffer_object;
    GLboolean ARB_robust_buffer_access_behavior;
+   GLboolean ARB_sample_locations;
    GLboolean ARB_sample_shading;
    GLboolean ARB_seamless_cube_map;
    GLboolean ARB_shader_atomic_counter_ops;
@@ -4291,6 +4248,7 @@ struct gl_extensions
    GLboolean EXT_pixel_buffer_object;
    GLboolean EXT_point_parameters;
    GLboolean EXT_provoking_vertex;
+   GLboolean EXT_render_snorm;
    GLboolean EXT_semaphore;
    GLboolean EXT_semaphore_fd;
    GLboolean EXT_shader_integer_mix;
@@ -4319,8 +4277,11 @@ struct gl_extensions
    GLboolean OES_standard_derivatives;
    GLboolean OES_texture_buffer;
    GLboolean OES_texture_cube_map_array;
+   GLboolean OES_texture_view;
    GLboolean OES_viewport_array;
    /* vendor extensions */
+   GLboolean AMD_framebuffer_multisample_advanced;
+   GLboolean AMD_depth_clamp_separate;
    GLboolean AMD_performance_monitor;
    GLboolean AMD_pinned_memory;
    GLboolean AMD_seamless_cubemap_per_texture;
@@ -4333,16 +4294,18 @@ struct gl_extensions
    GLboolean ATI_texture_mirror_once;
    GLboolean ATI_texture_env_combine3;
    GLboolean ATI_fragment_shader;
-   GLboolean ATI_separate_stencil;
    GLboolean GREMEDY_string_marker;
    GLboolean INTEL_conservative_rasterization;
+   GLboolean INTEL_fragment_shader_ordering;
    GLboolean INTEL_performance_query;
+   GLboolean INTEL_shader_atomic_float_minmax;
    GLboolean KHR_blend_equation_advanced;
    GLboolean KHR_blend_equation_advanced_coherent;
    GLboolean KHR_robustness;
    GLboolean KHR_texture_compression_astc_hdr;
    GLboolean KHR_texture_compression_astc_ldr;
    GLboolean KHR_texture_compression_astc_sliced_3d;
+   GLboolean MESA_framebuffer_flip_y;
    GLboolean MESA_tile_raster_order;
    GLboolean MESA_pack_invert;
    GLboolean EXT_shader_framebuffer_fetch;
@@ -4354,10 +4317,15 @@ struct gl_extensions
    GLboolean NV_fog_distance;
    GLboolean NV_point_sprite;
    GLboolean NV_primitive_restart;
+   GLboolean NV_shader_atomic_float;
    GLboolean NV_texture_barrier;
    GLboolean NV_texture_env_combine4;
    GLboolean NV_texture_rectangle;
    GLboolean NV_vdpau_interop;
+   GLboolean NV_conservative_raster;
+   GLboolean NV_conservative_raster_dilate;
+   GLboolean NV_conservative_raster_pre_snap_triangles;
+   GLboolean NV_conservative_raster_pre_snap;
    GLboolean NVX_gpu_memory_info;
    GLboolean TDFX_texture_compression_FXT1;
    GLboolean OES_EGL_image;
@@ -4518,7 +4486,7 @@ struct gl_dlist_state
    GLvertexformat ListVtxfmt;
 
    GLubyte ActiveAttribSize[VERT_ATTRIB_MAX];
-   GLfloat CurrentAttrib[VERT_ATTRIB_MAX][4];
+   GLfloat CurrentAttrib[VERT_ATTRIB_MAX][8];
 
    GLubyte ActiveMaterialSize[MAT_ATTRIB_MAX];
    GLfloat CurrentMaterial[MAT_ATTRIB_MAX][4];
@@ -4530,48 +4498,6 @@ struct gl_dlist_state
       GLenum16 ShadeModel;
    } Current;
 };
-
-/** @{
- *
- * These are a mapping of the GL_ARB_debug_output/GL_KHR_debug enums
- * to small enums suitable for use as an array index.
- */
-
-enum mesa_debug_source
-{
-   MESA_DEBUG_SOURCE_API,
-   MESA_DEBUG_SOURCE_WINDOW_SYSTEM,
-   MESA_DEBUG_SOURCE_SHADER_COMPILER,
-   MESA_DEBUG_SOURCE_THIRD_PARTY,
-   MESA_DEBUG_SOURCE_APPLICATION,
-   MESA_DEBUG_SOURCE_OTHER,
-   MESA_DEBUG_SOURCE_COUNT
-};
-
-enum mesa_debug_type
-{
-   MESA_DEBUG_TYPE_ERROR,
-   MESA_DEBUG_TYPE_DEPRECATED,
-   MESA_DEBUG_TYPE_UNDEFINED,
-   MESA_DEBUG_TYPE_PORTABILITY,
-   MESA_DEBUG_TYPE_PERFORMANCE,
-   MESA_DEBUG_TYPE_OTHER,
-   MESA_DEBUG_TYPE_MARKER,
-   MESA_DEBUG_TYPE_PUSH_GROUP,
-   MESA_DEBUG_TYPE_POP_GROUP,
-   MESA_DEBUG_TYPE_COUNT
-};
-
-enum mesa_debug_severity
-{
-   MESA_DEBUG_SEVERITY_LOW,
-   MESA_DEBUG_SEVERITY_MEDIUM,
-   MESA_DEBUG_SEVERITY_HIGH,
-   MESA_DEBUG_SEVERITY_NOTIFICATION,
-   MESA_DEBUG_SEVERITY_COUNT
-};
-
-/** @} */
 
 /**
  * Driver-specific state flags.
@@ -4630,6 +4556,17 @@ struct gl_driver_flags
     * gl_context::IntelConservativeRasterization
     */
    uint64_t NewIntelConservativeRasterization;
+
+   /**
+    * gl_context::NvConservativeRasterization
+    */
+   uint64_t NewNvConservativeRasterization;
+
+   /**
+    * gl_context::ConservativeRasterMode/ConservativeRasterDilate
+    * gl_context::SubpixelPrecisionBias
+    */
+   uint64_t NewNvConservativeRasterizationParams;
 
    /**
     * gl_context::Scissor::WindowRects
@@ -4704,6 +4641,9 @@ struct gl_driver_flags
 
    /** Shader constants (uniforms, program parameters, state constants) */
    uint64_t NewShaderConstants[MESA_SHADER_STAGES];
+
+   /** Programmable sample location state for gl_context::DrawBuffer */
+   uint64_t NewSampleLocations;
 };
 
 struct gl_buffer_binding
@@ -4939,6 +4879,7 @@ struct gl_context
    struct gl_texture_attrib	Texture;	/**< Texture attributes */
    struct gl_transform_attrib	Transform;	/**< Transformation attributes */
    struct gl_viewport_attrib	ViewportArray[MAX_VIEWPORTS];	/**< Viewport attributes */
+   GLuint SubpixelPrecisionBias[2];	/**< Viewport attributes */
    /*@}*/
 
    /** \name Client attribute stack */
@@ -5119,7 +5060,10 @@ struct gl_context
    GLboolean TextureFormatSupported[MESA_FORMAT_COUNT];
 
    GLboolean RasterDiscard;  /**< GL_RASTERIZER_DISCARD */
-   GLboolean IntelConservativeRasterization; /**< GL_INTEL_CONSERVATIVE_RASTERIZATION */
+   GLboolean IntelConservativeRasterization; /**< GL_CONSERVATIVE_RASTERIZATION_INTEL */
+   GLboolean ConservativeRasterization; /**< GL_CONSERVATIVE_RASTERIZATION_NV */
+   GLfloat ConservativeRasterDilate;
+   GLenum16 ConservativeRasterMode;
 
    /** Does glVertexAttrib(0) alias glVertex()? */
    bool _AttribZeroAliasesVertex;

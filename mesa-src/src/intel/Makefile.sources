@@ -9,11 +9,15 @@ BLORP_FILES = \
 
 COMMON_FILES = \
 	common/gen_clflush.h \
+	common/gen_batch_decoder.c \
 	common/gen_debug.c \
 	common/gen_debug.h \
 	common/gen_decoder.c \
 	common/gen_decoder.h \
+	common/gen_disasm.c \
+	common/gen_disasm.h \
 	common/gen_defines.h \
+	common/gen_gem.h \
 	common/gen_l3_config.c \
 	common/gen_l3_config.h \
 	common/gen_urb_config.c \
@@ -80,6 +84,7 @@ COMPILER_FILES = \
 	compiler/brw_nir_analyze_ubo_ranges.c \
 	compiler/brw_nir_attribute_workarounds.c \
 	compiler/brw_nir_lower_cs_intrinsics.c \
+	compiler/brw_nir_lower_image_load_store.c \
 	compiler/brw_nir_opt_peephole_ffma.c \
 	compiler/brw_nir_tcs_workarounds.c \
 	compiler/brw_packed_float.c \
@@ -249,6 +254,9 @@ VULKAN_WSI_WAYLAND_FILES := \
 
 VULKAN_WSI_X11_FILES := \
 	vulkan/anv_wsi_x11.c
+
+VULKAN_WSI_DISPLAY_FILES := \
+	vulkan/anv_wsi_display.c
 
 VULKAN_GEM_FILES := \
 	vulkan/anv_gem.c

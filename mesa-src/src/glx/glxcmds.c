@@ -937,6 +937,7 @@ init_fbconfig_for_chooser(struct glx_config * config,
    config->fbconfigID = (GLXFBConfigID) (GLX_DONT_CARE);
 
    config->swapMethod = GLX_DONT_CARE;
+   config->sRGBCapable = GLX_DONT_CARE;
 }
 
 #define MATCH_DONT_CARE( param )        \
@@ -1463,7 +1464,7 @@ glXImportContextEXT(Display *dpy, GLXContextID contextID)
    if (_XReply(dpy, (xReply *) & reply, 0, False) &&
        reply.n < (INT32_MAX / 2)) {
 
-      for (i = 0; i < reply.n * 2; i++) {
+      for (i = 0; i < reply.n; i++) {
          int prop[2];
 
          _XRead(dpy, (char *)prop, sizeof(prop));

@@ -323,6 +323,14 @@ write_xfb(struct blob *metadata, struct gl_shader_program *shProg)
 
    blob_write_uint32(metadata, prog->info.stage);
 
+   /* Data set by glTransformFeedbackVaryings. */
+   blob_write_uint32(metadata, shProg->TransformFeedback.BufferMode);
+   blob_write_bytes(metadata, shProg->TransformFeedback.BufferStride,
+                    sizeof(shProg->TransformFeedback.BufferStride));
+   blob_write_uint32(metadata, shProg->TransformFeedback.NumVarying);
+   for (unsigned i = 0; i < shProg->TransformFeedback.NumVarying; i++)
+      blob_write_string(metadata, shProg->TransformFeedback.VaryingNames[i]);
+
    blob_write_uint32(metadata, ltf->NumOutputs);
    blob_write_uint32(metadata, ltf->ActiveBuffers);
    blob_write_uint32(metadata, ltf->NumVarying);
@@ -351,6 +359,18 @@ read_xfb(struct blob_reader *metadata, struct gl_shader_program *shProg)
 
    if (xfb_stage == ~0u)
       return;
+
+   /* Data set by glTransformFeedbackVaryings. */
+   shProg->TransformFeedback.BufferMode = blob_read_uint32(metadata);
+   blob_copy_bytes(metadata, &shProg->TransformFeedback.BufferStride,
+                   sizeof(shProg->TransformFeedback.BufferStride));
+   shProg->TransformFeedback.NumVarying = blob_read_uint32(metadata);
+   shProg->TransformFeedback.VaryingNames = (char **)
+      malloc(shProg->TransformFeedback.NumVarying * sizeof(GLchar *));
+   /* Note, malloc used with VaryingNames. */
+   for (unsigned i = 0; i < shProg->TransformFeedback.NumVarying; i++)
+      shProg->TransformFeedback.VaryingNames[i] =
+         strdup(blob_read_string(metadata));
 
    struct gl_program *prog = shProg->_LinkedShaders[xfb_stage]->Program;
    struct gl_transform_feedback_info *ltf =
@@ -1015,6 +1035,7 @@ write_shader_metadata(struct blob *metadata, gl_linked_shader *shader)
    struct gl_program *glprog = shader->Program;
    unsigned i;
 
+   blob_write_uint64(metadata, glprog->DualSlotInputs);
    blob_write_bytes(metadata, glprog->TexturesUsed,
                     sizeof(glprog->TexturesUsed));
    blob_write_uint64(metadata, glprog->SamplersUsed);
@@ -1024,6 +1045,7 @@ write_shader_metadata(struct blob *metadata, gl_linked_shader *shader)
    blob_write_bytes(metadata, glprog->sh.SamplerTargets,
                     sizeof(glprog->sh.SamplerTargets));
    blob_write_uint32(metadata, glprog->ShadowSamplers);
+   blob_write_uint32(metadata, glprog->ExternalSamplersUsed);
 
    blob_write_bytes(metadata, glprog->sh.ImageAccess,
                     sizeof(glprog->sh.ImageAccess));
@@ -1067,6 +1089,7 @@ read_shader_metadata(struct blob_reader *metadata,
 {
    unsigned i;
 
+   glprog->DualSlotInputs = blob_read_uint64(metadata);
    blob_copy_bytes(metadata, (uint8_t *) glprog->TexturesUsed,
                    sizeof(glprog->TexturesUsed));
    glprog->SamplersUsed = blob_read_uint64(metadata);
@@ -1076,6 +1099,7 @@ read_shader_metadata(struct blob_reader *metadata,
    blob_copy_bytes(metadata, (uint8_t *) glprog->sh.SamplerTargets,
                    sizeof(glprog->sh.SamplerTargets));
    glprog->ShadowSamplers = blob_read_uint32(metadata);
+   glprog->ExternalSamplersUsed = blob_read_uint32(metadata);
 
    blob_copy_bytes(metadata, (uint8_t *) glprog->sh.ImageAccess,
                    sizeof(glprog->sh.ImageAccess));

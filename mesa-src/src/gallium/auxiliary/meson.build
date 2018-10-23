@@ -77,6 +77,35 @@ files_libgallium = files(
   'draw/draw_vs_exec.c',
   'draw/draw_vs.h',
   'draw/draw_vs_variant.c',
+  'driver_ddebug/dd_context.c',
+  'driver_ddebug/dd_draw.c',
+  'driver_ddebug/dd_pipe.h',
+  'driver_ddebug/dd_public.h',
+  'driver_ddebug/dd_screen.c',
+  'driver_ddebug/dd_util.h',
+  'driver_noop/noop_pipe.c',
+  'driver_noop/noop_public.h',
+  'driver_noop/noop_state.c',
+  'driver_rbug/rbug_context.c',
+  'driver_rbug/rbug_context.h',
+  'driver_rbug/rbug_core.c',
+  'driver_rbug/rbug_objects.c',
+  'driver_rbug/rbug_objects.h',
+  'driver_rbug/rbug_public.h',
+  'driver_rbug/rbug_screen.c',
+  'driver_rbug/rbug_screen.h',
+  'driver_trace/tr_context.c',
+  'driver_trace/tr_context.h',
+  'driver_trace/tr_dump.c',
+  'driver_trace/tr_dump_defines.h',
+  'driver_trace/tr_dump.h',
+  'driver_trace/tr_dump_state.c',
+  'driver_trace/tr_dump_state.h',
+  'driver_trace/tr_public.h',
+  'driver_trace/tr_screen.c',
+  'driver_trace/tr_screen.h',
+  'driver_trace/tr_texture.c',
+  'driver_trace/tr_texture.h',
   'hud/font.c',
   'hud/font.h',
   'hud/hud_context.c',
@@ -247,6 +276,8 @@ files_libgallium = files(
   'util/u_fifo.h',
   'util/u_format.c',
   'util/u_format.h',
+  'util/u_format_bptc.c',
+  'util/u_format_bptc.h',
   'util/u_format_etc.c',
   'util/u_format_etc.h',
   'util/u_format_latc.c',
@@ -283,8 +314,6 @@ files_libgallium = files(
   'util/u_linear.h',
   'util/u_log.c',
   'util/u_log.h',
-  'util/u_math.c',
-  'util/u_math.h',
   'util/u_memory.h',
   'util/u_mm.c',
   'util/u_mm.h',
@@ -306,6 +335,8 @@ files_libgallium = files(
   'util/u_ringbuffer.h',
   'util/u_sampler.c',
   'util/u_sampler.h',
+  'util/u_screen.c',
+  'util/u_screen.h',
   'util/u_simple_shaders.c',
   'util/u_simple_shaders.h',
   'util/u_split_prim.h',
@@ -450,11 +481,12 @@ files_libgalliumvl = files(
   'vl/vl_vlc.h',
   'vl/vl_zscan.c',
   'vl/vl_zscan.h',
+  'vl/vl_probs_table.h',
 )
 
 vlwinsys_deps = []
 files_libgalliumvlwinsys = files('vl/vl_winsys.h')
-if with_dri2
+if with_dri2 and with_platform_x11
   files_libgalliumvlwinsys += files('vl/vl_winsys_dri.c')
   if with_dri3
     vlwinsys_deps += [
@@ -472,7 +504,7 @@ u_indices_gen_c = custom_target(
   'u_indices_gen.c',
   input : 'indices/u_indices_gen.py',
   output : 'u_indices_gen.c',
-  command : [prog_python2, '@INPUT@'],
+  command : [prog_python, '@INPUT@'],
   capture : true,
 )
 
@@ -480,7 +512,7 @@ u_unfilled_gen_c = custom_target(
   'u_unfilled_gen.c',
   input : 'indices/u_unfilled_gen.py',
   output : 'u_unfilled_gen.c',
-  command : [prog_python2, '@INPUT@'],
+  command : [prog_python, '@INPUT@'],
   capture : true,
 )
 
@@ -488,7 +520,7 @@ u_format_table_c = custom_target(
   'u_format_table.c',
   input : ['util/u_format_table.py', 'util/u_format.csv'],
   output : 'u_format_table.c',
-  command : [prog_python2, '@INPUT@'],
+  command : [prog_python, '@INPUT@'],
   depend_files : files('util/u_format_pack.py', 'util/u_format_parse.py'),
   capture : true,
 )

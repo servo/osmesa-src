@@ -69,7 +69,7 @@ brw_select_clip_planes(struct gl_context *ctx)
    }
 }
 
-GLbitfield64
+static GLbitfield64
 brw_vs_outputs_written(struct brw_context *brw, struct brw_vs_prog_key *key,
                        GLbitfield64 user_varyings)
 {
@@ -181,7 +181,7 @@ brw_codegen_vs_prog(struct brw_context *brw,
       brw_nir_setup_glsl_uniforms(mem_ctx, vp->program.nir, &vp->program,
                                   &prog_data.base.base,
                                   compiler->scalar_stage[MESA_SHADER_VERTEX]);
-      brw_nir_analyze_ubo_ranges(compiler, vp->program.nir,
+      brw_nir_analyze_ubo_ranges(compiler, vp->program.nir, key,
                                  prog_data.base.base.ubo_ranges);
    } else {
       brw_nir_setup_arb_uniforms(mem_ctx, vp->program.nir, &vp->program,
@@ -341,9 +341,9 @@ brw_upload_vs_prog(struct brw_context *brw)
 
    brw_vs_populate_key(brw, &key);
 
-   if (brw_search_cache(&brw->cache, BRW_CACHE_VS_PROG,
-                        &key, sizeof(key),
-                        &brw->vs.base.prog_offset, &brw->vs.base.prog_data))
+   if (brw_search_cache(&brw->cache, BRW_CACHE_VS_PROG, &key, sizeof(key),
+                        &brw->vs.base.prog_offset, &brw->vs.base.prog_data,
+                        true))
       return;
 
    if (brw_disk_cache_upload_program(brw, MESA_SHADER_VERTEX))
@@ -354,6 +354,23 @@ brw_upload_vs_prog(struct brw_context *brw)
 
    MAYBE_UNUSED bool success = brw_codegen_vs_prog(brw, vp, &key);
    assert(success);
+}
+
+void
+brw_vs_populate_default_key(const struct gen_device_info *devinfo,
+                            struct brw_vs_prog_key *key,
+                            struct gl_program *prog)
+{
+   struct brw_program *bvp = brw_program(prog);
+
+   memset(key, 0, sizeof(*key));
+
+   brw_setup_tex_for_precompile(devinfo, &key->tex, prog);
+   key->program_string_id = bvp->id;
+   key->clamp_vertex_color =
+      (prog->info.outputs_written &
+       (VARYING_BIT_COL0 | VARYING_BIT_COL1 | VARYING_BIT_BFC0 |
+        VARYING_BIT_BFC1));
 }
 
 bool
@@ -367,14 +384,7 @@ brw_vs_precompile(struct gl_context *ctx, struct gl_program *prog)
 
    struct brw_program *bvp = brw_program(prog);
 
-   memset(&key, 0, sizeof(key));
-
-   brw_setup_tex_for_precompile(brw, &key.tex, prog);
-   key.program_string_id = bvp->id;
-   key.clamp_vertex_color =
-      (prog->info.outputs_written &
-       (VARYING_BIT_COL0 | VARYING_BIT_COL1 | VARYING_BIT_BFC0 |
-        VARYING_BIT_BFC1));
+   brw_vs_populate_default_key(&brw->screen->devinfo, &key, prog);
 
    success = brw_codegen_vs_prog(brw, bvp, &key);
 

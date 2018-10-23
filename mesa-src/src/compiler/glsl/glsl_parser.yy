@@ -897,6 +897,23 @@ parameter_declarator:
       $$->identifier = $2;
       state->symbols->add_variable(new(state) ir_variable(NULL, $2, ir_var_auto));
    }
+   | layout_qualifier type_specifier any_identifier
+   {
+      if (state->allow_layout_qualifier_on_function_parameter) {
+         void *ctx = state->linalloc;
+         $$ = new(ctx) ast_parameter_declarator();
+         $$->set_location_range(@2, @3);
+         $$->type = new(ctx) ast_fully_specified_type();
+         $$->type->set_location(@2);
+         $$->type->specifier = $2;
+         $$->identifier = $3;
+         state->symbols->add_variable(new(state) ir_variable(NULL, $3, ir_var_auto));
+      } else {
+         _mesa_glsl_error(&@1, state,
+                          "is is not allowed on function parameter");
+         YYERROR;
+      }
+   }
    | type_specifier any_identifier array_specifier
    {
       void *ctx = state->linalloc;
@@ -1340,18 +1357,18 @@ layout_qualifier_id:
                { "r32i", GL_R32I, GLSL_TYPE_INT, 130, 310, false },
                { "r16i", GL_R16I, GLSL_TYPE_INT, 130, 0, true },
                { "r8i", GL_R8I, GLSL_TYPE_INT, 130, 0, true },
-               { "rgba16", GL_RGBA16, GLSL_TYPE_FLOAT, 130, 0, false },
+               { "rgba16", GL_RGBA16, GLSL_TYPE_FLOAT, 130, 0, true },
                { "rgb10_a2", GL_RGB10_A2, GLSL_TYPE_FLOAT, 130, 0, true },
                { "rgba8", GL_RGBA8, GLSL_TYPE_FLOAT, 130, 310, false },
-               { "rg16", GL_RG16, GLSL_TYPE_FLOAT, 130, 0, false },
+               { "rg16", GL_RG16, GLSL_TYPE_FLOAT, 130, 0, true },
                { "rg8", GL_RG8, GLSL_TYPE_FLOAT, 130, 0, true },
-               { "r16", GL_R16, GLSL_TYPE_FLOAT, 130, 0, false },
+               { "r16", GL_R16, GLSL_TYPE_FLOAT, 130, 0, true },
                { "r8", GL_R8, GLSL_TYPE_FLOAT, 130, 0, true },
-               { "rgba16_snorm", GL_RGBA16_SNORM, GLSL_TYPE_FLOAT, 130, 0, false },
+               { "rgba16_snorm", GL_RGBA16_SNORM, GLSL_TYPE_FLOAT, 130, 0, true },
                { "rgba8_snorm", GL_RGBA8_SNORM, GLSL_TYPE_FLOAT, 130, 310, false },
-               { "rg16_snorm", GL_RG16_SNORM, GLSL_TYPE_FLOAT, 130, 0, false },
+               { "rg16_snorm", GL_RG16_SNORM, GLSL_TYPE_FLOAT, 130, 0, true },
                { "rg8_snorm", GL_RG8_SNORM, GLSL_TYPE_FLOAT, 130, 0, true },
-               { "r16_snorm", GL_R16_SNORM, GLSL_TYPE_FLOAT, 130, 0, false },
+               { "r16_snorm", GL_R16_SNORM, GLSL_TYPE_FLOAT, 130, 0, true },
                { "r8_snorm", GL_R8_SNORM, GLSL_TYPE_FLOAT, 130, 0, true }
             };
 
@@ -1430,6 +1447,38 @@ layout_qualifier_id:
                              "post_depth_coverage & inner_coverage layout qualifiers "
                              "are mutually exclusive");
          }
+      }
+
+      const bool pixel_interlock_ordered = match_layout_qualifier($1,
+         "pixel_interlock_ordered", state) == 0;
+      const bool pixel_interlock_unordered = match_layout_qualifier($1,
+         "pixel_interlock_unordered", state) == 0;
+      const bool sample_interlock_ordered = match_layout_qualifier($1,
+         "sample_interlock_ordered", state) == 0;
+      const bool sample_interlock_unordered = match_layout_qualifier($1,
+         "sample_interlock_unordered", state) == 0;
+
+      if (pixel_interlock_ordered + pixel_interlock_unordered +
+          sample_interlock_ordered + sample_interlock_unordered > 0 &&
+          state->stage != MESA_SHADER_FRAGMENT) {
+         _mesa_glsl_error(& @1, state, "interlock layout qualifiers: "
+                          "pixel_interlock_ordered, pixel_interlock_unordered, "
+                          "sample_interlock_ordered and sample_interlock_unordered, "
+                          "only valid in fragment shader input layout declaration.");
+      } else if (pixel_interlock_ordered + pixel_interlock_unordered +
+                 sample_interlock_ordered + sample_interlock_unordered > 0 &&
+                 !state->ARB_fragment_shader_interlock_enable &&
+                 !state->NV_fragment_shader_interlock_enable) {
+         _mesa_glsl_error(& @1, state,
+                          "interlock layout qualifier present, but the "
+                          "GL_ARB_fragment_shader_interlock or "
+                          "GL_NV_fragment_shader_interlock extension is not "
+                          "enabled.");
+      } else {
+         $$.flags.q.pixel_interlock_ordered = pixel_interlock_ordered;
+         $$.flags.q.pixel_interlock_unordered = pixel_interlock_unordered;
+         $$.flags.q.sample_interlock_ordered = sample_interlock_ordered;
+         $$.flags.q.sample_interlock_unordered = sample_interlock_unordered;
       }
 
       /* Layout qualifiers for tessellation evaluation shaders. */
@@ -2676,6 +2725,7 @@ external_declaration:
    | declaration            { $$ = $1; }
    | pragma_statement       { $$ = NULL; }
    | layout_defaults        { $$ = $1; }
+   | ';'                    { $$ = NULL; }
    ;
 
 function_definition:

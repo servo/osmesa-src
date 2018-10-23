@@ -39,23 +39,6 @@
 #include "loader.h"
 #include "loader_dri3_helper.h"
 
-static uint32_t
-dri3_format_for_depth(uint32_t depth)
-{
-   switch (depth) {
-   case 16:
-      return __DRI_IMAGE_FORMAT_RGB565;
-   case 24:
-      return __DRI_IMAGE_FORMAT_XRGB8888;
-   case 30:
-      return __DRI_IMAGE_FORMAT_XRGB2101010;
-   case 32:
-      return __DRI_IMAGE_FORMAT_ARGB8888;
-   default:
-      return __DRI_IMAGE_FORMAT_NONE;
-   }
-}
-
 static struct dri3_egl_surface *
 loader_drawable_to_egl_surface(struct loader_dri3_drawable *draw) {
    size_t offset = offsetof(struct dri3_egl_surface, loader_drawable);
@@ -124,11 +107,16 @@ static const struct loader_dri3_vtable egl_dri3_vtable = {
 static EGLBoolean
 dri3_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 {
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri3_egl_surface *dri3_surf = dri3_egl_surface(surf);
+   xcb_drawable_t drawable = dri3_surf->loader_drawable.drawable;
 
    (void) drv;
 
    loader_dri3_drawable_fini(&dri3_surf->loader_drawable);
+
+   if (surf->Type == EGL_PBUFFER_BIT)
+      xcb_free_pixmap (dri2_dpy->conn, drawable);
 
    dri2_fini_surface(surf);
    free(surf);
@@ -182,6 +170,11 @@ dri3_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
 
    dri_config = dri2_get_dri_config(dri2_conf, type,
                                     dri3_surf->surf.base.GLColorspace);
+
+   if (!dri_config) {
+      _eglError(EGL_BAD_MATCH, "Unsupported surfacetype/colorspace configuration");
+      goto cleanup_pixmap;
+   }
 
    if (loader_dri3_drawable_init(dri2_dpy->conn, drawable,
                                  dri2_dpy->dri_screen,
@@ -293,7 +286,7 @@ dri3_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
       return NULL;
    }
 
-   format = dri3_format_for_depth(bp_reply->depth);
+   format = dri2_format_for_depth(dri2_dpy, bp_reply->depth);
    if (format == __DRI_IMAGE_FORMAT_NONE) {
       _eglError(EGL_BAD_PARAMETER,
                 "dri3_create_image_khr: unsupported pixmap depth");
@@ -345,7 +338,7 @@ dri3_create_image_khr_pixmap_from_buffers(_EGLDisplay *disp, _EGLContext *ctx,
       return EGL_NO_IMAGE_KHR;
    }
 
-   format = dri3_format_for_depth(bp_reply->depth);
+   format = dri2_format_for_depth(dri2_dpy, bp_reply->depth);
    if (format == __DRI_IMAGE_FORMAT_NONE) {
       _eglError(EGL_BAD_PARAMETER,
                 "dri3_create_image_khr: unsupported pixmap depth");
@@ -429,10 +422,6 @@ static EGLBoolean
 dri3_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
 {
    struct dri3_egl_surface *dri3_surf = dri3_egl_surface(draw);
-
-   /* No-op for a pixmap or pbuffer surface */
-   if (draw->Type == EGL_PIXMAP_BIT || draw->Type == EGL_PBUFFER_BIT)
-      return EGL_FALSE;
 
    return loader_dri3_swap_buffers_msc(&dri3_surf->loader_drawable,
                                        0, 0, 0, 0,

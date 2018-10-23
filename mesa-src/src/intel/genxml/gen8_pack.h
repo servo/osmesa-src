@@ -7002,9 +7002,9 @@ GEN8_MI_BATCH_BUFFER_END_pack(__attribute__((unused)) __gen_user_data *data,
 struct GEN8_MI_BATCH_BUFFER_START {
    uint32_t                             CommandType;
    uint32_t                             MICommandOpcode;
-   uint32_t                             _2ndLevelBatchBuffer;
-#define _1stlevelbatch                           0
-#define _2ndlevelbatch                           1
+   uint32_t                             SecondLevelBatchBuffer;
+#define Firstlevelbatch                          0
+#define Secondlevelbatch                         1
    bool                                 AddOffsetEnable;
    bool                                 PredicationEnable;
    bool                                 ResourceStreamerEnable;
@@ -7025,7 +7025,7 @@ GEN8_MI_BATCH_BUFFER_START_pack(__attribute__((unused)) __gen_user_data *data,
    dw[0] =
       __gen_uint(values->CommandType, 29, 31) |
       __gen_uint(values->MICommandOpcode, 23, 28) |
-      __gen_uint(values->_2ndLevelBatchBuffer, 22, 22) |
+      __gen_uint(values->SecondLevelBatchBuffer, 22, 22) |
       __gen_uint(values->AddOffsetEnable, 16, 16) |
       __gen_uint(values->PredicationEnable, 15, 15) |
       __gen_uint(values->ResourceStreamerEnable, 10, 10) |
@@ -7320,7 +7320,7 @@ struct GEN8_MI_LOAD_SCAN_LINES_INCL {
 #define DisplayPlaneA                            0
 #define DisplayPlaneB                            1
 #define DisplayPlaneC                            4
-   bool                                 ScanLineEventDoneForward;
+   uint32_t                             ScanLineEventDoneForward;
    uint32_t                             DWordLength;
    uint32_t                             StartScanLineNumber;
    uint32_t                             EndScanLineNumber;
@@ -9067,7 +9067,7 @@ GEN8_SAMPLER_INSTDONE_pack(__attribute__((unused)) __gen_user_data *data,
 #define GEN8_L3CNTLREG_num                0x7034
 #define GEN8_L3CNTLREG_length                  1
 struct GEN8_L3CNTLREG {
-   uint32_t                             SLMEnable;
+   bool                                 SLMEnable;
    uint32_t                             URBAllocation;
    uint32_t                             ROAllocation;
    uint32_t                             DCAllocation;
@@ -9518,6 +9518,10 @@ struct GEN8_INSTPM {
    bool                                 _3DRenderingInstructionDisable;
    bool                                 MediaInstructionDisable;
    bool                                 CONSTANT_BUFFERAddressOffsetDisable;
+   bool                                 _3DStateInstructionDisableMask;
+   bool                                 _3DRenderingInstructionDisableMask;
+   bool                                 MediaInstructionDisableMask;
+   bool                                 CONSTANT_BUFFERAddressOffsetDisableMask;
 };
 
 static inline void
@@ -9531,7 +9535,11 @@ GEN8_INSTPM_pack(__attribute__((unused)) __gen_user_data *data,
       __gen_uint(values->_3DStateInstructionDisable, 1, 1) |
       __gen_uint(values->_3DRenderingInstructionDisable, 2, 2) |
       __gen_uint(values->MediaInstructionDisable, 3, 3) |
-      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisable, 6, 6);
+      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisable, 6, 6) |
+      __gen_uint(values->_3DStateInstructionDisableMask, 17, 17) |
+      __gen_uint(values->_3DRenderingInstructionDisableMask, 18, 18) |
+      __gen_uint(values->MediaInstructionDisableMask, 19, 19) |
+      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisableMask, 22, 22);
 }
 
 #endif /* GEN8_PACK_H */

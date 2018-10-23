@@ -121,15 +121,6 @@ set_blitter_tiling(struct brw_context *brw,
          SET_BLITTER_TILING(brw, false, false);                         \
       ADVANCE_BATCH()
 
-static int
-blt_pitch(struct intel_mipmap_tree *mt)
-{
-   int pitch = mt->surf.row_pitch;
-   if (mt->surf.tiling != ISL_TILING_LINEAR)
-      pitch /= 4;
-   return pitch;
-}
-
 bool
 intel_miptree_blit_compatible_formats(mesa_format src, mesa_format dst)
 {
@@ -178,7 +169,7 @@ get_blit_intratile_offset_el(const struct brw_context *brw,
                              uint32_t *y_offset_el)
 {
    isl_tiling_get_intratile_offset_el(mt->surf.tiling,
-                                      mt->cpp * 8, mt->surf.row_pitch,
+                                      mt->cpp * 8, mt->surf.row_pitch_B,
                                       total_x_offset_el, total_y_offset_el,
                                       base_address_offset,
                                       x_offset_el, y_offset_el);
@@ -288,7 +279,7 @@ emit_copy_blit(struct brw_context *brw,
 
    unsigned length = devinfo->gen >= 8 ? 10 : 8;
 
-   intel_batchbuffer_require_space(brw, length * 4, BLT_RING);
+   intel_batchbuffer_require_space(brw, length * 4);
    DBG("%s src:buf(%p)/%d+%d %d,%d dst:buf(%p)/%d+%d %d,%d sz:%dx%d\n",
        __func__,
        src_buffer, src_pitch, src_offset, src_x, src_y,
@@ -403,7 +394,8 @@ emit_miptree_blit(struct brw_context *brw,
     * for linear surfaces and DWords for tiled surfaces.  So the maximum
     * pitch is 32k linear and 128k tiled.
     */
-   if (blt_pitch(src_mt) >= 32768 || blt_pitch(dst_mt) >= 32768) {
+   if (intel_miptree_blt_pitch(src_mt) >= 32768 ||
+       intel_miptree_blt_pitch(dst_mt) >= 32768) {
       perf_debug("Falling back due to >= 32k/128k pitch\n");
       return false;
    }
@@ -433,11 +425,11 @@ emit_miptree_blit(struct brw_context *brw,
 
          if (!emit_copy_blit(brw,
                              src_mt->cpp,
-                             reverse ? -src_mt->surf.row_pitch :
-                                        src_mt->surf.row_pitch,
+                             reverse ? -src_mt->surf.row_pitch_B :
+                                        src_mt->surf.row_pitch_B,
                              src_mt->bo, src_mt->offset + src_offset,
                              src_mt->surf.tiling,
-                             dst_mt->surf.row_pitch,
+                             dst_mt->surf.row_pitch_B,
                              dst_mt->bo, dst_mt->offset + dst_offset,
                              dst_mt->surf.tiling,
                              src_tile_x, src_tile_y,
@@ -661,7 +653,7 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
 
    unsigned xy_setup_blt_length = devinfo->gen >= 8 ? 10 : 8;
    intel_batchbuffer_require_space(brw, (xy_setup_blt_length * 4) +
-                                        (3 * 4) + dwords * 4, BLT_RING);
+                                        (3 * 4) + dwords * 4);
 
    opcode = XY_SETUP_BLT_CMD;
    if (cpp == 4)
@@ -699,67 +691,11 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
    OUT_BATCH(SET_FIELD(y + h, BLT_Y) | SET_FIELD(x + w, BLT_X));
    ADVANCE_BATCH();
 
-   intel_batchbuffer_data(brw, src_bits, dwords * 4, BLT_RING);
+   intel_batchbuffer_data(brw, src_bits, dwords * 4);
 
    brw_emit_mi_flush(brw);
 
    return true;
-}
-
-/* We don't have a memmove-type blit like some other hardware, so we'll do a
- * rectangular blit covering a large space, then emit 1-scanline blit at the
- * end to cover the last if we need.
- */
-void
-intel_emit_linear_blit(struct brw_context *brw,
-		       struct brw_bo *dst_bo,
-		       unsigned int dst_offset,
-		       struct brw_bo *src_bo,
-		       unsigned int src_offset,
-		       unsigned int size)
-{
-   struct gl_context *ctx = &brw->ctx;
-   GLuint pitch, height;
-   int16_t src_x, dst_x;
-   bool ok;
-
-   do {
-      /* The pitch given to the GPU must be DWORD aligned, and
-       * we want width to match pitch. Max width is (1 << 15 - 1),
-       * rounding that down to the nearest DWORD is 1 << 15 - 4
-       */
-      pitch = ROUND_DOWN_TO(MIN2(size, (1 << 15) - 64), 4);
-      height = (size < pitch || pitch == 0) ? 1 : size / pitch;
-
-      src_x = src_offset % 64;
-      dst_x = dst_offset % 64;
-      pitch = ALIGN(MIN2(size, (1 << 15) - 64), 4);
-      assert(src_x + pitch < 1 << 15);
-      assert(dst_x + pitch < 1 << 15);
-
-      ok = emit_copy_blit(brw, 1,
-                          pitch, src_bo, src_offset - src_x,
-                          ISL_TILING_LINEAR,
-                          pitch, dst_bo, dst_offset - dst_x,
-                          ISL_TILING_LINEAR,
-                          src_x, 0, /* src x/y */
-                          dst_x, 0, /* dst x/y */
-                          MIN2(size, pitch), height, /* w, h */
-                          COLOR_LOGICOP_COPY);
-      if (!ok) {
-         _mesa_problem(ctx, "Failed to linear blit %dx%d\n",
-                       MIN2(size, pitch), height);
-         return;
-      }
-
-      pitch *= height;
-      if (size <= pitch)
-         return;
-
-      src_offset += pitch;
-      dst_offset += pitch;
-      size -= pitch;
-   } while (1);
 }
 
 /**
@@ -779,7 +715,7 @@ intel_miptree_set_alpha_to_one(struct brw_context *brw,
    uint32_t BR13, CMD;
    int pitch, cpp;
 
-   pitch = mt->surf.row_pitch;
+   pitch = mt->surf.row_pitch_B;
    cpp = mt->cpp;
 
    DBG("%s dst:buf(%p)/%d %d,%d sz:%dx%d\n",

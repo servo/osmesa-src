@@ -41,7 +41,7 @@ ir_expression_operation_constant_h = custom_target(
   'ir_expression_operation_constant.h',
   input : 'ir_expression_operation.py',
   output : 'ir_expression_operation_constant.h',
-  command : [prog_python2, '@INPUT@', 'constant'],
+  command : [prog_python, '@INPUT@', 'constant'],
   capture : true,
 )
 
@@ -49,7 +49,7 @@ ir_expression_operation_strings_h = custom_target(
   'ir_expression_operation_strings.h',
   input : 'ir_expression_operation.py',
   output : 'ir_expression_operation_strings.h',
-  command : [prog_python2, '@INPUT@', 'strings'],
+  command : [prog_python, '@INPUT@', 'strings'],
   capture : true,
 )
 
@@ -66,6 +66,16 @@ files_libglsl = files(
   'builtin_types.cpp',
   'builtin_variables.cpp',
   'generate_ir.cpp',
+  'gl_nir_lower_atomics.c',
+  'gl_nir_lower_samplers.c',
+  'gl_nir_lower_samplers_as_deref.c',
+  'gl_nir_link_atomics.c',
+  'gl_nir_link_uniform_initializers.c',
+  'gl_nir_link_uniforms.c',
+  'gl_nir_link_xfb.c',
+  'gl_nir_linker.c',
+  'gl_nir_linker.h',
+  'gl_nir.h',
   'glsl_parser_extras.cpp',
   'glsl_parser_extras.h',
   'glsl_symbol_table.cpp',
@@ -108,6 +118,8 @@ files_libglsl = files(
   'ir_visitor.h',
   'linker.cpp',
   'linker.h',
+  'linker_util.h',
+  'linker_util.cpp',
   'link_atomics.cpp',
   'link_functions.cpp',
   'link_interface_blocks.cpp',
@@ -159,7 +171,6 @@ files_libglsl = files(
   'opt_constant_folding.cpp',
   'opt_constant_propagation.cpp',
   'opt_constant_variable.cpp',
-  'opt_copy_propagation.cpp',
   'opt_copy_propagation_elements.cpp',
   'opt_dead_builtin_variables.cpp',
   'opt_dead_builtin_varyings.cpp',
@@ -247,6 +258,6 @@ glsl_test = executable(
   install : with_tools.contains('glsl'),
 )
 
-if with_tests
+if with_any_opengl and with_tests
   subdir('tests')
 endif

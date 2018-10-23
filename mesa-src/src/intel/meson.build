@@ -18,6 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+c_sse2_args = ['-msse2', '-mstackrealign']
 inc_intel = include_directories('.')
 
 subdir('blorp')
@@ -26,7 +27,9 @@ subdir('genxml')
 subdir('isl')
 subdir('common')
 subdir('compiler')
-subdir('tools')
+if with_tools.contains('intel') or with_tools.contains('intel-ui')
+  subdir('tools')
+endif
 if with_intel_vk
   subdir('vulkan')
 endif

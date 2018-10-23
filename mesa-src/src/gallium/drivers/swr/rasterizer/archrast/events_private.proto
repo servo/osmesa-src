@@ -120,6 +120,21 @@ event ClipInfoEvent
     uint32_t clipMask;
 };
 
+event CullInfoEvent
+{
+    uint32_t drawId;
+    uint64_t degeneratePrimMask;
+    uint64_t backfacePrimMask;
+    uint32_t validMask;
+};
+
+event AlphaInfoEvent
+{
+    uint32_t drawId;
+    uint32_t alphaTestEnable;
+    uint32_t alphaBlendEnable;
+};
+
 event DrawInstancedEvent
 {
     uint32_t drawId;
@@ -149,4 +164,34 @@ event DrawIndexedInstancedEvent
     uint32_t soEnable;
     uint32_t soTopology;
     uint32_t splitId; // Split draw count or id.
+};
+
+event VSStats
+{
+    uint32_t numInstExecuted;
+};
+
+event HSStats
+{
+    uint32_t numInstExecuted;
+};
+
+event DSStats
+{
+    uint32_t numInstExecuted;
+};
+
+event GSStats
+{
+    uint32_t numInstExecuted;
+};
+
+event PSStats
+{
+    uint32_t numInstExecuted;
+};
+
+event CSStats
+{
+    uint32_t numInstExecuted;
 };

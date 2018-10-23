@@ -257,13 +257,48 @@ void anv_DestroyDescriptorSetLayout(
    anv_descriptor_set_layout_unref(device, set_layout);
 }
 
+#define SHA1_UPDATE_VALUE(ctx, x) _mesa_sha1_update(ctx, &(x), sizeof(x));
+
+static void
+sha1_update_immutable_sampler(struct mesa_sha1 *ctx,
+                              const struct anv_sampler *sampler)
+{
+   if (!sampler->conversion)
+      return;
+
+   /* The only thing that affects the shader is ycbcr conversion */
+   _mesa_sha1_update(ctx, sampler->conversion,
+                     sizeof(*sampler->conversion));
+}
+
+static void
+sha1_update_descriptor_set_binding_layout(struct mesa_sha1 *ctx,
+   const struct anv_descriptor_set_binding_layout *layout)
+{
+   SHA1_UPDATE_VALUE(ctx, layout->array_size);
+   SHA1_UPDATE_VALUE(ctx, layout->descriptor_index);
+   SHA1_UPDATE_VALUE(ctx, layout->dynamic_offset_index);
+   SHA1_UPDATE_VALUE(ctx, layout->buffer_index);
+   _mesa_sha1_update(ctx, layout->stage, sizeof(layout->stage));
+
+   if (layout->immutable_samplers) {
+      for (uint16_t i = 0; i < layout->array_size; i++)
+         sha1_update_immutable_sampler(ctx, layout->immutable_samplers[i]);
+   }
+}
+
 static void
 sha1_update_descriptor_set_layout(struct mesa_sha1 *ctx,
                                   const struct anv_descriptor_set_layout *layout)
 {
-   size_t size = sizeof(*layout) +
-                 sizeof(layout->binding[0]) * layout->binding_count;
-   _mesa_sha1_update(ctx, layout, size);
+   SHA1_UPDATE_VALUE(ctx, layout->binding_count);
+   SHA1_UPDATE_VALUE(ctx, layout->size);
+   SHA1_UPDATE_VALUE(ctx, layout->shader_stages);
+   SHA1_UPDATE_VALUE(ctx, layout->buffer_count);
+   SHA1_UPDATE_VALUE(ctx, layout->dynamic_offset_count);
+
+   for (uint16_t i = 0; i < layout->binding_count; i++)
+      sha1_update_descriptor_set_binding_layout(ctx, &layout->binding[i]);
 }
 
 /*
@@ -454,19 +489,6 @@ anv_descriptor_set_layout_size(const struct anv_descriptor_set_layout *layout)
       sizeof(struct anv_descriptor_set) +
       layout->size * sizeof(struct anv_descriptor) +
       layout->buffer_count * sizeof(struct anv_buffer_view);
-}
-
-size_t
-anv_descriptor_set_binding_layout_get_hw_size(const struct anv_descriptor_set_binding_layout *binding)
-{
-   if (!binding->immutable_samplers)
-      return binding->array_size;
-
-   uint32_t total_plane_count = 0;
-   for (uint32_t i = 0; i < binding->array_size; i++)
-      total_plane_count += binding->immutable_samplers[i]->n_planes;
-
-   return total_plane_count;
 }
 
 struct surface_state_free_list_entry {
@@ -745,9 +767,8 @@ anv_descriptor_set_write_buffer(struct anv_descriptor_set *set,
          &set->buffer_views[bind_layout->buffer_index + element];
 
       bview->format = anv_isl_format_for_descriptor_type(type);
-      bview->bo = buffer->bo;
-      bview->offset = buffer->offset + offset;
       bview->range = anv_buffer_get_range(buffer, offset, range);
+      bview->address = anv_address_add(buffer->address, offset);
 
       /* If we're writing descriptors through a push command, we need to
        * allocate the surface state from the command buffer. Otherwise it will
@@ -758,7 +779,7 @@ anv_descriptor_set_write_buffer(struct anv_descriptor_set *set,
 
       anv_fill_buffer_surface_state(device, bview->surface_state,
                                     bview->format,
-                                    bview->offset, bview->range, 1);
+                                    bview->address, bview->range, 1);
 
       *desc = (struct anv_descriptor) {
          .type = type,
@@ -868,15 +889,9 @@ anv_descriptor_set_write_template(struct anv_descriptor_set *set,
                                   const struct anv_descriptor_update_template *template,
                                   const void *data)
 {
-   const struct anv_descriptor_set_layout *layout = set->layout;
-
    for (uint32_t i = 0; i < template->entry_count; i++) {
       const struct anv_descriptor_template_entry *entry =
          &template->entries[i];
-      const struct anv_descriptor_set_binding_layout *bind_layout =
-         &layout->binding[entry->binding];
-      struct anv_descriptor *desc = &set->descriptors[bind_layout->descriptor_index];
-      desc += entry->array_element;
 
       switch (entry->type) {
       case VK_DESCRIPTOR_TYPE_SAMPLER:

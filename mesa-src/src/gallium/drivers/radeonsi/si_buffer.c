@@ -25,6 +25,7 @@
 #include "radeonsi/si_pipe.h"
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
+#include "util/u_transfer.h"
 #include <inttypes.h>
 #include <stdio.h>
 
@@ -64,10 +65,10 @@ void *si_buffer_map_sync_with_rings(struct si_context *sctx,
 	    sctx->ws->cs_is_buffer_referenced(sctx->gfx_cs,
 						resource->buf, rusage)) {
 		if (usage & PIPE_TRANSFER_DONTBLOCK) {
-			si_flush_gfx_cs(sctx, PIPE_FLUSH_ASYNC, NULL);
+			si_flush_gfx_cs(sctx, RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
 			return NULL;
 		} else {
-			si_flush_gfx_cs(sctx, 0, NULL);
+			si_flush_gfx_cs(sctx, RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
 			busy = true;
 		}
 	}
@@ -103,7 +104,7 @@ void si_init_resource_fields(struct si_screen *sscreen,
 			     struct r600_resource *res,
 			     uint64_t size, unsigned alignment)
 {
-	struct r600_texture *rtex = (struct r600_texture*)res;
+	struct si_texture *tex = (struct si_texture*)res;
 
 	res->bo_size = size;
 	res->bo_alignment = alignment;
@@ -124,8 +125,7 @@ void si_init_resource_fields(struct si_screen *sscreen,
 		/* Older kernels didn't always flush the HDP cache before
 		 * CS execution
 		 */
-		if (sscreen->info.drm_major == 2 &&
-		    sscreen->info.drm_minor < 40) {
+		if (!sscreen->info.kernel_flushes_hdp_before_ib) {
 			res->domains = RADEON_DOMAIN_GTT;
 			res->flags |= RADEON_FLAG_GTT_WC;
 			break;
@@ -142,8 +142,7 @@ void si_init_resource_fields(struct si_screen *sscreen,
 	}
 
 	if (res->b.b.target == PIPE_BUFFER &&
-	    res->b.b.flags & (PIPE_RESOURCE_FLAG_MAP_PERSISTENT |
-			      PIPE_RESOURCE_FLAG_MAP_COHERENT)) {
+	    res->b.b.flags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT) {
 		/* Use GTT for all persistent mappings with older
 		 * kernels, because they didn't always flush the HDP
 		 * cache before CS execution.
@@ -151,14 +150,17 @@ void si_init_resource_fields(struct si_screen *sscreen,
 		 * Write-combined CPU mappings are fine, the kernel
 		 * ensures all CPU writes finish before the GPU
 		 * executes a command stream.
+		 *
+		 * radeon doesn't have good BO move throttling, so put all
+		 * persistent buffers into GTT to prevent VRAM CPU page faults.
 		 */
-		if (sscreen->info.drm_major == 2 &&
-		    sscreen->info.drm_minor < 40)
+		if (!sscreen->info.kernel_flushes_hdp_before_ib ||
+		    sscreen->info.drm_major == 2)
 			res->domains = RADEON_DOMAIN_GTT;
 	}
 
 	/* Tiled textures are unmappable. Always put them in VRAM. */
-	if ((res->b.b.target != PIPE_BUFFER && !rtex->surface.is_linear) ||
+	if ((res->b.b.target != PIPE_BUFFER && !tex->surface.is_linear) ||
 	    res->b.b.flags & SI_RESOURCE_FLAG_UNMAPPABLE) {
 		res->domains = RADEON_DOMAIN_VRAM;
 		res->flags |= RADEON_FLAG_NO_CPU_ACCESS |
@@ -339,7 +341,7 @@ static void *si_buffer_get_transfer(struct pipe_context *ctx,
 				    unsigned offset)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
-	struct r600_transfer *transfer;
+	struct si_transfer *transfer;
 
 	if (usage & TC_TRANSFER_MAP_THREADED_UNSYNC)
 		transfer = slab_alloc(&sctx->pool_transfers_unsync);
@@ -477,9 +479,9 @@ static void *si_buffer_transfer_map(struct pipe_context *ctx,
 		struct r600_resource *staging;
 
 		assert(!(usage & TC_TRANSFER_MAP_THREADED_UNSYNC));
-		staging = (struct r600_resource*) pipe_buffer_create(
+		staging = r600_resource(pipe_buffer_create(
 				ctx->screen, 0, PIPE_USAGE_STAGING,
-				box->width + (box->x % SI_MAP_BUFFER_ALIGNMENT));
+				box->width + (box->x % SI_MAP_BUFFER_ALIGNMENT)));
 		if (staging) {
 			/* Copy the VRAM buffer to the staging buffer. */
 			sctx->dma_copy(ctx, &staging->b.b, 0,
@@ -515,22 +517,15 @@ static void si_buffer_do_flush_region(struct pipe_context *ctx,
 				      struct pipe_transfer *transfer,
 				      const struct pipe_box *box)
 {
-	struct r600_transfer *rtransfer = (struct r600_transfer*)transfer;
+	struct si_transfer *stransfer = (struct si_transfer*)transfer;
 	struct r600_resource *rbuffer = r600_resource(transfer->resource);
 
-	if (rtransfer->staging) {
-		struct pipe_resource *dst, *src;
-		unsigned soffset;
-		struct pipe_box dma_box;
-
-		dst = transfer->resource;
-		src = &rtransfer->staging->b.b;
-		soffset = rtransfer->offset + box->x % SI_MAP_BUFFER_ALIGNMENT;
-
-		u_box_1d(soffset, box->width, &dma_box);
-
+	if (stransfer->staging) {
 		/* Copy the staging buffer into the original one. */
-		ctx->resource_copy_region(ctx, dst, 0, box->x, 0, 0, src, 0, &dma_box);
+		si_copy_buffer((struct si_context*)ctx, transfer->resource,
+			       &stransfer->staging->b.b, box->x,
+			       stransfer->offset + box->x % SI_MAP_BUFFER_ALIGNMENT,
+			       box->width);
 	}
 
 	util_range_add(&rbuffer->valid_buffer_range, box->x,
@@ -556,14 +551,14 @@ static void si_buffer_transfer_unmap(struct pipe_context *ctx,
 				     struct pipe_transfer *transfer)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
-	struct r600_transfer *rtransfer = (struct r600_transfer*)transfer;
+	struct si_transfer *stransfer = (struct si_transfer*)transfer;
 
 	if (transfer->usage & PIPE_TRANSFER_WRITE &&
 	    !(transfer->usage & PIPE_TRANSFER_FLUSH_EXPLICIT))
 		si_buffer_do_flush_region(ctx, transfer, &transfer->box);
 
-	r600_resource_reference(&rtransfer->staging, NULL);
-	assert(rtransfer->b.staging == NULL); /* for threaded context only */
+	r600_resource_reference(&stransfer->staging, NULL);
+	assert(stransfer->b.staging == NULL); /* for threaded context only */
 	pipe_resource_reference(&transfer->resource, NULL);
 
 	/* Don't use pool_transfers_unsync. We are always in the driver
@@ -647,11 +642,9 @@ static struct pipe_resource *si_buffer_create(struct pipe_screen *screen,
 	return &rbuffer->b.b;
 }
 
-struct pipe_resource *si_aligned_buffer_create(struct pipe_screen *screen,
-					       unsigned flags,
-					       unsigned usage,
-					       unsigned size,
-					       unsigned alignment)
+struct pipe_resource *pipe_aligned_buffer_create(struct pipe_screen *screen,
+						 unsigned flags, unsigned usage,
+						 unsigned size, unsigned alignment)
 {
 	struct pipe_resource buffer;
 
@@ -666,6 +659,14 @@ struct pipe_resource *si_aligned_buffer_create(struct pipe_screen *screen,
 	buffer.depth0 = 1;
 	buffer.array_size = 1;
 	return si_buffer_create(screen, &buffer, alignment);
+}
+
+struct r600_resource *si_aligned_buffer_create(struct pipe_screen *screen,
+					       unsigned flags, unsigned usage,
+					       unsigned size, unsigned alignment)
+{
+	return r600_resource(pipe_aligned_buffer_create(screen, flags, usage,
+							size, alignment));
 }
 
 static struct pipe_resource *
@@ -725,7 +726,7 @@ static bool si_resource_commit(struct pipe_context *pctx,
 	if (radeon_emitted(ctx->gfx_cs, ctx->initial_gfx_cs_size) &&
 	    ctx->ws->cs_is_buffer_referenced(ctx->gfx_cs,
 					       res->buf, RADEON_USAGE_READWRITE)) {
-		si_flush_gfx_cs(ctx, PIPE_FLUSH_ASYNC, NULL);
+		si_flush_gfx_cs(ctx, RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
 	}
 	if (radeon_emitted(ctx->dma_cs, 0) &&
 	    ctx->ws->cs_is_buffer_referenced(ctx->dma_cs,

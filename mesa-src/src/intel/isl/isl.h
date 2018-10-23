@@ -389,6 +389,9 @@ enum isl_format {
    ISL_FORMAT_GEN9_CCS_64BPP,
    ISL_FORMAT_GEN9_CCS_128BPP,
 
+   /* An upper bound on the supported format enumerations */
+   ISL_NUM_FORMATS,
+
    /* Hardware doesn't understand this out-of-band value */
    ISL_FORMAT_UNSUPPORTED =                             UINT16_MAX,
 };
@@ -1005,6 +1008,7 @@ struct isl_extent4d {
 
 struct isl_channel_layout {
    enum isl_base_type type;
+   uint8_t start_bit; /**< Bit at which this channel starts */
    uint8_t bits; /**< Size in bits */
 };
 
@@ -1081,7 +1085,7 @@ struct isl_tile_info {
     * always used with ISL_FORMAT_R8) has a logical size of 64el x 64el but
     * its physical size is 128B x 32rows, the same as a Y-tile.
     *
-    * @see isl_surf::row_pitch
+    * @see isl_surf::row_pitch_B
     */
    struct isl_extent2d phys_extent_B;
 };
@@ -1131,13 +1135,13 @@ struct isl_surf_init_info {
    uint32_t samples;
 
    /** Lower bound for isl_surf::alignment, in bytes. */
-   uint32_t min_alignment;
+   uint32_t min_alignment_B;
 
    /**
     * Exact value for isl_surf::row_pitch. Ignored if zero.  isl_surf_init()
     * will fail if this is misaligned or out of bounds.
     */
-   uint32_t row_pitch;
+   uint32_t row_pitch_B;
 
    isl_surf_usage_flags_t usage;
 
@@ -1180,17 +1184,17 @@ struct isl_surf {
    uint32_t samples;
 
    /** Total size of the surface, in bytes. */
-   uint64_t size;
+   uint64_t size_B;
 
    /** Required alignment for the surface's base address. */
-   uint32_t alignment;
+   uint32_t alignment_B;
 
    /**
     * The interpretation of this field depends on the value of
     * isl_tile_info::physical_extent_B.  In particular, the width of the
-    * surface in tiles is row_pitch / isl_tile_info::physical_extent_B.width
+    * surface in tiles is row_pitch_B / isl_tile_info::physical_extent_B.width
     * and the distance in bytes between vertically adjacent tiles in the image
-    * is given by row_pitch * isl_tile_info::physical_extent_B.height.
+    * is given by row_pitch_B * isl_tile_info::physical_extent_B.height.
     *
     * For linear images where isl_tile_info::physical_extent_B.height == 1,
     * this cleanly reduces to being the distance, in bytes, between vertically
@@ -1198,7 +1202,7 @@ struct isl_surf {
     *
     * @see isl_tile_info::phys_extent_B;
     */
-   uint32_t row_pitch;
+   uint32_t row_pitch_B;
 
    /**
     * Pitch between physical array slices, in rows of surface elements.
@@ -1334,7 +1338,7 @@ struct isl_buffer_fill_state_info {
    /**
     * The size of the buffer
     */
-   uint64_t size;
+   uint64_t size_B;
 
    /**
     * The Memory Object Control state for the filled surface state.
@@ -1351,7 +1355,7 @@ struct isl_buffer_fill_state_info {
     */
    enum isl_format format;
 
-   uint32_t stride;
+   uint32_t stride_B;
 };
 
 struct isl_depth_stencil_hiz_emit_info {
@@ -1422,6 +1426,8 @@ isl_device_get_sample_counts(struct isl_device *dev);
 static inline const struct isl_format_layout * ATTRIBUTE_CONST
 isl_format_get_layout(enum isl_format fmt)
 {
+   assert(fmt != ISL_FORMAT_UNSUPPORTED);
+   assert(fmt < ISL_NUM_FORMATS);
    return &isl_format_layouts[fmt];
 }
 
@@ -1430,7 +1436,7 @@ bool isl_format_is_valid(enum isl_format);
 static inline const char * ATTRIBUTE_CONST
 isl_format_get_name(enum isl_format fmt)
 {
-   return isl_format_layouts[fmt].name;
+   return isl_format_get_layout(fmt)->name;
 }
 
 bool isl_format_supports_rendering(const struct gen_device_info *devinfo,
@@ -1545,7 +1551,7 @@ isl_format_block_is_1x1x1(enum isl_format fmt)
 static inline bool
 isl_format_is_srgb(enum isl_format fmt)
 {
-   return isl_format_layouts[fmt].colorspace == ISL_COLORSPACE_SRGB;
+   return isl_format_get_layout(fmt)->colorspace == ISL_COLORSPACE_SRGB;
 }
 
 enum isl_format isl_format_srgb_to_linear(enum isl_format fmt);
@@ -1555,14 +1561,37 @@ isl_format_is_rgb(enum isl_format fmt)
 {
    if (isl_format_is_yuv(fmt))
       return false;
-   return isl_format_layouts[fmt].channels.r.bits > 0 &&
-          isl_format_layouts[fmt].channels.g.bits > 0 &&
-          isl_format_layouts[fmt].channels.b.bits > 0 &&
-          isl_format_layouts[fmt].channels.a.bits == 0;
+
+   const struct isl_format_layout *fmtl = isl_format_get_layout(fmt);
+
+   return fmtl->channels.r.bits > 0 &&
+          fmtl->channels.g.bits > 0 &&
+          fmtl->channels.b.bits > 0 &&
+          fmtl->channels.a.bits == 0;
+}
+
+static inline bool
+isl_format_is_rgbx(enum isl_format fmt)
+{
+   const struct isl_format_layout *fmtl = isl_format_get_layout(fmt);
+
+   return fmtl->channels.r.bits > 0 &&
+          fmtl->channels.g.bits > 0 &&
+          fmtl->channels.b.bits > 0 &&
+          fmtl->channels.a.bits > 0 &&
+          fmtl->channels.a.type == ISL_VOID;
 }
 
 enum isl_format isl_format_rgb_to_rgba(enum isl_format rgb) ATTRIBUTE_CONST;
 enum isl_format isl_format_rgb_to_rgbx(enum isl_format rgb) ATTRIBUTE_CONST;
+enum isl_format isl_format_rgbx_to_rgba(enum isl_format rgb) ATTRIBUTE_CONST;
+
+void isl_color_value_pack(const union isl_color_value *value,
+                          enum isl_format format,
+                          uint32_t *data_out);
+void isl_color_value_unpack(union isl_color_value *value,
+                            enum isl_format format,
+                            const uint32_t *data_in);
 
 bool isl_is_storage_image_format(enum isl_format fmt);
 
@@ -1731,6 +1760,24 @@ bool isl_color_value_is_zero(union isl_color_value value,
 bool isl_color_value_is_zero_one(union isl_color_value value,
                                  enum isl_format format);
 
+static inline bool
+isl_swizzle_is_identity(struct isl_swizzle swizzle)
+{
+   return swizzle.r == ISL_CHANNEL_SELECT_RED &&
+          swizzle.g == ISL_CHANNEL_SELECT_GREEN &&
+          swizzle.b == ISL_CHANNEL_SELECT_BLUE &&
+          swizzle.a == ISL_CHANNEL_SELECT_ALPHA;
+}
+
+bool
+isl_swizzle_supports_rendering(const struct gen_device_info *devinfo,
+                               struct isl_swizzle swizzle);
+
+struct isl_swizzle
+isl_swizzle_compose(struct isl_swizzle first, struct isl_swizzle second);
+struct isl_swizzle
+isl_swizzle_invert(struct isl_swizzle swizzle);
+
 #define isl_surf_init(dev, surf, ...) \
    isl_surf_init_s((dev), (surf), \
                    &(struct isl_surf_init_info) {  __VA_ARGS__ });
@@ -1758,7 +1805,7 @@ bool
 isl_surf_get_ccs_surf(const struct isl_device *dev,
                       const struct isl_surf *surf,
                       struct isl_surf *ccs_surf,
-                      uint32_t row_pitch /**< Ignored if 0 */);
+                      uint32_t row_pitch_B /**< Ignored if 0 */);
 
 #define isl_surf_fill_state(dev, state, ...) \
    isl_surf_fill_state_s((dev), (state), \
@@ -1828,9 +1875,9 @@ isl_surf_get_image_alignment_sa(const struct isl_surf *surf)
  * Pitch between vertically adjacent surface elements, in bytes.
  */
 static inline uint32_t
-isl_surf_get_row_pitch(const struct isl_surf *surf)
+isl_surf_get_row_pitch_B(const struct isl_surf *surf)
 {
-   return surf->row_pitch;
+   return surf->row_pitch_B;
 }
 
 /**
@@ -1841,8 +1888,8 @@ isl_surf_get_row_pitch_el(const struct isl_surf *surf)
 {
    const struct isl_format_layout *fmtl = isl_format_get_layout(surf->format);
 
-   assert(surf->row_pitch % (fmtl->bpb / 8) == 0);
-   return surf->row_pitch / (fmtl->bpb / 8);
+   assert(surf->row_pitch_B % (fmtl->bpb / 8) == 0);
+   return surf->row_pitch_B / (fmtl->bpb / 8);
 }
 
 /**
@@ -1880,7 +1927,7 @@ isl_surf_get_array_pitch_sa_rows(const struct isl_surf *surf)
 static inline uint32_t
 isl_surf_get_array_pitch(const struct isl_surf *surf)
 {
-   return isl_surf_get_array_pitch_sa_rows(surf) * surf->row_pitch;
+   return isl_surf_get_array_pitch_sa_rows(surf) * surf->row_pitch_B;
 }
 
 /**
@@ -1972,7 +2019,7 @@ isl_surf_get_image_surf(const struct isl_device *dev,
 void
 isl_tiling_get_intratile_offset_el(enum isl_tiling tiling,
                                    uint32_t bpb,
-                                   uint32_t row_pitch,
+                                   uint32_t row_pitch_B,
                                    uint32_t total_x_offset_el,
                                    uint32_t total_y_offset_el,
                                    uint32_t *base_address_offset,
@@ -1982,7 +2029,7 @@ isl_tiling_get_intratile_offset_el(enum isl_tiling tiling,
 static inline void
 isl_tiling_get_intratile_offset_sa(enum isl_tiling tiling,
                                    enum isl_format format,
-                                   uint32_t row_pitch,
+                                   uint32_t row_pitch_B,
                                    uint32_t total_x_offset_sa,
                                    uint32_t total_y_offset_sa,
                                    uint32_t *base_address_offset,
@@ -2000,7 +2047,7 @@ isl_tiling_get_intratile_offset_sa(enum isl_tiling tiling,
    const uint32_t total_x_offset = total_x_offset_sa / fmtl->bw;
    const uint32_t total_y_offset = total_y_offset_sa / fmtl->bh;
 
-   isl_tiling_get_intratile_offset_el(tiling, fmtl->bpb, row_pitch,
+   isl_tiling_get_intratile_offset_el(tiling, fmtl->bpb, row_pitch_B,
                                       total_x_offset, total_y_offset,
                                       base_address_offset,
                                       x_offset_sa, y_offset_sa);

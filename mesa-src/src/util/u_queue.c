@@ -31,6 +31,7 @@
 #include "util/os_time.h"
 #include "util/u_string.h"
 #include "util/u_thread.h"
+#include "u_process.h"
 
 static void util_queue_killall_and_wait(struct util_queue *queue);
 
@@ -238,9 +239,23 @@ util_queue_thread_func(void *input)
 
    free(input);
 
-   if (queue->name) {
+#ifdef HAVE_PTHREAD_SETAFFINITY
+   if (queue->flags & UTIL_QUEUE_INIT_SET_FULL_THREAD_AFFINITY) {
+      /* Don't inherit the thread affinity from the parent thread.
+       * Set the full mask.
+       */
+      cpu_set_t cpuset;
+      CPU_ZERO(&cpuset);
+      for (unsigned i = 0; i < CPU_SETSIZE; i++)
+         CPU_SET(i, &cpuset);
+
+      pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+   }
+#endif
+
+   if (strlen(queue->name) > 0) {
       char name[16];
-      util_snprintf(name, sizeof(name), "%s:%i", queue->name, thread_index);
+      util_snprintf(name, sizeof(name), "%s%i", queue->name, thread_index);
       u_thread_setname(name);
    }
 
@@ -299,8 +314,34 @@ util_queue_init(struct util_queue *queue,
 {
    unsigned i;
 
+   /* Form the thread name from process_name and name, limited to 13
+    * characters. Characters 14-15 are reserved for the thread number.
+    * Character 16 should be 0. Final form: "process:name12"
+    *
+    * If name is too long, it's truncated. If any space is left, the process
+    * name fills it.
+    */
+   const char *process_name = util_get_process_name();
+   int process_len = process_name ? strlen(process_name) : 0;
+   int name_len = strlen(name);
+   const int max_chars = sizeof(queue->name) - 1;
+
+   name_len = MIN2(name_len, max_chars);
+
+   /* See if there is any space left for the process name, reserve 1 for
+    * the colon. */
+   process_len = MIN2(process_len, max_chars - name_len - 1);
+   process_len = MAX2(process_len, 0);
+
    memset(queue, 0, sizeof(*queue));
-   queue->name = name;
+
+   if (process_len) {
+      util_snprintf(queue->name, sizeof(queue->name), "%.*s:%s",
+                    process_len, process_name, name);
+   } else {
+      util_snprintf(queue->name, sizeof(queue->name), "%s", name);
+   }
+
    queue->flags = flags;
    queue->num_threads = num_threads;
    queue->max_jobs = max_jobs;
@@ -311,6 +352,7 @@ util_queue_init(struct util_queue *queue,
       goto fail;
 
    (void) mtx_init(&queue->lock, mtx_plain);
+   (void) mtx_init(&queue->finish_lock, mtx_plain);
 
    queue->num_queued = 0;
    cnd_init(&queue->has_queued_cond);
@@ -398,6 +440,7 @@ util_queue_destroy(struct util_queue *queue)
 
    cnd_destroy(&queue->has_space_cond);
    cnd_destroy(&queue->has_queued_cond);
+   mtx_destroy(&queue->finish_lock);
    mtx_destroy(&queue->lock);
    free(queue->jobs);
    free(queue->threads);
@@ -529,6 +572,12 @@ util_queue_finish(struct util_queue *queue)
 
    util_barrier_init(&barrier, queue->num_threads);
 
+   /* If 2 threads were adding jobs for 2 different barries at the same time,
+    * a deadlock would happen, because 1 barrier requires that all threads
+    * wait for it exclusively.
+    */
+   mtx_lock(&queue->finish_lock);
+
    for (unsigned i = 0; i < queue->num_threads; ++i) {
       util_queue_fence_init(&fences[i]);
       util_queue_add_job(queue, &barrier, &fences[i], util_queue_finish_execute, NULL);
@@ -538,6 +587,7 @@ util_queue_finish(struct util_queue *queue)
       util_queue_fence_wait(&fences[i]);
       util_queue_fence_destroy(&fences[i]);
    }
+   mtx_unlock(&queue->finish_lock);
 
    util_barrier_destroy(&barrier);
 

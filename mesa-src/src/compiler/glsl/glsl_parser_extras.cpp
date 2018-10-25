@@ -26,7 +26,6 @@
 #include <string.h>
 #include <assert.h>
 
-#include "main/core.h" /* for struct gl_context */
 #include "main/context.h"
 #include "main/debug_output.h"
 #include "main/formats.h"
@@ -119,6 +118,7 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->Const.MaxVertexOutputComponents = ctx->Const.Program[MESA_SHADER_VERTEX].MaxOutputComponents;
    this->Const.MaxGeometryInputComponents = ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxInputComponents;
    this->Const.MaxGeometryOutputComponents = ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxOutputComponents;
+   this->Const.MaxGeometryShaderInvocations = ctx->Const.MaxGeometryShaderInvocations;
    this->Const.MaxFragmentInputComponents = ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxInputComponents;
    this->Const.MaxGeometryTextureImageUnits = ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits;
    this->Const.MaxGeometryOutputVertices = ctx->Const.MaxGeometryOutputVertices;
@@ -300,6 +300,10 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->fs_early_fragment_tests = false;
    this->fs_inner_coverage = false;
    this->fs_post_depth_coverage = false;
+   this->fs_pixel_interlock_ordered = false;
+   this->fs_pixel_interlock_unordered = false;
+   this->fs_sample_interlock_ordered = false;
+   this->fs_sample_interlock_unordered = false;
    this->fs_blend_support = 0;
    memset(this->atomic_counter_offsets, 0,
           sizeof(this->atomic_counter_offsets));
@@ -307,6 +311,8 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
       ctx->Const.AllowGLSLExtensionDirectiveMidShader;
    this->allow_builtin_variable_redeclaration =
       ctx->Const.AllowGLSLBuiltinVariableRedeclaration;
+   this->allow_layout_qualifier_on_function_parameter =
+      ctx->Const.AllowLayoutQualifiersOnFunctionParameters;
 
    this->cs_input_local_size_variable_specified = false;
 
@@ -429,6 +435,8 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
       this->language_version = version;
 
    this->compat_shader = compat_token_present ||
+                         (this->ctx->API == API_OPENGL_COMPAT &&
+                          this->language_version == 140) ||
                          (!this->es_shader && this->language_version < 140);
 
    bool supported = false;
@@ -629,6 +637,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_explicit_uniform_location),
    EXT(ARB_fragment_coord_conventions),
    EXT(ARB_fragment_layer_viewport),
+   EXT(ARB_fragment_shader_interlock),
    EXT(ARB_gpu_shader5),
    EXT(ARB_gpu_shader_fp64),
    EXT(ARB_gpu_shader_int64),
@@ -692,6 +701,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    /* All other extensions go here, sorted alphabetically.
     */
    EXT(AMD_conservative_depth),
+   EXT(AMD_gpu_shader_int64),
    EXT(AMD_shader_stencil_export),
    EXT(AMD_shader_trinary_minmax),
    EXT(AMD_vertex_shader_layer),
@@ -717,8 +727,12 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT_AEP(EXT_texture_buffer),
    EXT_AEP(EXT_texture_cube_map_array),
    EXT(INTEL_conservative_rasterization),
+   EXT(INTEL_fragment_shader_ordering),
+   EXT(INTEL_shader_atomic_float_minmax),
    EXT(MESA_shader_integer_functions),
+   EXT(NV_fragment_shader_interlock),
    EXT(NV_image_formats),
+   EXT(NV_shader_atomic_float),
 };
 
 #undef EXT
@@ -1720,6 +1734,10 @@ set_shader_inout_layout(struct gl_shader *shader,
       assert(!state->fs_early_fragment_tests);
       assert(!state->fs_inner_coverage);
       assert(!state->fs_post_depth_coverage);
+      assert(!state->fs_pixel_interlock_ordered);
+      assert(!state->fs_pixel_interlock_unordered);
+      assert(!state->fs_sample_interlock_ordered);
+      assert(!state->fs_sample_interlock_unordered);
    }
 
    for (unsigned i = 0; i < MAX_FEEDBACK_BUFFERS; i++) {
@@ -1807,7 +1825,7 @@ set_shader_inout_layout(struct gl_shader *shader,
                                           &invocations, false)) {
 
             YYLTYPE loc = state->in_qualifier->invocations->get_location();
-            if (invocations > MAX_GEOMETRY_SHADER_INVOCATIONS) {
+            if (invocations > state->Const.MaxGeometryShaderInvocations) {
                _mesa_glsl_error(&loc, state,
                                 "invocations (%d) exceeds "
                                 "GL_MAX_GEOMETRY_SHADER_INVOCATIONS",
@@ -1841,6 +1859,10 @@ set_shader_inout_layout(struct gl_shader *shader,
       shader->EarlyFragmentTests = state->fs_early_fragment_tests;
       shader->InnerCoverage = state->fs_inner_coverage;
       shader->PostDepthCoverage = state->fs_post_depth_coverage;
+      shader->PixelInterlockOrdered = state->fs_pixel_interlock_ordered;
+      shader->PixelInterlockUnordered = state->fs_pixel_interlock_unordered;
+      shader->SampleInterlockOrdered = state->fs_sample_interlock_ordered;
+      shader->SampleInterlockUnordered = state->fs_sample_interlock_unordered;
       shader->BlendSupport = state->fs_blend_support;
       break;
 
@@ -2200,7 +2222,6 @@ do_common_optimization(exec_list *ir, bool linked,
    OPT(do_if_simplification, ir);
    OPT(opt_flatten_nested_if_blocks, ir);
    OPT(opt_conditional_discard, ir);
-   OPT(do_copy_propagation, ir);
    OPT(do_copy_propagation_elements, ir);
 
    if (options->OptimizeForAOS && !linked)

@@ -134,7 +134,6 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->ColorMaterial = NULL;
    driver->CullFace = NULL;
    driver->DrawBuffer = NULL;
-   driver->DrawBuffers = NULL;
    driver->FrontFace = NULL;
    driver->DepthFunc = NULL;
    driver->DepthMask = NULL;
@@ -307,5 +306,5 @@ _mesa_init_driver_state(struct gl_context *ctx)
                                  ctx->Stencil.ZPassFunc[1]);
 
 
-   ctx->Driver.DrawBuffer(ctx, ctx->Color.DrawBuffer[0]);
+   ctx->Driver.DrawBuffer(ctx);
 }

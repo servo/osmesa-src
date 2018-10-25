@@ -29,18 +29,18 @@
 // Generation Command Line:
 //  ./rasterizer/codegen/gen_llvm_ir_macros.py
 //    --input
-//    /usr/lib/llvm-4.0/include/llvm/IR/IRBuilder.h
+//    /usr/local/Cellar/llvm@6/6.0.1/include/llvm/IR/IRBuilder.h
 //    --output
 //    rasterizer/jitter
 //    --gen_h
 //
 //============================================================================
+// clang-format off
 #pragma once
 
 //============================================================================
 // Auto-generated Builder IR Wrappers
 //============================================================================
-
 GlobalVariable* GLOBAL_STRING(StringRef Str, const Twine &Name = "", unsigned AddressSpace = 0)
 {
     return IRB()->CreateGlobalString(Str, Name, AddressSpace);
@@ -66,6 +66,16 @@ CallInst* MEMCOPY(Value *Dst, Value *Src, Value *Size, unsigned Align, bool isVo
     return IRB()->CreateMemCpy(Dst, Src, Size, Align, isVolatile, TBAATag, TBAAStructTag, ScopeTag, NoAliasTag);
 }
 
+CallInst* ELEMENT_UNORDERED_ATOMIC_MEM_CPY(Value *Dst, unsigned DstAlign, Value *Src, unsigned SrcAlign, uint64_t Size, uint32_t ElementSize, MDNode *TBAATag = nullptr, MDNode *TBAAStructTag = nullptr, MDNode *ScopeTag = nullptr, MDNode *NoAliasTag = nullptr)
+{
+    return IRB()->CreateElementUnorderedAtomicMemCpy(Dst, DstAlign, Src, SrcAlign, Size, ElementSize, TBAATag, TBAAStructTag, ScopeTag, NoAliasTag);
+}
+
+CallInst* ELEMENT_UNORDERED_ATOMIC_MEM_CPY(Value *Dst, unsigned DstAlign, Value *Src, unsigned SrcAlign, Value *Size, uint32_t ElementSize, MDNode *TBAATag = nullptr, MDNode *TBAAStructTag = nullptr, MDNode *ScopeTag = nullptr, MDNode *NoAliasTag = nullptr)
+{
+    return IRB()->CreateElementUnorderedAtomicMemCpy(Dst, DstAlign, Src, SrcAlign, Size, ElementSize, TBAATag, TBAAStructTag, ScopeTag, NoAliasTag);
+}
+
 CallInst* MEMMOVE(Value *Dst, Value *Src, uint64_t Size, unsigned Align, bool isVolatile = false, MDNode *TBAATag = nullptr, MDNode *ScopeTag = nullptr, MDNode *NoAliasTag = nullptr)
 {
     return IRB()->CreateMemMove(Dst, Src, Size, Align, isVolatile, TBAATag, ScopeTag, NoAliasTag);
@@ -74,6 +84,61 @@ CallInst* MEMMOVE(Value *Dst, Value *Src, uint64_t Size, unsigned Align, bool is
 CallInst* MEMMOVE(Value *Dst, Value *Src, Value *Size, unsigned Align, bool isVolatile = false, MDNode *TBAATag = nullptr, MDNode *ScopeTag = nullptr, MDNode *NoAliasTag = nullptr)
 {
     return IRB()->CreateMemMove(Dst, Src, Size, Align, isVolatile, TBAATag, ScopeTag, NoAliasTag);
+}
+
+CallInst* FADD_REDUCE(Value *Acc, Value *Src)
+{
+    return IRB()->CreateFAddReduce(Acc, Src);
+}
+
+CallInst* FMUL_REDUCE(Value *Acc, Value *Src)
+{
+    return IRB()->CreateFMulReduce(Acc, Src);
+}
+
+CallInst* ADD_REDUCE(Value *Src)
+{
+    return IRB()->CreateAddReduce(Src);
+}
+
+CallInst* MUL_REDUCE(Value *Src)
+{
+    return IRB()->CreateMulReduce(Src);
+}
+
+CallInst* AND_REDUCE(Value *Src)
+{
+    return IRB()->CreateAndReduce(Src);
+}
+
+CallInst* OR_REDUCE(Value *Src)
+{
+    return IRB()->CreateOrReduce(Src);
+}
+
+CallInst* XOR_REDUCE(Value *Src)
+{
+    return IRB()->CreateXorReduce(Src);
+}
+
+CallInst* INT_MAX_REDUCE(Value *Src, bool IsSigned = false)
+{
+    return IRB()->CreateIntMaxReduce(Src, IsSigned);
+}
+
+CallInst* INT_MIN_REDUCE(Value *Src, bool IsSigned = false)
+{
+    return IRB()->CreateIntMinReduce(Src, IsSigned);
+}
+
+CallInst* FP_MAX_REDUCE(Value *Src, bool NoNaN = false)
+{
+    return IRB()->CreateFPMaxReduce(Src, NoNaN);
+}
+
+CallInst* FP_MIN_REDUCE(Value *Src, bool NoNaN = false)
+{
+    return IRB()->CreateFPMinReduce(Src, NoNaN);
 }
 
 CallInst* LIFETIME_START(Value *Ptr, ConstantInt *Size = nullptr)
@@ -89,11 +154,6 @@ CallInst* LIFETIME_END(Value *Ptr, ConstantInt *Size = nullptr)
 CallInst* INVARIANT_START(Value *Ptr, ConstantInt *Size = nullptr)
 {
     return IRB()->CreateInvariantStart(Ptr, Size);
-}
-
-CallInst* MASKED_LOAD(Value *Ptr, unsigned Align, Value *Mask, Value *PassThru = nullptr, const Twine &Name = "")
-{
-    return IRB()->CreateMaskedLoad(Ptr, Align, Mask, PassThru, Name);
 }
 
 CallInst* MASKED_STORE(Value *Val, Value *Ptr, unsigned Align, Value *Mask)
@@ -154,6 +214,21 @@ CallInst* GC_RESULT(Instruction *Statepoint, Type *ResultType, const Twine &Name
 CallInst* GC_RELOCATE(Instruction *Statepoint, int BaseOffset, int DerivedOffset, Type *ResultType, const Twine &Name = "")
 {
     return IRB()->CreateGCRelocate(Statepoint, BaseOffset, DerivedOffset, ResultType, Name);
+}
+
+CallInst* BINARY_INTRINSIC(Intrinsic::ID ID, Value *LHS, Value *RHS, const Twine &Name = "")
+{
+    return IRB()->CreateBinaryIntrinsic(ID, LHS, RHS, Name);
+}
+
+CallInst* MIN_NUM(Value *LHS, Value *RHS, const Twine &Name = "")
+{
+    return IRB()->CreateMinNum(LHS, RHS, Name);
+}
+
+CallInst* MAX_NUM(Value *LHS, Value *RHS, const Twine &Name = "")
+{
+    return IRB()->CreateMaxNum(LHS, RHS, Name);
 }
 
 ReturnInst* RET_VOID()
@@ -461,6 +536,11 @@ Value* NOT(Value *V, const Twine &Name = "")
     return IRB()->CreateNot(V, Name);
 }
 
+AllocaInst* ALLOCA(Type *Ty, unsigned AddrSpace, Value *ArraySize = nullptr, const Twine &Name = "")
+{
+    return IRB()->CreateAlloca(Ty, AddrSpace, ArraySize, Name);
+}
+
 AllocaInst* ALLOCA(Type *Ty, Value *ArraySize = nullptr, const Twine &Name = "")
 {
     return IRB()->CreateAlloca(Ty, ArraySize, Name);
@@ -491,16 +571,6 @@ StoreInst* ALIGNED_STORE(Value *Val, Value *Ptr, unsigned Align, bool isVolatile
     return IRB()->CreateAlignedStore(Val, Ptr, Align, isVolatile);
 }
 
-Value* GEPA(Value *Ptr, ArrayRef<Value *> IdxList, const Twine &Name = "")
-{
-    return IRB()->CreateGEP(Ptr, IdxList, Name);
-}
-
-Value* GEPA(Type *Ty, Value *Ptr, ArrayRef<Value *> IdxList, const Twine &Name = "")
-{
-    return IRB()->CreateGEP(Ty, Ptr, IdxList, Name);
-}
-
 Value* IN_BOUNDS_GEP(Value *Ptr, ArrayRef<Value *> IdxList, const Twine &Name = "")
 {
     return IRB()->CreateInBoundsGEP(Ptr, IdxList, Name);
@@ -509,16 +579,6 @@ Value* IN_BOUNDS_GEP(Value *Ptr, ArrayRef<Value *> IdxList, const Twine &Name = 
 Value* IN_BOUNDS_GEP(Type *Ty, Value *Ptr, ArrayRef<Value *> IdxList, const Twine &Name = "")
 {
     return IRB()->CreateInBoundsGEP(Ty, Ptr, IdxList, Name);
-}
-
-Value* GEP(Value *Ptr, Value *Idx, const Twine &Name = "")
-{
-    return IRB()->CreateGEP(Ptr, Idx, Name);
-}
-
-Value* GEP(Type *Ty, Value *Ptr, Value *Idx, const Twine &Name = "")
-{
-    return IRB()->CreateGEP(Ty, Ptr, Idx, Name);
 }
 
 Value* IN_BOUNDS_GEP(Type *Ty, Value *Ptr, Value *Idx, const Twine &Name = "")
@@ -946,3 +1006,9 @@ CallInst* ALIGNMENT_ASSUMPTION(const DataLayout &DL, Value *PtrValue, unsigned A
     return IRB()->CreateAlignmentAssumption(DL, PtrValue, Alignment, OffsetValue);
 }
 
+CallInst* ALIGNMENT_ASSUMPTION(const DataLayout &DL, Value *PtrValue, Value *Alignment, Value *OffsetValue = nullptr)
+{
+    return IRB()->CreateAlignmentAssumption(DL, PtrValue, Alignment, OffsetValue);
+}
+
+    // clang-format on

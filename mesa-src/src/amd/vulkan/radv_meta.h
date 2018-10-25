@@ -58,34 +58,34 @@ struct radv_meta_saved_state {
 	VkRect2D render_area;
 };
 
-VkResult radv_device_init_meta_clear_state(struct radv_device *device);
+VkResult radv_device_init_meta_clear_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_clear_state(struct radv_device *device);
 
-VkResult radv_device_init_meta_resolve_state(struct radv_device *device);
+VkResult radv_device_init_meta_resolve_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_resolve_state(struct radv_device *device);
 
-VkResult radv_device_init_meta_depth_decomp_state(struct radv_device *device);
+VkResult radv_device_init_meta_depth_decomp_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_depth_decomp_state(struct radv_device *device);
 
-VkResult radv_device_init_meta_fast_clear_flush_state(struct radv_device *device);
+VkResult radv_device_init_meta_fast_clear_flush_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_fast_clear_flush_state(struct radv_device *device);
 
-VkResult radv_device_init_meta_blit_state(struct radv_device *device);
+VkResult radv_device_init_meta_blit_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_blit_state(struct radv_device *device);
 
-VkResult radv_device_init_meta_blit2d_state(struct radv_device *device);
+VkResult radv_device_init_meta_blit2d_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_blit2d_state(struct radv_device *device);
 
 VkResult radv_device_init_meta_buffer_state(struct radv_device *device);
 void radv_device_finish_meta_buffer_state(struct radv_device *device);
 
-VkResult radv_device_init_meta_query_state(struct radv_device *device);
+VkResult radv_device_init_meta_query_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_query_state(struct radv_device *device);
 
-VkResult radv_device_init_meta_resolve_compute_state(struct radv_device *device);
+VkResult radv_device_init_meta_resolve_compute_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_resolve_compute_state(struct radv_device *device);
 
-VkResult radv_device_init_meta_resolve_fragment_state(struct radv_device *device);
+VkResult radv_device_init_meta_resolve_fragment_state(struct radv_device *device, bool on_demand);
 void radv_device_finish_meta_resolve_fragment_state(struct radv_device *device);
 
 void radv_meta_save(struct radv_meta_saved_state *saved_state,
@@ -191,9 +191,13 @@ void radv_meta_resolve_fragment_image(struct radv_cmd_buffer *cmd_buffer,
 				      uint32_t region_count,
 				      const VkImageResolve *regions);
 
-void radv_blit_to_prime_linear(struct radv_cmd_buffer *cmd_buffer,
-			       struct radv_image *image,
-			       struct radv_image *linear_image);
+void radv_decompress_resolve_subpass_src(struct radv_cmd_buffer *cmd_buffer);
+
+void radv_decompress_resolve_src(struct radv_cmd_buffer *cmd_buffer,
+				 struct radv_image *src_image,
+				 VkImageLayout src_image_layout,
+				 uint32_t region_count,
+				 const VkImageResolve *regions);
 
 uint32_t radv_clear_cmask(struct radv_cmd_buffer *cmd_buffer,
 			  struct radv_image *image, uint32_t value);

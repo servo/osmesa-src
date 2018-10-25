@@ -7815,7 +7815,7 @@ struct GEN11_MI_DISPLAY_FLIP {
    uint32_t                             DWordLength;
    bool                                 Stereoscopic3DMode;
    uint32_t                             DisplayBufferPitch;
-   bool                                 TileParameter;
+   uint32_t                             TileParameter;
    __gen_address_type                   DisplayBufferBaseAddress;
    uint32_t                             VRRMasterFlip;
    uint32_t                             FlipType;
@@ -8064,7 +8064,7 @@ struct GEN11_MI_LOAD_SCAN_LINES_INCL {
 #define DisplayPlane1B                           1
 #define DisplayPlane1C                           4
 #define DisplayPlane1D                           5
-   bool                                 ScanLineEventDoneForward;
+   uint32_t                             ScanLineEventDoneForward;
    uint32_t                             DWordLength;
    uint32_t                             StartScanLineNumber;
    uint32_t                             EndScanLineNumber;
@@ -8777,9 +8777,9 @@ GEN11_MI_WAIT_FOR_EVENT_pack(__attribute__((unused)) __gen_user_data *data,
 struct GEN11_MI_WAIT_FOR_EVENT_2 {
    uint32_t                             CommandType;
    uint32_t                             MICommandOpcode;
-   bool                                 DisplayPipeScanLineWaitEnable;
-   bool                                 DisplayPipeVerticalBlankWaitEnable;
-   bool                                 DisplayPlaneFlipPendingWaitEnable;
+   uint32_t                             DisplayPipeScanLineWaitEnable;
+   uint32_t                             DisplayPipeVerticalBlankWaitEnable;
+   uint32_t                             DisplayPlaneFlipPendingWaitEnable;
 };
 
 static inline void
@@ -9910,6 +9910,9 @@ struct GEN11_CS_DEBUG_MODE2 {
    bool                                 _3DRenderingInstructionDisable;
    bool                                 MediaInstructionDisable;
    bool                                 CONSTANT_BUFFERAddressOffsetDisable;
+   bool                                 _3DRenderingInstructionDisableMask;
+   bool                                 MediaInstructionDisableMask;
+   bool                                 CONSTANT_BUFFERAddressOffsetDisableMask;
 };
 
 static inline void
@@ -9922,7 +9925,48 @@ GEN11_CS_DEBUG_MODE2_pack(__attribute__((unused)) __gen_user_data *data,
    dw[0] =
       __gen_uint(values->_3DRenderingInstructionDisable, 0, 0) |
       __gen_uint(values->MediaInstructionDisable, 1, 1) |
-      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisable, 4, 4);
+      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisable, 4, 4) |
+      __gen_uint(values->_3DRenderingInstructionDisableMask, 16, 16) |
+      __gen_uint(values->MediaInstructionDisableMask, 17, 17) |
+      __gen_uint(values->CONSTANT_BUFFERAddressOffsetDisableMask, 20, 20);
+}
+
+#define GEN11_SAMPLER_MODE_num            0xe18c
+#define GEN11_SAMPLER_MODE_length              1
+struct GEN11_SAMPLER_MODE {
+   bool                                 HeaderlessMessageforPreemptableContexts;
+   bool                                 HeaderlessMessageforPreemptableContextsMask;
+};
+
+static inline void
+GEN11_SAMPLER_MODE_pack(__attribute__((unused)) __gen_user_data *data,
+                        __attribute__((unused)) void * restrict dst,
+                        __attribute__((unused)) const struct GEN11_SAMPLER_MODE * restrict values)
+{
+   uint32_t * restrict dw = (uint32_t * restrict) dst;
+
+   dw[0] =
+      __gen_uint(values->HeaderlessMessageforPreemptableContexts, 5, 5) |
+      __gen_uint(values->HeaderlessMessageforPreemptableContextsMask, 21, 21);
+}
+
+#define GEN11_HALF_SLICE_CHICKEN7_num     0xe194
+#define GEN11_HALF_SLICE_CHICKEN7_length       1
+struct GEN11_HALF_SLICE_CHICKEN7 {
+   bool                                 EnabledTexelOffsetPrecisionFix;
+   bool                                 EnabledTexelOffsetPrecisionFixMask;
+};
+
+static inline void
+GEN11_HALF_SLICE_CHICKEN7_pack(__attribute__((unused)) __gen_user_data *data,
+                               __attribute__((unused)) void * restrict dst,
+                               __attribute__((unused)) const struct GEN11_HALF_SLICE_CHICKEN7 * restrict values)
+{
+   uint32_t * restrict dw = (uint32_t * restrict) dst;
+
+   dw[0] =
+      __gen_uint(values->EnabledTexelOffsetPrecisionFix, 1, 1) |
+      __gen_uint(values->EnabledTexelOffsetPrecisionFixMask, 17, 17);
 }
 
 #endif /* GEN11_PACK_H */

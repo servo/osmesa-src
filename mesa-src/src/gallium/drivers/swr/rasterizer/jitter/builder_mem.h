@@ -1,84 +1,157 @@
 /****************************************************************************
-* Copyright (C) 2014-2015 Intel Corporation.   All Rights Reserved.
-*
-* Permission is hereby granted, free of charge, to any person obtaining a
-* copy of this software and associated documentation files (the "Software"),
-* to deal in the Software without restriction, including without limitation
-* the rights to use, copy, modify, merge, publish, distribute, sublicense,
-* and/or sell copies of the Software, and to permit persons to whom the
-* Software is furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice (including the next
-* paragraph) shall be included in all copies or substantial portions of the
-* Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-* IN THE SOFTWARE.
-*
-* @file builder_misc.h
-*
-* @brief miscellaneous builder functions
-*
-* Notes:
-*
-******************************************************************************/
+ * Copyright (C) 2014-2015 Intel Corporation.   All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ *
+ * @file builder_misc.h
+ *
+ * @brief miscellaneous builder functions
+ *
+ * Notes:
+ *
+ ******************************************************************************/
 #pragma once
 
-Value *GEP(Value* ptr, const std::initializer_list<Value*> &indexList);
-Value *GEP(Value* ptr, const std::initializer_list<uint32_t> &indexList);
-Value *IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<Value*> &indexList);
-Value *IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<uint32_t> &indexList);
+public:
+typedef enum _JIT_MEM_CLIENT
+{
+    MEM_CLIENT_INTERNAL,
+    GFX_MEM_CLIENT_FETCH,
+    GFX_MEM_CLIENT_SAMPLER,
+    GFX_MEM_CLIENT_SHADER,
+} JIT_MEM_CLIENT;
 
-virtual LoadInst* LOAD(Value *Ptr, const char *Name);
-virtual LoadInst* LOAD(Value *Ptr, const Twine &Name = "");
-virtual LoadInst* LOAD(Type *Ty, Value *Ptr, const Twine &Name = "");
-virtual LoadInst* LOAD(Value *Ptr, bool isVolatile, const Twine &Name = "");
-virtual LoadInst* LOAD(Value *BasePtr, const std::initializer_list<uint32_t> &offset, const llvm::Twine& Name = "");
+protected:
+virtual Value* OFFSET_TO_NEXT_COMPONENT(Value* base, Constant* offset);
+void           AssertMemoryUsageParams(Value* ptr, JIT_MEM_CLIENT usage);
 
-LoadInst *LOADV(Value *BasePtr, const std::initializer_list<Value*> &offset, const llvm::Twine& name = "");
-StoreInst *STORE(Value *Val, Value *BasePtr, const std::initializer_list<uint32_t> &offset);
-StoreInst *STOREV(Value *Val, Value *BasePtr, const std::initializer_list<Value*> &offset);
+public:
+virtual Value* GEP(Value* Ptr, Value* Idx, Type* Ty = nullptr, const Twine& Name = "");
+virtual Value* GEP(Type* Ty, Value* Ptr, Value* Idx, const Twine& Name = "");
+virtual Value* GEP(Value* ptr, const std::initializer_list<Value*>& indexList, Type* Ty = nullptr);
+virtual Value*
+GEP(Value* ptr, const std::initializer_list<uint32_t>& indexList, Type* Ty = nullptr);
 
-Value *MASKLOADD(Value* src, Value* mask);
+Value* GEPA(Value* Ptr, ArrayRef<Value*> IdxList, const Twine& Name = "");
+Value* GEPA(Type* Ty, Value* Ptr, ArrayRef<Value*> IdxList, const Twine& Name = "");
 
-void Gather4(const SWR_FORMAT format, Value* pSrcBase, Value* byteOffsets,
-    Value* mask, Value* vGatherComponents[], bool bPackedOutput);
+Value* IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<Value*>& indexList);
+Value* IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<uint32_t>& indexList);
 
-virtual Value* OFFSET_TO_NEXT_COMPONENT(Value* base, Constant *offset);
+virtual LoadInst*
+                  LOAD(Value* Ptr, const char* Name, Type* Ty = nullptr, JIT_MEM_CLIENT usage = MEM_CLIENT_INTERNAL);
+virtual LoadInst* LOAD(Value*         Ptr,
+                       const Twine&   Name  = "",
+                       Type*          Ty    = nullptr,
+                       JIT_MEM_CLIENT usage = MEM_CLIENT_INTERNAL);
+virtual LoadInst*
+                  LOAD(Type* Ty, Value* Ptr, const Twine& Name = "", JIT_MEM_CLIENT usage = MEM_CLIENT_INTERNAL);
+virtual LoadInst* LOAD(Value*         Ptr,
+                       bool           isVolatile,
+                       const Twine&   Name  = "",
+                       Type*          Ty    = nullptr,
+                       JIT_MEM_CLIENT usage = MEM_CLIENT_INTERNAL);
+virtual LoadInst* LOAD(Value*                                 BasePtr,
+                       const std::initializer_list<uint32_t>& offset,
+                       const llvm::Twine&                     Name  = "",
+                       Type*                                  Ty    = nullptr,
+                       JIT_MEM_CLIENT                         usage = MEM_CLIENT_INTERNAL);
 
-virtual Value *GATHERPS(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
+virtual CallInst* MASKED_LOAD(Value*         Ptr,
+                              unsigned       Align,
+                              Value*         Mask,
+                              Value*         PassThru = nullptr,
+                              const Twine&   Name     = "",
+                              Type*          Ty       = nullptr,
+                              JIT_MEM_CLIENT usage    = MEM_CLIENT_INTERNAL)
+{
+    return IRB()->CreateMaskedLoad(Ptr, Align, Mask, PassThru, Name);
+}
 
-Value *GATHERPS_16(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
+LoadInst*
+           LOADV(Value* BasePtr, const std::initializer_list<Value*>& offset, const llvm::Twine& name = "");
+StoreInst* STORE(Value* Val, Value* BasePtr, const std::initializer_list<uint32_t>& offset);
+StoreInst* STOREV(Value* Val, Value* BasePtr, const std::initializer_list<Value*>& offset);
 
-void GATHER4PS(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
-    Value* mask, Value* vGatherComponents[], bool bPackedOutput);
+Value* MEM_ADD(Value*                                 i32Incr,
+               Value*                                 basePtr,
+               const std::initializer_list<uint32_t>& indices,
+               const llvm::Twine&                     name = "");
 
-virtual Value *GATHERDD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
-Value *GATHERDD_16(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
+void Gather4(const SWR_FORMAT format,
+             Value*           pSrcBase,
+             Value*           byteOffsets,
+             Value*           mask,
+             Value*           vGatherComponents[],
+             bool             bPackedOutput,
+             JIT_MEM_CLIENT   usage = MEM_CLIENT_INTERNAL);
 
-virtual void GATHER4DD(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
-    Value* mask, Value* vGatherComponents[], bool bPackedOutput);
+virtual Value* GATHERPS(Value*         src,
+                        Value*         pBase,
+                        Value*         indices,
+                        Value*         mask,
+                        uint8_t        scale = 1,
+                        JIT_MEM_CLIENT usage = MEM_CLIENT_INTERNAL);
 
-Value *GATHERPD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
+void GATHER4PS(const SWR_FORMAT_INFO& info,
+               Value*                 pSrcBase,
+               Value*                 byteOffsets,
+               Value*                 mask,
+               Value*                 vGatherComponents[],
+               bool                   bPackedOutput,
+               JIT_MEM_CLIENT         usage = MEM_CLIENT_INTERNAL);
 
-Value *GATHER_PTR(Value* pVecSrcPtr, Value* pVecMask, Value* pVecPassthru);
+virtual Value* GATHERDD(Value*         src,
+                        Value*         pBase,
+                        Value*         indices,
+                        Value*         mask,
+                        uint8_t        scale = 1,
+                        JIT_MEM_CLIENT usage = MEM_CLIENT_INTERNAL);
 
-void SCATTERPS(Value* pDst, Value* vSrc, Value* vOffsets, Value* vMask);
+void GATHER4DD(const SWR_FORMAT_INFO& info,
+               Value*                 pSrcBase,
+               Value*                 byteOffsets,
+               Value*                 mask,
+               Value*                 vGatherComponents[],
+               bool                   bPackedOutput,
+               JIT_MEM_CLIENT         usage = MEM_CLIENT_INTERNAL);
 
-void Shuffle8bpcGather4(const SWR_FORMAT_INFO &info, Value* vGatherInput, Value* vGatherOutput[], bool bPackedOutput);
-void Shuffle16bpcGather4(const SWR_FORMAT_INFO &info, Value* vGatherInput[], Value* vGatherOutput[], bool bPackedOutput);
+Value* GATHERPD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
 
-Value* STACKSAVE();
-void STACKRESTORE(Value* pSaved);
+Value* GATHER_PTR(Value* pVecSrcPtr, Value* pVecMask, Value* pVecPassthru);
+
+virtual void SCATTERPS(Value*         pDst,
+                       Value*         vSrc,
+                       Value*         vOffsets,
+                       Value*         vMask,
+                       JIT_MEM_CLIENT usage = MEM_CLIENT_INTERNAL);
+
+void Shuffle8bpcGather4(const SWR_FORMAT_INFO& info,
+                        Value*                 vGatherInput,
+                        Value*                 vGatherOutput[],
+                        bool                   bPackedOutput);
+void Shuffle16bpcGather4(const SWR_FORMAT_INFO& info,
+                         Value*                 vGatherInput[],
+                         Value*                 vGatherOutput[],
+                         bool                   bPackedOutput);
 
 // Static stack allocations for scatter operations
-Value* pScatterStackSrc{ nullptr };
-Value* pScatterStackOffsets{ nullptr };
-
-
-virtual Value* TRANSLATE_ADDRESS(Value* address) { return address; }
+Value* pScatterStackSrc{nullptr};
+Value* pScatterStackOffsets{nullptr};

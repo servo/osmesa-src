@@ -56,6 +56,8 @@ files_i965 = files(
   'brw_pipe_control.c',
   'brw_performance_query.h',
   'brw_performance_query.c',
+  'brw_performance_query_mdapi.c',
+  'brw_performance_query_metrics.h',
   'brw_program.c',
   'brw_program.h',
   'brw_program_binary.c',
@@ -85,14 +87,12 @@ files_i965 = files(
   'gen4_blorp_exec.h',
   'gen6_clip_state.c',
   'gen6_constant_state.c',
-  'gen6_depth_state.c',
   'gen6_multisample_state.c',
   'gen6_queryobj.c',
   'gen6_sampler_state.c',
   'gen6_sol.c',
   'gen6_urb.c',
   'gen7_l3_state.c',
-  'gen7_misc_state.c',
   'gen7_sol_state.c',
   'gen7_urb.c',
   'gen8_depth_state.c',
@@ -138,11 +138,11 @@ files_i965 = files(
 i965_gen_libs = []
 foreach v : ['40', '45', '50', '60', '70', '75', '80', '90', '100', '110']
   i965_gen_libs += static_library(
-    'libi965_gen@0@'.format(v),
+    'i965_gen@0@'.format(v),
     ['genX_blorp_exec.c', 'genX_state_upload.c', gen_xml_pack],
     include_directories : [inc_common, inc_intel, inc_dri_common],
     c_args : [
-      c_vis_args, no_override_init_args, '-msse2',
+      c_vis_args, no_override_init_args, c_sse2_args,
       '-DGEN_VERSIONx10=@0@'.format(v),
     ],
     dependencies : [dep_libdrm, idep_nir_headers],
@@ -170,7 +170,7 @@ i965_oa_sources = custom_target(
   input : i965_hw_metrics_xml_files,
   output : [ 'brw_oa_metrics.c', 'brw_oa_metrics.h' ],
   command : [
-    prog_python2, files('brw_oa.py'),
+    prog_python, files('brw_oa.py'),
     '--code', '@OUTPUT0@', '--header', '@OUTPUT1@',
     '@INPUT@',
   ],
@@ -183,8 +183,8 @@ libi965 = static_library(
   include_directories : [
     inc_common, inc_intel, inc_dri_common, inc_util, inc_drm_uapi,
   ],
-  c_args : [c_vis_args, no_override_init_args, '-msse2'],
-  cpp_args : [cpp_vis_args, '-msse2'],
+  c_args : [c_vis_args, no_override_init_args, c_sse2_args],
+  cpp_args : [cpp_vis_args, c_sse2_args],
   link_with : [
     i965_gen_libs, libintel_common, libintel_dev, libisl, libintel_compiler,
     libblorp,

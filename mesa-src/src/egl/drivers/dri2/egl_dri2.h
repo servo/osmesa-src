@@ -67,8 +67,6 @@ struct zwp_linux_dmabuf_v1;
 
 #include <system/window.h>
 #include <hardware/gralloc.h>
-#include <gralloc_drm_handle.h>
-
 #endif /* HAVE_ANDROID_PLATFORM */
 
 #include "eglconfig.h"
@@ -153,6 +151,12 @@ struct dri2_egl_display_vtbl {
    __DRIdrawable *(*get_dri_drawable)(_EGLSurface *surf);
 
    void (*close_screen_notify)(_EGLDisplay *dpy);
+
+   /* Used in EGL_KHR_mutable_render_buffer to update the native window's
+    * shared buffer mode.
+    */
+   bool (*set_shared_buffer_mode)(_EGLDisplay *dpy, _EGLSurface *surf,
+                                  bool mode);
 };
 
 struct dri2_egl_display
@@ -180,6 +184,7 @@ struct dri2_egl_display
    const __DRI2blobExtension *blob;
    const __DRI2rendererQueryExtension *rendererQuery;
    const __DRI2interopExtension *interop;
+   const __DRImutableRenderBufferDriverExtension *mutable_render_buffer;
    int                       fd;
 
    /* dri2_initialize/dri2_terminate increment/decrement this count, so does
@@ -225,7 +230,7 @@ struct dri2_egl_display
    struct zwp_linux_dmabuf_v1 *wl_dmabuf;
    struct u_vector          *wl_modifiers;
    bool                      authenticated;
-   int                       formats;
+   unsigned                  formats;
    uint32_t                  capabilities;
    char                     *device_name;
 #endif
@@ -292,6 +297,7 @@ struct dri2_egl_surface
    struct {
 #ifdef HAVE_WAYLAND_PLATFORM
       struct wl_buffer   *wl_buffer;
+      bool                wl_release;
       __DRIimage         *dri_image;
       /* for is_different_gpu case. NULL else */
       __DRIimage         *linear_copy;
@@ -413,6 +419,8 @@ EGLBoolean
 dri2_initialize_x11(_EGLDriver *drv, _EGLDisplay *disp);
 void
 dri2_teardown_x11(struct dri2_egl_display *dri2_dpy);
+unsigned int
+dri2_x11_get_red_mask_for_depth(struct dri2_egl_display *dri2_dpy, int depth);
 #else
 static inline EGLBoolean
 dri2_initialize_x11(_EGLDriver *drv, _EGLDisplay *disp)
@@ -421,6 +429,11 @@ dri2_initialize_x11(_EGLDriver *drv, _EGLDisplay *disp)
 }
 static inline void
 dri2_teardown_x11(struct dri2_egl_display *dri2_dpy) {}
+static inline unsigned int
+dri2_x11_get_red_mask_for_depth(struct dri2_egl_display *dri2_dpy, int depth)
+{
+   return 0;
+}
 #endif
 
 #ifdef HAVE_DRM_PLATFORM
@@ -522,5 +535,11 @@ dri2_init_surface(_EGLSurface *surf, _EGLDisplay *dpy, EGLint type,
 
 void
 dri2_fini_surface(_EGLSurface *surf);
+
+static inline uint64_t
+combine_u32_into_u64(uint32_t hi, uint32_t lo)
+{
+   return (((uint64_t) hi) << 32) | (((uint64_t) lo) & 0xffffffff);
+}
 
 #endif /* EGL_DRI2_INCLUDED */

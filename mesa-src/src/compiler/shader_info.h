@@ -44,6 +44,7 @@ struct spirv_supported_capabilities {
    bool multiview;
    bool variable_pointers;
    bool storage_16bit;
+   bool int16;
    bool shader_viewport_index_layer;
    bool subgroup_arithmetic;
    bool subgroup_ballot;
@@ -53,6 +54,14 @@ struct spirv_supported_capabilities {
    bool subgroup_vote;
    bool gcn_shader;
    bool trinary_minmax;
+   bool descriptor_array_dynamic_indexing;
+   bool runtime_descriptor_array;
+   bool stencil_export;
+   bool atomic_storage;
+   bool storage_8bit;
+   bool post_depth_coverage;
+   bool transform_feedback;
+   bool geometry_streams;
 };
 
 typedef struct shader_info {
@@ -125,9 +134,6 @@ typedef struct shader_info {
       struct {
          /* Which inputs are doubles */
          uint64_t double_inputs;
-
-         /* Which inputs are actually read and are double */
-         uint64_t double_inputs_read;
       } vs;
 
       struct {
@@ -175,6 +181,11 @@ typedef struct shader_info {
          bool post_depth_coverage;
 
          bool pixel_center_integer;
+
+         bool pixel_interlock_ordered;
+         bool pixel_interlock_unordered;
+         bool sample_interlock_ordered;
+         bool sample_interlock_unordered;
 
          /** gl_FragDepth layout for ARB_conservative_depth. */
          enum gl_frag_depth_layout depth_layout;

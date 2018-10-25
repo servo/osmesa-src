@@ -56,7 +56,6 @@
 #include "varray.h"
 #include "viewport.h"
 #include "mtypes.h"
-#include "main/dispatch.h"
 #include "state.h"
 #include "hash.h"
 #include <stdbool.h>
@@ -73,7 +72,8 @@ struct gl_enable_attrib
    GLbitfield ClipPlanes;
    GLboolean ColorMaterial;
    GLboolean CullFace;
-   GLboolean DepthClamp;
+   GLboolean DepthClampNear;
+   GLboolean DepthClampFar;
    GLboolean DepthTest;
    GLboolean Dither;
    GLboolean Fog;
@@ -138,6 +138,9 @@ struct gl_enable_attrib
 
    /* GL_ARB_framebuffer_sRGB / GL_EXT_framebuffer_sRGB */
    GLboolean sRGBEnabled;
+
+   /* GL_NV_conservative_raster */
+   GLboolean ConservativeRasterization;
 };
 
 
@@ -175,6 +178,13 @@ struct texture_state
     * texture objects.
     */
    struct gl_shared_state *SharedRef;
+};
+
+
+struct viewport_state
+{
+   struct gl_viewport_attrib ViewportArray[MAX_VIEWPORTS];
+   GLuint SubpixelPrecisionBias[2];
 };
 
 
@@ -327,7 +337,8 @@ _mesa_PushAttrib(GLbitfield mask)
       attr->ClipPlanes = ctx->Transform.ClipPlanesEnabled;
       attr->ColorMaterial = ctx->Light.ColorMaterialEnabled;
       attr->CullFace = ctx->Polygon.CullFlag;
-      attr->DepthClamp = ctx->Transform.DepthClamp;
+      attr->DepthClampNear = ctx->Transform.DepthClampNear;
+      attr->DepthClampFar = ctx->Transform.DepthClampFar;
       attr->DepthTest = ctx->Depth.Test;
       attr->Dither = ctx->Color.DitherFlag;
       attr->Fog = ctx->Fog.Enabled;
@@ -394,6 +405,9 @@ _mesa_PushAttrib(GLbitfield mask)
 
       /* GL_ARB_framebuffer_sRGB / GL_EXT_framebuffer_sRGB */
       attr->sRGBEnabled = ctx->Color.sRGBEnabled;
+
+      /* GL_NV_conservative_raster */
+      attr->ConservativeRasterization = ctx->ConservativeRasterization;
    }
 
    if (mask & GL_EVAL_BIT) {
@@ -545,11 +559,23 @@ _mesa_PushAttrib(GLbitfield mask)
    }
 
    if (mask & GL_VIEWPORT_BIT) {
-      if (!push_attrib(ctx, &head, GL_VIEWPORT_BIT,
-                       sizeof(struct gl_viewport_attrib)
-                       * ctx->Const.MaxViewports,
-                       (void*)&ctx->ViewportArray))
+      struct viewport_state *viewstate = CALLOC_STRUCT(viewport_state);
+      if (!viewstate) {
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glPushAttrib(GL_VIEWPORT_BIT)");
          goto end;
+      }
+
+      if (!save_attrib_data(&head, GL_VIEWPORT_BIT, viewstate)) {
+         free(viewstate);
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glPushAttrib(GL_VIEWPORT_BIT)");
+         goto end;
+      }
+
+      memcpy(&viewstate->ViewportArray, &ctx->ViewportArray,
+             sizeof(struct gl_viewport_attrib)*ctx->Const.MaxViewports);
+
+      viewstate->SubpixelPrecisionBias[0] = ctx->SubpixelPrecisionBias[0];
+      viewstate->SubpixelPrecisionBias[1] = ctx->SubpixelPrecisionBias[1];
    }
 
    /* GL_ARB_multisample */
@@ -603,8 +629,18 @@ pop_enable_group(struct gl_context *ctx, const struct gl_enable_attrib *enable)
    TEST_AND_UPDATE(ctx->Light.ColorMaterialEnabled, enable->ColorMaterial,
                    GL_COLOR_MATERIAL);
    TEST_AND_UPDATE(ctx->Polygon.CullFlag, enable->CullFace, GL_CULL_FACE);
-   TEST_AND_UPDATE(ctx->Transform.DepthClamp, enable->DepthClamp,
-                   GL_DEPTH_CLAMP);
+
+   if (!ctx->Extensions.AMD_depth_clamp_separate) {
+      TEST_AND_UPDATE(ctx->Transform.DepthClampNear && ctx->Transform.DepthClampFar,
+                      enable->DepthClampNear && enable->DepthClampFar,
+                      GL_DEPTH_CLAMP);
+   } else {
+      TEST_AND_UPDATE(ctx->Transform.DepthClampNear, enable->DepthClampNear,
+                      GL_DEPTH_CLAMP_NEAR_AMD);
+      TEST_AND_UPDATE(ctx->Transform.DepthClampFar, enable->DepthClampFar,
+                      GL_DEPTH_CLAMP_FAR_AMD);
+   }
+
    TEST_AND_UPDATE(ctx->Depth.Test, enable->DepthTest, GL_DEPTH_TEST);
    TEST_AND_UPDATE(ctx->Color.DitherFlag, enable->Dither, GL_DITHER);
    TEST_AND_UPDATE(ctx->Fog.Enabled, enable->Fog, GL_FOG);
@@ -713,6 +749,13 @@ pop_enable_group(struct gl_context *ctx, const struct gl_enable_attrib *enable)
    /* GL_ARB_framebuffer_sRGB / GL_EXT_framebuffer_sRGB */
    TEST_AND_UPDATE(ctx->Color.sRGBEnabled, enable->sRGBEnabled,
                    GL_FRAMEBUFFER_SRGB);
+
+   /* GL_NV_conservative_raster */
+   if (ctx->Extensions.NV_conservative_raster) {
+      TEST_AND_UPDATE(ctx->ConservativeRasterization,
+                      enable->ConservativeRasterization,
+                      GL_CONSERVATIVE_RASTERIZATION_NV);
+   }
 
    /* texture unit enables */
    for (i = 0; i < ctx->Const.MaxTextureUnits; i++) {
@@ -1127,7 +1170,8 @@ _mesa_PopAttrib(void)
                                       ctx->DriverFlags.NewSampleAlphaToXEnable |
                                       ctx->DriverFlags.NewSampleMask |
                                       ctx->DriverFlags.NewScissorTest |
-                                      ctx->DriverFlags.NewStencil;
+                                      ctx->DriverFlags.NewStencil |
+                                      ctx->DriverFlags.NewNvConservativeRasterization;
             }
             break;
          case GL_EVAL_BIT:
@@ -1401,9 +1445,23 @@ _mesa_PopAttrib(void)
                if (xform->RescaleNormals != ctx->Transform.RescaleNormals)
                   _mesa_set_enable(ctx, GL_RESCALE_NORMAL_EXT,
                                    ctx->Transform.RescaleNormals);
-               if (xform->DepthClamp != ctx->Transform.DepthClamp)
-                  _mesa_set_enable(ctx, GL_DEPTH_CLAMP,
-                                   ctx->Transform.DepthClamp);
+
+               if (!ctx->Extensions.AMD_depth_clamp_separate) {
+                  if (xform->DepthClampNear != ctx->Transform.DepthClampNear &&
+                      xform->DepthClampFar != ctx->Transform.DepthClampFar) {
+                     _mesa_set_enable(ctx, GL_DEPTH_CLAMP,
+                                      ctx->Transform.DepthClampNear &&
+                                      ctx->Transform.DepthClampFar);
+                  }
+               } else {
+                  if (xform->DepthClampNear != ctx->Transform.DepthClampNear)
+                     _mesa_set_enable(ctx, GL_DEPTH_CLAMP_NEAR_AMD,
+                                      ctx->Transform.DepthClampNear);
+                  if (xform->DepthClampFar != ctx->Transform.DepthClampFar)
+                     _mesa_set_enable(ctx, GL_DEPTH_CLAMP_FAR_AMD,
+                                      ctx->Transform.DepthClampFar);
+               }
+
                if (ctx->Extensions.ARB_clip_control)
                   _mesa_ClipControl(xform->ClipOrigin, xform->ClipDepthMode);
             }
@@ -1419,13 +1477,20 @@ _mesa_PopAttrib(void)
          case GL_VIEWPORT_BIT:
             {
                unsigned i;
-               const struct gl_viewport_attrib *vp;
-               vp = (const struct gl_viewport_attrib *) attr->data;
+               const struct viewport_state *viewstate;
+               viewstate = (const struct viewport_state *) attr->data;
 
                for (i = 0; i < ctx->Const.MaxViewports; i++) {
-                  _mesa_set_viewport(ctx, i, vp[i].X, vp[i].Y, vp[i].Width,
-                                     vp[i].Height);
-                  _mesa_set_depth_range(ctx, i, vp[i].Near, vp[i].Far);
+                  const struct gl_viewport_attrib *vp = &viewstate->ViewportArray[i];
+                  _mesa_set_viewport(ctx, i, vp->X, vp->Y, vp->Width,
+                                     vp->Height);
+                  _mesa_set_depth_range(ctx, i, vp->Near, vp->Far);
+               }
+
+               if (ctx->Extensions.NV_conservative_raster) {
+                  GLuint biasx = viewstate->SubpixelPrecisionBias[0];
+                  GLuint biasy = viewstate->SubpixelPrecisionBias[1];
+                  _mesa_SubpixelPrecisionBiasNV(biasx, biasy);
                }
             }
             break;
@@ -1513,6 +1578,7 @@ copy_array_object(struct gl_context *ctx,
 
    /* _Enabled must be the same than on push */
    dest->_Enabled = src->_Enabled;
+   dest->_EffEnabledVBO = src->_EffEnabledVBO;
    /* The bitmask of bound VBOs needs to match the VertexBinding array */
    dest->VertexAttribBufferMask = src->VertexAttribBufferMask;
    dest->_AttributeMapMode = src->_AttributeMapMode;
@@ -1548,7 +1614,6 @@ copy_array_attrib(struct gl_context *ctx,
    /* skip IndexBufferObj */
 
    /* Invalidate array state. It will be updated during the next draw. */
-   _mesa_set_drawing_arrays(ctx, NULL);
    _mesa_set_draw_vao(ctx, ctx->Array._EmptyVAO, 0);
 }
 

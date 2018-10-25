@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -52,6 +50,8 @@ struct fd_texture_stateobj {
 	struct pipe_sampler_state *samplers[PIPE_MAX_SAMPLERS];
 	unsigned num_samplers;
 	unsigned valid_samplers;
+	/* number of samples per sampler, 2 bits per sampler: */
+	uint32_t samples;
 };
 
 struct fd_program_stateobj {
@@ -69,26 +69,22 @@ struct fd_program_stateobj {
 struct fd_constbuf_stateobj {
 	struct pipe_constant_buffer cb[PIPE_MAX_CONSTANT_BUFFERS];
 	uint32_t enabled_mask;
-	uint32_t dirty_mask;
 };
 
 struct fd_shaderbuf_stateobj {
 	struct pipe_shader_buffer sb[PIPE_MAX_SHADER_BUFFERS];
 	uint32_t enabled_mask;
-	uint32_t dirty_mask;
 };
 
 struct fd_shaderimg_stateobj {
 	struct pipe_image_view si[PIPE_MAX_SHADER_IMAGES];
 	uint32_t enabled_mask;
-	uint32_t dirty_mask;
 };
 
 struct fd_vertexbuf_stateobj {
 	struct pipe_vertex_buffer vb[PIPE_MAX_ATTRIBS];
 	unsigned count;
 	uint32_t enabled_mask;
-	uint32_t dirty_mask;
 };
 
 struct fd_vertex_stateobj {
@@ -223,6 +219,7 @@ struct fd_context {
 		uint64_t draw_calls;
 		uint64_t batch_total, batch_sysmem, batch_gmem, batch_nondraw, batch_restore;
 		uint64_t staging_uploads, shadow_uploads;
+		uint64_t vs_regs, fs_regs;
 	} stats;
 
 	/* Current batch.. the rule here is that you can deref ctx->batch
@@ -259,7 +256,7 @@ struct fd_context {
 	 * means we'd always have to recalc tiles ever batch)
 	 */
 	struct fd_gmem_stateobj gmem;
-	struct fd_vsc_pipe      vsc_pipe[16];
+	struct fd_vsc_pipe      vsc_pipe[32];
 	struct fd_tile          tile[512];
 
 	/* which state objects need to be re-emit'd: */
@@ -282,6 +279,8 @@ struct fd_context {
 	struct pipe_blend_color blend_color;
 	struct pipe_stencil_ref stencil_ref;
 	unsigned sample_mask;
+	/* local context fb state, for when ctx->batch is null: */
+	struct pipe_framebuffer_state framebuffer;
 	struct pipe_poly_stipple stipple;
 	struct pipe_viewport_state viewport;
 	struct fd_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
@@ -427,6 +426,19 @@ static inline bool
 fd_supported_prim(struct fd_context *ctx, unsigned prim)
 {
 	return (1 << prim) & ctx->primtype_mask;
+}
+
+static inline struct fd_batch *
+fd_context_batch(struct fd_context *ctx)
+{
+	if (unlikely(!ctx->batch)) {
+		struct fd_batch *batch =
+			fd_batch_from_fb(&ctx->screen->batch_cache, ctx, &ctx->framebuffer);
+		util_copy_framebuffer_state(&batch->framebuffer, &ctx->framebuffer);
+		ctx->batch = batch;
+		fd_context_all_dirty(ctx);
+	}
+	return ctx->batch;
 }
 
 static inline void

@@ -121,7 +121,8 @@ renderer_init_state(struct xa_context *r)
     memset(&raster, 0, sizeof(struct pipe_rasterizer_state));
     raster.half_pixel_center = 1;
     raster.bottom_edge_rule = 1;
-    raster.depth_clip = 1;
+    raster.depth_clip_near = 1;
+    raster.depth_clip_far = 1;
     raster.scissor = 1;
     cso_set_rasterizer(r->cso, &raster);
 
@@ -417,7 +418,7 @@ renderer_copy_prepare(struct xa_context *r,
     uint32_t fs_traits = FS_COMPOSITE;
 
     assert(screen->is_format_supported(screen, dst_surface->format,
-				       PIPE_TEXTURE_2D, 0,
+				       PIPE_TEXTURE_2D, 0, 0,
 				       PIPE_BIND_RENDER_TARGET));
     (void)screen;
 

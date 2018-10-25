@@ -369,6 +369,7 @@ schedule_node::set_latency_gen7(bool is_haswell)
       break;
 
    case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT:
    case SHADER_OPCODE_TYPED_ATOMIC:
       /* Test code:
        *   mov(8)    g112<1>ud       0x00000000ud       { align1 WE_all 1Q };
@@ -763,22 +764,22 @@ vec4_instruction_scheduler::vec4_instruction_scheduler(vec4_visitor *v,
 }
 
 void
-vec4_instruction_scheduler::count_reads_remaining(backend_instruction *be)
+vec4_instruction_scheduler::count_reads_remaining(backend_instruction *)
 {
 }
 
 void
-vec4_instruction_scheduler::setup_liveness(cfg_t *cfg)
+vec4_instruction_scheduler::setup_liveness(cfg_t *)
 {
 }
 
 void
-vec4_instruction_scheduler::update_register_pressure(backend_instruction *be)
+vec4_instruction_scheduler::update_register_pressure(backend_instruction *)
 {
 }
 
 int
-vec4_instruction_scheduler::get_register_pressure_benefit(backend_instruction *be)
+vec4_instruction_scheduler::get_register_pressure_benefit(backend_instruction *)
 {
    return 0;
 }
@@ -1267,6 +1268,9 @@ vec4_instruction_scheduler::calculate_deps()
          }
       }
 
+      if (inst->reads_g0_implicitly())
+         add_dep(last_fixed_grf_write, n);
+
       if (!inst->is_send_from_grf()) {
          for (int i = 0; i < inst->mlen; i++) {
             /* It looks like the MRF regs are released in the send
@@ -1551,7 +1555,7 @@ fs_instruction_scheduler::issue_time(backend_instruction *inst)
 }
 
 int
-vec4_instruction_scheduler::issue_time(backend_instruction *inst)
+vec4_instruction_scheduler::issue_time(backend_instruction *)
 {
    /* We always execute as two vec4s in parallel. */
    return 2;

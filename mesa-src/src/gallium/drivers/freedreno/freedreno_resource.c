@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -110,6 +108,7 @@ realloc_bo(struct fd_resource *rsc, uint32_t size)
 		fd_bo_del(rsc->bo);
 
 	rsc->bo = fd_bo_new(screen->dev, size, flags);
+	rsc->seqno = p_atomic_inc_return(&screen->rsc_seqno);
 	util_range_set_empty(&rsc->valid_buffer_range);
 	fd_bc_invalidate_resource(rsc, true);
 }
@@ -148,6 +147,7 @@ fd_try_shadow_resource(struct fd_context *ctx, struct fd_resource *rsc,
 	 */
 	if (!pctx->screen->is_format_supported(pctx->screen,
 			prsc->format, prsc->target, prsc->nr_samples,
+			prsc->nr_storage_samples,
 			PIPE_BIND_RENDER_TARGET))
 		fallback = true;
 
@@ -194,6 +194,7 @@ fd_try_shadow_resource(struct fd_context *ctx, struct fd_resource *rsc,
 	/* TODO valid_buffer_range?? */
 	swap(rsc->bo,        shadow->bo);
 	swap(rsc->write_batch,   shadow->write_batch);
+	rsc->seqno = p_atomic_inc_return(&ctx->screen->rsc_seqno);
 
 	/* at this point, the newly created shadow buffer is not referenced
 	 * by any batches, but the existing rsc (probably) is.  We need to
@@ -210,7 +211,7 @@ fd_try_shadow_resource(struct fd_context *ctx, struct fd_resource *rsc,
 
 	mtx_unlock(&ctx->screen->lock);
 
-	struct pipe_blit_info blit = {0};
+	struct pipe_blit_info blit = {};
 	blit.dst.resource = prsc;
 	blit.dst.format   = prsc->format;
 	blit.src.resource = pshadow;
@@ -304,7 +305,7 @@ static void
 fd_blit_from_staging(struct fd_context *ctx, struct fd_transfer *trans)
 {
 	struct pipe_resource *dst = trans->base.resource;
-	struct pipe_blit_info blit = {0};
+	struct pipe_blit_info blit = {};
 
 	blit.dst.resource = dst;
 	blit.dst.format   = dst->format;
@@ -324,7 +325,7 @@ static void
 fd_blit_to_staging(struct fd_context *ctx, struct fd_transfer *trans)
 {
 	struct pipe_resource *src = trans->base.resource;
-	struct pipe_blit_info blit = {0};
+	struct pipe_blit_info blit = {};
 
 	blit.src.resource = src;
 	blit.src.format   = src->format;
@@ -371,7 +372,7 @@ flush_resource(struct fd_context *ctx, struct fd_resource *rsc, unsigned usage)
 	fd_batch_reference(&write_batch, rsc->write_batch);
 
 	if (usage & PIPE_TRANSFER_WRITE) {
-		struct fd_batch *batch, *batches[32] = {0};
+		struct fd_batch *batch, *batches[32] = {};
 		uint32_t batch_mask;
 
 		/* This is a bit awkward, probably a fd_batch_flush_locked()
@@ -837,14 +838,17 @@ fd_resource_create(struct pipe_screen *pscreen,
 
 	rsc->internal_format = format;
 	rsc->cpp = util_format_get_blocksize(format);
+	prsc->nr_samples = MAX2(1, prsc->nr_samples);
+	rsc->cpp *= prsc->nr_samples;
 
 	assert(rsc->cpp);
 
 	// XXX probably need some extra work if we hit rsc shadowing path w/ lrz..
-	if (is_a5xx(screen) && (fd_mesa_debug & FD_DBG_LRZ) && has_depth(format)) {
+	if ((is_a5xx(screen) || is_a6xx(screen)) &&
+		 (fd_mesa_debug & FD_DBG_LRZ) && has_depth(format)) {
 		const uint32_t flags = DRM_FREEDRENO_GEM_CACHE_WCOMBINE |
 				DRM_FREEDRENO_GEM_TYPE_KMEM; /* TODO */
-		unsigned lrz_pitch  = align(DIV_ROUND_UP(tmpl->width0, 8), 32);
+		unsigned lrz_pitch  = align(DIV_ROUND_UP(tmpl->width0, 8), 64);
 		unsigned lrz_height = DIV_ROUND_UP(tmpl->height0, 8);
 		unsigned size = lrz_pitch * lrz_height * 2;
 
@@ -919,8 +923,9 @@ fd_resource_from_handle(struct pipe_screen *pscreen,
 	if (!rsc->bo)
 		goto fail;
 
+	prsc->nr_samples = MAX2(1, prsc->nr_samples);
 	rsc->internal_format = tmpl->format;
-	rsc->cpp = util_format_get_blocksize(tmpl->format);
+	rsc->cpp = prsc->nr_samples * util_format_get_blocksize(tmpl->format);
 	slice->pitch = handle->stride / rsc->cpp;
 	slice->offset = handle->offset;
 	slice->size0 = handle->stride * prsc->height0;
@@ -1030,14 +1035,6 @@ fd_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info)
 	struct pipe_blit_info info = *blit_info;
 	bool discard = false;
 
-	if (info.src.resource->nr_samples > 1 &&
-			info.dst.resource->nr_samples <= 1 &&
-			!util_format_is_depth_or_stencil(info.src.resource->format) &&
-			!util_format_is_pure_integer(info.src.resource->format)) {
-		DBG("color resolve unimplemented");
-		return;
-	}
-
 	if (info.render_condition_enable && !fd_render_condition_check(pctx))
 		return;
 
@@ -1088,8 +1085,7 @@ fd_blitter_pipe_begin(struct fd_context *ctx, bool render_cond, bool discard,
 	util_blitter_save_depth_stencil_alpha(ctx->blitter, ctx->zsa);
 	util_blitter_save_stencil_ref(ctx->blitter, &ctx->stencil_ref);
 	util_blitter_save_sample_mask(ctx->blitter, ctx->sample_mask);
-	util_blitter_save_framebuffer(ctx->blitter,
-			ctx->batch ? &ctx->batch->framebuffer : NULL);
+	util_blitter_save_framebuffer(ctx->blitter, &ctx->framebuffer);
 	util_blitter_save_fragment_sampler_states(ctx->blitter,
 			ctx->tex[PIPE_SHADER_FRAGMENT].num_samplers,
 			(void **)ctx->tex[PIPE_SHADER_FRAGMENT].samplers);
@@ -1187,7 +1183,7 @@ fd_resource_screen_init(struct pipe_screen *pscreen)
 	pscreen->resource_destroy = u_transfer_helper_resource_destroy;
 
 	pscreen->transfer_helper = u_transfer_helper_create(&transfer_vtbl,
-			true, fake_rgtc, true);
+			true, false, fake_rgtc, true);
 
 	if (!screen->setup_slices)
 		screen->setup_slices = fd_setup_slices;

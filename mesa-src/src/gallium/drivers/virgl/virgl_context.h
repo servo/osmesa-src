@@ -68,9 +68,14 @@ struct virgl_context {
    unsigned num_so_targets;
 
    struct pipe_resource *ubos[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
+
+   struct pipe_resource *ssbos[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_BUFFERS];
+   struct pipe_resource *images[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_BUFFERS];
    int num_transfers;
    int num_draws;
    struct list_head to_flush_bufs;
+
+   struct pipe_resource *atomic_buffers[PIPE_MAX_HW_ATOMIC_BUFFERS];
 
    struct primconvert_context *primconvert;
    uint32_t hw_sub_ctx_id;

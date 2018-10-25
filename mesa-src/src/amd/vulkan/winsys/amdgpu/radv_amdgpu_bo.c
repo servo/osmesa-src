@@ -33,9 +33,10 @@
 #include <amdgpu.h>
 #include <amdgpu_drm.h>
 #include <inttypes.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include "util/u_atomic.h"
-
 
 static void radv_amdgpu_winsys_bo_destroy(struct radeon_winsys_bo *_bo);
 
@@ -304,7 +305,9 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws,
 	}
 
 	r = amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general,
-				  size, alignment, 0, &va, &va_handle, 0);
+				  size, alignment, 0, &va, &va_handle,
+				  (flags & RADEON_FLAG_32BIT ? AMDGPU_VA_RANGE_32_BIT : 0) |
+				   AMDGPU_VA_RANGE_HIGH);
 	if (r)
 		goto error_va_alloc;
 
@@ -345,7 +348,8 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws,
 		request.flags |= AMDGPU_GEM_CREATE_CPU_GTT_USWC;
 	if (!(flags & RADEON_FLAG_IMPLICIT_SYNC) && ws->info.drm_minor >= 22)
 		request.flags |= AMDGPU_GEM_CREATE_EXPLICIT_SYNC;
-	if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING && ws->info.drm_minor >= 20 && ws->use_local_bos) {
+	if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
+	    ws->info.has_local_buffers && ws->use_local_bos) {
 		bo->base.is_local = true;
 		request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
 	}
@@ -421,7 +425,8 @@ radv_amdgpu_winsys_bo_from_ptr(struct radeon_winsys *_ws,
 		goto error;
 
 	if (amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general,
-	                          size, 1 << 12, 0, &va, &va_handle, 0))
+	                          size, 1 << 12, 0, &va, &va_handle,
+				  AMDGPU_VA_RANGE_HIGH))
 		goto error_va_alloc;
 
 	if (amdgpu_bo_va_op(buf_handle, 0, size, va, 0, AMDGPU_VA_OP_MAP))
@@ -477,7 +482,8 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws,
 		goto error_query;
 
 	r = amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general,
-				  result.alloc_size, 1 << 20, 0, &va, &va_handle, 0);
+				  result.alloc_size, 1 << 20, 0, &va, &va_handle,
+				  AMDGPU_VA_RANGE_HIGH);
 	if (r)
 		goto error_query;
 
@@ -498,6 +504,7 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws,
 	bo->size = result.alloc_size;
 	bo->is_shared = true;
 	bo->ws = ws;
+	bo->ref_count = 1;
 	radv_amdgpu_add_buffer_to_global_list(bo);
 	return (struct radeon_winsys_bo *)bo;
 error_va_map:

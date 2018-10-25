@@ -62,39 +62,56 @@ static void
 tcs_add_output_reads(nir_shader *shader, uint64_t *read, uint64_t *patches_read)
 {
    nir_foreach_function(function, shader) {
-      if (function->impl) {
-         nir_foreach_block(block, function->impl) {
-            nir_foreach_instr(instr, block) {
-               if (instr->type != nir_instr_type_intrinsic)
-                  continue;
+      if (!function->impl)
+         continue;
 
-               nir_intrinsic_instr *intrin_instr =
-                  nir_instr_as_intrinsic(instr);
-               if (intrin_instr->intrinsic == nir_intrinsic_load_var &&
-                   intrin_instr->variables[0]->var->data.mode ==
-                   nir_var_shader_out) {
+      nir_foreach_block(block, function->impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
 
-                  nir_variable *var = intrin_instr->variables[0]->var;
-                  if (var->data.patch) {
-                     patches_read[var->data.location_frac] |=
-                        get_variable_io_mask(intrin_instr->variables[0]->var,
-                                             shader->info.stage);
-                  } else {
-                     read[var->data.location_frac] |=
-                        get_variable_io_mask(intrin_instr->variables[0]->var,
-                                             shader->info.stage);
-                  }
-               }
+            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+            if (intrin->intrinsic != nir_intrinsic_load_deref)
+               continue;
+
+            nir_variable *var =
+               nir_deref_instr_get_variable(nir_src_as_deref(intrin->src[0]));
+
+            if (var->data.mode != nir_var_shader_out)
+               continue;
+
+            if (var->data.patch) {
+               patches_read[var->data.location_frac] |=
+                  get_variable_io_mask(var, shader->info.stage);
+            } else {
+               read[var->data.location_frac] |=
+                  get_variable_io_mask(var, shader->info.stage);
             }
          }
       }
    }
 }
 
-static bool
-remove_unused_io_vars(nir_shader *shader, struct exec_list *var_list,
-                      uint64_t *used_by_other_stage,
-                      uint64_t *used_by_other_stage_patches)
+/**
+ * Helper for removing unused shader I/O variables, by demoting them to global
+ * variables (which may then by dead code eliminated).
+ *
+ * Example usage is:
+ *
+ * progress = nir_remove_unused_io_vars(producer,
+ *                                      &producer->outputs,
+ *                                      read, patches_read) ||
+ *                                      progress;
+ *
+ * The "used" should be an array of 4 uint64_ts (probably of VARYING_BIT_*)
+ * representing each .location_frac used.  Note that for vector variables,
+ * only the first channel (.location_frac) is examined for deciding if the
+ * variable is used!
+ */
+bool
+nir_remove_unused_io_vars(nir_shader *shader, struct exec_list *var_list,
+                          uint64_t *used_by_other_stage,
+                          uint64_t *used_by_other_stage_patches)
 {
    bool progress = false;
    uint64_t *used;
@@ -124,6 +141,9 @@ remove_unused_io_vars(nir_shader *shader, struct exec_list *var_list,
          progress = true;
       }
    }
+
+   if (progress)
+      nir_fixup_deref_modes(shader);
 
    return progress;
 }
@@ -165,11 +185,11 @@ nir_remove_unused_varyings(nir_shader *producer, nir_shader *consumer)
       tcs_add_output_reads(producer, read, patches_read);
 
    bool progress = false;
-   progress = remove_unused_io_vars(producer, &producer->outputs, read,
-                                    patches_read);
+   progress = nir_remove_unused_io_vars(producer, &producer->outputs, read,
+                                        patches_read);
 
-   progress = remove_unused_io_vars(consumer, &consumer->inputs, written,
-                                    patches_written) || progress;
+   progress = nir_remove_unused_io_vars(consumer, &consumer->inputs, written,
+                                        patches_written) || progress;
 
    return progress;
 }

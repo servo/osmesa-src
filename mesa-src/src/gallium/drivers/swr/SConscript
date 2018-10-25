@@ -12,8 +12,8 @@ if not env['llvm']:
     env['swr'] = False
     Return()
 
-if env['LLVM_VERSION'] < distutils.version.LooseVersion('4.0'):
-    print("warning: swr requires LLVM >= 4.0: not building swr")
+if env['LLVM_VERSION'] < distutils.version.LooseVersion('6.0'):
+    print("warning: swr requires LLVM >= 6.0: not building swr")
     env['swr'] = False
     Return()
 
@@ -76,10 +76,19 @@ Depends('rasterizer/jitter/gen_builder.hpp',
         swrroot + 'rasterizer/codegen/templates/gen_builder.hpp')
 
 env.CodeGenerate(
-    target = 'rasterizer/jitter/gen_builder_x86.hpp',
+    target = 'rasterizer/jitter/gen_builder_meta.hpp',
     script = swrroot + 'rasterizer/codegen/gen_llvm_ir_macros.py',
     source = '',
-    command = python_cmd + ' $SCRIPT --output ' + bldroot + '/rasterizer/jitter --gen_x86_h'
+    command = python_cmd + ' $SCRIPT --output ' + bldroot + '/rasterizer/jitter --gen_meta_h'
+)
+Depends('rasterizer/jitter/gen_builder.hpp',
+        swrroot + 'rasterizer/codegen/templates/gen_builder.hpp')
+
+env.CodeGenerate(
+    target = 'rasterizer/jitter/gen_builder_intrin.hpp',
+    script = swrroot + 'rasterizer/codegen/gen_llvm_ir_macros.py',
+    source = '',
+    command = python_cmd + ' $SCRIPT --output ' + bldroot + '/rasterizer/jitter --gen_intrin_h'
 )
 Depends('rasterizer/jitter/gen_builder.hpp',
         swrroot + 'rasterizer/codegen/templates/gen_builder.hpp')

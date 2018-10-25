@@ -87,6 +87,7 @@
 #include "blend.h"
 #include "buffers.h"
 #include "bufferobj.h"
+#include "conservativeraster.h"
 #include "context.h"
 #include "cpuinfo.h"
 #include "debug.h"
@@ -403,11 +404,7 @@ one_time_init( struct gl_context *ctx )
 
 #if defined(DEBUG)
       if (MESA_VERBOSE != 0) {
-         _mesa_debug(ctx, "Mesa " PACKAGE_VERSION " DEBUG build"
-#ifdef MESA_GIT_SHA1
-                     " (" MESA_GIT_SHA1 ")"
-#endif
-                     "\n");
+         _mesa_debug(ctx, "Mesa " PACKAGE_VERSION " DEBUG build" MESA_GIT_SHA1 "\n");
       }
 #endif
    }
@@ -636,10 +633,7 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    consts->Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits = MAX_TEXTURE_IMAGE_UNITS;
    consts->MaxGeometryOutputVertices = MAX_GEOMETRY_OUTPUT_VERTICES;
    consts->MaxGeometryTotalOutputComponents = MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS;
-
-   /* Shading language version */
-   consts->GLSLVersion = 120;
-   _mesa_override_glsl_version(consts);
+   consts->MaxGeometryShaderInvocations = MAX_GEOMETRY_SHADER_INVOCATIONS;
 
 #ifdef DEBUG
    consts->GenerateTemporaryNames = true;
@@ -739,6 +733,14 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    consts->MaxComputeVariableGroupSize[1] = 512;
    consts->MaxComputeVariableGroupSize[2] = 64;
    consts->MaxComputeVariableGroupInvocations = 512;
+
+   /** GL_NV_conservative_raster */
+   consts->MaxSubpixelPrecisionBiasBits = 0;
+
+   /** GL_NV_conservative_raster_dilate */
+   consts->ConservativeRasterDilateRange[0] = 0.0;
+   consts->ConservativeRasterDilateRange[1] = 0.0;
+   consts->ConservativeRasterDilateGranularity = 0.0;
 }
 
 
@@ -828,6 +830,7 @@ init_attrib_groups(struct gl_context *ctx)
    _mesa_init_bbox( ctx );
    _mesa_init_buffer_objects( ctx );
    _mesa_init_color( ctx );
+   _mesa_init_conservative_raster( ctx );
    _mesa_init_current( ctx );
    _mesa_init_depth( ctx );
    _mesa_init_debug( ctx );
@@ -1695,7 +1698,10 @@ _mesa_make_current( struct gl_context *newCtx,
       _mesa_flush(curCtx);
    }
 
-   /* We used to call _glapi_check_multithread() here.  Now do it in drivers */
+   /* Call this periodically to detect when the user has begun using
+    * GL rendering from multiple threads.
+    */
+   _glapi_check_multithread();
 
    if (!newCtx) {
       _glapi_set_dispatch(NULL);  /* none current */

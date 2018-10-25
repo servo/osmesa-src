@@ -20,7 +20,10 @@ fn main() {
                 .arg("src/compiler/glsl/glcpp/glcpp-parse.c")
                 .arg("src/compiler/glsl/glsl_parser.cpp")
                 .arg("src/mesa/program/program_parse.tab.c")
-                .arg("src/compiler/glsl/glsl_lexer.cpp"));
+                .arg("src/compiler/glsl/glsl_lexer.cpp")
+                .arg("src/glx/indirect.h")
+                .arg("src/glx/indirect_init.c")
+                .arg("src/mapi/glapi/glapi_mapi_tmp.h"));
 
     run(Command::new(src.join("mesa-src/configure"))
                 .current_dir(&dst)

@@ -30,7 +30,7 @@
 /* initialize */
 void si_need_gfx_cs_space(struct si_context *ctx)
 {
-	struct radeon_winsys_cs *cs = ctx->gfx_cs;
+	struct radeon_cmdbuf *cs = ctx->gfx_cs;
 
 	/* There is no need to flush the DMA IB here, because
 	 * r600_need_dma_space always flushes the GFX IB if there is
@@ -47,7 +47,7 @@ void si_need_gfx_cs_space(struct si_context *ctx)
 						   ctx->vram, ctx->gtt))) {
 		ctx->gtt = 0;
 		ctx->vram = 0;
-		si_flush_gfx_cs(ctx, PIPE_FLUSH_ASYNC, NULL);
+		si_flush_gfx_cs(ctx, RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
 		return;
 	}
 	ctx->gtt = 0;
@@ -61,19 +61,35 @@ void si_need_gfx_cs_space(struct si_context *ctx)
 	 */
 	unsigned need_dwords = 2048 + ctx->num_cs_dw_queries_suspend;
 	if (!ctx->ws->cs_check_space(cs, need_dwords))
-		si_flush_gfx_cs(ctx, PIPE_FLUSH_ASYNC, NULL);
+		si_flush_gfx_cs(ctx, RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
 }
 
 void si_flush_gfx_cs(struct si_context *ctx, unsigned flags,
 		     struct pipe_fence_handle **fence)
 {
-	struct radeon_winsys_cs *cs = ctx->gfx_cs;
+	struct radeon_cmdbuf *cs = ctx->gfx_cs;
 	struct radeon_winsys *ws = ctx->ws;
+	unsigned wait_flags = 0;
 
 	if (ctx->gfx_flush_in_progress)
 		return;
 
-	if (!radeon_emitted(cs, ctx->initial_gfx_cs_size))
+	if (!ctx->screen->info.kernel_flushes_tc_l2_after_ib) {
+		wait_flags |= SI_CONTEXT_PS_PARTIAL_FLUSH |
+			      SI_CONTEXT_CS_PARTIAL_FLUSH |
+			      SI_CONTEXT_INV_GLOBAL_L2;
+	} else if (ctx->chip_class == SI) {
+		/* The kernel flushes L2 before shaders are finished. */
+		wait_flags |= SI_CONTEXT_PS_PARTIAL_FLUSH |
+			      SI_CONTEXT_CS_PARTIAL_FLUSH;
+	} else if (!(flags & RADEON_FLUSH_START_NEXT_GFX_IB_NOW)) {
+		wait_flags |= SI_CONTEXT_PS_PARTIAL_FLUSH |
+			      SI_CONTEXT_CS_PARTIAL_FLUSH;
+	}
+
+	/* Drop this flush if it's a no-op. */
+	if (!radeon_emitted(cs, ctx->initial_gfx_cs_size) &&
+	    (!wait_flags || !ctx->gfx_last_ib_is_busy))
 		return;
 
 	if (si_check_device_reset(ctx))
@@ -103,24 +119,27 @@ void si_flush_gfx_cs(struct si_context *ctx, unsigned flags,
 		ctx->streamout.suspended = true;
 	}
 
-	ctx->flags |= SI_CONTEXT_CS_PARTIAL_FLUSH |
-			SI_CONTEXT_PS_PARTIAL_FLUSH;
+	/* Make sure CP DMA is idle at the end of IBs after L2 prefetches
+	 * because the kernel doesn't wait for it. */
+	if (ctx->chip_class >= CIK)
+		si_cp_dma_wait_for_idle(ctx);
 
-	/* DRM 3.1.0 doesn't flush TC for VI correctly. */
-	if (ctx->chip_class == VI && ctx->screen->info.drm_minor <= 1)
-		ctx->flags |= SI_CONTEXT_INV_GLOBAL_L2 |
-				SI_CONTEXT_INV_VMEM_L1;
-
-	si_emit_cache_flush(ctx);
+	/* Wait for draw calls to finish if needed. */
+	if (wait_flags) {
+		ctx->flags |= wait_flags;
+		si_emit_cache_flush(ctx);
+	}
+	ctx->gfx_last_ib_is_busy = wait_flags == 0;
 
 	if (ctx->current_saved_cs) {
 		si_trace_emit(ctx);
-		si_log_hw_flush(ctx);
 
 		/* Save the IB for debug contexts. */
 		si_save_cs(ws, cs, &ctx->current_saved_cs->gfx, true);
 		ctx->current_saved_cs->flushed = true;
 		ctx->current_saved_cs->time_flush = os_time_get_nano();
+
+		si_log_hw_flush(ctx);
 	}
 
 	/* Flush the CS. */
@@ -128,8 +147,6 @@ void si_flush_gfx_cs(struct si_context *ctx, unsigned flags,
 	if (fence)
 		ws->fence_reference(fence, ctx->last_gfx_fence);
 
-	/* This must be after cs_flush returns, since the context's API
-	 * thread can concurrently read this value in si_fence_finish. */
 	ctx->num_gfx_cs_flushes++;
 
 	/* Check VM faults if needed. */
@@ -160,9 +177,8 @@ static void si_begin_gfx_cs_debug(struct si_context *ctx)
 
 	pipe_reference_init(&ctx->current_saved_cs->reference, 1);
 
-	ctx->current_saved_cs->trace_buf = (struct r600_resource*)
-				 pipe_buffer_create(ctx->b.screen, 0,
-						    PIPE_USAGE_STAGING, 8);
+	ctx->current_saved_cs->trace_buf = r600_resource(
+		pipe_buffer_create(ctx->b.screen, 0, PIPE_USAGE_STAGING, 8));
 	if (!ctx->current_saved_cs->trace_buf) {
 		free(ctx->current_saved_cs);
 		ctx->current_saved_cs = NULL;
@@ -184,12 +200,21 @@ void si_begin_new_gfx_cs(struct si_context *ctx)
 	if (ctx->is_debug)
 		si_begin_gfx_cs_debug(ctx);
 
-	/* Flush read caches at the beginning of CS not flushed by the kernel. */
-	if (ctx->chip_class >= CIK)
-		ctx->flags |= SI_CONTEXT_INV_SMEM_L1 |
-				SI_CONTEXT_INV_ICACHE;
-
-	ctx->flags |= SI_CONTEXT_START_PIPELINE_STATS;
+	/* Always invalidate caches at the beginning of IBs, because external
+	 * users (e.g. BO evictions and SDMA/UVD/VCE IBs) can modify our
+	 * buffers.
+	 *
+	 * Note that the cache flush done by the kernel at the end of GFX IBs
+	 * isn't useful here, because that flush can finish after the following
+	 * IB starts drawing.
+	 *
+	 * TODO: Do we also need to invalidate CB & DB caches?
+	 */
+	ctx->flags |= SI_CONTEXT_INV_ICACHE |
+		      SI_CONTEXT_INV_SMEM_L1 |
+		      SI_CONTEXT_INV_VMEM_L1 |
+		      SI_CONTEXT_INV_GLOBAL_L2 |
+		      SI_CONTEXT_START_PIPELINE_STATS;
 
 	/* set all valid group as dirty so they get reemited on
 	 * next draw command
@@ -229,39 +254,43 @@ void si_begin_new_gfx_cs(struct si_context *ctx)
 	}
 	/* This should always be marked as dirty to set the framebuffer scissor
 	 * at least. */
-	si_mark_atom_dirty(ctx, &ctx->framebuffer.atom);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.framebuffer);
 
-	si_mark_atom_dirty(ctx, &ctx->clip_regs);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.clip_regs);
 	/* CLEAR_STATE sets zeros. */
 	if (!has_clear_state || ctx->clip_state.any_nonzeros)
-		si_mark_atom_dirty(ctx, &ctx->clip_state.atom);
-	ctx->msaa_sample_locs.nr_samples = 0;
-	si_mark_atom_dirty(ctx, &ctx->msaa_sample_locs.atom);
-	si_mark_atom_dirty(ctx, &ctx->msaa_config);
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.clip_state);
+	ctx->sample_locs_num_samples = 0;
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.msaa_sample_locs);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.msaa_config);
 	/* CLEAR_STATE sets 0xffff. */
-	if (!has_clear_state || ctx->sample_mask.sample_mask != 0xffff)
-		si_mark_atom_dirty(ctx, &ctx->sample_mask.atom);
-	si_mark_atom_dirty(ctx, &ctx->cb_render_state);
+	if (!has_clear_state || ctx->sample_mask != 0xffff)
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.sample_mask);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.cb_render_state);
 	/* CLEAR_STATE sets zeros. */
 	if (!has_clear_state || ctx->blend_color.any_nonzeros)
-		si_mark_atom_dirty(ctx, &ctx->blend_color.atom);
-	si_mark_atom_dirty(ctx, &ctx->db_render_state);
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.blend_color);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.db_render_state);
 	if (ctx->chip_class >= GFX9)
-		si_mark_atom_dirty(ctx, &ctx->dpbb_state);
-	si_mark_atom_dirty(ctx, &ctx->stencil_ref.atom);
-	si_mark_atom_dirty(ctx, &ctx->spi_map);
-	si_mark_atom_dirty(ctx, &ctx->streamout.enable_atom);
-	si_mark_atom_dirty(ctx, &ctx->render_cond_atom);
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.dpbb_state);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.stencil_ref);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.spi_map);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.streamout_enable);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.render_cond);
+	/* CLEAR_STATE disables all window rectangles. */
+	if (!has_clear_state || ctx->num_window_rectangles > 0)
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.window_rectangles);
 	si_all_descriptors_begin_new_cs(ctx);
 	si_all_resident_buffers_begin_new_cs(ctx);
 
 	ctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
 	ctx->viewports.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
 	ctx->viewports.depth_range_dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
-	si_mark_atom_dirty(ctx, &ctx->scissors.atom);
-	si_mark_atom_dirty(ctx, &ctx->viewports.atom);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.guardband);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.scissors);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.viewports);
 
-	si_mark_atom_dirty(ctx, &ctx->scratch_state);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.scratch_state);
 	if (ctx->scratch_buffer) {
 		si_context_add_resource_size(ctx, &ctx->scratch_buffer->b.b);
 	}
@@ -283,7 +312,6 @@ void si_begin_new_gfx_cs(struct si_context *ctx)
 	ctx->last_index_size = -1;
 	ctx->last_primitive_restart_en = -1;
 	ctx->last_restart_index = SI_RESTART_INDEX_UNKNOWN;
-	ctx->last_gs_out_prim = -1;
 	ctx->last_prim = -1;
 	ctx->last_multi_vgt_param = -1;
 	ctx->last_rast_prim = -1;
@@ -293,6 +321,74 @@ void si_begin_new_gfx_cs(struct si_context *ctx)
 	ctx->last_tcs = NULL;
 	ctx->last_tes_sh_base = -1;
 	ctx->last_num_tcs_input_cp = -1;
+	ctx->last_ls_hs_config = -1; /* impossible value */
 
 	ctx->cs_shader_state.initialized = false;
+
+	if (has_clear_state) {
+		ctx->tracked_regs.reg_value[SI_TRACKED_DB_RENDER_CONTROL] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_DB_COUNT_CONTROL] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_DB_RENDER_OVERRIDE2] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_DB_SHADER_CONTROL] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_CB_TARGET_MASK] = 0xffffffff;
+		ctx->tracked_regs.reg_value[SI_TRACKED_CB_DCC_CONTROL] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SX_PS_DOWNCONVERT] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SX_BLEND_OPT_EPSILON] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SX_BLEND_OPT_CONTROL] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SC_LINE_CNTL]	= 0x00001000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SC_AA_CONFIG]	= 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_DB_EQAA]	= 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SC_MODE_CNTL_1] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SU_PRIM_FILTER_CNTL] = 0;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SU_SMALL_PRIM_FILTER_CNTL] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_CL_VS_OUT_CNTL] = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_CL_CLIP_CNTL]	= 0x00090000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SC_BINNER_CNTL_0] = 0x00000003;
+		ctx->tracked_regs.reg_value[SI_TRACKED_DB_DFSM_CONTROL]	= 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_CL_GB_VERT_CLIP_ADJ]	= 0x3f800000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_CL_GB_VERT_DISC_ADJ]	= 0x3f800000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_CL_GB_HORZ_CLIP_ADJ]	= 0x3f800000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_CL_GB_HORZ_DISC_ADJ]	= 0x3f800000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SU_HARDWARE_SCREEN_OFFSET] = 0;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SU_VTX_CNTL] = 0x00000005;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_SC_CLIPRECT_RULE]	= 0xffff;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_ESGS_RING_ITEMSIZE]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GSVS_RING_OFFSET_1]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GSVS_RING_OFFSET_2]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GSVS_RING_OFFSET_3]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_OUT_PRIM_TYPE]    = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GSVS_RING_ITEMSIZE]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_MAX_VERT_OUT]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_VERT_ITEMSIZE]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_VERT_ITEMSIZE_1]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_VERT_ITEMSIZE_2]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_VERT_ITEMSIZE_3]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_INSTANCE_CNT]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_ONCHIP_CNTL]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_MAX_PRIMS_PER_SUBGROUP]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_GS_MODE]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_PRIMITIVEID_EN]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_REUSE_OFF]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SPI_VS_OUT_CONFIG]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SPI_SHADER_POS_FORMAT]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_PA_CL_VTE_CNTL]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SPI_PS_INPUT_ENA]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SPI_PS_INPUT_ADDR]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SPI_BARYC_CNTL]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SPI_PS_IN_CONTROL]  = 0x00000002;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SPI_SHADER_Z_FORMAT]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_SPI_SHADER_COL_FORMAT]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_CB_SHADER_MASK]  = 0xffffffff;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_TF_PARAM]  = 0x00000000;
+		ctx->tracked_regs.reg_value[SI_TRACKED_VGT_VERTEX_REUSE_BLOCK_CNTL]  = 0x0000001e; /* From VI */
+
+		/* Set all saved registers state to saved. */
+		ctx->tracked_regs.reg_saved = 0xffffffffffffffff;
+	} else {
+		/* Set all saved registers state to unknown. */
+		ctx->tracked_regs.reg_saved = 0;
+	}
+
+	/* 0xffffffff is a impossible value to register SPI_PS_INPUT_CNTL_n */
+	memset(ctx->tracked_regs.spi_ps_input_cntl, 0xff, sizeof(uint32_t) * 32);
 }

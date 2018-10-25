@@ -63,11 +63,25 @@ brw_upload_initial_gpu_state(struct brw_context *brw)
 
    brw_upload_invariant_state(brw);
 
-   if (devinfo->gen == 10 || devinfo->gen == 11) {
-      brw_load_register_imm32(brw, GEN10_CACHE_MODE_SS,
-                              REG_MASK(GEN10_FLOAT_BLEND_OPTIMIZATION_ENABLE) |
-                              GEN10_FLOAT_BLEND_OPTIMIZATION_ENABLE);
+   if (devinfo->gen == 11) {
+      /* The default behavior of bit 5 "Headerless Message for Pre-emptable
+       * Contexts" in SAMPLER MODE register is set to 0, which means
+       * headerless sampler messages are not allowed for pre-emptable
+       * contexts. Set the bit 5 to 1 to allow them.
+       */
+      brw_load_register_imm32(brw, GEN11_SAMPLER_MODE,
+                              HEADERLESS_MESSAGE_FOR_PREEMPTABLE_CONTEXTS_MASK |
+                              HEADERLESS_MESSAGE_FOR_PREEMPTABLE_CONTEXTS);
 
+      /* Bit 1 "Enabled Texel Offset Precision Fix" must be set in
+       * HALF_SLICE_CHICKEN7 register.
+       */
+      brw_load_register_imm32(brw, HALF_SLICE_CHICKEN7,
+                              TEXEL_OFFSET_FIX_MASK |
+                              TEXEL_OFFSET_FIX_ENABLE);
+   }
+
+   if (devinfo->gen == 10 || devinfo->gen == 11) {
       /* From gen10 workaround table in h/w specs:
        *
        *    "On 3DSTATE_3D_MODE, driver must always program bits 31:16 of DW1

@@ -1,46 +1,48 @@
 /****************************************************************************
-* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
-*
-* Permission is hereby granted, free of charge, to any person obtaining a
-* copy of this software and associated documentation files (the "Software"),
-* to deal in the Software without restriction, including without limitation
-* the rights to use, copy, modify, merge, publish, distribute, sublicense,
-* and/or sell copies of the Software, and to permit persons to whom the
-* Software is furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice (including the next
-* paragraph) shall be included in all copies or substantial portions of the
-* Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-* IN THE SOFTWARE.
-*
-* @file gen_state_llvm.h
-*
-* @brief auto-generated file
-*
-* DO NOT EDIT
-*
-* Generation Command Line:
-*   ./rasterizer/codegen/gen_llvm_types.py
-*     --input
-*     ./rasterizer/core/state.h
-*     --output
-*     rasterizer/jitter/gen_state_llvm.h
-*
-******************************************************************************/
+ * Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ *
+ * @file gen_state_llvm.h
+ *
+ * @brief auto-generated file
+ *
+ * DO NOT EDIT
+ *
+ * Generation Command Line:
+ *   ./rasterizer/codegen/gen_llvm_types.py
+ *     --input
+ *     ./rasterizer/core/state.h
+ *     --output
+ *     rasterizer/jitter/gen_state_llvm.h
+ *
+ ******************************************************************************/
+// clang-format off
+
 #pragma once
 
 namespace SwrJit
 {
     using namespace llvm;
 
-    INLINE static StructType *Gen_simdvertex(JitManager* pJitMgr)
+    INLINE static StructType* Gen_simdvertex(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -60,9 +62,9 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("attrib", 199),
+                std::make_pair("attrib", 201),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "simdvertex", pFile, 197, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "simdvertex", pFile, 199, dbgMembers);
         }
 
         return pRetType;
@@ -70,7 +72,7 @@ namespace SwrJit
 
     static const uint32_t simdvertex_attrib = 0;
 
-    INLINE static StructType *Gen_simd16vertex(JitManager* pJitMgr)
+    INLINE static StructType* Gen_simd16vertex(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -90,9 +92,9 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("attrib", 205),
+                std::make_pair("attrib", 207),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "simd16vertex", pFile, 203, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "simd16vertex", pFile, 205, dbgMembers);
         }
 
         return pRetType;
@@ -100,7 +102,7 @@ namespace SwrJit
 
     static const uint32_t simd16vertex_attrib = 0;
 
-    INLINE static StructType *Gen_SIMDVERTEX_T(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SIMDVERTEX_T(JitManager* pJitMgr)
     {
         StructType* pRetType = pJitMgr->mpCurrentModule->getTypeByName("SIMDVERTEX_T");
         if (pRetType == nullptr)
@@ -118,14 +120,44 @@ namespace SwrJit
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SIMDVERTEX_T", pFile, 211, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SIMDVERTEX_T", pFile, 213, dbgMembers);
         }
 
         return pRetType;
     }
 
 
-    INLINE static StructType *Gen_SWR_VS_CONTEXT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_SHADER_STATS(JitManager* pJitMgr)
+    {
+        LLVMContext& ctx = pJitMgr->mContext;
+
+        StructType* pRetType = pJitMgr->mpCurrentModule->getTypeByName("SWR_SHADER_STATS");
+        if (pRetType == nullptr)
+        {
+            std::vector<Type*> members =
+            {
+                /* numInstExecuted */ Type::getInt32Ty(ctx),
+            };
+
+            pRetType = StructType::create(members, "SWR_SHADER_STATS", false);
+
+            // Compute debug metadata
+            llvm::DIBuilder builder(*pJitMgr->mpCurrentModule);
+            llvm::DIFile* pFile = builder.createFile("state.h", "rasterizer/core");
+
+            std::vector<std::pair<std::string, uint32_t>> dbgMembers =
+            {
+                std::make_pair("numInstExecuted", 224),
+            };
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_SHADER_STATS", pFile, 222, dbgMembers);
+        }
+
+        return pRetType;
+    }
+
+    static const uint32_t SWR_SHADER_STATS_numInstExecuted = 0;
+
+    INLINE static StructType* Gen_SWR_VS_CONTEXT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -142,6 +174,7 @@ namespace SwrJit
                 /* AlternateOffset */ Type::getInt32Ty(ctx),
                 /* mask16          */ VectorType::get(Type::getInt32Ty(ctx), 16),
                 /* VertexID16      */ VectorType::get(Type::getInt32Ty(ctx), 16),
+                /* stats           */ Gen_SWR_SHADER_STATS(pJitMgr),
             };
 
             pRetType = StructType::create(members, "SWR_VS_CONTEXT", false);
@@ -152,16 +185,17 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("pVin",            222),
-                std::make_pair("pVout",           223),
-                std::make_pair("InstanceID",      225),
-                std::make_pair("VertexID",        226),
-                std::make_pair("mask",            227),
-                std::make_pair("AlternateOffset", 229),
-                std::make_pair("mask16",          231),
-                std::make_pair("VertexID16",      232),
+                std::make_pair("pVin",            233),
+                std::make_pair("pVout",           234),
+                std::make_pair("InstanceID",      236),
+                std::make_pair("VertexID",        237),
+                std::make_pair("mask",            238),
+                std::make_pair("AlternateOffset", 241),
+                std::make_pair("mask16",          243),
+                std::make_pair("VertexID16",      244),
+                std::make_pair("stats",           246),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_VS_CONTEXT", pFile, 220, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_VS_CONTEXT", pFile, 231, dbgMembers);
         }
 
         return pRetType;
@@ -175,8 +209,9 @@ namespace SwrJit
     static const uint32_t SWR_VS_CONTEXT_AlternateOffset = 5;
     static const uint32_t SWR_VS_CONTEXT_mask16          = 6;
     static const uint32_t SWR_VS_CONTEXT_VertexID16      = 7;
+    static const uint32_t SWR_VS_CONTEXT_stats           = 8;
 
-    INLINE static StructType *Gen_ScalarAttrib(JitManager* pJitMgr)
+    INLINE static StructType* Gen_ScalarAttrib(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -199,12 +234,12 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("x", 244),
-                std::make_pair("y", 245),
-                std::make_pair("z", 246),
-                std::make_pair("w", 247),
+                std::make_pair("x", 256),
+                std::make_pair("y", 257),
+                std::make_pair("z", 258),
+                std::make_pair("w", 259),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "ScalarAttrib", pFile, 242, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "ScalarAttrib", pFile, 254, dbgMembers);
         }
 
         return pRetType;
@@ -215,7 +250,7 @@ namespace SwrJit
     static const uint32_t ScalarAttrib_z = 2;
     static const uint32_t ScalarAttrib_w = 3;
 
-    INLINE static StructType *Gen_ScalarCPoint(JitManager* pJitMgr)
+    INLINE static StructType* Gen_ScalarCPoint(JitManager* pJitMgr)
     {
         StructType* pRetType = pJitMgr->mpCurrentModule->getTypeByName("ScalarCPoint");
         if (pRetType == nullptr)
@@ -233,9 +268,9 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("attrib", 252),
+                std::make_pair("attrib", 264),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "ScalarCPoint", pFile, 250, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "ScalarCPoint", pFile, 262, dbgMembers);
         }
 
         return pRetType;
@@ -243,7 +278,7 @@ namespace SwrJit
 
     static const uint32_t ScalarCPoint_attrib = 0;
 
-    INLINE static StructType *Gen_SWR_TESSELLATION_FACTORS(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_TESSELLATION_FACTORS(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -264,10 +299,10 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("OuterTessFactors", 261),
-                std::make_pair("InnerTessFactors", 262),
+                std::make_pair("OuterTessFactors", 273),
+                std::make_pair("InnerTessFactors", 274),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_TESSELLATION_FACTORS", pFile, 259, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_TESSELLATION_FACTORS", pFile, 271, dbgMembers);
         }
 
         return pRetType;
@@ -276,7 +311,7 @@ namespace SwrJit
     static const uint32_t SWR_TESSELLATION_FACTORS_OuterTessFactors = 0;
     static const uint32_t SWR_TESSELLATION_FACTORS_InnerTessFactors = 1;
 
-    INLINE static StructType *Gen_ScalarPatch(JitManager* pJitMgr)
+    INLINE static StructType* Gen_ScalarPatch(JitManager* pJitMgr)
     {
         StructType* pRetType = pJitMgr->mpCurrentModule->getTypeByName("ScalarPatch");
         if (pRetType == nullptr)
@@ -296,11 +331,11 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("tessFactors", 268),
-                std::make_pair("cp",          269),
-                std::make_pair("patchData",   270),
+                std::make_pair("tessFactors", 280),
+                std::make_pair("cp",          281),
+                std::make_pair("patchData",   282),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "ScalarPatch", pFile, 266, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "ScalarPatch", pFile, 278, dbgMembers);
         }
 
         return pRetType;
@@ -310,7 +345,7 @@ namespace SwrJit
     static const uint32_t ScalarPatch_cp          = 1;
     static const uint32_t ScalarPatch_patchData   = 2;
 
-    INLINE static StructType *Gen_SWR_HS_CONTEXT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_HS_CONTEXT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -323,6 +358,7 @@ namespace SwrJit
                 /* PrimitiveID */ VectorType::get(Type::getInt32Ty(ctx), pJitMgr->mVWidth),
                 /* mask        */ VectorType::get(Type::getInt32Ty(ctx), pJitMgr->mVWidth),
                 /* pCPout      */ PointerType::get(Gen_ScalarPatch(pJitMgr), 0),
+                /* stats       */ Gen_SWR_SHADER_STATS(pJitMgr),
             };
 
             pRetType = StructType::create(members, "SWR_HS_CONTEXT", false);
@@ -333,12 +369,13 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("vert",        279),
-                std::make_pair("PrimitiveID", 280),
-                std::make_pair("mask",        281),
-                std::make_pair("pCPout",      282),
+                std::make_pair("vert",        291),
+                std::make_pair("PrimitiveID", 292),
+                std::make_pair("mask",        293),
+                std::make_pair("pCPout",      294),
+                std::make_pair("stats",       295),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_HS_CONTEXT", pFile, 277, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_HS_CONTEXT", pFile, 289, dbgMembers);
         }
 
         return pRetType;
@@ -348,8 +385,9 @@ namespace SwrJit
     static const uint32_t SWR_HS_CONTEXT_PrimitiveID = 1;
     static const uint32_t SWR_HS_CONTEXT_mask        = 2;
     static const uint32_t SWR_HS_CONTEXT_pCPout      = 3;
+    static const uint32_t SWR_HS_CONTEXT_stats       = 4;
 
-    INLINE static StructType *Gen_SWR_DS_CONTEXT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_DS_CONTEXT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -367,6 +405,7 @@ namespace SwrJit
                 /* pDomainV              */ PointerType::get(VectorType::get(Type::getFloatTy(ctx), pJitMgr->mVWidth), 0),
                 /* mask                  */ VectorType::get(Type::getInt32Ty(ctx), pJitMgr->mVWidth),
                 /* pOutputData           */ PointerType::get(VectorType::get(Type::getFloatTy(ctx), pJitMgr->mVWidth), 0),
+                /* stats                 */ Gen_SWR_SHADER_STATS(pJitMgr),
             };
 
             pRetType = StructType::create(members, "SWR_DS_CONTEXT", false);
@@ -377,17 +416,18 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("PrimitiveID",           292),
-                std::make_pair("vectorOffset",          293),
-                std::make_pair("vectorStride",          294),
-                std::make_pair("outVertexAttribOffset", 295),
-                std::make_pair("pCpIn",                 296),
-                std::make_pair("pDomainU",              297),
-                std::make_pair("pDomainV",              298),
-                std::make_pair("mask",                  299),
-                std::make_pair("pOutputData",           300),
+                std::make_pair("PrimitiveID",           304),
+                std::make_pair("vectorOffset",          305),
+                std::make_pair("vectorStride",          306),
+                std::make_pair("outVertexAttribOffset", 307),
+                std::make_pair("pCpIn",                 308),
+                std::make_pair("pDomainU",              309),
+                std::make_pair("pDomainV",              310),
+                std::make_pair("mask",                  311),
+                std::make_pair("pOutputData",           312),
+                std::make_pair("stats",                 313),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_DS_CONTEXT", pFile, 290, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_DS_CONTEXT", pFile, 302, dbgMembers);
         }
 
         return pRetType;
@@ -402,8 +442,9 @@ namespace SwrJit
     static const uint32_t SWR_DS_CONTEXT_pDomainV              = 6;
     static const uint32_t SWR_DS_CONTEXT_mask                  = 7;
     static const uint32_t SWR_DS_CONTEXT_pOutputData           = 8;
+    static const uint32_t SWR_DS_CONTEXT_stats                 = 9;
 
-    INLINE static StructType *Gen_SWR_GS_CONTEXT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_GS_CONTEXT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -418,6 +459,7 @@ namespace SwrJit
                 /* InstanceID      */ Type::getInt32Ty(ctx),
                 /* mask            */ VectorType::get(Type::getInt32Ty(ctx), pJitMgr->mVWidth),
                 /* pStreams        */ ArrayType::get(PointerType::get(Type::getInt8Ty(ctx), 0), KNOB_SIMD_WIDTH),
+                /* stats           */ Gen_SWR_SHADER_STATS(pJitMgr),
             };
 
             pRetType = StructType::create(members, "SWR_GS_CONTEXT", false);
@@ -428,14 +470,15 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("pVerts",          309),
-                std::make_pair("inputVertStride", 310),
-                std::make_pair("PrimitiveID",     311),
-                std::make_pair("InstanceID",      312),
-                std::make_pair("mask",            313),
-                std::make_pair("pStreams",        314),
+                std::make_pair("pVerts",          322),
+                std::make_pair("inputVertStride", 323),
+                std::make_pair("PrimitiveID",     324),
+                std::make_pair("InstanceID",      325),
+                std::make_pair("mask",            326),
+                std::make_pair("pStreams",        327),
+                std::make_pair("stats",           328),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_GS_CONTEXT", pFile, 307, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_GS_CONTEXT", pFile, 320, dbgMembers);
         }
 
         return pRetType;
@@ -447,8 +490,9 @@ namespace SwrJit
     static const uint32_t SWR_GS_CONTEXT_InstanceID      = 3;
     static const uint32_t SWR_GS_CONTEXT_mask            = 4;
     static const uint32_t SWR_GS_CONTEXT_pStreams        = 5;
+    static const uint32_t SWR_GS_CONTEXT_stats           = 6;
 
-    INLINE static StructType *Gen_PixelPositions(JitManager* pJitMgr)
+    INLINE static StructType* Gen_PixelPositions(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -471,12 +515,12 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("UL",       319),
-                std::make_pair("center",   320),
-                std::make_pair("sample",   321),
-                std::make_pair("centroid", 322),
+                std::make_pair("UL",       333),
+                std::make_pair("center",   334),
+                std::make_pair("sample",   335),
+                std::make_pair("centroid", 336),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "PixelPositions", pFile, 317, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "PixelPositions", pFile, 331, dbgMembers);
         }
 
         return pRetType;
@@ -487,7 +531,7 @@ namespace SwrJit
     static const uint32_t PixelPositions_sample   = 2;
     static const uint32_t PixelPositions_centroid = 3;
 
-    INLINE static StructType *Gen_SWR_PS_CONTEXT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_PS_CONTEXT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -519,6 +563,7 @@ namespace SwrJit
                 /* renderTargetArrayIndex */ Type::getInt32Ty(ctx),
                 /* rasterizerSampleCount  */ Type::getInt32Ty(ctx),
                 /* pColorBuffer           */ ArrayType::get(PointerType::get(Type::getInt8Ty(ctx), 0), SWR_NUM_RENDERTARGETS),
+                /* stats                  */ Gen_SWR_SHADER_STATS(pJitMgr),
             };
 
             pRetType = StructType::create(members, "SWR_PS_CONTEXT", false);
@@ -529,31 +574,32 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("vX",                     333),
-                std::make_pair("vY",                     334),
-                std::make_pair("vZ",                     335),
-                std::make_pair("activeMask",             336),
-                std::make_pair("inputMask",              337),
-                std::make_pair("oMask",                  338),
-                std::make_pair("vI",                     340),
-                std::make_pair("vJ",                     341),
-                std::make_pair("vOneOverW",              342),
-                std::make_pair("pAttribs",               344),
-                std::make_pair("pPerspAttribs",          345),
-                std::make_pair("pRecipW",                346),
-                std::make_pair("I",                      347),
-                std::make_pair("J",                      348),
-                std::make_pair("recipDet",               349),
-                std::make_pair("pSamplePosX",            350),
-                std::make_pair("pSamplePosY",            351),
-                std::make_pair("shaded",                 352),
-                std::make_pair("frontFace",              355),
-                std::make_pair("sampleIndex",            356),
-                std::make_pair("renderTargetArrayIndex", 357),
-                std::make_pair("rasterizerSampleCount",  358),
-                std::make_pair("pColorBuffer",           360),
+                std::make_pair("vX",                     347),
+                std::make_pair("vY",                     348),
+                std::make_pair("vZ",                     349),
+                std::make_pair("activeMask",             350),
+                std::make_pair("inputMask",              351),
+                std::make_pair("oMask",                  352),
+                std::make_pair("vI",                     354),
+                std::make_pair("vJ",                     355),
+                std::make_pair("vOneOverW",              356),
+                std::make_pair("pAttribs",               358),
+                std::make_pair("pPerspAttribs",          359),
+                std::make_pair("pRecipW",                360),
+                std::make_pair("I",                      361),
+                std::make_pair("J",                      362),
+                std::make_pair("recipDet",               363),
+                std::make_pair("pSamplePosX",            364),
+                std::make_pair("pSamplePosY",            365),
+                std::make_pair("shaded",                 366),
+                std::make_pair("frontFace",              368),
+                std::make_pair("sampleIndex",            369),
+                std::make_pair("renderTargetArrayIndex", 370),
+                std::make_pair("rasterizerSampleCount",  371),
+                std::make_pair("pColorBuffer",           373),
+                std::make_pair("stats",                  375),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_PS_CONTEXT", pFile, 331, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_PS_CONTEXT", pFile, 345, dbgMembers);
         }
 
         return pRetType;
@@ -582,8 +628,9 @@ namespace SwrJit
     static const uint32_t SWR_PS_CONTEXT_renderTargetArrayIndex = 20;
     static const uint32_t SWR_PS_CONTEXT_rasterizerSampleCount  = 21;
     static const uint32_t SWR_PS_CONTEXT_pColorBuffer           = 22;
+    static const uint32_t SWR_PS_CONTEXT_stats                  = 23;
 
-    INLINE static StructType *Gen_SWR_CS_CONTEXT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_CS_CONTEXT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -598,6 +645,7 @@ namespace SwrJit
                 /* pSpillFillBuffer    */ PointerType::get(Type::getInt8Ty(ctx), 0),
                 /* pScratchSpace       */ PointerType::get(Type::getInt8Ty(ctx), 0),
                 /* scratchSpacePerSimd */ Type::getInt32Ty(ctx),
+                /* stats               */ Gen_SWR_SHADER_STATS(pJitMgr),
             };
 
             pRetType = StructType::create(members, "SWR_CS_CONTEXT", false);
@@ -608,14 +656,15 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("tileCounter",         389),
-                std::make_pair("dispatchDims",        392),
-                std::make_pair("pTGSM",               394),
-                std::make_pair("pSpillFillBuffer",    396),
-                std::make_pair("pScratchSpace",       398),
-                std::make_pair("scratchSpacePerSimd", 401),
+                std::make_pair("tileCounter",         404),
+                std::make_pair("dispatchDims",        407),
+                std::make_pair("pTGSM",               409),
+                std::make_pair("pSpillFillBuffer",    410),
+                std::make_pair("pScratchSpace",       411),
+                std::make_pair("scratchSpacePerSimd", 413),
+                std::make_pair("stats",               415),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_CS_CONTEXT", pFile, 367, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_CS_CONTEXT", pFile, 382, dbgMembers);
         }
 
         return pRetType;
@@ -627,8 +676,39 @@ namespace SwrJit
     static const uint32_t SWR_CS_CONTEXT_pSpillFillBuffer    = 3;
     static const uint32_t SWR_CS_CONTEXT_pScratchSpace       = 4;
     static const uint32_t SWR_CS_CONTEXT_scratchSpacePerSimd = 5;
+    static const uint32_t SWR_CS_CONTEXT_stats               = 6;
 
-    INLINE static StructType *Gen_SWR_SURFACE_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_LOD_OFFSETS(JitManager* pJitMgr)
+    {
+        LLVMContext& ctx = pJitMgr->mContext;
+
+        StructType* pRetType = pJitMgr->mpCurrentModule->getTypeByName("SWR_LOD_OFFSETS");
+        if (pRetType == nullptr)
+        {
+            std::vector<Type*> members =
+            {
+                /* offsets */ ArrayType::get(ArrayType::get(Type::getInt32Ty(ctx), 15), 2),
+            };
+
+            pRetType = StructType::create(members, "SWR_LOD_OFFSETS", false);
+
+            // Compute debug metadata
+            llvm::DIBuilder builder(*pJitMgr->mpCurrentModule);
+            llvm::DIFile* pFile = builder.createFile("state.h", "rasterizer/core");
+
+            std::vector<std::pair<std::string, uint32_t>> dbgMembers =
+            {
+                std::make_pair("offsets", 532),
+            };
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_LOD_OFFSETS", pFile, 530, dbgMembers);
+        }
+
+        return pRetType;
+    }
+
+    static const uint32_t SWR_LOD_OFFSETS_offsets = 0;
+
+    INLINE static StructType* Gen_SWR_SURFACE_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -671,32 +751,32 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("xpBaseAddress",       521),
-                std::make_pair("type",                522),
-                std::make_pair("format",              523),
-                std::make_pair("width",               524),
-                std::make_pair("height",              525),
-                std::make_pair("depth",               526),
-                std::make_pair("numSamples",          527),
-                std::make_pair("samplePattern",       528),
-                std::make_pair("pitch",               529),
-                std::make_pair("qpitch",              530),
-                std::make_pair("minLod",              531),
-                std::make_pair("maxLod",              532),
-                std::make_pair("resourceMinLod",      533),
-                std::make_pair("lod",                 534),
-                std::make_pair("arrayIndex",          535),
-                std::make_pair("tileMode",            536),
-                std::make_pair("halign",              537),
-                std::make_pair("valign",              538),
-                std::make_pair("xOffset",             539),
-                std::make_pair("yOffset",             540),
-                std::make_pair("lodOffsets",          542),
-                std::make_pair("xpAuxBaseAddress",    544),
-                std::make_pair("auxMode",             545),
-                std::make_pair("bInterleavedSamples", 548),
+                std::make_pair("xpBaseAddress",       540),
+                std::make_pair("type",                541),
+                std::make_pair("format",              542),
+                std::make_pair("width",               543),
+                std::make_pair("height",              544),
+                std::make_pair("depth",               545),
+                std::make_pair("numSamples",          546),
+                std::make_pair("samplePattern",       547),
+                std::make_pair("pitch",               548),
+                std::make_pair("qpitch",              549),
+                std::make_pair("minLod",              550),
+                std::make_pair("maxLod",              551),
+                std::make_pair("resourceMinLod",      552),
+                std::make_pair("lod",                 554),
+                std::make_pair("arrayIndex",          555),
+                std::make_pair("tileMode",            556),
+                std::make_pair("halign",              557),
+                std::make_pair("valign",              558),
+                std::make_pair("xOffset",             559),
+                std::make_pair("yOffset",             560),
+                std::make_pair("lodOffsets",          562),
+                std::make_pair("xpAuxBaseAddress",    564),
+                std::make_pair("auxMode",             565),
+                std::make_pair("bInterleavedSamples", 568),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_SURFACE_STATE", pFile, 519, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_SURFACE_STATE", pFile, 538, dbgMembers);
         }
 
         return pRetType;
@@ -727,7 +807,7 @@ namespace SwrJit
     static const uint32_t SWR_SURFACE_STATE_auxMode             = 22;
     static const uint32_t SWR_SURFACE_STATE_bInterleavedSamples = 23;
 
-    INLINE static StructType *Gen_SWR_VERTEX_BUFFER_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_VERTEX_BUFFER_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -753,15 +833,15 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("xpData",              556),
-                std::make_pair("index",               557),
-                std::make_pair("pitch",               558),
-                std::make_pair("size",                559),
-                std::make_pair("minVertex",           560),
-                std::make_pair("maxVertex",           561),
-                std::make_pair("partialInboundsSize", 562),
+                std::make_pair("xpData",              576),
+                std::make_pair("index",               577),
+                std::make_pair("pitch",               578),
+                std::make_pair("size",                579),
+                std::make_pair("minVertex",           580),
+                std::make_pair("maxVertex",           581),
+                std::make_pair("partialInboundsSize", 582),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_VERTEX_BUFFER_STATE", pFile, 554, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_VERTEX_BUFFER_STATE", pFile, 574, dbgMembers);
         }
 
         return pRetType;
@@ -775,7 +855,7 @@ namespace SwrJit
     static const uint32_t SWR_VERTEX_BUFFER_STATE_maxVertex           = 5;
     static const uint32_t SWR_VERTEX_BUFFER_STATE_partialInboundsSize = 6;
 
-    INLINE static StructType *Gen_SWR_INDEX_BUFFER_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_INDEX_BUFFER_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -784,9 +864,9 @@ namespace SwrJit
         {
             std::vector<Type*> members =
             {
-                /* pIndices */ PointerType::get(Type::getInt32Ty(ctx), 0),
-                /* format   */ Type::getInt32Ty(ctx),
-                /* size     */ Type::getInt32Ty(ctx),
+                /* xpIndices */ Type::getInt64Ty(ctx),
+                /* format    */ Type::getInt32Ty(ctx),
+                /* size      */ Type::getInt32Ty(ctx),
             };
 
             pRetType = StructType::create(members, "SWR_INDEX_BUFFER_STATE", false);
@@ -797,21 +877,21 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("pIndices", 567),
-                std::make_pair("format",   569),
-                std::make_pair("size",     570),
+                std::make_pair("xpIndices", 588),
+                std::make_pair("format",    590),
+                std::make_pair("size",      591),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_INDEX_BUFFER_STATE", pFile, 565, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_INDEX_BUFFER_STATE", pFile, 586, dbgMembers);
         }
 
         return pRetType;
     }
 
-    static const uint32_t SWR_INDEX_BUFFER_STATE_pIndices = 0;
-    static const uint32_t SWR_INDEX_BUFFER_STATE_format   = 1;
-    static const uint32_t SWR_INDEX_BUFFER_STATE_size     = 2;
+    static const uint32_t SWR_INDEX_BUFFER_STATE_xpIndices = 0;
+    static const uint32_t SWR_INDEX_BUFFER_STATE_format    = 1;
+    static const uint32_t SWR_INDEX_BUFFER_STATE_size      = 2;
 
-    INLINE static StructType *Gen_SWR_FETCH_CONTEXT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_FETCH_CONTEXT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -821,8 +901,8 @@ namespace SwrJit
             std::vector<Type*> members =
             {
                 /* pStreams      */ PointerType::get(Gen_SWR_VERTEX_BUFFER_STATE(pJitMgr), 0),
-                /* pIndices      */ PointerType::get(Type::getInt32Ty(ctx), 0),
-                /* pLastIndex    */ PointerType::get(Type::getInt32Ty(ctx), 0),
+                /* xpIndices     */ Type::getInt64Ty(ctx),
+                /* xpLastIndex   */ Type::getInt64Ty(ctx),
                 /* CurInstance   */ Type::getInt32Ty(ctx),
                 /* BaseVertex    */ Type::getInt32Ty(ctx),
                 /* StartVertex   */ Type::getInt32Ty(ctx),
@@ -841,27 +921,27 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("pStreams",      582),
-                std::make_pair("pIndices",      583),
-                std::make_pair("pLastIndex",    584),
-                std::make_pair("CurInstance",   585),
-                std::make_pair("BaseVertex",    586),
-                std::make_pair("StartVertex",   587),
-                std::make_pair("StartInstance", 588),
-                std::make_pair("VertexID",      589),
-                std::make_pair("CutMask",       590),
-                std::make_pair("VertexID2",     594),
-                std::make_pair("CutMask2",      595),
+                std::make_pair("pStreams",      602),
+                std::make_pair("xpIndices",     603),
+                std::make_pair("xpLastIndex",   604),
+                std::make_pair("CurInstance",   605),
+                std::make_pair("BaseVertex",    606),
+                std::make_pair("StartVertex",   607),
+                std::make_pair("StartInstance", 608),
+                std::make_pair("VertexID",      609),
+                std::make_pair("CutMask",       610),
+                std::make_pair("VertexID2",     615),
+                std::make_pair("CutMask2",      616),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_FETCH_CONTEXT", pFile, 580, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_FETCH_CONTEXT", pFile, 600, dbgMembers);
         }
 
         return pRetType;
     }
 
     static const uint32_t SWR_FETCH_CONTEXT_pStreams      = 0;
-    static const uint32_t SWR_FETCH_CONTEXT_pIndices      = 1;
-    static const uint32_t SWR_FETCH_CONTEXT_pLastIndex    = 2;
+    static const uint32_t SWR_FETCH_CONTEXT_xpIndices     = 1;
+    static const uint32_t SWR_FETCH_CONTEXT_xpLastIndex   = 2;
     static const uint32_t SWR_FETCH_CONTEXT_CurInstance   = 3;
     static const uint32_t SWR_FETCH_CONTEXT_BaseVertex    = 4;
     static const uint32_t SWR_FETCH_CONTEXT_StartVertex   = 5;
@@ -871,7 +951,7 @@ namespace SwrJit
     static const uint32_t SWR_FETCH_CONTEXT_VertexID2     = 9;
     static const uint32_t SWR_FETCH_CONTEXT_CutMask2      = 10;
 
-    INLINE static StructType *Gen_SWR_STREAMOUT_BUFFER(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_STREAMOUT_BUFFER(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -897,15 +977,15 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("pBuffer",       649),
-                std::make_pair("pWriteOffset",  652),
-                std::make_pair("enable",        654),
-                std::make_pair("soWriteEnable", 655),
-                std::make_pair("bufferSize",    658),
-                std::make_pair("pitch",         661),
-                std::make_pair("streamOffset",  664),
+                std::make_pair("pBuffer",       670),
+                std::make_pair("pWriteOffset",  673),
+                std::make_pair("enable",        675),
+                std::make_pair("soWriteEnable", 676),
+                std::make_pair("bufferSize",    679),
+                std::make_pair("pitch",         682),
+                std::make_pair("streamOffset",  685),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_STREAMOUT_BUFFER", pFile, 646, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_STREAMOUT_BUFFER", pFile, 667, dbgMembers);
         }
 
         return pRetType;
@@ -919,7 +999,7 @@ namespace SwrJit
     static const uint32_t SWR_STREAMOUT_BUFFER_pitch         = 5;
     static const uint32_t SWR_STREAMOUT_BUFFER_streamOffset  = 6;
 
-    INLINE static StructType *Gen_SWR_STREAMOUT_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_STREAMOUT_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -932,7 +1012,7 @@ namespace SwrJit
                 /* streamEnable       */ ArrayType::get(Type::getInt8Ty(ctx), MAX_SO_STREAMS),
                 /* rasterizerDisable  */ Type::getInt8Ty(ctx),
                 /* streamToRasterizer */ Type::getInt32Ty(ctx),
-                /* streamMasks        */ ArrayType::get(Type::getInt32Ty(ctx), MAX_SO_STREAMS),
+                /* streamMasks        */ ArrayType::get(Type::getInt64Ty(ctx), MAX_SO_STREAMS),
                 /* streamNumEntries   */ ArrayType::get(Type::getInt32Ty(ctx), MAX_SO_STREAMS),
                 /* vertexAttribOffset */ ArrayType::get(Type::getInt32Ty(ctx), MAX_SO_STREAMS),
             };
@@ -945,15 +1025,15 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("soEnable",           673),
-                std::make_pair("streamEnable",       676),
-                std::make_pair("rasterizerDisable",  679),
-                std::make_pair("streamToRasterizer", 682),
-                std::make_pair("streamMasks",        687),
-                std::make_pair("streamNumEntries",   691),
-                std::make_pair("vertexAttribOffset", 694),
+                std::make_pair("soEnable",           694),
+                std::make_pair("streamEnable",       697),
+                std::make_pair("rasterizerDisable",  700),
+                std::make_pair("streamToRasterizer", 703),
+                std::make_pair("streamMasks",        708),
+                std::make_pair("streamNumEntries",   712),
+                std::make_pair("vertexAttribOffset", 715),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_STREAMOUT_STATE", pFile, 670, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_STREAMOUT_STATE", pFile, 691, dbgMembers);
         }
 
         return pRetType;
@@ -967,7 +1047,7 @@ namespace SwrJit
     static const uint32_t SWR_STREAMOUT_STATE_streamNumEntries   = 5;
     static const uint32_t SWR_STREAMOUT_STATE_vertexAttribOffset = 6;
 
-    INLINE static StructType *Gen_SWR_STREAMOUT_CONTEXT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_STREAMOUT_CONTEXT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -990,12 +1070,12 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("pPrimData",            702),
-                std::make_pair("pBuffer",              703),
-                std::make_pair("numPrimsWritten",      706),
-                std::make_pair("numPrimStorageNeeded", 709),
+                std::make_pair("pPrimData",            723),
+                std::make_pair("pBuffer",              724),
+                std::make_pair("numPrimsWritten",      727),
+                std::make_pair("numPrimStorageNeeded", 730),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_STREAMOUT_CONTEXT", pFile, 700, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_STREAMOUT_CONTEXT", pFile, 721, dbgMembers);
         }
 
         return pRetType;
@@ -1006,7 +1086,7 @@ namespace SwrJit
     static const uint32_t SWR_STREAMOUT_CONTEXT_numPrimsWritten      = 2;
     static const uint32_t SWR_STREAMOUT_CONTEXT_numPrimStorageNeeded = 3;
 
-    INLINE static StructType *Gen_SWR_GS_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_GS_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1042,25 +1122,25 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("gsEnable",              717),
-                std::make_pair("isSingleStream",        722),
-                std::make_pair("numInputAttribs",       726),
-                std::make_pair("inputVertStride",       729),
-                std::make_pair("outputTopology",        732),
-                std::make_pair("maxNumVerts",           735),
-                std::make_pair("instanceCount",         738),
-                std::make_pair("singleStreamID",        742),
-                std::make_pair("allocationSize",        745),
-                std::make_pair("vertexAttribOffset",    748),
-                std::make_pair("srcVertexAttribOffset", 751),
-                std::make_pair("controlDataSize",       755),
-                std::make_pair("controlDataOffset",     758),
-                std::make_pair("outputVertexSize",      761),
-                std::make_pair("outputVertexOffset",    764),
-                std::make_pair("staticVertexCount",     768),
-                std::make_pair("pad",                   770),
+                std::make_pair("gsEnable",              738),
+                std::make_pair("isSingleStream",        743),
+                std::make_pair("numInputAttribs",       747),
+                std::make_pair("inputVertStride",       750),
+                std::make_pair("outputTopology",        753),
+                std::make_pair("maxNumVerts",           756),
+                std::make_pair("instanceCount",         759),
+                std::make_pair("singleStreamID",        763),
+                std::make_pair("allocationSize",        766),
+                std::make_pair("vertexAttribOffset",    770),
+                std::make_pair("srcVertexAttribOffset", 773),
+                std::make_pair("controlDataSize",       778),
+                std::make_pair("controlDataOffset",     781),
+                std::make_pair("outputVertexSize",      784),
+                std::make_pair("outputVertexOffset",    787),
+                std::make_pair("staticVertexCount",     792),
+                std::make_pair("pad",                   794),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_GS_STATE", pFile, 715, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_GS_STATE", pFile, 736, dbgMembers);
         }
 
         return pRetType;
@@ -1084,7 +1164,7 @@ namespace SwrJit
     static const uint32_t SWR_GS_STATE_staticVertexCount     = 15;
     static const uint32_t SWR_GS_STATE_pad                   = 16;
 
-    INLINE static StructType *Gen_SWR_TS_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_TS_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1114,19 +1194,19 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("tsEnable",             818),
-                std::make_pair("tsOutputTopology",     820),
-                std::make_pair("partitioning",         821),
-                std::make_pair("domain",               822),
-                std::make_pair("postDSTopology",       824),
-                std::make_pair("numHsInputAttribs",    826),
-                std::make_pair("numHsOutputAttribs",   827),
-                std::make_pair("numDsOutputAttribs",   828),
-                std::make_pair("dsAllocationSize",     829),
-                std::make_pair("dsOutVtxAttribOffset", 830),
-                std::make_pair("vertexAttribOffset",   833),
+                std::make_pair("tsEnable",             840),
+                std::make_pair("tsOutputTopology",     842),
+                std::make_pair("partitioning",         843),
+                std::make_pair("domain",               844),
+                std::make_pair("postDSTopology",       846),
+                std::make_pair("numHsInputAttribs",    848),
+                std::make_pair("numHsOutputAttribs",   849),
+                std::make_pair("numDsOutputAttribs",   850),
+                std::make_pair("dsAllocationSize",     851),
+                std::make_pair("dsOutVtxAttribOffset", 852),
+                std::make_pair("vertexAttribOffset",   855),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_TS_STATE", pFile, 816, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_TS_STATE", pFile, 838, dbgMembers);
         }
 
         return pRetType;
@@ -1144,7 +1224,7 @@ namespace SwrJit
     static const uint32_t SWR_TS_STATE_dsOutVtxAttribOffset = 9;
     static const uint32_t SWR_TS_STATE_vertexAttribOffset   = 10;
 
-    INLINE static StructType *Gen_SWR_RENDER_TARGET_BLEND_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_RENDER_TARGET_BLEND_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1167,12 +1247,12 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("writeDisableRed",   839),
-                std::make_pair("writeDisableGreen", 840),
-                std::make_pair("writeDisableBlue",  841),
-                std::make_pair("writeDisableAlpha", 842),
+                std::make_pair("writeDisableRed",   861),
+                std::make_pair("writeDisableGreen", 862),
+                std::make_pair("writeDisableBlue",  863),
+                std::make_pair("writeDisableAlpha", 864),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_RENDER_TARGET_BLEND_STATE", pFile, 837, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_RENDER_TARGET_BLEND_STATE", pFile, 859, dbgMembers);
         }
 
         return pRetType;
@@ -1183,7 +1263,7 @@ namespace SwrJit
     static const uint32_t SWR_RENDER_TARGET_BLEND_STATE_writeDisableBlue  = 2;
     static const uint32_t SWR_RENDER_TARGET_BLEND_STATE_writeDisableAlpha = 3;
 
-    INLINE static StructType *Gen_SWR_BLEND_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_BLEND_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1207,13 +1287,13 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("constantColor",      866),
-                std::make_pair("alphaTestReference", 869),
-                std::make_pair("sampleMask",         870),
-                std::make_pair("sampleCount",        873),
-                std::make_pair("renderTarget",       875),
+                std::make_pair("constantColor",      887),
+                std::make_pair("alphaTestReference", 890),
+                std::make_pair("sampleMask",         891),
+                std::make_pair("sampleCount",        894),
+                std::make_pair("renderTarget",       896),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_BLEND_STATE", pFile, 863, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_BLEND_STATE", pFile, 884, dbgMembers);
         }
 
         return pRetType;
@@ -1225,7 +1305,67 @@ namespace SwrJit
     static const uint32_t SWR_BLEND_STATE_sampleCount        = 3;
     static const uint32_t SWR_BLEND_STATE_renderTarget       = 4;
 
-    INLINE static StructType *Gen_SWR_FRONTEND_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_BLEND_CONTEXT(JitManager* pJitMgr)
+    {
+        LLVMContext& ctx = pJitMgr->mContext;
+
+        StructType* pRetType = pJitMgr->mpCurrentModule->getTypeByName("SWR_BLEND_CONTEXT");
+        if (pRetType == nullptr)
+        {
+            std::vector<Type*> members =
+            {
+                /* pBlendState    */ PointerType::get(Gen_SWR_BLEND_STATE(pJitMgr), 0),
+                /* src            */ PointerType::get(ArrayType::get(VectorType::get(Type::getFloatTy(ctx), 8), 4), 0),
+                /* src1           */ PointerType::get(ArrayType::get(VectorType::get(Type::getFloatTy(ctx), 8), 4), 0),
+                /* src0alpha      */ PointerType::get(ArrayType::get(VectorType::get(Type::getFloatTy(ctx), 8), 4), 0),
+                /* sampleNum      */ Type::getInt32Ty(ctx),
+                /* pDst           */ PointerType::get(ArrayType::get(VectorType::get(Type::getFloatTy(ctx), 8), 4), 0),
+                /* result         */ PointerType::get(ArrayType::get(VectorType::get(Type::getFloatTy(ctx), 8), 4), 0),
+                /* oMask          */ PointerType::get(VectorType::get(Type::getInt32Ty(ctx), pJitMgr->mVWidth), 0),
+                /* pMask          */ PointerType::get(VectorType::get(Type::getInt32Ty(ctx), pJitMgr->mVWidth), 0),
+                /* isAlphaTested  */ Type::getInt32Ty(ctx),
+                /* isAlphaBlended */ Type::getInt32Ty(ctx),
+            };
+
+            pRetType = StructType::create(members, "SWR_BLEND_CONTEXT", false);
+
+            // Compute debug metadata
+            llvm::DIBuilder builder(*pJitMgr->mpCurrentModule);
+            llvm::DIFile* pFile = builder.createFile("state.h", "rasterizer/core");
+
+            std::vector<std::pair<std::string, uint32_t>> dbgMembers =
+            {
+                std::make_pair("pBlendState",    902),
+                std::make_pair("src",            903),
+                std::make_pair("src1",           904),
+                std::make_pair("src0alpha",      905),
+                std::make_pair("sampleNum",      906),
+                std::make_pair("pDst",           907),
+                std::make_pair("result",         908),
+                std::make_pair("oMask",          909),
+                std::make_pair("pMask",          910),
+                std::make_pair("isAlphaTested",  911),
+                std::make_pair("isAlphaBlended", 912),
+            };
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_BLEND_CONTEXT", pFile, 900, dbgMembers);
+        }
+
+        return pRetType;
+    }
+
+    static const uint32_t SWR_BLEND_CONTEXT_pBlendState    = 0;
+    static const uint32_t SWR_BLEND_CONTEXT_src            = 1;
+    static const uint32_t SWR_BLEND_CONTEXT_src1           = 2;
+    static const uint32_t SWR_BLEND_CONTEXT_src0alpha      = 3;
+    static const uint32_t SWR_BLEND_CONTEXT_sampleNum      = 4;
+    static const uint32_t SWR_BLEND_CONTEXT_pDst           = 5;
+    static const uint32_t SWR_BLEND_CONTEXT_result         = 6;
+    static const uint32_t SWR_BLEND_CONTEXT_oMask          = 7;
+    static const uint32_t SWR_BLEND_CONTEXT_pMask          = 8;
+    static const uint32_t SWR_BLEND_CONTEXT_isAlphaTested  = 9;
+    static const uint32_t SWR_BLEND_CONTEXT_isAlphaBlended = 10;
+
+    INLINE static StructType* Gen_SWR_FRONTEND_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1249,13 +1389,13 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("vpTransformDisable", 909),
-                std::make_pair("bEnableCutIndex",    910),
-                std::make_pair("triFan",             915),
-                std::make_pair("lineStripList",      916),
-                std::make_pair("triStripList",       917),
+                std::make_pair("vpTransformDisable", 942),
+                std::make_pair("bEnableCutIndex",    943),
+                std::make_pair("triFan",             948),
+                std::make_pair("lineStripList",      949),
+                std::make_pair("triStripList",       950),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_FRONTEND_STATE", pFile, 905, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_FRONTEND_STATE", pFile, 938, dbgMembers);
         }
 
         return pRetType;
@@ -1267,7 +1407,7 @@ namespace SwrJit
     static const uint32_t SWR_FRONTEND_STATE_lineStripList      = 3;
     static const uint32_t SWR_FRONTEND_STATE_triStripList       = 4;
 
-    INLINE static StructType *Gen_SWR_VIEWPORT_MATRIX(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_VIEWPORT_MATRIX(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1292,14 +1432,14 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("m00", 933),
-                std::make_pair("m11", 934),
-                std::make_pair("m22", 935),
-                std::make_pair("m30", 936),
-                std::make_pair("m31", 937),
-                std::make_pair("m32", 938),
+                std::make_pair("m00", 966),
+                std::make_pair("m11", 967),
+                std::make_pair("m22", 968),
+                std::make_pair("m30", 969),
+                std::make_pair("m31", 970),
+                std::make_pair("m32", 971),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_VIEWPORT_MATRIX", pFile, 931, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_VIEWPORT_MATRIX", pFile, 964, dbgMembers);
         }
 
         return pRetType;
@@ -1312,7 +1452,7 @@ namespace SwrJit
     static const uint32_t SWR_VIEWPORT_MATRIX_m31 = 4;
     static const uint32_t SWR_VIEWPORT_MATRIX_m32 = 5;
 
-    INLINE static StructType *Gen_SWR_VIEWPORT_MATRICES(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_VIEWPORT_MATRICES(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1337,14 +1477,14 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("m00", 946),
-                std::make_pair("m11", 947),
-                std::make_pair("m22", 948),
-                std::make_pair("m30", 949),
-                std::make_pair("m31", 950),
-                std::make_pair("m32", 951),
+                std::make_pair("m00", 979),
+                std::make_pair("m11", 980),
+                std::make_pair("m22", 981),
+                std::make_pair("m30", 982),
+                std::make_pair("m31", 983),
+                std::make_pair("m32", 984),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_VIEWPORT_MATRICES", pFile, 944, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_VIEWPORT_MATRICES", pFile, 977, dbgMembers);
         }
 
         return pRetType;
@@ -1357,7 +1497,7 @@ namespace SwrJit
     static const uint32_t SWR_VIEWPORT_MATRICES_m31 = 4;
     static const uint32_t SWR_VIEWPORT_MATRICES_m32 = 5;
 
-    INLINE static StructType *Gen_SWR_VIEWPORT(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_VIEWPORT(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1382,14 +1522,14 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("x",      959),
-                std::make_pair("y",      960),
-                std::make_pair("width",  961),
-                std::make_pair("height", 962),
-                std::make_pair("minZ",   963),
-                std::make_pair("maxZ",   964),
+                std::make_pair("x",      992),
+                std::make_pair("y",      993),
+                std::make_pair("width",  994),
+                std::make_pair("height", 995),
+                std::make_pair("minZ",   996),
+                std::make_pair("maxZ",   997),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_VIEWPORT", pFile, 957, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_VIEWPORT", pFile, 990, dbgMembers);
         }
 
         return pRetType;
@@ -1402,7 +1542,7 @@ namespace SwrJit
     static const uint32_t SWR_VIEWPORT_minZ   = 4;
     static const uint32_t SWR_VIEWPORT_maxZ   = 5;
 
-    INLINE static StructType *Gen_SWR_MULTISAMPLE_POS(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_MULTISAMPLE_POS(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1431,18 +1571,18 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("_xi",                1028),
-                std::make_pair("_yi",                1029),
-                std::make_pair("_x",                 1030),
-                std::make_pair("_y",                 1031),
-                std::make_pair("_vXi",               1034),
-                std::make_pair("_vYi",               1035),
-                std::make_pair("_vX",                1036),
-                std::make_pair("_vY",                1037),
-                std::make_pair("tileSampleOffsetsX", 1038),
-                std::make_pair("tileSampleOffsetsY", 1039),
+                std::make_pair("_xi",                1061),
+                std::make_pair("_yi",                1062),
+                std::make_pair("_x",                 1063),
+                std::make_pair("_y",                 1064),
+                std::make_pair("_vXi",               1067),
+                std::make_pair("_vYi",               1068),
+                std::make_pair("_vX",                1069),
+                std::make_pair("_vY",                1070),
+                std::make_pair("tileSampleOffsetsX", 1071),
+                std::make_pair("tileSampleOffsetsY", 1072),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_MULTISAMPLE_POS", pFile, 999, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_MULTISAMPLE_POS", pFile, 1032, dbgMembers);
         }
 
         return pRetType;
@@ -1459,7 +1599,7 @@ namespace SwrJit
     static const uint32_t SWR_MULTISAMPLE_POS_tileSampleOffsetsX = 8;
     static const uint32_t SWR_MULTISAMPLE_POS_tileSampleOffsetsY = 9;
 
-    INLINE static StructType *Gen_SWR_RASTSTATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_RASTSTATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1501,31 +1641,31 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("cullMode",             1047),
-                std::make_pair("fillMode",             1048),
-                std::make_pair("frontWinding",         1049),
-                std::make_pair("scissorEnable",        1050),
-                std::make_pair("depthClipEnable",      1051),
-                std::make_pair("clipHalfZ",            1052),
-                std::make_pair("pointParam",           1053),
-                std::make_pair("pointSpriteEnable",    1054),
-                std::make_pair("pointSpriteTopOrigin", 1055),
-                std::make_pair("forcedSampleCount",    1056),
-                std::make_pair("pixelOffset",          1057),
-                std::make_pair("depthBiasPreAdjusted", 1058),
-                std::make_pair("conservativeRast",     1059),
-                std::make_pair("pointSize",            1061),
-                std::make_pair("lineWidth",            1062),
-                std::make_pair("depthBias",            1064),
-                std::make_pair("slopeScaledDepthBias", 1065),
-                std::make_pair("depthBiasClamp",       1066),
-                std::make_pair("depthFormat",          1067),
-                std::make_pair("sampleCount",          1070),
-                std::make_pair("pixelLocation",        1071),
-                std::make_pair("samplePositions",      1072),
-                std::make_pair("bIsCenterPattern",     1073),
+                std::make_pair("cullMode",             1080),
+                std::make_pair("fillMode",             1081),
+                std::make_pair("frontWinding",         1082),
+                std::make_pair("scissorEnable",        1083),
+                std::make_pair("depthClipEnable",      1084),
+                std::make_pair("clipHalfZ",            1085),
+                std::make_pair("pointParam",           1086),
+                std::make_pair("pointSpriteEnable",    1087),
+                std::make_pair("pointSpriteTopOrigin", 1088),
+                std::make_pair("forcedSampleCount",    1089),
+                std::make_pair("pixelOffset",          1090),
+                std::make_pair("depthBiasPreAdjusted", 1091),
+                std::make_pair("conservativeRast",     1092),
+                std::make_pair("pointSize",            1094),
+                std::make_pair("lineWidth",            1095),
+                std::make_pair("depthBias",            1097),
+                std::make_pair("slopeScaledDepthBias", 1098),
+                std::make_pair("depthBiasClamp",       1099),
+                std::make_pair("depthFormat",          1100),
+                std::make_pair("sampleCount",          1103),
+                std::make_pair("pixelLocation",        1104),
+                std::make_pair("samplePositions",      1105),
+                std::make_pair("bIsCenterPattern",     1106),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_RASTSTATE", pFile, 1045, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_RASTSTATE", pFile, 1078, dbgMembers);
         }
 
         return pRetType;
@@ -1555,7 +1695,7 @@ namespace SwrJit
     static const uint32_t SWR_RASTSTATE_samplePositions      = 21;
     static const uint32_t SWR_RASTSTATE_bIsCenterPattern     = 22;
 
-    INLINE static StructType *Gen_SWR_ATTRIB_SWIZZLE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_ATTRIB_SWIZZLE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1577,11 +1717,11 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("sourceAttrib",          1087),
-                std::make_pair("constantSource",        1088),
-                std::make_pair("componentOverrideMask", 1089),
+                std::make_pair("sourceAttrib",          1120),
+                std::make_pair("constantSource",        1121),
+                std::make_pair("componentOverrideMask", 1122),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_ATTRIB_SWIZZLE", pFile, 1085, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_ATTRIB_SWIZZLE", pFile, 1118, dbgMembers);
         }
 
         return pRetType;
@@ -1591,7 +1731,7 @@ namespace SwrJit
     static const uint32_t SWR_ATTRIB_SWIZZLE_constantSource        = 1;
     static const uint32_t SWR_ATTRIB_SWIZZLE_componentOverrideMask = 2;
 
-    INLINE static StructType *Gen_SWR_BACKEND_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_BACKEND_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1623,21 +1763,21 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("constantInterpolationMask",  1095),
-                std::make_pair("pointSpriteTexCoordMask",    1096),
-                std::make_pair("swizzleEnable",              1098),
-                std::make_pair("numAttributes",              1101),
-                std::make_pair("numComponents",              1102),
-                std::make_pair("readRenderTargetArrayIndex", 1104),
-                std::make_pair("readViewportArrayIndex",     1105),
-                std::make_pair("cullDistanceMask",           1108),
-                std::make_pair("clipDistanceMask",           1109),
-                std::make_pair("pad",                        1113),
-                std::make_pair("vertexAttribOffset",         1116),
-                std::make_pair("vertexClipCullOffset",       1119),
-                std::make_pair("swizzleMap",                 1121),
+                std::make_pair("constantInterpolationMask",  1128),
+                std::make_pair("pointSpriteTexCoordMask",    1130),
+                std::make_pair("swizzleEnable",              1133),
+                std::make_pair("numAttributes",              1136),
+                std::make_pair("numComponents",              1137),
+                std::make_pair("readRenderTargetArrayIndex", 1140),
+                std::make_pair("readViewportArrayIndex",     1142),
+                std::make_pair("cullDistanceMask",           1145),
+                std::make_pair("clipDistanceMask",           1146),
+                std::make_pair("pad",                        1150),
+                std::make_pair("vertexAttribOffset",         1153),
+                std::make_pair("vertexClipCullOffset",       1156),
+                std::make_pair("swizzleMap",                 1158),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_BACKEND_STATE", pFile, 1093, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_BACKEND_STATE", pFile, 1126, dbgMembers);
         }
 
         return pRetType;
@@ -1657,7 +1797,7 @@ namespace SwrJit
     static const uint32_t SWR_BACKEND_STATE_vertexClipCullOffset       = 11;
     static const uint32_t SWR_BACKEND_STATE_swizzleMap                 = 12;
 
-    INLINE static StructType *Gen_SWR_PS_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_PS_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1687,19 +1827,19 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("pfnPixelShader",   1196),
-                std::make_pair("killsPixel",       1199),
-                std::make_pair("inputCoverage",    1200),
-                std::make_pair("writesODepth",     1201),
-                std::make_pair("usesSourceDepth",  1202),
-                std::make_pair("shadingRate",      1203),
-                std::make_pair("posOffset",        1204),
-                std::make_pair("barycentricsMask", 1205),
-                std::make_pair("usesUAV",          1206),
-                std::make_pair("forceEarlyZ",      1207),
-                std::make_pair("renderTargetMask", 1209),
+                std::make_pair("pfnPixelShader",   1233),
+                std::make_pair("killsPixel",       1236),
+                std::make_pair("inputCoverage",    1237),
+                std::make_pair("writesODepth",     1238),
+                std::make_pair("usesSourceDepth",  1239),
+                std::make_pair("shadingRate",      1240),
+                std::make_pair("posOffset",        1241),
+                std::make_pair("barycentricsMask", 1242),
+                std::make_pair("usesUAV",          1244),
+                std::make_pair("forceEarlyZ",      1245),
+                std::make_pair("renderTargetMask", 1247),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_PS_STATE", pFile, 1193, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_PS_STATE", pFile, 1230, dbgMembers);
         }
 
         return pRetType;
@@ -1717,7 +1857,7 @@ namespace SwrJit
     static const uint32_t SWR_PS_STATE_forceEarlyZ      = 9;
     static const uint32_t SWR_PS_STATE_renderTargetMask = 10;
 
-    INLINE static StructType *Gen_SWR_DEPTH_BOUNDS_STATE(JitManager* pJitMgr)
+    INLINE static StructType* Gen_SWR_DEPTH_BOUNDS_STATE(JitManager* pJitMgr)
     {
         LLVMContext& ctx = pJitMgr->mContext;
 
@@ -1739,11 +1879,11 @@ namespace SwrJit
 
             std::vector<std::pair<std::string, uint32_t>> dbgMembers =
             {
-                std::make_pair("depthBoundsTestEnable",   1215),
-                std::make_pair("depthBoundsTestMinValue", 1216),
-                std::make_pair("depthBoundsTestMaxValue", 1217),
+                std::make_pair("depthBoundsTestEnable",   1253),
+                std::make_pair("depthBoundsTestMinValue", 1254),
+                std::make_pair("depthBoundsTestMaxValue", 1255),
             };
-            pJitMgr->CreateDebugStructType(pRetType, "SWR_DEPTH_BOUNDS_STATE", pFile, 1213, dbgMembers);
+            pJitMgr->CreateDebugStructType(pRetType, "SWR_DEPTH_BOUNDS_STATE", pFile, 1251, dbgMembers);
         }
 
         return pRetType;
@@ -1753,6 +1893,7 @@ namespace SwrJit
     static const uint32_t SWR_DEPTH_BOUNDS_STATE_depthBoundsTestMinValue = 1;
     static const uint32_t SWR_DEPTH_BOUNDS_STATE_depthBoundsTestMaxValue = 2;
 
-} // ns SwrJit
+} // namespace SwrJit
 
 
+// clang-format on

@@ -7,9 +7,18 @@
 # `{localedir}/{language}/LC_MESSAGES/options.mo`.
 #
 
+from __future__ import print_function
+
+import io
 import sys
 import gettext
 import re
+
+
+if sys.version_info < (3, 0):
+    gettext_method = 'ugettext'
+else:
+    gettext_method = 'gettext'
 
 # Path to t_options.h
 template_header_path = sys.argv[1]
@@ -40,7 +49,7 @@ def escapeCString (s):
                 # open quote
                 q = u'\u201d'
             r = r + q
-        elif escapeSeqs.has_key(s[i]):
+        elif s[i] in escapeSeqs:
             r = r + escapeSeqs[s[i]]
         else:
             r = r + s[i]
@@ -58,7 +67,7 @@ def expandCString (s):
     octa = False
     num = 0
     digits = 0
-    r = ''
+    r = u''
     while i < len(s):
         if not escape:
             if s[i] == '\\':
@@ -88,7 +97,7 @@ def expandCString (s):
                 escape = False
                 r = r + chr(num)
         else:
-            if escapeSeqs.has_key(s[i]):
+            if s[i] in escapeSeqs:
                 r = r + escapeSeqs[s[i]]
                 escape = False
             elif s[i] >= '0' and s[i] <= '7':
@@ -126,20 +135,33 @@ def expandMatches (matches, translations, end=None):
         if len(matches) == 1 and i < len(translations) and \
                not matches[0].expand (r'\7').endswith('\\'):
             suffix = ' \\'
-        # Expand the description line. Need to use ugettext in order to allow
-        # non-ascii unicode chars in the original English descriptions.
-        text = escapeCString (trans.ugettext (unicode (expandCString (
-            matches[0].expand (r'\5')), "utf-8"))).encode("utf-8")
-        print matches[0].expand (r'\1' + lang + r'\3"' + text + r'"\7') + suffix
+        text = escapeCString (getattr(trans, gettext_method) (expandCString (
+            matches[0].expand (r'\5'))))
+        text = (matches[0].expand (r'\1' + lang + r'\3"' + text + r'"\7') + suffix)
+
+        # In Python 2, stdout expects encoded byte strings, or else it will
+        # encode them with the ascii 'codec'
+        if sys.version_info.major == 2:
+            text = text.encode('utf-8')
+
+        print(text)
+
         # Expand any subsequent enum lines
         for match in matches[1:]:
-            text = escapeCString (trans.ugettext (unicode (expandCString (
-                match.expand (r'\3')), "utf-8"))).encode("utf-8")
-            print match.expand (r'\1"' + text + r'"\5')
+            text = escapeCString (getattr(trans, gettext_method) (expandCString (
+                match.expand (r'\3'))))
+            text = match.expand (r'\1"' + text + r'"\5')
+
+            # In Python 2, stdout expects encoded byte strings, or else it will
+            # encode them with the ascii 'codec'
+            if sys.version_info.major == 2:
+                text = text.encode('utf-8')
+
+            print(text)
 
         # Expand description end
         if end:
-            print end,
+            print(end, end='')
 
 # Compile a list of translation classes to all supported languages.
 # The first translation is always a NullTranslations.
@@ -160,14 +182,13 @@ reENUM       = re.compile (r'(\s*DRI_CONF_ENUM\s*\([^,]+,\s*)(gettext\s*\(\s*")(
 reDESC_END   = re.compile (r'\s*DRI_CONF_DESC_END')
 
 # Print a header
-print \
-"/***********************************************************************\n" \
+print("/***********************************************************************\n" \
 " ***        THIS FILE IS GENERATED AUTOMATICALLY. DON'T EDIT!        ***\n" \
-" ***********************************************************************/"
+" ***********************************************************************/")
 
 # Process the options template and generate options.h with all
 # translations.
-template = file (template_header_path, "r")
+template = io.open (template_header_path, mode="rt", encoding='utf-8')
 descMatches = []
 for line in template:
     if len(descMatches) > 0:
@@ -185,7 +206,7 @@ for line in template:
         continue
     if reLibintl_h.search (line):
         # Ignore (comment out) #include <libintl.h>
-        print "/* %s * commented out by gen_xmlpool.py */" % line
+        print("/* %s * commented out by gen_xmlpool.py */" % line)
         continue
     matchDESC       = reDESC      .match (line)
     matchDESC_BEGIN = reDESC_BEGIN.match (line)
@@ -196,7 +217,14 @@ for line in template:
         assert len(descMatches) == 0
         descMatches = [matchDESC_BEGIN]
     else:
-        print line,
+        # In Python 2, stdout expects encoded byte strings, or else it will
+        # encode them with the ascii 'codec'
+        if sys.version_info.major == 2:
+           line = line.encode('utf-8')
+
+        print(line, end='')
+
+template.close()
 
 if len(descMatches) > 0:
     sys.stderr.write ("Warning: unterminated description at end of file.\n")

@@ -1,4 +1,4 @@
-# Copyright © 2017 Intel Corporation
+# Copyright © 2017-2018 Intel Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -22,10 +22,10 @@ anv_extensions_py = files('anv_extensions.py')
 
 anv_entrypoints = custom_target(
   'anv_entrypoints.[ch]',
-  input : ['anv_entrypoints_gen.py', vk_api_xml, vk_android_native_buffer_xml],
+  input : ['anv_entrypoints_gen.py', vk_api_xml],
   output : ['anv_entrypoints.h', 'anv_entrypoints.c'],
   command : [
-    prog_python2, '@INPUT0@', '--xml', '@INPUT1@', '--xml', '@INPUT2@',
+    prog_python, '@INPUT0@', '--xml', '@INPUT1@',
     '--outdir', meson.current_build_dir(),
   ],
   depend_files : anv_extensions_py,
@@ -33,10 +33,10 @@ anv_entrypoints = custom_target(
 
 anv_extensions_c = custom_target(
   'anv_extensions.c',
-  input : ['anv_extensions_gen.py', vk_api_xml, vk_android_native_buffer_xml],
+  input : ['anv_extensions_gen.py', vk_api_xml],
   output : 'anv_extensions.c',
   command : [
-    prog_python2, '@INPUT0@', '--xml', '@INPUT1@', '--xml', '@INPUT2@',
+    prog_python, '@INPUT0@', '--xml', '@INPUT1@',
     '--out-c', '@OUTPUT@',
   ],
   depend_files : anv_extensions_py,
@@ -44,10 +44,10 @@ anv_extensions_c = custom_target(
 
 anv_extensions_h = custom_target(
   'anv_extensions.h',
-  input : ['anv_extensions_gen.py', vk_api_xml, vk_android_native_buffer_xml],
+  input : ['anv_extensions_gen.py', vk_api_xml],
   output : 'anv_extensions.h',
   command : [
-    prog_python2, '@INPUT0@', '--xml', '@INPUT1@', '--xml', '@INPUT2@',
+    prog_python, '@INPUT0@', '--xml', '@INPUT1@',
     '--out-h', '@OUTPUT@',
   ],
   depend_files : anv_extensions_py,
@@ -58,7 +58,7 @@ intel_icd = custom_target(
   input : 'anv_icd.py',
   output : 'intel_icd.@0@.json'.format(host_machine.cpu()),
   command : [
-    prog_python2, '@INPUT@',
+    prog_python, '@INPUT@',
     '--lib-path', join_paths(get_option('prefix'), get_option('libdir')),
     '--out', '@OUTPUT@',
   ],
@@ -73,21 +73,12 @@ dev_icd = custom_target(
   input : 'anv_icd.py',
   output : 'dev_icd.@0@.json'.format(host_machine.cpu()),
   command : [
-    prog_python2, '@INPUT@', '--lib-path', meson.current_build_dir(),
+    prog_python, '@INPUT@', '--lib-path', meson.current_build_dir(),
     '--out', '@OUTPUT@'
   ],
   depend_files : files('anv_extensions.py'),
   build_by_default : true,
   install : false,
-)
-
-# TODO: workaround for anv_entrypoints combining the .h and .c files in it's
-# output. See issue #2346
-block_entrypoints = custom_target(
-  'block_entrypoints',
-  command : [prog_touch, '@OUTPUT@'],
-  output : 'null',
-  depends : anv_entrypoints,
 )
 
 libanv_gen_libs = []
@@ -104,14 +95,14 @@ foreach g : [['70', ['gen7_cmd_buffer.c']], ['75', ['gen7_cmd_buffer.c']],
              ['100', ['gen8_cmd_buffer.c']], ['110', ['gen8_cmd_buffer.c']]]
   _gen = g[0]
   libanv_gen_libs += static_library(
-    'libanv_gen@0@'.format(_gen),
-    [anv_gen_files, g[1], block_entrypoints],
+    'anv_gen@0@'.format(_gen),
+    [anv_gen_files, g[1], anv_entrypoints[0], anv_extensions_h],
     include_directories : [
       inc_common, inc_compiler, inc_drm_uapi, inc_intel, inc_vulkan_util,
       inc_vulkan_wsi,
     ],
     c_args : [
-      c_vis_args, no_override_init_args, '-msse2',
+      c_vis_args, no_override_init_args, c_sse2_args,
       '-DGEN_VERSIONx10=@0@'.format(_gen),
     ],
     dependencies : [dep_libdrm, dep_valgrind, idep_nir_headers],
@@ -155,7 +146,7 @@ anv_deps = [
 anv_flags = [
   c_vis_args,
   no_override_init_args,
-  '-msse2',
+  c_sse2_args,
 ]
 
 if with_platform_x11
@@ -173,6 +164,16 @@ if with_platform_wayland
   libanv_files += files('anv_wsi_wayland.c')
 endif
 
+if with_platform_drm
+  anv_flags += '-DVK_USE_PLATFORM_DISPLAY_KHR'
+  libanv_files += files('anv_wsi_display.c')
+endif
+
+if with_xlib_lease
+  anv_deps += [dep_xcb_xrandr, dep_xlib_xrandr]
+  anv_flags += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
+endif
+
 libanv_common = static_library(
   'anv_common',
   [libanv_files, anv_entrypoints, anv_extensions_c, anv_extensions_h],
@@ -186,7 +187,7 @@ libanv_common = static_library(
 
 libvulkan_intel = shared_library(
   'vulkan_intel',
-  [files('anv_gem.c'), block_entrypoints, anv_extensions_h],
+  [files('anv_gem.c'), anv_entrypoints[0], anv_extensions_h],
   include_directories : [
     inc_common, inc_intel, inc_compiler, inc_drm_uapi, inc_vulkan_util,
     inc_vulkan_wsi,
@@ -207,7 +208,7 @@ libvulkan_intel = shared_library(
 if with_tests
   libvulkan_intel_test = static_library(
     'vulkan_intel_test',
-    [files('anv_gem_stubs.c'), block_entrypoints, anv_extensions_h],
+    [files('anv_gem_stubs.c'), anv_entrypoints[0], anv_extensions_h],
     include_directories : [
       inc_common, inc_intel, inc_compiler, inc_drm_uapi, inc_vulkan_util,
       inc_vulkan_wsi,
@@ -229,7 +230,7 @@ if with_tests
       'anv_@0@'.format(t),
       executable(
         t,
-        ['tests/@0@.c'.format(t), dummy_cpp, block_entrypoints],
+        ['tests/@0@.c'.format(t), anv_entrypoints[0], anv_extensions_h],
         link_with : libvulkan_intel_test,
         dependencies : [dep_libdrm, dep_thread, dep_m, dep_valgrind],
         include_directories : [

@@ -37,6 +37,8 @@
 
 #include "amdgpu_asic_addr.h"
 
+#include "util/macros.h"
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1230,6 +1232,7 @@ BOOL_32 Gfx9Lib::HwlInitGlobalParams(
         {
             ADDR_ASSERT(m_settings.isVega10 == FALSE);
             ADDR_ASSERT(m_settings.isRaven == FALSE);
+            ADDR_ASSERT(m_settings.isVega20 == FALSE);
 
             if (m_settings.isVega12)
             {
@@ -1273,7 +1276,7 @@ ChipFamily Gfx9Lib::HwlConvertChipFamily(
             m_settings.isArcticIsland = 1;
             m_settings.isVega10    = ASICREV_IS_VEGA10_P(uChipRevision);
             m_settings.isVega12    = ASICREV_IS_VEGA12_P(uChipRevision);
-
+            m_settings.isVega20    = ASICREV_IS_VEGA20_P(uChipRevision);
             m_settings.isDce12 = 1;
 
             if (m_settings.isVega10 == 0)
@@ -2469,7 +2472,7 @@ ADDR_E_RETURNCODE Gfx9Lib::HwlComputeBlock256Equation(
     // Post validation
     if (ret == ADDR_OK)
     {
-        Dim2d microBlockDim = Block256_2d[elementBytesLog2];
+        MAYBE_UNUSED Dim2d microBlockDim = Block256_2d[elementBytesLog2];
         ADDR_ASSERT((2u << GetMaxValidChannelIndex(pEquation->addr, 8, 0)) ==
                     (microBlockDim.w * (1 << elementBytesLog2)));
         ADDR_ASSERT((2u << GetMaxValidChannelIndex(pEquation->addr, 8, 1)) == microBlockDim.h);
@@ -3875,7 +3878,7 @@ ADDR_E_RETURNCODE Gfx9Lib::ComputeStereoInfo(
             const UINT_32        numBankBits       = GetBankXorBits(blkSizeLog2);
             const UINT_32        bppLog2           = Log2(pIn->bpp >> 3);
             const UINT_32        maxYCoordBlock256 = Log2(Block256_2d[bppLog2].h) - 1;
-            const ADDR_EQUATION *pEqToCheck        = &m_equationTable[eqIndex];
+            MAYBE_UNUSED const ADDR_EQUATION *pEqToCheck = &m_equationTable[eqIndex];
 
             ADDR_ASSERT(maxYCoordBlock256 ==
                         GetMaxValidChannelIndex(&pEqToCheck->addr[0], GetBlockSizeLog2(ADDR_SW_256B), 1));

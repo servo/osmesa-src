@@ -36,6 +36,7 @@
 
 #include "u_debug.h"
 #include "u_cpu_detect.h"
+#include "c11/threads.h"
 
 #if defined(PIPE_ARCH_PPC)
 #if defined(PIPE_OS_APPLE)
@@ -133,6 +134,7 @@ check_os_altivec_support(void)
       signal(SIGILL, SIG_DFL);
    } else {
       boolean enable_altivec = TRUE;    /* Default: enable  if available, and if not overridden */
+      boolean enable_vsx = TRUE;
 #ifdef DEBUG
       /* Disabling Altivec code generation is not the same as disabling VSX code generation,
        * which can be done simply by passing -mattr=-vsx to the LLVM compiler; cf.
@@ -144,6 +146,11 @@ check_os_altivec_support(void)
          enable_altivec = FALSE;
       }
 #endif
+      /* VSX instructions can be explicitly enabled/disabled via GALLIVM_VSX=1 or 0 */
+      char *env_vsx = getenv("GALLIVM_VSX");
+      if (env_vsx && env_vsx[0] == '0') {
+         enable_vsx = FALSE;
+      }
       if (enable_altivec) {
          __lv_powerpc_canjump = 1;
 
@@ -153,8 +160,13 @@ check_os_altivec_support(void)
              :
              : "r" (-1));
 
-         signal(SIGILL, SIG_DFL);
          util_cpu_caps.has_altivec = 1;
+
+         if (enable_vsx) {
+            __asm __volatile("xxland %vs0, %vs0, %vs0");
+            util_cpu_caps.has_vsx = 1;
+         }
+         signal(SIGILL, SIG_DFL);
       } else {
          util_cpu_caps.has_altivec = 0;
       }
@@ -355,14 +367,31 @@ check_os_arm_support(void)
 }
 #endif /* PIPE_ARCH_ARM */
 
-void
-util_cpu_detect(void)
+static void
+get_cpu_topology(void)
 {
-   static boolean util_cpu_detect_initialized = FALSE;
+   uint32_t regs[4];
 
-   if(util_cpu_detect_initialized)
-      return;
+   /* Default. This is correct if L3 is not present or there is only one. */
+   util_cpu_caps.cores_per_L3 = util_cpu_caps.nr_cpus;
 
+#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+   /* AMD Zen */
+   if (util_cpu_caps.x86_cpu_type == 0x17) {
+      /* Query the L3 cache topology information. */
+      cpuid_count(0x8000001D, 3, regs);
+      unsigned cache_level = (regs[0] >> 5) & 0x7;
+      unsigned cores_per_cache = ((regs[0] >> 14) & 0xfff) + 1;
+
+      if (cache_level == 3)
+         util_cpu_caps.cores_per_L3 = cores_per_cache;
+   }
+#endif
+}
+
+static void
+util_cpu_detect_once(void)
+{
    memset(&util_cpu_caps, 0, sizeof util_cpu_caps);
 
    /* Count the number of CPUs in system */
@@ -374,7 +403,7 @@ util_cpu_detect(void)
    }
 #elif defined(PIPE_OS_UNIX) && defined(_SC_NPROCESSORS_ONLN)
    util_cpu_caps.nr_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-   if (util_cpu_caps.nr_cpus == ~0u)
+   if (util_cpu_caps.nr_cpus == ~0)
       util_cpu_caps.nr_cpus = 1;
 #elif defined(PIPE_OS_BSD)
    {
@@ -413,8 +442,9 @@ util_cpu_detect(void)
          cpuid (0x00000001, regs2);
 
          util_cpu_caps.x86_cpu_type = (regs2[0] >> 8) & 0xf;
+         /* Add "extended family". */
          if (util_cpu_caps.x86_cpu_type == 0xf)
-             util_cpu_caps.x86_cpu_type = 8 + ((regs2[0] >> 20) & 255); /* use extended family (P4, IA64) */
+             util_cpu_caps.x86_cpu_type += ((regs2[0] >> 20) & 0xff);
 
          /* general feature flags */
          util_cpu_caps.has_tsc    = (regs2[3] >>  4) & 1; /* 0x0000010 */
@@ -512,6 +542,8 @@ util_cpu_detect(void)
    check_os_altivec_support();
 #endif /* PIPE_ARCH_PPC */
 
+   get_cpu_topology();
+
 #ifdef DEBUG
    if (debug_get_option_dump_cpu()) {
       debug_printf("util_cpu_caps.nr_cpus = %u\n", util_cpu_caps.nr_cpus);
@@ -536,6 +568,7 @@ util_cpu_detect(void)
       debug_printf("util_cpu_caps.has_3dnow_ext = %u\n", util_cpu_caps.has_3dnow_ext);
       debug_printf("util_cpu_caps.has_xop = %u\n", util_cpu_caps.has_xop);
       debug_printf("util_cpu_caps.has_altivec = %u\n", util_cpu_caps.has_altivec);
+      debug_printf("util_cpu_caps.has_vsx = %u\n", util_cpu_caps.has_vsx);
       debug_printf("util_cpu_caps.has_neon = %u\n", util_cpu_caps.has_neon);
       debug_printf("util_cpu_caps.has_daz = %u\n", util_cpu_caps.has_daz);
       debug_printf("util_cpu_caps.has_avx512f = %u\n", util_cpu_caps.has_avx512f);
@@ -549,6 +582,12 @@ util_cpu_detect(void)
       debug_printf("util_cpu_caps.has_avx512vbmi = %u\n", util_cpu_caps.has_avx512vbmi);
    }
 #endif
+}
 
-   util_cpu_detect_initialized = TRUE;
+static once_flag cpu_once_flag = ONCE_FLAG_INIT;
+
+void
+util_cpu_detect(void)
+{
+   call_once(&cpu_once_flag, util_cpu_detect_once);
 }

@@ -27,24 +27,36 @@
 #include "vk_util.h"
 
 #include <unistd.h>
+#include <xf86drm.h>
 
 VkResult
 wsi_device_init(struct wsi_device *wsi,
                 VkPhysicalDevice pdevice,
                 WSI_FN_GetPhysicalDeviceProcAddr proc_addr,
-                const VkAllocationCallbacks *alloc)
+                const VkAllocationCallbacks *alloc,
+                int display_fd)
 {
    VkResult result;
 
    memset(wsi, 0, sizeof(*wsi));
 
+   wsi->instance_alloc = *alloc;
    wsi->pdevice = pdevice;
 
 #define WSI_GET_CB(func) \
    PFN_vk##func func = (PFN_vk##func)proc_addr(pdevice, "vk" #func)
+   WSI_GET_CB(GetPhysicalDeviceProperties2);
    WSI_GET_CB(GetPhysicalDeviceMemoryProperties);
    WSI_GET_CB(GetPhysicalDeviceQueueFamilyProperties);
 #undef WSI_GET_CB
+
+   wsi->pci_bus_info.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT;
+   VkPhysicalDeviceProperties2 pdp2 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+      .pNext = &wsi->pci_bus_info,
+   };
+   GetPhysicalDeviceProperties2(pdevice, &pdp2);
 
    GetPhysicalDeviceMemoryProperties(pdevice, &wsi->memory_props);
    GetPhysicalDeviceQueueFamilyProperties(pdevice, &wsi->queue_family_count, NULL);
@@ -91,6 +103,12 @@ wsi_device_init(struct wsi_device *wsi,
       goto fail;
 #endif
 
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+   result = wsi_display_init_wsi(wsi, alloc, display_fd);
+   if (result != VK_SUCCESS)
+      goto fail;
+#endif
+
    return VK_SUCCESS;
 
 fail:
@@ -102,12 +120,41 @@ void
 wsi_device_finish(struct wsi_device *wsi,
                   const VkAllocationCallbacks *alloc)
 {
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+   wsi_display_finish_wsi(wsi, alloc);
+#endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
    wsi_wl_finish_wsi(wsi, alloc);
 #endif
 #ifdef VK_USE_PLATFORM_XCB_KHR
    wsi_x11_finish_wsi(wsi, alloc);
 #endif
+}
+
+bool
+wsi_device_matches_drm_fd(const struct wsi_device *wsi, int drm_fd)
+{
+   drmDevicePtr fd_device;
+   int ret = drmGetDevice(drm_fd, &fd_device);
+   if (ret)
+      return false;
+
+   bool match = false;
+   switch (fd_device->bustype) {
+   case DRM_BUS_PCI:
+      match = wsi->pci_bus_info.pciDomain == fd_device->businfo.pci->domain &&
+              wsi->pci_bus_info.pciBus == fd_device->businfo.pci->bus &&
+              wsi->pci_bus_info.pciDevice == fd_device->businfo.pci->dev &&
+              wsi->pci_bus_info.pciFunction == fd_device->businfo.pci->func;
+      break;
+
+   default:
+      break;
+   }
+
+   drmFreeDevice(&fd_device);
+
+   return match;
 }
 
 VkResult
@@ -442,6 +489,7 @@ fail:
 VkResult
 wsi_create_prime_image(const struct wsi_swapchain *chain,
                        const VkSwapchainCreateInfoKHR *pCreateInfo,
+                       bool use_modifier,
                        struct wsi_image *image)
 {
    const struct wsi_device *wsi = chain->wsi;
@@ -626,7 +674,7 @@ wsi_create_prime_image(const struct wsi_swapchain *chain,
    if (result != VK_SUCCESS)
       goto fail;
 
-   image->drm_modifier = DRM_FORMAT_MOD_LINEAR;
+   image->drm_modifier = use_modifier ? DRM_FORMAT_MOD_LINEAR : DRM_FORMAT_MOD_INVALID;
    image->num_planes = 1;
    image->sizes[0] = linear_size;
    image->row_pitches[0] = linear_stride;
@@ -663,17 +711,15 @@ wsi_destroy_image(const struct wsi_swapchain *chain,
 
 VkResult
 wsi_common_get_surface_support(struct wsi_device *wsi_device,
-                               int local_fd,
                                uint32_t queueFamilyIndex,
                                VkSurfaceKHR _surface,
-                               const VkAllocationCallbacks *alloc,
                                VkBool32* pSupported)
 {
    ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
    struct wsi_interface *iface = wsi_device->wsi[surface->platform];
 
-   return iface->get_support(surface, wsi_device, alloc,
-                             queueFamilyIndex, local_fd, pSupported);
+   return iface->get_support(surface, wsi_device,
+                             queueFamilyIndex, pSupported);
 }
 
 VkResult
@@ -684,7 +730,16 @@ wsi_common_get_surface_capabilities(struct wsi_device *wsi_device,
    ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
    struct wsi_interface *iface = wsi_device->wsi[surface->platform];
 
-   return iface->get_capabilities(surface, pSurfaceCapabilities);
+   VkSurfaceCapabilities2KHR caps2 = {
+      .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR,
+   };
+
+   VkResult result = iface->get_capabilities2(surface, NULL, &caps2);
+
+   if (result == VK_SUCCESS)
+      *pSurfaceCapabilities = caps2.surfaceCapabilities;
+
+   return result;
 }
 
 VkResult
@@ -697,6 +752,51 @@ wsi_common_get_surface_capabilities2(struct wsi_device *wsi_device,
 
    return iface->get_capabilities2(surface, pSurfaceInfo->pNext,
                                    pSurfaceCapabilities);
+}
+
+VkResult
+wsi_common_get_surface_capabilities2ext(
+   struct wsi_device *wsi_device,
+   VkSurfaceKHR _surface,
+   VkSurfaceCapabilities2EXT *pSurfaceCapabilities)
+{
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
+   struct wsi_interface *iface = wsi_device->wsi[surface->platform];
+
+   assert(pSurfaceCapabilities->sType ==
+          VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_EXT);
+
+   struct wsi_surface_supported_counters counters = {
+      .sType = VK_STRUCTURE_TYPE_WSI_SURFACE_SUPPORTED_COUNTERS_MESA,
+      .pNext = pSurfaceCapabilities->pNext,
+      .supported_surface_counters = 0,
+   };
+
+   VkSurfaceCapabilities2KHR caps2 = {
+      .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR,
+      .pNext = &counters,
+   };
+
+   VkResult result = iface->get_capabilities2(surface, NULL, &caps2);
+
+   if (result == VK_SUCCESS) {
+      VkSurfaceCapabilities2EXT *ext_caps = pSurfaceCapabilities;
+      VkSurfaceCapabilitiesKHR khr_caps = caps2.surfaceCapabilities;
+
+      ext_caps->minImageCount = khr_caps.minImageCount;
+      ext_caps->maxImageCount = khr_caps.maxImageCount;
+      ext_caps->currentExtent = khr_caps.currentExtent;
+      ext_caps->minImageExtent = khr_caps.minImageExtent;
+      ext_caps->maxImageExtent = khr_caps.maxImageExtent;
+      ext_caps->maxImageArrayLayers = khr_caps.maxImageArrayLayers;
+      ext_caps->supportedTransforms = khr_caps.supportedTransforms;
+      ext_caps->currentTransform = khr_caps.currentTransform;
+      ext_caps->supportedCompositeAlpha = khr_caps.supportedCompositeAlpha;
+      ext_caps->supportedUsageFlags = khr_caps.supportedUsageFlags;
+      ext_caps->supportedSurfaceCounters = counters.supported_surface_counters;
+   }
+
+   return result;
 }
 
 VkResult
@@ -739,9 +839,21 @@ wsi_common_get_surface_present_modes(struct wsi_device *wsi_device,
 }
 
 VkResult
+wsi_common_get_present_rectangles(struct wsi_device *wsi_device,
+                                  VkSurfaceKHR _surface,
+                                  uint32_t* pRectCount,
+                                  VkRect2D* pRects)
+{
+   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
+   struct wsi_interface *iface = wsi_device->wsi[surface->platform];
+
+   return iface->get_present_rectangles(surface, wsi_device,
+                                        pRectCount, pRects);
+}
+
+VkResult
 wsi_common_create_swapchain(struct wsi_device *wsi,
                             VkDevice device,
-                            int fd,
                             const VkSwapchainCreateInfoKHR *pCreateInfo,
                             const VkAllocationCallbacks *pAllocator,
                             VkSwapchainKHR *pSwapchain)
@@ -750,7 +862,7 @@ wsi_common_create_swapchain(struct wsi_device *wsi,
    struct wsi_interface *iface = wsi->wsi[surface->platform];
    struct wsi_swapchain *swapchain;
 
-   VkResult result = iface->create_swapchain(surface, device, wsi, fd,
+   VkResult result = iface->create_swapchain(surface, device, wsi,
                                              pCreateInfo, pAllocator,
                                              &swapchain);
    if (result != VK_SUCCESS)
@@ -791,17 +903,14 @@ wsi_common_get_images(VkSwapchainKHR _swapchain,
 }
 
 VkResult
-wsi_common_acquire_next_image(const struct wsi_device *wsi,
-                              VkDevice device,
-                              VkSwapchainKHR _swapchain,
-                              uint64_t timeout,
-                              VkSemaphore semaphore,
-                              uint32_t *pImageIndex)
+wsi_common_acquire_next_image2(const struct wsi_device *wsi,
+                               VkDevice device,
+                               const VkAcquireNextImageInfoKHR *pAcquireInfo,
+                               uint32_t *pImageIndex)
 {
-   WSI_FROM_HANDLE(wsi_swapchain, swapchain, _swapchain);
+   WSI_FROM_HANDLE(wsi_swapchain, swapchain, pAcquireInfo->swapchain);
 
-   return swapchain->acquire_next_image(swapchain, timeout,
-                                        semaphore, pImageIndex);
+   return swapchain->acquire_next_image(swapchain, pAcquireInfo, pImageIndex);
 }
 
 VkResult

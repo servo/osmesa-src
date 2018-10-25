@@ -23,37 +23,30 @@
 # rules must be outside of any AM_CONDITIONALs. Otherwise they will be commented
 # out and we'll fail at `make dist'
 vulkan_api_xml = $(top_srcdir)/src/vulkan/registry/vk.xml
-vk_android_native_buffer_xml = $(top_srcdir)/src/vulkan/registry/vk_android_native_buffer.xml
 
 vulkan/anv_entrypoints.c: vulkan/anv_entrypoints_gen.py \
 			  vulkan/anv_extensions.py \
-			  $(vulkan_api_xml) \
-			  $(vk_android_native_buffer_xml)
+			  $(vulkan_api_xml)
 	$(MKDIR_GEN)
 	$(AM_V_GEN)$(PYTHON2) $(srcdir)/vulkan/anv_entrypoints_gen.py \
 		--xml $(vulkan_api_xml) \
-		--xml $(vk_android_native_buffer_xml) \
 		--outdir $(builddir)/vulkan
 vulkan/anv_entrypoints.h: vulkan/anv_entrypoints.c
 
 vulkan/anv_extensions.c: vulkan/anv_extensions_gen.py \
 			 vulkan/anv_extensions.py \
-			 $(vulkan_api_xml) \
-			 $(vk_android_native_buffer_xml)
+			 $(vulkan_api_xml)
 	$(MKDIR_GEN)
 	$(AM_V_GEN)$(PYTHON2) $(srcdir)/vulkan/anv_extensions_gen.py \
 		--xml $(vulkan_api_xml) \
-		--xml $(vk_android_native_buffer_xml) \
 		--out-c $@
 
 vulkan/anv_extensions.h: vulkan/anv_extensions_gen.py \
 			 vulkan/anv_extensions.py \
-			 $(vulkan_api_xml) \
-			 $(vk_android_native_buffer_xml)
+			 $(vulkan_api_xml)
 	$(MKDIR_GEN)
 	$(AM_V_GEN)$(PYTHON2) $(srcdir)/vulkan/anv_extensions_gen.py \
 		--xml $(vulkan_api_xml) \
-		--xml $(vk_android_native_buffer_xml) \
 		--out-h $@
 
 BUILT_SOURCES += $(VULKAN_GENERATED_FILES)
@@ -71,10 +64,12 @@ EXTRA_DIST += \
 	vulkan/TODO
 
 vulkan/dev_icd.json : vulkan/anv_extensions.py vulkan/anv_icd.py
+	$(MKDIR_GEN)
 	$(AM_V_GEN)$(PYTHON2) $(srcdir)/vulkan/anv_icd.py \
 		--lib-path="${abs_top_builddir}/${LIB_DIR}" --out $@
 
 vulkan/intel_icd.@host_cpu@.json : vulkan/anv_extensions.py vulkan/anv_icd.py
+	$(MKDIR_GEN)
 	$(AM_V_GEN)$(PYTHON2) $(srcdir)/vulkan/anv_icd.py \
 		--lib-path="${libdir}" --out $@
 
@@ -109,7 +104,7 @@ noinst_LTLIBRARIES += $(VULKAN_PER_GEN_LIBS)
 
 VULKAN_CFLAGS = \
 	$(AM_CFLAGS) \
-	-msse2
+	-msse2 -mstackrealign
 
 VULKAN_CPPFLAGS = \
 	-I$(top_srcdir)/src/compiler \
@@ -169,7 +164,10 @@ VULKAN_LIB_DEPS = \
 	-lm
 
 if HAVE_PLATFORM_ANDROID
-VULKAN_CPPFLAGS += $(ANDROID_CPPFLAGS)
+VULKAN_CPPFLAGS += \
+    $(ANDROID_CPPFLAGS) \
+    -DVK_USE_PLATFORM_ANDROID_KHR
+
 VULKAN_CFLAGS += $(ANDROID_CFLAGS)
 VULKAN_LIB_DEPS += $(ANDROID_LIBS)
 VULKAN_SOURCES += $(VULKAN_ANDROID_FILES)
@@ -195,6 +193,21 @@ VULKAN_CPPFLAGS += \
 VULKAN_SOURCES += $(VULKAN_WSI_WAYLAND_FILES)
 
 VULKAN_LIB_DEPS += $(WAYLAND_CLIENT_LIBS)
+endif
+
+if HAVE_PLATFORM_DRM
+VULKAN_CPPFLAGS += \
+	-DVK_USE_PLATFORM_DISPLAY_KHR
+
+VULKAN_SOURCES += $(VULKAN_WSI_DISPLAY_FILES)
+endif
+
+if HAVE_XLIB_LEASE
+VULKAN_CPPFLAGS += \
+	-DVK_USE_PLATFORM_XLIB_XRANDR_EXT \
+	$(XCB_RANDR_CFLAGS) \
+	$(XLIB_RANDR_CFLAGS)
+VULKAN_LIB_DEPS += $(XCB_RANDR_LIBS)
 endif
 
 noinst_LTLIBRARIES += vulkan/libvulkan_common.la

@@ -1,6 +1,6 @@
-#line 1 "glsl/glsl_lexer.cpp"
+#line 2 "glsl/glsl_lexer.cpp"
 
-#line 3 "glsl/glsl_lexer.cpp"
+#line 4 "glsl/glsl_lexer.cpp"
 
 #define  YY_INT_ALIGNED short int
 
@@ -8,244 +8,10 @@
 
 #define FLEX_SCANNER
 #define YY_FLEX_MAJOR_VERSION 2
-#define YY_FLEX_MINOR_VERSION 6
-#define YY_FLEX_SUBMINOR_VERSION 4
+#define YY_FLEX_MINOR_VERSION 5
+#define YY_FLEX_SUBMINOR_VERSION 35
 #if YY_FLEX_SUBMINOR_VERSION > 0
 #define FLEX_BETA
-#endif
-
-#ifdef yy_create_buffer
-#define _mesa_glsl_lexer__create_buffer_ALREADY_DEFINED
-#else
-#define yy_create_buffer _mesa_glsl_lexer__create_buffer
-#endif
-
-#ifdef yy_delete_buffer
-#define _mesa_glsl_lexer__delete_buffer_ALREADY_DEFINED
-#else
-#define yy_delete_buffer _mesa_glsl_lexer__delete_buffer
-#endif
-
-#ifdef yy_scan_buffer
-#define _mesa_glsl_lexer__scan_buffer_ALREADY_DEFINED
-#else
-#define yy_scan_buffer _mesa_glsl_lexer__scan_buffer
-#endif
-
-#ifdef yy_scan_string
-#define _mesa_glsl_lexer__scan_string_ALREADY_DEFINED
-#else
-#define yy_scan_string _mesa_glsl_lexer__scan_string
-#endif
-
-#ifdef yy_scan_bytes
-#define _mesa_glsl_lexer__scan_bytes_ALREADY_DEFINED
-#else
-#define yy_scan_bytes _mesa_glsl_lexer__scan_bytes
-#endif
-
-#ifdef yy_init_buffer
-#define _mesa_glsl_lexer__init_buffer_ALREADY_DEFINED
-#else
-#define yy_init_buffer _mesa_glsl_lexer__init_buffer
-#endif
-
-#ifdef yy_flush_buffer
-#define _mesa_glsl_lexer__flush_buffer_ALREADY_DEFINED
-#else
-#define yy_flush_buffer _mesa_glsl_lexer__flush_buffer
-#endif
-
-#ifdef yy_load_buffer_state
-#define _mesa_glsl_lexer__load_buffer_state_ALREADY_DEFINED
-#else
-#define yy_load_buffer_state _mesa_glsl_lexer__load_buffer_state
-#endif
-
-#ifdef yy_switch_to_buffer
-#define _mesa_glsl_lexer__switch_to_buffer_ALREADY_DEFINED
-#else
-#define yy_switch_to_buffer _mesa_glsl_lexer__switch_to_buffer
-#endif
-
-#ifdef yypush_buffer_state
-#define _mesa_glsl_lexer_push_buffer_state_ALREADY_DEFINED
-#else
-#define yypush_buffer_state _mesa_glsl_lexer_push_buffer_state
-#endif
-
-#ifdef yypop_buffer_state
-#define _mesa_glsl_lexer_pop_buffer_state_ALREADY_DEFINED
-#else
-#define yypop_buffer_state _mesa_glsl_lexer_pop_buffer_state
-#endif
-
-#ifdef yyensure_buffer_stack
-#define _mesa_glsl_lexer_ensure_buffer_stack_ALREADY_DEFINED
-#else
-#define yyensure_buffer_stack _mesa_glsl_lexer_ensure_buffer_stack
-#endif
-
-#ifdef yylex
-#define _mesa_glsl_lexer_lex_ALREADY_DEFINED
-#else
-#define yylex _mesa_glsl_lexer_lex
-#endif
-
-#ifdef yyrestart
-#define _mesa_glsl_lexer_restart_ALREADY_DEFINED
-#else
-#define yyrestart _mesa_glsl_lexer_restart
-#endif
-
-#ifdef yylex_init
-#define _mesa_glsl_lexer_lex_init_ALREADY_DEFINED
-#else
-#define yylex_init _mesa_glsl_lexer_lex_init
-#endif
-
-#ifdef yylex_init_extra
-#define _mesa_glsl_lexer_lex_init_extra_ALREADY_DEFINED
-#else
-#define yylex_init_extra _mesa_glsl_lexer_lex_init_extra
-#endif
-
-#ifdef yylex_destroy
-#define _mesa_glsl_lexer_lex_destroy_ALREADY_DEFINED
-#else
-#define yylex_destroy _mesa_glsl_lexer_lex_destroy
-#endif
-
-#ifdef yyget_debug
-#define _mesa_glsl_lexer_get_debug_ALREADY_DEFINED
-#else
-#define yyget_debug _mesa_glsl_lexer_get_debug
-#endif
-
-#ifdef yyset_debug
-#define _mesa_glsl_lexer_set_debug_ALREADY_DEFINED
-#else
-#define yyset_debug _mesa_glsl_lexer_set_debug
-#endif
-
-#ifdef yyget_extra
-#define _mesa_glsl_lexer_get_extra_ALREADY_DEFINED
-#else
-#define yyget_extra _mesa_glsl_lexer_get_extra
-#endif
-
-#ifdef yyset_extra
-#define _mesa_glsl_lexer_set_extra_ALREADY_DEFINED
-#else
-#define yyset_extra _mesa_glsl_lexer_set_extra
-#endif
-
-#ifdef yyget_in
-#define _mesa_glsl_lexer_get_in_ALREADY_DEFINED
-#else
-#define yyget_in _mesa_glsl_lexer_get_in
-#endif
-
-#ifdef yyset_in
-#define _mesa_glsl_lexer_set_in_ALREADY_DEFINED
-#else
-#define yyset_in _mesa_glsl_lexer_set_in
-#endif
-
-#ifdef yyget_out
-#define _mesa_glsl_lexer_get_out_ALREADY_DEFINED
-#else
-#define yyget_out _mesa_glsl_lexer_get_out
-#endif
-
-#ifdef yyset_out
-#define _mesa_glsl_lexer_set_out_ALREADY_DEFINED
-#else
-#define yyset_out _mesa_glsl_lexer_set_out
-#endif
-
-#ifdef yyget_leng
-#define _mesa_glsl_lexer_get_leng_ALREADY_DEFINED
-#else
-#define yyget_leng _mesa_glsl_lexer_get_leng
-#endif
-
-#ifdef yyget_text
-#define _mesa_glsl_lexer_get_text_ALREADY_DEFINED
-#else
-#define yyget_text _mesa_glsl_lexer_get_text
-#endif
-
-#ifdef yyget_lineno
-#define _mesa_glsl_lexer_get_lineno_ALREADY_DEFINED
-#else
-#define yyget_lineno _mesa_glsl_lexer_get_lineno
-#endif
-
-#ifdef yyset_lineno
-#define _mesa_glsl_lexer_set_lineno_ALREADY_DEFINED
-#else
-#define yyset_lineno _mesa_glsl_lexer_set_lineno
-#endif
-
-#ifdef yyget_column
-#define _mesa_glsl_lexer_get_column_ALREADY_DEFINED
-#else
-#define yyget_column _mesa_glsl_lexer_get_column
-#endif
-
-#ifdef yyset_column
-#define _mesa_glsl_lexer_set_column_ALREADY_DEFINED
-#else
-#define yyset_column _mesa_glsl_lexer_set_column
-#endif
-
-#ifdef yywrap
-#define _mesa_glsl_lexer_wrap_ALREADY_DEFINED
-#else
-#define yywrap _mesa_glsl_lexer_wrap
-#endif
-
-#ifdef yyget_lval
-#define _mesa_glsl_lexer_get_lval_ALREADY_DEFINED
-#else
-#define yyget_lval _mesa_glsl_lexer_get_lval
-#endif
-
-#ifdef yyset_lval
-#define _mesa_glsl_lexer_set_lval_ALREADY_DEFINED
-#else
-#define yyset_lval _mesa_glsl_lexer_set_lval
-#endif
-
-#ifdef yyget_lloc
-#define _mesa_glsl_lexer_get_lloc_ALREADY_DEFINED
-#else
-#define yyget_lloc _mesa_glsl_lexer_get_lloc
-#endif
-
-#ifdef yyset_lloc
-#define _mesa_glsl_lexer_set_lloc_ALREADY_DEFINED
-#else
-#define yyset_lloc _mesa_glsl_lexer_set_lloc
-#endif
-
-#ifdef yyalloc
-#define _mesa_glsl_lexer_alloc_ALREADY_DEFINED
-#else
-#define yyalloc _mesa_glsl_lexer_alloc
-#endif
-
-#ifdef yyrealloc
-#define _mesa_glsl_lexer_realloc_ALREADY_DEFINED
-#else
-#define yyrealloc _mesa_glsl_lexer_realloc
-#endif
-
-#ifdef yyfree
-#define _mesa_glsl_lexer_free_ALREADY_DEFINED
-#else
-#define yyfree _mesa_glsl_lexer_free
 #endif
 
 /* First, we deal with  platform-specific or compiler-specific issues. */
@@ -281,6 +47,7 @@ typedef int16_t flex_int16_t;
 typedef uint16_t flex_uint16_t;
 typedef int32_t flex_int32_t;
 typedef uint32_t flex_uint32_t;
+typedef uint64_t flex_uint64_t;
 #else
 typedef signed char flex_int8_t;
 typedef short int flex_int16_t;
@@ -288,6 +55,7 @@ typedef int flex_int32_t;
 typedef unsigned char flex_uint8_t; 
 typedef unsigned short int flex_uint16_t;
 typedef unsigned int flex_uint32_t;
+#endif /* ! C99 */
 
 /* Limits of integral types. */
 #ifndef INT8_MIN
@@ -318,32 +86,38 @@ typedef unsigned int flex_uint32_t;
 #define UINT32_MAX             (4294967295U)
 #endif
 
-#ifndef SIZE_MAX
-#define SIZE_MAX               (~(size_t)0)
-#endif
-
-#endif /* ! C99 */
-
 #endif /* ! FLEXINT_H */
 
-/* begin standard C++ headers. */
+#ifdef __cplusplus
 
-/* TODO: this is always defined, so inline it */
+/* The "const" storage-class-modifier is valid. */
+#define YY_USE_CONST
+
+#else	/* ! __cplusplus */
+
+/* C99 requires __STDC__ to be defined as 1. */
+#if defined (__STDC__)
+
+#define YY_USE_CONST
+
+#endif	/* defined (__STDC__) */
+#endif	/* ! __cplusplus */
+
+#ifdef YY_USE_CONST
 #define yyconst const
-
-#if defined(__GNUC__) && __GNUC__ >= 3
-#define yynoreturn __attribute__((__noreturn__))
 #else
-#define yynoreturn
+#define yyconst
 #endif
 
 /* Returned upon end-of-file. */
 #define YY_NULL 0
 
-/* Promotes a possibly negative, possibly signed char to an
- *   integer in range [0..255] for use as an array index.
+/* Promotes a possibly negative, possibly signed char to an unsigned
+ * integer for use as an array index.  If the signed char is negative,
+ * we want to instead treat it as an 8-bit unsigned char, hence the
+ * double cast.
  */
-#define YY_SC_TO_UI(c) ((YY_CHAR) (c))
+#define YY_SC_TO_UI(c) ((unsigned int) (unsigned char) c)
 
 /* An opaque pointer. */
 #ifndef YY_TYPEDEF_YY_SCANNER_T
@@ -367,29 +141,25 @@ typedef void* yyscan_t;
  * definition of BEGIN.
  */
 #define BEGIN yyg->yy_start = 1 + 2 *
+
 /* Translate the current start state into a value that can be later handed
  * to BEGIN to return to the state.  The YYSTATE alias is for lex
  * compatibility.
  */
 #define YY_START ((yyg->yy_start - 1) / 2)
 #define YYSTATE YY_START
+
 /* Action number for EOF rule of a given start state. */
 #define YY_STATE_EOF(state) (YY_END_OF_BUFFER + state + 1)
+
 /* Special action meaning "start processing a new file". */
-#define YY_NEW_FILE yyrestart( yyin , yyscanner )
+#define YY_NEW_FILE _mesa_glsl_lexer_restart(yyin ,yyscanner )
+
 #define YY_END_OF_BUFFER_CHAR 0
 
 /* Size of default input buffer. */
 #ifndef YY_BUF_SIZE
-#ifdef __ia64__
-/* On IA-64, the buffer size is 16k, not 8k.
- * Moreover, YY_BUF_SIZE is 2*YY_READ_BUF_SIZE in the general case.
- * Ditto for the __ia64__ case accordingly.
- */
-#define YY_BUF_SIZE 32768
-#else
 #define YY_BUF_SIZE 16384
-#endif /* __ia64__ */
 #endif
 
 /* The state buf must be large enough to hold one state per character in the main buffer.
@@ -409,9 +179,8 @@ typedef size_t yy_size_t;
 #define EOB_ACT_CONTINUE_SCAN 0
 #define EOB_ACT_END_OF_FILE 1
 #define EOB_ACT_LAST_MATCH 2
-    
+
     #define YY_LESS_LINENO(n)
-    #define YY_LINENO_REWIND_TO(ptr)
     
 /* Return all but the first "n" matched characters back to the input stream. */
 #define yyless(n) \
@@ -426,6 +195,7 @@ typedef size_t yy_size_t;
 		YY_DO_BEFORE_ACTION; /* set up yytext again */ \
 		} \
 	while ( 0 )
+
 #define unput(c) yyunput( c, yyg->yytext_ptr , yyscanner )
 
 #ifndef YY_STRUCT_YY_BUFFER_STATE
@@ -440,12 +210,12 @@ struct yy_buffer_state
 	/* Size of input buffer in bytes, not including room for EOB
 	 * characters.
 	 */
-	int yy_buf_size;
+	yy_size_t yy_buf_size;
 
 	/* Number of characters read into yy_ch_buf, not including EOB
 	 * characters.
 	 */
-	int yy_n_chars;
+	yy_size_t yy_n_chars;
 
 	/* Whether we "own" the buffer - i.e., we know we created it,
 	 * and can realloc() it to grow it, and should free() it to
@@ -468,7 +238,7 @@ struct yy_buffer_state
 
     int yy_bs_lineno; /**< The line count. */
     int yy_bs_column; /**< The column count. */
-
+    
 	/* Whether to try to fill the input buffer when we reach the
 	 * end of it.
 	 */
@@ -485,7 +255,7 @@ struct yy_buffer_state
 	 * possible backing-up.
 	 *
 	 * When we actually see the EOF, we change the status to "new"
-	 * (via yyrestart()), so that the user can continue scanning by
+	 * (via _mesa_glsl_lexer_restart()), so that the user can continue scanning by
 	 * just pointing yyin at a new input file.
 	 */
 #define YY_BUFFER_EOF_PENDING 2
@@ -502,77 +272,84 @@ struct yy_buffer_state
 #define YY_CURRENT_BUFFER ( yyg->yy_buffer_stack \
                           ? yyg->yy_buffer_stack[yyg->yy_buffer_stack_top] \
                           : NULL)
+
 /* Same as previous macro, but useful when we know that the buffer stack is not
  * NULL or when we need an lvalue. For internal use only.
  */
 #define YY_CURRENT_BUFFER_LVALUE yyg->yy_buffer_stack[yyg->yy_buffer_stack_top]
 
-void yyrestart ( FILE *input_file , yyscan_t yyscanner );
-void yy_switch_to_buffer ( YY_BUFFER_STATE new_buffer , yyscan_t yyscanner );
-YY_BUFFER_STATE yy_create_buffer ( FILE *file, int size , yyscan_t yyscanner );
-void yy_delete_buffer ( YY_BUFFER_STATE b , yyscan_t yyscanner );
-void yy_flush_buffer ( YY_BUFFER_STATE b , yyscan_t yyscanner );
-void yypush_buffer_state ( YY_BUFFER_STATE new_buffer , yyscan_t yyscanner );
-void yypop_buffer_state ( yyscan_t yyscanner );
+void _mesa_glsl_lexer_restart (FILE *input_file ,yyscan_t yyscanner );
+void _mesa_glsl_lexer__switch_to_buffer (YY_BUFFER_STATE new_buffer ,yyscan_t yyscanner );
+YY_BUFFER_STATE _mesa_glsl_lexer__create_buffer (FILE *file,int size ,yyscan_t yyscanner );
+void _mesa_glsl_lexer__delete_buffer (YY_BUFFER_STATE b ,yyscan_t yyscanner );
+void _mesa_glsl_lexer__flush_buffer (YY_BUFFER_STATE b ,yyscan_t yyscanner );
+void _mesa_glsl_lexer_push_buffer_state (YY_BUFFER_STATE new_buffer ,yyscan_t yyscanner );
+void _mesa_glsl_lexer_pop_buffer_state (yyscan_t yyscanner );
 
-static void yyensure_buffer_stack ( yyscan_t yyscanner );
-static void yy_load_buffer_state ( yyscan_t yyscanner );
-static void yy_init_buffer ( YY_BUFFER_STATE b, FILE *file , yyscan_t yyscanner );
-#define YY_FLUSH_BUFFER yy_flush_buffer( YY_CURRENT_BUFFER , yyscanner)
+static void _mesa_glsl_lexer_ensure_buffer_stack (yyscan_t yyscanner );
+static void _mesa_glsl_lexer__load_buffer_state (yyscan_t yyscanner );
+static void _mesa_glsl_lexer__init_buffer (YY_BUFFER_STATE b,FILE *file ,yyscan_t yyscanner );
 
-YY_BUFFER_STATE yy_scan_buffer ( char *base, yy_size_t size , yyscan_t yyscanner );
-YY_BUFFER_STATE yy_scan_string ( const char *yy_str , yyscan_t yyscanner );
-YY_BUFFER_STATE yy_scan_bytes ( const char *bytes, int len , yyscan_t yyscanner );
+#define YY_FLUSH_BUFFER _mesa_glsl_lexer__flush_buffer(YY_CURRENT_BUFFER ,yyscanner)
 
-void *yyalloc ( yy_size_t , yyscan_t yyscanner );
-void *yyrealloc ( void *, yy_size_t , yyscan_t yyscanner );
-void yyfree ( void * , yyscan_t yyscanner );
+YY_BUFFER_STATE _mesa_glsl_lexer__scan_buffer (char *base,yy_size_t size ,yyscan_t yyscanner );
+YY_BUFFER_STATE _mesa_glsl_lexer__scan_string (yyconst char *yy_str ,yyscan_t yyscanner );
+YY_BUFFER_STATE _mesa_glsl_lexer__scan_bytes (yyconst char *bytes,yy_size_t len ,yyscan_t yyscanner );
 
-#define yy_new_buffer yy_create_buffer
+void *_mesa_glsl_lexer_alloc (yy_size_t ,yyscan_t yyscanner );
+void *_mesa_glsl_lexer_realloc (void *,yy_size_t ,yyscan_t yyscanner );
+void _mesa_glsl_lexer_free (void * ,yyscan_t yyscanner );
+
+#define yy_new_buffer _mesa_glsl_lexer__create_buffer
+
 #define yy_set_interactive(is_interactive) \
 	{ \
 	if ( ! YY_CURRENT_BUFFER ){ \
-        yyensure_buffer_stack (yyscanner); \
+        _mesa_glsl_lexer_ensure_buffer_stack (yyscanner); \
 		YY_CURRENT_BUFFER_LVALUE =    \
-            yy_create_buffer( yyin, YY_BUF_SIZE , yyscanner); \
+            _mesa_glsl_lexer__create_buffer(yyin,YY_BUF_SIZE ,yyscanner); \
 	} \
 	YY_CURRENT_BUFFER_LVALUE->yy_is_interactive = is_interactive; \
 	}
+
 #define yy_set_bol(at_bol) \
 	{ \
 	if ( ! YY_CURRENT_BUFFER ){\
-        yyensure_buffer_stack (yyscanner); \
+        _mesa_glsl_lexer_ensure_buffer_stack (yyscanner); \
 		YY_CURRENT_BUFFER_LVALUE =    \
-            yy_create_buffer( yyin, YY_BUF_SIZE , yyscanner); \
+            _mesa_glsl_lexer__create_buffer(yyin,YY_BUF_SIZE ,yyscanner); \
 	} \
 	YY_CURRENT_BUFFER_LVALUE->yy_at_bol = at_bol; \
 	}
+
 #define YY_AT_BOL() (YY_CURRENT_BUFFER_LVALUE->yy_at_bol)
 
 /* Begin user sect3 */
 
-#define _mesa_glsl_lexer_wrap(yyscanner) (/*CONSTCOND*/1)
+#define _mesa_glsl_lexer_wrap(n) 1
 #define YY_SKIP_YYWRAP
-typedef flex_uint8_t YY_CHAR;
+
+typedef unsigned char YY_CHAR;
 
 typedef int yy_state_type;
 
 #define yytext_ptr yytext_r
 
-static yy_state_type yy_get_previous_state ( yyscan_t yyscanner );
-static yy_state_type yy_try_NUL_trans ( yy_state_type current_state  , yyscan_t yyscanner);
-static int yy_get_next_buffer ( yyscan_t yyscanner );
-static void yynoreturn yy_fatal_error ( const char* msg , yyscan_t yyscanner );
+static yy_state_type yy_get_previous_state (yyscan_t yyscanner );
+static yy_state_type yy_try_NUL_trans (yy_state_type current_state  ,yyscan_t yyscanner);
+static int yy_get_next_buffer (yyscan_t yyscanner );
+static void yy_fatal_error (yyconst char msg[] ,yyscan_t yyscanner );
 
 /* Done after the current pattern has been matched and before the
  * corresponding action - sets up yytext.
  */
 #define YY_DO_BEFORE_ACTION \
 	yyg->yytext_ptr = yy_bp; \
-	yyleng = (int) (yy_cp - yy_bp); \
+	yyleng = (yy_size_t) (yy_cp - yy_bp); \
 	yyg->yy_hold_char = *yy_cp; \
 	*yy_cp = '\0'; \
 	yyg->yy_c_buf_p = yy_cp;
+
 #define YY_NUM_RULES 275
 #define YY_END_OF_BUFFER 276
 /* This struct is not used in this scanner,
@@ -582,7 +359,7 @@ struct yy_trans_info
 	flex_int32_t yy_verify;
 	flex_int32_t yy_nxt;
 	};
-static const flex_int16_t yy_accept[1078] =
+static yyconst flex_int16_t yy_accept[1078] =
     {   0,
         0,    0,   16,   16,    0,    0,  276,  274,    1,   23,
       274,  274,  274,  274,  274,  274,  273,  274,  180,  178,
@@ -704,7 +481,7 @@ static const flex_int16_t yy_accept[1078] =
         0,    0,    0,    0,    0,   11,    0
     } ;
 
-static const YY_CHAR yy_ec[256] =
+static yyconst flex_int32_t yy_ec[256] =
     {   0,
         1,    1,    1,    1,    1,    1,    1,    1,    2,    3,
         1,    1,    4,    1,    1,    1,    1,    1,    1,    1,
@@ -736,7 +513,7 @@ static const YY_CHAR yy_ec[256] =
         1,    1,    1,    1,    1
     } ;
 
-static const YY_CHAR yy_meta[72] =
+static yyconst flex_int32_t yy_meta[72] =
     {   0,
         1,    2,    3,    1,    1,    1,    1,    1,    1,    1,
         1,    1,    1,    4,    1,    5,    5,    5,    5,    5,
@@ -748,7 +525,7 @@ static const YY_CHAR yy_meta[72] =
         1
     } ;
 
-static const flex_int16_t yy_base[1092] =
+static yyconst flex_int16_t yy_base[1092] =
     {   0,
         0,   70,   76,    0, 1517, 1516, 1518, 1521,   71, 1521,
      1491, 1490,  140, 1489,  137,  138,  136, 1488,  153,  208,
@@ -873,7 +650,7 @@ static const flex_int16_t yy_base[1092] =
 
     } ;
 
-static const flex_int16_t yy_def[1092] =
+static yyconst flex_int16_t yy_def[1092] =
     {   0,
      1077,    1, 1077,    3, 1078, 1078, 1077, 1077, 1077, 1077,
      1077, 1077, 1077, 1077, 1077, 1077, 1077, 1077, 1077, 1077,
@@ -998,7 +775,7 @@ static const flex_int16_t yy_def[1092] =
 
     } ;
 
-static const flex_int16_t yy_nxt[1593] =
+static yyconst flex_int16_t yy_nxt[1593] =
     {   0,
         8,    9,   10,    9,   11,    8,   12,   13,    8,    8,
        14,   15,   16,   17,   18,   19,   20,   20,   20,   20,
@@ -1178,7 +955,7 @@ static const flex_int16_t yy_nxt[1593] =
 
     } ;
 
-static const flex_int16_t yy_chk[1593] =
+static yyconst flex_int16_t yy_chk[1593] =
     {   0,
         1,    1,    1,    1,    1,    1,    1,    1,    1,    1,
         1,    1,    1,    1,    1,    1,    1,    1,    1,    1,
@@ -1572,13 +1349,11 @@ literal_integer(char *text, int len, struct _mesa_glsl_parse_state *state,
 #define LITERAL_INTEGER(base) \
    literal_integer(yytext, yyleng, yyextra, yylval, yylloc, base)
 
-#line 1575 "glsl/glsl_lexer.cpp"
-#line 217 "./glsl/glsl_lexer.ll"
-	/* Note: When adding any start conditions to this list, you must also
-	 * update the "Internal compiler error" catch-all rule near the end of
-	 * this file. */
+/* Note: When adding any start conditions to this list, you must also
+* update the "Internal compiler error" catch-all rule near the end of
+* this file. */
 
-#line 1581 "glsl/glsl_lexer.cpp"
+#line 1357 "glsl/glsl_lexer.cpp"
 
 #define INITIAL 0
 #define PP 1
@@ -1607,8 +1382,8 @@ struct yyguts_t
     size_t yy_buffer_stack_max; /**< capacity of stack. */
     YY_BUFFER_STATE * yy_buffer_stack; /**< Stack as an array. */
     char yy_hold_char;
-    int yy_n_chars;
-    int yyleng_r;
+    yy_size_t yy_n_chars;
+    yy_size_t yyleng_r;
     char *yy_c_buf_p;
     int yy_init;
     int yy_start;
@@ -1632,7 +1407,7 @@ struct yyguts_t
 
     }; /* end struct yyguts_t */
 
-static int yy_init_globals ( yyscan_t yyscanner );
+static int yy_init_globals (yyscan_t yyscanner );
 
     /* This must go here because YYSTYPE and YYLTYPE are included
      * from bison output in section 1.*/
@@ -1640,50 +1415,46 @@ static int yy_init_globals ( yyscan_t yyscanner );
     
     #    define yylloc yyg->yylloc_r
     
-int yylex_init (yyscan_t* scanner);
+int _mesa_glsl_lexer_lex_init (yyscan_t* scanner);
 
-int yylex_init_extra ( YY_EXTRA_TYPE user_defined, yyscan_t* scanner);
+int _mesa_glsl_lexer_lex_init_extra (YY_EXTRA_TYPE user_defined,yyscan_t* scanner);
 
 /* Accessor methods to globals.
    These are made visible to non-reentrant scanners for convenience. */
 
-int yylex_destroy ( yyscan_t yyscanner );
+int _mesa_glsl_lexer_lex_destroy (yyscan_t yyscanner );
 
-int yyget_debug ( yyscan_t yyscanner );
+int _mesa_glsl_lexer_get_debug (yyscan_t yyscanner );
 
-void yyset_debug ( int debug_flag , yyscan_t yyscanner );
+void _mesa_glsl_lexer_set_debug (int debug_flag ,yyscan_t yyscanner );
 
-YY_EXTRA_TYPE yyget_extra ( yyscan_t yyscanner );
+YY_EXTRA_TYPE _mesa_glsl_lexer_get_extra (yyscan_t yyscanner );
 
-void yyset_extra ( YY_EXTRA_TYPE user_defined , yyscan_t yyscanner );
+void _mesa_glsl_lexer_set_extra (YY_EXTRA_TYPE user_defined ,yyscan_t yyscanner );
 
-FILE *yyget_in ( yyscan_t yyscanner );
+FILE *_mesa_glsl_lexer_get_in (yyscan_t yyscanner );
 
-void yyset_in  ( FILE * _in_str , yyscan_t yyscanner );
+void _mesa_glsl_lexer_set_in  (FILE * in_str ,yyscan_t yyscanner );
 
-FILE *yyget_out ( yyscan_t yyscanner );
+FILE *_mesa_glsl_lexer_get_out (yyscan_t yyscanner );
 
-void yyset_out  ( FILE * _out_str , yyscan_t yyscanner );
+void _mesa_glsl_lexer_set_out  (FILE * out_str ,yyscan_t yyscanner );
 
-			int yyget_leng ( yyscan_t yyscanner );
+yy_size_t _mesa_glsl_lexer_get_leng (yyscan_t yyscanner );
 
-char *yyget_text ( yyscan_t yyscanner );
+char *_mesa_glsl_lexer_get_text (yyscan_t yyscanner );
 
-int yyget_lineno ( yyscan_t yyscanner );
+int _mesa_glsl_lexer_get_lineno (yyscan_t yyscanner );
 
-void yyset_lineno ( int _line_number , yyscan_t yyscanner );
+void _mesa_glsl_lexer_set_lineno (int line_number ,yyscan_t yyscanner );
 
-int yyget_column  ( yyscan_t yyscanner );
+YYSTYPE * _mesa_glsl_lexer_get_lval (yyscan_t yyscanner );
 
-void yyset_column ( int _column_no , yyscan_t yyscanner );
+void _mesa_glsl_lexer_set_lval (YYSTYPE * yylval_param ,yyscan_t yyscanner );
 
-YYSTYPE * yyget_lval ( yyscan_t yyscanner );
-
-void yyset_lval ( YYSTYPE * yylval_param , yyscan_t yyscanner );
-
-       YYLTYPE *yyget_lloc ( yyscan_t yyscanner );
+       YYLTYPE *_mesa_glsl_lexer_get_lloc (yyscan_t yyscanner );
     
-        void yyset_lloc ( YYLTYPE * yylloc_param , yyscan_t yyscanner );
+        void _mesa_glsl_lexer_set_lloc (YYLTYPE * yylloc_param ,yyscan_t yyscanner );
     
 /* Macros after this point can all be overridden by user definitions in
  * section 1.
@@ -1691,41 +1462,33 @@ void yyset_lval ( YYSTYPE * yylval_param , yyscan_t yyscanner );
 
 #ifndef YY_SKIP_YYWRAP
 #ifdef __cplusplus
-extern "C" int yywrap ( yyscan_t yyscanner );
+extern "C" int _mesa_glsl_lexer_wrap (yyscan_t yyscanner );
 #else
-extern int yywrap ( yyscan_t yyscanner );
+extern int _mesa_glsl_lexer_wrap (yyscan_t yyscanner );
 #endif
-#endif
-
-#ifndef YY_NO_UNPUT
-    
 #endif
 
 #ifndef yytext_ptr
-static void yy_flex_strncpy ( char *, const char *, int , yyscan_t yyscanner);
+static void yy_flex_strncpy (char *,yyconst char *,int ,yyscan_t yyscanner);
 #endif
 
 #ifdef YY_NEED_STRLEN
-static int yy_flex_strlen ( const char * , yyscan_t yyscanner);
+static int yy_flex_strlen (yyconst char * ,yyscan_t yyscanner);
 #endif
 
 #ifndef YY_NO_INPUT
+
 #ifdef __cplusplus
-static int yyinput ( yyscan_t yyscanner );
+static int yyinput (yyscan_t yyscanner );
 #else
-static int input ( yyscan_t yyscanner );
+static int input (yyscan_t yyscanner );
 #endif
 
 #endif
 
 /* Amount of stuff to slurp up with each read. */
 #ifndef YY_READ_BUF_SIZE
-#ifdef __ia64__
-/* On IA-64, the buffer size is 16k, not 8k */
-#define YY_READ_BUF_SIZE 16384
-#else
 #define YY_READ_BUF_SIZE 8192
-#endif /* __ia64__ */
 #endif
 
 /* Copy whatever the last rule matched to the standard output. */
@@ -1733,7 +1496,7 @@ static int input ( yyscan_t yyscanner );
 /* This used to be an fputs(), but since the string might contain NUL's,
  * we now use fwrite().
  */
-#define ECHO do { if (fwrite( yytext, (size_t) yyleng, 1, yyout )) {} } while (0)
+#define ECHO fwrite( yytext, yyleng, 1, yyout )
 #endif
 
 /* Gets input and stuffs it into "buf".  number of characters read, or YY_NULL,
@@ -1744,7 +1507,7 @@ static int input ( yyscan_t yyscanner );
 	if ( YY_CURRENT_BUFFER_LVALUE->yy_is_interactive ) \
 		{ \
 		int c = '*'; \
-		int n; \
+		yy_size_t n; \
 		for ( n = 0; n < max_size && \
 			     (c = getc( yyin )) != EOF && c != '\n'; ++n ) \
 			buf[n] = (char) c; \
@@ -1757,7 +1520,7 @@ static int input ( yyscan_t yyscanner );
 	else \
 		{ \
 		errno=0; \
-		while ( (result = (int) fread(buf, 1, (yy_size_t) max_size, yyin)) == 0 && ferror(yyin)) \
+		while ( (result = fread(buf, 1, max_size, yyin))==0 && ferror(yyin)) \
 			{ \
 			if( errno != EINTR) \
 				{ \
@@ -1798,10 +1561,10 @@ static int input ( yyscan_t yyscanner );
 #ifndef YY_DECL
 #define YY_DECL_IS_OURS 1
 
-extern int yylex \
-               (YYSTYPE * yylval_param, YYLTYPE * yylloc_param , yyscan_t yyscanner);
+extern int _mesa_glsl_lexer_lex \
+               (YYSTYPE * yylval_param,YYLTYPE * yylloc_param ,yyscan_t yyscanner);
 
-#define YY_DECL int yylex \
+#define YY_DECL int _mesa_glsl_lexer_lex \
                (YYSTYPE * yylval_param, YYLTYPE * yylloc_param , yyscan_t yyscanner)
 #endif /* !YY_DECL */
 
@@ -1814,7 +1577,7 @@ extern int yylex \
 
 /* Code executed at the end of each rule. */
 #ifndef YY_BREAK
-#define YY_BREAK /*LINTED*/break;
+#define YY_BREAK break;
 #endif
 
 #define YY_RULE_SETUP \
@@ -1827,10 +1590,15 @@ extern int yylex \
  */
 YY_DECL
 {
-	yy_state_type yy_current_state;
-	char *yy_cp, *yy_bp;
-	int yy_act;
+	register yy_state_type yy_current_state;
+	register char *yy_cp, *yy_bp;
+	register int yy_act;
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
+
+#line 228 "./glsl/glsl_lexer.ll"
+
+
+#line 1602 "glsl/glsl_lexer.cpp"
 
     yylval = yylval_param;
 
@@ -1854,21 +1622,15 @@ YY_DECL
 			yyout = stdout;
 
 		if ( ! YY_CURRENT_BUFFER ) {
-			yyensure_buffer_stack (yyscanner);
+			_mesa_glsl_lexer_ensure_buffer_stack (yyscanner);
 			YY_CURRENT_BUFFER_LVALUE =
-				yy_create_buffer( yyin, YY_BUF_SIZE , yyscanner);
+				_mesa_glsl_lexer__create_buffer(yyin,YY_BUF_SIZE ,yyscanner);
 		}
 
-		yy_load_buffer_state( yyscanner );
+		_mesa_glsl_lexer__load_buffer_state(yyscanner );
 		}
 
-	{
-#line 229 "./glsl/glsl_lexer.ll"
-
-
-#line 1869 "glsl/glsl_lexer.cpp"
-
-	while ( /*CONSTCOND*/1 )		/* loops until end-of-file is reached */
+	while ( 1 )		/* loops until end-of-file is reached */
 		{
 		yy_cp = yyg->yy_c_buf_p;
 
@@ -1885,7 +1647,7 @@ YY_DECL
 yy_match:
 		do
 			{
-			YY_CHAR yy_c = yy_ec[YY_SC_TO_UI(*yy_cp)] ;
+			register YY_CHAR yy_c = yy_ec[YY_SC_TO_UI(*yy_cp)];
 			if ( yy_accept[yy_current_state] )
 				{
 				yyg->yy_last_accepting_state = yy_current_state;
@@ -1895,9 +1657,9 @@ yy_match:
 				{
 				yy_current_state = (int) yy_def[yy_current_state];
 				if ( yy_current_state >= 1078 )
-					yy_c = yy_meta[yy_c];
+					yy_c = yy_meta[(unsigned int) yy_c];
 				}
-			yy_current_state = yy_nxt[yy_base[yy_current_state] + yy_c];
+			yy_current_state = yy_nxt[yy_base[yy_current_state] + (unsigned int) yy_c];
 			++yy_cp;
 			}
 		while ( yy_current_state != 1077 );
@@ -1922,7 +1684,7 @@ do_action:	/* This label is used only to access EOF actions. */
 
 case 1:
 YY_RULE_SETUP
-#line 231 "./glsl/glsl_lexer.ll"
+#line 230 "./glsl/glsl_lexer.ll"
 ;
 	YY_BREAK
 /* Preprocessor tokens. */ 
@@ -1931,17 +1693,17 @@ case 2:
 yyg->yy_c_buf_p = yy_cp -= 1;
 YY_DO_BEFORE_ACTION; /* set up yytext again */
 YY_RULE_SETUP
-#line 234 "./glsl/glsl_lexer.ll"
+#line 233 "./glsl/glsl_lexer.ll"
 ;
 	YY_BREAK
 case 3:
 YY_RULE_SETUP
-#line 235 "./glsl/glsl_lexer.ll"
+#line 234 "./glsl/glsl_lexer.ll"
 { BEGIN PP; return VERSION_TOK; }
 	YY_BREAK
 case 4:
 YY_RULE_SETUP
-#line 236 "./glsl/glsl_lexer.ll"
+#line 235 "./glsl/glsl_lexer.ll"
 { BEGIN PP; return EXTENSION; }
 	YY_BREAK
 case 5:
@@ -1949,7 +1711,7 @@ case 5:
 yyg->yy_c_buf_p = yy_cp -= 1;
 YY_DO_BEFORE_ACTION; /* set up yytext again */
 YY_RULE_SETUP
-#line 237 "./glsl/glsl_lexer.ll"
+#line 236 "./glsl/glsl_lexer.ll"
 {
 				   /* Eat characters until the first digit is
 				    * encountered
@@ -1980,7 +1742,7 @@ case 6:
 yyg->yy_c_buf_p = yy_cp -= 1;
 YY_DO_BEFORE_ACTION; /* set up yytext again */
 YY_RULE_SETUP
-#line 261 "./glsl/glsl_lexer.ll"
+#line 260 "./glsl/glsl_lexer.ll"
 {
 				   /* Eat characters until the first digit is
 				    * encountered
@@ -2006,7 +1768,7 @@ YY_RULE_SETUP
 	YY_BREAK
 case 7:
 YY_RULE_SETUP
-#line 283 "./glsl/glsl_lexer.ll"
+#line 282 "./glsl/glsl_lexer.ll"
 {
 				  BEGIN PP;
 				  return PRAGMA_DEBUG_ON;
@@ -2014,7 +1776,7 @@ YY_RULE_SETUP
 	YY_BREAK
 case 8:
 YY_RULE_SETUP
-#line 287 "./glsl/glsl_lexer.ll"
+#line 286 "./glsl/glsl_lexer.ll"
 {
 				  BEGIN PP;
 				  return PRAGMA_DEBUG_OFF;
@@ -2022,7 +1784,7 @@ YY_RULE_SETUP
 	YY_BREAK
 case 9:
 YY_RULE_SETUP
-#line 291 "./glsl/glsl_lexer.ll"
+#line 290 "./glsl/glsl_lexer.ll"
 {
 				  BEGIN PP;
 				  return PRAGMA_OPTIMIZE_ON;
@@ -2030,7 +1792,7 @@ YY_RULE_SETUP
 	YY_BREAK
 case 10:
 YY_RULE_SETUP
-#line 295 "./glsl/glsl_lexer.ll"
+#line 294 "./glsl/glsl_lexer.ll"
 {
 				  BEGIN PP;
 				  return PRAGMA_OPTIMIZE_OFF;
@@ -2038,7 +1800,7 @@ YY_RULE_SETUP
 	YY_BREAK
 case 11:
 YY_RULE_SETUP
-#line 299 "./glsl/glsl_lexer.ll"
+#line 298 "./glsl/glsl_lexer.ll"
 {
 				  BEGIN PP;
 				  return PRAGMA_INVARIANT_ALL;
@@ -2046,38 +1808,38 @@ YY_RULE_SETUP
 	YY_BREAK
 case 12:
 YY_RULE_SETUP
-#line 303 "./glsl/glsl_lexer.ll"
+#line 302 "./glsl/glsl_lexer.ll"
 { BEGIN PRAGMA; }
 	YY_BREAK
 case 13:
 /* rule 13 can match eol */
 YY_RULE_SETUP
-#line 305 "./glsl/glsl_lexer.ll"
+#line 304 "./glsl/glsl_lexer.ll"
 { BEGIN 0; yylineno++; yycolumn = 0; }
 	YY_BREAK
 case 14:
 YY_RULE_SETUP
-#line 306 "./glsl/glsl_lexer.ll"
+#line 305 "./glsl/glsl_lexer.ll"
 { }
 	YY_BREAK
 case 15:
 YY_RULE_SETUP
-#line 308 "./glsl/glsl_lexer.ll"
+#line 307 "./glsl/glsl_lexer.ll"
 { }
 	YY_BREAK
 case 16:
 YY_RULE_SETUP
-#line 309 "./glsl/glsl_lexer.ll"
+#line 308 "./glsl/glsl_lexer.ll"
 { }
 	YY_BREAK
 case 17:
 YY_RULE_SETUP
-#line 310 "./glsl/glsl_lexer.ll"
+#line 309 "./glsl/glsl_lexer.ll"
 return COLON;
 	YY_BREAK
 case 18:
 YY_RULE_SETUP
-#line 311 "./glsl/glsl_lexer.ll"
+#line 310 "./glsl/glsl_lexer.ll"
 {
 				   /* We're not doing linear_strdup here, to avoid an implicit call
 				    * on strlen() for the length of the string, as this is already
@@ -2092,7 +1854,7 @@ YY_RULE_SETUP
 	YY_BREAK
 case 19:
 YY_RULE_SETUP
-#line 322 "./glsl/glsl_lexer.ll"
+#line 321 "./glsl/glsl_lexer.ll"
 {
 				    yylval->n = strtol(yytext, NULL, 10);
 				    return INTCONSTANT;
@@ -2100,7 +1862,7 @@ YY_RULE_SETUP
 	YY_BREAK
 case 20:
 YY_RULE_SETUP
-#line 326 "./glsl/glsl_lexer.ll"
+#line 325 "./glsl/glsl_lexer.ll"
 {
 				    yylval->n = 0;
 				    return INTCONSTANT;
@@ -2109,388 +1871,388 @@ YY_RULE_SETUP
 case 21:
 /* rule 21 can match eol */
 YY_RULE_SETUP
-#line 330 "./glsl/glsl_lexer.ll"
+#line 329 "./glsl/glsl_lexer.ll"
 { BEGIN 0; yylineno++; yycolumn = 0; return EOL; }
 	YY_BREAK
 case 22:
 YY_RULE_SETUP
-#line 331 "./glsl/glsl_lexer.ll"
+#line 330 "./glsl/glsl_lexer.ll"
 { return yytext[0]; }
 	YY_BREAK
 case 23:
 /* rule 23 can match eol */
 YY_RULE_SETUP
-#line 333 "./glsl/glsl_lexer.ll"
+#line 332 "./glsl/glsl_lexer.ll"
 { yylineno++; yycolumn = 0; }
 	YY_BREAK
 case 24:
 YY_RULE_SETUP
-#line 335 "./glsl/glsl_lexer.ll"
+#line 334 "./glsl/glsl_lexer.ll"
 DEPRECATED_ES_KEYWORD(ATTRIBUTE);
 	YY_BREAK
 case 25:
 YY_RULE_SETUP
-#line 336 "./glsl/glsl_lexer.ll"
+#line 335 "./glsl/glsl_lexer.ll"
 return CONST_TOK;
 	YY_BREAK
 case 26:
 YY_RULE_SETUP
-#line 337 "./glsl/glsl_lexer.ll"
+#line 336 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::bool_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 27:
 YY_RULE_SETUP
-#line 338 "./glsl/glsl_lexer.ll"
+#line 337 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::float_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 28:
 YY_RULE_SETUP
-#line 339 "./glsl/glsl_lexer.ll"
+#line 338 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::int_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 29:
 YY_RULE_SETUP
-#line 340 "./glsl/glsl_lexer.ll"
+#line 339 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::uint_type);
 	YY_BREAK
 case 30:
 YY_RULE_SETUP
-#line 342 "./glsl/glsl_lexer.ll"
+#line 341 "./glsl/glsl_lexer.ll"
 return BREAK;
 	YY_BREAK
 case 31:
 YY_RULE_SETUP
-#line 343 "./glsl/glsl_lexer.ll"
+#line 342 "./glsl/glsl_lexer.ll"
 return CONTINUE;
 	YY_BREAK
 case 32:
 YY_RULE_SETUP
-#line 344 "./glsl/glsl_lexer.ll"
+#line 343 "./glsl/glsl_lexer.ll"
 return DO;
 	YY_BREAK
 case 33:
 YY_RULE_SETUP
-#line 345 "./glsl/glsl_lexer.ll"
+#line 344 "./glsl/glsl_lexer.ll"
 return WHILE;
 	YY_BREAK
 case 34:
 YY_RULE_SETUP
-#line 346 "./glsl/glsl_lexer.ll"
+#line 345 "./glsl/glsl_lexer.ll"
 return ELSE;
 	YY_BREAK
 case 35:
 YY_RULE_SETUP
-#line 347 "./glsl/glsl_lexer.ll"
+#line 346 "./glsl/glsl_lexer.ll"
 return FOR;
 	YY_BREAK
 case 36:
 YY_RULE_SETUP
-#line 348 "./glsl/glsl_lexer.ll"
+#line 347 "./glsl/glsl_lexer.ll"
 return IF;
 	YY_BREAK
 case 37:
 YY_RULE_SETUP
-#line 349 "./glsl/glsl_lexer.ll"
+#line 348 "./glsl/glsl_lexer.ll"
 return DISCARD;
 	YY_BREAK
 case 38:
 YY_RULE_SETUP
-#line 350 "./glsl/glsl_lexer.ll"
+#line 349 "./glsl/glsl_lexer.ll"
 return RETURN;
 	YY_BREAK
 case 39:
 YY_RULE_SETUP
-#line 352 "./glsl/glsl_lexer.ll"
+#line 351 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::bvec2_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 40:
 YY_RULE_SETUP
-#line 353 "./glsl/glsl_lexer.ll"
+#line 352 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::bvec3_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 41:
 YY_RULE_SETUP
-#line 354 "./glsl/glsl_lexer.ll"
+#line 353 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::bvec4_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 42:
 YY_RULE_SETUP
-#line 355 "./glsl/glsl_lexer.ll"
+#line 354 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::ivec2_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 43:
 YY_RULE_SETUP
-#line 356 "./glsl/glsl_lexer.ll"
+#line 355 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::ivec3_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 44:
 YY_RULE_SETUP
-#line 357 "./glsl/glsl_lexer.ll"
+#line 356 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::ivec4_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 45:
 YY_RULE_SETUP
-#line 358 "./glsl/glsl_lexer.ll"
+#line 357 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::uvec2_type);
 	YY_BREAK
 case 46:
 YY_RULE_SETUP
-#line 359 "./glsl/glsl_lexer.ll"
+#line 358 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::uvec3_type);
 	YY_BREAK
 case 47:
 YY_RULE_SETUP
-#line 360 "./glsl/glsl_lexer.ll"
+#line 359 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::uvec4_type);
 	YY_BREAK
 case 48:
 YY_RULE_SETUP
-#line 361 "./glsl/glsl_lexer.ll"
+#line 360 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::vec2_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 49:
 YY_RULE_SETUP
-#line 362 "./glsl/glsl_lexer.ll"
+#line 361 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::vec3_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 50:
 YY_RULE_SETUP
-#line 363 "./glsl/glsl_lexer.ll"
+#line 362 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::vec4_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 51:
 YY_RULE_SETUP
-#line 364 "./glsl/glsl_lexer.ll"
+#line 363 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::mat2_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 52:
 YY_RULE_SETUP
-#line 365 "./glsl/glsl_lexer.ll"
+#line 364 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::mat3_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 53:
 YY_RULE_SETUP
-#line 366 "./glsl/glsl_lexer.ll"
+#line 365 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::mat4_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 54:
 YY_RULE_SETUP
-#line 367 "./glsl/glsl_lexer.ll"
+#line 366 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat2_type);
 	YY_BREAK
 case 55:
 YY_RULE_SETUP
-#line 368 "./glsl/glsl_lexer.ll"
+#line 367 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat2x3_type);
 	YY_BREAK
 case 56:
 YY_RULE_SETUP
-#line 369 "./glsl/glsl_lexer.ll"
+#line 368 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat2x4_type);
 	YY_BREAK
 case 57:
 YY_RULE_SETUP
-#line 370 "./glsl/glsl_lexer.ll"
+#line 369 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat3x2_type);
 	YY_BREAK
 case 58:
 YY_RULE_SETUP
-#line 371 "./glsl/glsl_lexer.ll"
+#line 370 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat3_type);
 	YY_BREAK
 case 59:
 YY_RULE_SETUP
-#line 372 "./glsl/glsl_lexer.ll"
+#line 371 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat3x4_type);
 	YY_BREAK
 case 60:
 YY_RULE_SETUP
-#line 373 "./glsl/glsl_lexer.ll"
+#line 372 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat4x2_type);
 	YY_BREAK
 case 61:
 YY_RULE_SETUP
-#line 374 "./glsl/glsl_lexer.ll"
+#line 373 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat4x3_type);
 	YY_BREAK
 case 62:
 YY_RULE_SETUP
-#line 375 "./glsl/glsl_lexer.ll"
+#line 374 "./glsl/glsl_lexer.ll"
 TYPE(120, 300, 120, 300, glsl_type::mat4_type);
 	YY_BREAK
 case 63:
 YY_RULE_SETUP
-#line 377 "./glsl/glsl_lexer.ll"
+#line 376 "./glsl/glsl_lexer.ll"
 return IN_TOK;
 	YY_BREAK
 case 64:
 YY_RULE_SETUP
-#line 378 "./glsl/glsl_lexer.ll"
+#line 377 "./glsl/glsl_lexer.ll"
 return OUT_TOK;
 	YY_BREAK
 case 65:
 YY_RULE_SETUP
-#line 379 "./glsl/glsl_lexer.ll"
+#line 378 "./glsl/glsl_lexer.ll"
 return INOUT_TOK;
 	YY_BREAK
 case 66:
 YY_RULE_SETUP
-#line 380 "./glsl/glsl_lexer.ll"
+#line 379 "./glsl/glsl_lexer.ll"
 return UNIFORM;
 	YY_BREAK
 case 67:
 YY_RULE_SETUP
-#line 381 "./glsl/glsl_lexer.ll"
+#line 380 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(0, 0, 430, 310, yyextra->ARB_shader_storage_buffer_object_enable, BUFFER);
 	YY_BREAK
 case 68:
 YY_RULE_SETUP
-#line 382 "./glsl/glsl_lexer.ll"
+#line 381 "./glsl/glsl_lexer.ll"
 DEPRECATED_ES_KEYWORD(VARYING);
 	YY_BREAK
 case 69:
 YY_RULE_SETUP
-#line 383 "./glsl/glsl_lexer.ll"
+#line 382 "./glsl/glsl_lexer.ll"
 KEYWORD(120, 300, 120, 300, CENTROID);
 	YY_BREAK
 case 70:
 YY_RULE_SETUP
-#line 384 "./glsl/glsl_lexer.ll"
+#line 383 "./glsl/glsl_lexer.ll"
 KEYWORD(120, 100, 120, 100, INVARIANT);
 	YY_BREAK
 case 71:
 YY_RULE_SETUP
-#line 385 "./glsl/glsl_lexer.ll"
+#line 384 "./glsl/glsl_lexer.ll"
 KEYWORD(130, 100, 130, 300, FLAT);
 	YY_BREAK
 case 72:
 YY_RULE_SETUP
-#line 386 "./glsl/glsl_lexer.ll"
+#line 385 "./glsl/glsl_lexer.ll"
 KEYWORD(130, 300, 130, 300, SMOOTH);
 	YY_BREAK
 case 73:
 YY_RULE_SETUP
-#line 387 "./glsl/glsl_lexer.ll"
+#line 386 "./glsl/glsl_lexer.ll"
 KEYWORD(130, 300, 130, 0, NOPERSPECTIVE);
 	YY_BREAK
 case 74:
 YY_RULE_SETUP
-#line 388 "./glsl/glsl_lexer.ll"
+#line 387 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(0, 300, 400, 320, yyextra->has_tessellation_shader(), PATCH);
 	YY_BREAK
 case 75:
 YY_RULE_SETUP
-#line 390 "./glsl/glsl_lexer.ll"
+#line 389 "./glsl/glsl_lexer.ll"
 DEPRECATED_ES_TYPE(glsl_type::sampler1D_type);
 	YY_BREAK
 case 76:
 YY_RULE_SETUP
-#line 391 "./glsl/glsl_lexer.ll"
+#line 390 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::sampler2D_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 77:
 YY_RULE_SETUP
-#line 392 "./glsl/glsl_lexer.ll"
+#line 391 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::sampler3D_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 78:
 YY_RULE_SETUP
-#line 393 "./glsl/glsl_lexer.ll"
+#line 392 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::samplerCube_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 79:
 YY_RULE_SETUP
-#line 394 "./glsl/glsl_lexer.ll"
+#line 393 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 0, glsl_type::sampler1DArray_type);
 	YY_BREAK
 case 80:
 YY_RULE_SETUP
-#line 395 "./glsl/glsl_lexer.ll"
+#line 394 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::sampler2DArray_type);
 	YY_BREAK
 case 81:
 YY_RULE_SETUP
-#line 396 "./glsl/glsl_lexer.ll"
+#line 395 "./glsl/glsl_lexer.ll"
 DEPRECATED_ES_TYPE(glsl_type::sampler1DShadow_type);
 	YY_BREAK
 case 82:
 YY_RULE_SETUP
-#line 397 "./glsl/glsl_lexer.ll"
+#line 396 "./glsl/glsl_lexer.ll"
 { yylval->type = glsl_type::sampler2DShadow_type; return BASIC_TYPE_TOK; }
 	YY_BREAK
 case 83:
 YY_RULE_SETUP
-#line 398 "./glsl/glsl_lexer.ll"
+#line 397 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::samplerCubeShadow_type);
 	YY_BREAK
 case 84:
 YY_RULE_SETUP
-#line 399 "./glsl/glsl_lexer.ll"
+#line 398 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 0, glsl_type::sampler1DArrayShadow_type);
 	YY_BREAK
 case 85:
 YY_RULE_SETUP
-#line 400 "./glsl/glsl_lexer.ll"
+#line 399 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::sampler2DArrayShadow_type);
 	YY_BREAK
 case 86:
 YY_RULE_SETUP
-#line 401 "./glsl/glsl_lexer.ll"
+#line 400 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 0, glsl_type::isampler1D_type);
 	YY_BREAK
 case 87:
 YY_RULE_SETUP
-#line 402 "./glsl/glsl_lexer.ll"
+#line 401 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::isampler2D_type);
 	YY_BREAK
 case 88:
 YY_RULE_SETUP
-#line 403 "./glsl/glsl_lexer.ll"
+#line 402 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::isampler3D_type);
 	YY_BREAK
 case 89:
 YY_RULE_SETUP
-#line 404 "./glsl/glsl_lexer.ll"
+#line 403 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::isamplerCube_type);
 	YY_BREAK
 case 90:
 YY_RULE_SETUP
-#line 405 "./glsl/glsl_lexer.ll"
+#line 404 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 0, glsl_type::isampler1DArray_type);
 	YY_BREAK
 case 91:
 YY_RULE_SETUP
-#line 406 "./glsl/glsl_lexer.ll"
+#line 405 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::isampler2DArray_type);
 	YY_BREAK
 case 92:
 YY_RULE_SETUP
-#line 407 "./glsl/glsl_lexer.ll"
+#line 406 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 0, glsl_type::usampler1D_type);
 	YY_BREAK
 case 93:
 YY_RULE_SETUP
-#line 408 "./glsl/glsl_lexer.ll"
+#line 407 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::usampler2D_type);
 	YY_BREAK
 case 94:
 YY_RULE_SETUP
-#line 409 "./glsl/glsl_lexer.ll"
+#line 408 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::usampler3D_type);
 	YY_BREAK
 case 95:
 YY_RULE_SETUP
-#line 410 "./glsl/glsl_lexer.ll"
+#line 409 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::usamplerCube_type);
 	YY_BREAK
 case 96:
 YY_RULE_SETUP
-#line 411 "./glsl/glsl_lexer.ll"
+#line 410 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 0, glsl_type::usampler1DArray_type);
 	YY_BREAK
 case 97:
 YY_RULE_SETUP
-#line 412 "./glsl/glsl_lexer.ll"
+#line 411 "./glsl/glsl_lexer.ll"
 TYPE(130, 300, 130, 300, glsl_type::usampler2DArray_type);
 	YY_BREAK
 /* additional keywords in ARB_texture_multisample, included in GLSL 1.50 */
@@ -2498,58 +2260,58 @@ TYPE(130, 300, 130, 300, glsl_type::usampler2DArray_type);
 /* [iu]sampler2DMS are defined in GLSL ES 3.10 */
 case 98:
 YY_RULE_SETUP
-#line 417 "./glsl/glsl_lexer.ll"
+#line 416 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(150, 300, 150, 310, yyextra->ARB_texture_multisample_enable, glsl_type::sampler2DMS_type);
 	YY_BREAK
 case 99:
 YY_RULE_SETUP
-#line 418 "./glsl/glsl_lexer.ll"
+#line 417 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(150, 300, 150, 310, yyextra->ARB_texture_multisample_enable, glsl_type::isampler2DMS_type);
 	YY_BREAK
 case 100:
 YY_RULE_SETUP
-#line 419 "./glsl/glsl_lexer.ll"
+#line 418 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(150, 300, 150, 310, yyextra->ARB_texture_multisample_enable, glsl_type::usampler2DMS_type);
 	YY_BREAK
 case 101:
 YY_RULE_SETUP
-#line 420 "./glsl/glsl_lexer.ll"
+#line 419 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(150, 300, 150, 320, yyextra->ARB_texture_multisample_enable || yyextra->OES_texture_storage_multisample_2d_array_enable, glsl_type::sampler2DMSArray_type);
 	YY_BREAK
 case 102:
 YY_RULE_SETUP
-#line 421 "./glsl/glsl_lexer.ll"
+#line 420 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(150, 300, 150, 320, yyextra->ARB_texture_multisample_enable || yyextra->OES_texture_storage_multisample_2d_array_enable, glsl_type::isampler2DMSArray_type);
 	YY_BREAK
 case 103:
 YY_RULE_SETUP
-#line 422 "./glsl/glsl_lexer.ll"
+#line 421 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(150, 300, 150, 320, yyextra->ARB_texture_multisample_enable || yyextra->OES_texture_storage_multisample_2d_array_enable, glsl_type::usampler2DMSArray_type);
 	YY_BREAK
 /* keywords available with ARB_texture_cube_map_array_enable extension on desktop GLSL */
 case 104:
 YY_RULE_SETUP
-#line 425 "./glsl/glsl_lexer.ll"
+#line 424 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(400, 310, 400, 320, yyextra->ARB_texture_cube_map_array_enable || yyextra->OES_texture_cube_map_array_enable || yyextra->EXT_texture_cube_map_array_enable, glsl_type::samplerCubeArray_type);
 	YY_BREAK
 case 105:
 YY_RULE_SETUP
-#line 426 "./glsl/glsl_lexer.ll"
+#line 425 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(400, 310, 400, 320, yyextra->ARB_texture_cube_map_array_enable || yyextra->OES_texture_cube_map_array_enable || yyextra->EXT_texture_cube_map_array_enable, glsl_type::isamplerCubeArray_type);
 	YY_BREAK
 case 106:
 YY_RULE_SETUP
-#line 427 "./glsl/glsl_lexer.ll"
+#line 426 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(400, 310, 400, 320, yyextra->ARB_texture_cube_map_array_enable || yyextra->OES_texture_cube_map_array_enable || yyextra->EXT_texture_cube_map_array_enable, glsl_type::usamplerCubeArray_type);
 	YY_BREAK
 case 107:
 YY_RULE_SETUP
-#line 428 "./glsl/glsl_lexer.ll"
+#line 427 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(400, 310, 400, 320, yyextra->ARB_texture_cube_map_array_enable || yyextra->OES_texture_cube_map_array_enable || yyextra->EXT_texture_cube_map_array_enable, glsl_type::samplerCubeArrayShadow_type);
 	YY_BREAK
 case 108:
 YY_RULE_SETUP
-#line 430 "./glsl/glsl_lexer.ll"
+#line 429 "./glsl/glsl_lexer.ll"
 {
 			  if (yyextra->OES_EGL_image_external_enable || yyextra->OES_EGL_image_external_essl3_enable) {
 			     yylval->type = glsl_type::samplerExternalOES_type;
@@ -2561,243 +2323,243 @@ YY_RULE_SETUP
 /* keywords available with ARB_gpu_shader5 */
 case 109:
 YY_RULE_SETUP
-#line 439 "./glsl/glsl_lexer.ll"
+#line 438 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(400, 310, 400, 320, yyextra->ARB_gpu_shader5_enable || yyextra->EXT_gpu_shader5_enable || yyextra->OES_gpu_shader5_enable, PRECISE);
 	YY_BREAK
 /* keywords available with ARB_shader_image_load_store */
 case 110:
 YY_RULE_SETUP
-#line 442 "./glsl/glsl_lexer.ll"
+#line 441 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::image1D_type);
 	YY_BREAK
 case 111:
 YY_RULE_SETUP
-#line 443 "./glsl/glsl_lexer.ll"
+#line 442 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::image2D_type);
 	YY_BREAK
 case 112:
 YY_RULE_SETUP
-#line 444 "./glsl/glsl_lexer.ll"
+#line 443 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::image3D_type);
 	YY_BREAK
 case 113:
 YY_RULE_SETUP
-#line 445 "./glsl/glsl_lexer.ll"
+#line 444 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::image2DRect_type);
 	YY_BREAK
 case 114:
 YY_RULE_SETUP
-#line 446 "./glsl/glsl_lexer.ll"
+#line 445 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::imageCube_type);
 	YY_BREAK
 case 115:
 YY_RULE_SETUP
-#line 447 "./glsl/glsl_lexer.ll"
+#line 446 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 320, yyextra->ARB_shader_image_load_store_enable || yyextra->EXT_texture_buffer_enable || yyextra->OES_texture_buffer_enable, glsl_type::imageBuffer_type);
 	YY_BREAK
 case 116:
 YY_RULE_SETUP
-#line 448 "./glsl/glsl_lexer.ll"
+#line 447 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::image1DArray_type);
 	YY_BREAK
 case 117:
 YY_RULE_SETUP
-#line 449 "./glsl/glsl_lexer.ll"
+#line 448 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::image2DArray_type);
 	YY_BREAK
 case 118:
 YY_RULE_SETUP
-#line 450 "./glsl/glsl_lexer.ll"
+#line 449 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 320, yyextra->ARB_shader_image_load_store_enable || yyextra->OES_texture_cube_map_array_enable || yyextra->EXT_texture_cube_map_array_enable, glsl_type::imageCubeArray_type);
 	YY_BREAK
 case 119:
 YY_RULE_SETUP
-#line 451 "./glsl/glsl_lexer.ll"
+#line 450 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::image2DMS_type);
 	YY_BREAK
 case 120:
 YY_RULE_SETUP
-#line 452 "./glsl/glsl_lexer.ll"
+#line 451 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::image2DMSArray_type);
 	YY_BREAK
 case 121:
 YY_RULE_SETUP
-#line 453 "./glsl/glsl_lexer.ll"
+#line 452 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimage1D_type);
 	YY_BREAK
 case 122:
 YY_RULE_SETUP
-#line 454 "./glsl/glsl_lexer.ll"
+#line 453 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimage2D_type);
 	YY_BREAK
 case 123:
 YY_RULE_SETUP
-#line 455 "./glsl/glsl_lexer.ll"
+#line 454 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimage3D_type);
 	YY_BREAK
 case 124:
 YY_RULE_SETUP
-#line 456 "./glsl/glsl_lexer.ll"
+#line 455 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimage2DRect_type);
 	YY_BREAK
 case 125:
 YY_RULE_SETUP
-#line 457 "./glsl/glsl_lexer.ll"
+#line 456 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimageCube_type);
 	YY_BREAK
 case 126:
 YY_RULE_SETUP
-#line 458 "./glsl/glsl_lexer.ll"
+#line 457 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 320, yyextra->ARB_shader_image_load_store_enable || yyextra->EXT_texture_buffer_enable || yyextra->OES_texture_buffer_enable, glsl_type::iimageBuffer_type);
 	YY_BREAK
 case 127:
 YY_RULE_SETUP
-#line 459 "./glsl/glsl_lexer.ll"
+#line 458 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimage1DArray_type);
 	YY_BREAK
 case 128:
 YY_RULE_SETUP
-#line 460 "./glsl/glsl_lexer.ll"
+#line 459 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimage2DArray_type);
 	YY_BREAK
 case 129:
 YY_RULE_SETUP
-#line 461 "./glsl/glsl_lexer.ll"
+#line 460 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 320, yyextra->ARB_shader_image_load_store_enable || yyextra->OES_texture_cube_map_array_enable || yyextra->EXT_texture_cube_map_array_enable, glsl_type::iimageCubeArray_type);
 	YY_BREAK
 case 130:
 YY_RULE_SETUP
-#line 462 "./glsl/glsl_lexer.ll"
+#line 461 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimage2DMS_type);
 	YY_BREAK
 case 131:
 YY_RULE_SETUP
-#line 463 "./glsl/glsl_lexer.ll"
+#line 462 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::iimage2DMSArray_type);
 	YY_BREAK
 case 132:
 YY_RULE_SETUP
-#line 464 "./glsl/glsl_lexer.ll"
+#line 463 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimage1D_type);
 	YY_BREAK
 case 133:
 YY_RULE_SETUP
-#line 465 "./glsl/glsl_lexer.ll"
+#line 464 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimage2D_type);
 	YY_BREAK
 case 134:
 YY_RULE_SETUP
-#line 466 "./glsl/glsl_lexer.ll"
+#line 465 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimage3D_type);
 	YY_BREAK
 case 135:
 YY_RULE_SETUP
-#line 467 "./glsl/glsl_lexer.ll"
+#line 466 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimage2DRect_type);
 	YY_BREAK
 case 136:
 YY_RULE_SETUP
-#line 468 "./glsl/glsl_lexer.ll"
+#line 467 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimageCube_type);
 	YY_BREAK
 case 137:
 YY_RULE_SETUP
-#line 469 "./glsl/glsl_lexer.ll"
+#line 468 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 320, yyextra->ARB_shader_image_load_store_enable || yyextra->EXT_texture_buffer_enable || yyextra->OES_texture_buffer_enable, glsl_type::uimageBuffer_type);
 	YY_BREAK
 case 138:
 YY_RULE_SETUP
-#line 470 "./glsl/glsl_lexer.ll"
+#line 469 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimage1DArray_type);
 	YY_BREAK
 case 139:
 YY_RULE_SETUP
-#line 471 "./glsl/glsl_lexer.ll"
+#line 470 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimage2DArray_type);
 	YY_BREAK
 case 140:
 YY_RULE_SETUP
-#line 472 "./glsl/glsl_lexer.ll"
+#line 471 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 320, yyextra->ARB_shader_image_load_store_enable || yyextra->OES_texture_cube_map_array_enable || yyextra->EXT_texture_cube_map_array_enable, glsl_type::uimageCubeArray_type);
 	YY_BREAK
 case 141:
 YY_RULE_SETUP
-#line 473 "./glsl/glsl_lexer.ll"
+#line 472 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimage2DMS_type);
 	YY_BREAK
 case 142:
 YY_RULE_SETUP
-#line 474 "./glsl/glsl_lexer.ll"
+#line 473 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(130, 300, 420, 0, yyextra->ARB_shader_image_load_store_enable, glsl_type::uimage2DMSArray_type);
 	YY_BREAK
 case 143:
 YY_RULE_SETUP
-#line 475 "./glsl/glsl_lexer.ll"
+#line 474 "./glsl/glsl_lexer.ll"
 KEYWORD(130, 300, 0, 0, IMAGE1DSHADOW);
 	YY_BREAK
 case 144:
 YY_RULE_SETUP
-#line 476 "./glsl/glsl_lexer.ll"
+#line 475 "./glsl/glsl_lexer.ll"
 KEYWORD(130, 300, 0, 0, IMAGE2DSHADOW);
 	YY_BREAK
 case 145:
 YY_RULE_SETUP
-#line 477 "./glsl/glsl_lexer.ll"
+#line 476 "./glsl/glsl_lexer.ll"
 KEYWORD(130, 300, 0, 0, IMAGE1DARRAYSHADOW);
 	YY_BREAK
 case 146:
 YY_RULE_SETUP
-#line 478 "./glsl/glsl_lexer.ll"
+#line 477 "./glsl/glsl_lexer.ll"
 KEYWORD(130, 300, 0, 0, IMAGE2DARRAYSHADOW);
 	YY_BREAK
 case 147:
 YY_RULE_SETUP
-#line 480 "./glsl/glsl_lexer.ll"
+#line 479 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(420, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable || yyextra->ARB_shader_storage_buffer_object_enable, COHERENT);
 	YY_BREAK
 case 148:
 YY_RULE_SETUP
-#line 481 "./glsl/glsl_lexer.ll"
+#line 480 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(110, 100, 420, 310, yyextra->ARB_shader_image_load_store_enable || yyextra->ARB_shader_storage_buffer_object_enable, VOLATILE);
 	YY_BREAK
 case 149:
 YY_RULE_SETUP
-#line 482 "./glsl/glsl_lexer.ll"
+#line 481 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(420, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable || yyextra->ARB_shader_storage_buffer_object_enable, RESTRICT);
 	YY_BREAK
 case 150:
 YY_RULE_SETUP
-#line 483 "./glsl/glsl_lexer.ll"
+#line 482 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(420, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable || yyextra->ARB_shader_storage_buffer_object_enable, READONLY);
 	YY_BREAK
 case 151:
 YY_RULE_SETUP
-#line 484 "./glsl/glsl_lexer.ll"
+#line 483 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(420, 300, 420, 310, yyextra->ARB_shader_image_load_store_enable || yyextra->ARB_shader_storage_buffer_object_enable, WRITEONLY);
 	YY_BREAK
 case 152:
 YY_RULE_SETUP
-#line 486 "./glsl/glsl_lexer.ll"
+#line 485 "./glsl/glsl_lexer.ll"
 TYPE_WITH_ALT(420, 300, 420, 310, yyextra->ARB_shader_atomic_counters_enable, glsl_type::atomic_uint_type);
 	YY_BREAK
 case 153:
 YY_RULE_SETUP
-#line 488 "./glsl/glsl_lexer.ll"
+#line 487 "./glsl/glsl_lexer.ll"
 KEYWORD_WITH_ALT(430, 310, 430, 310, yyextra->ARB_compute_shader_enable, SHARED);
 	YY_BREAK
 case 154:
 YY_RULE_SETUP
-#line 490 "./glsl/glsl_lexer.ll"
+#line 489 "./glsl/glsl_lexer.ll"
 return STRUCT;
 	YY_BREAK
 case 155:
 YY_RULE_SETUP
-#line 491 "./glsl/glsl_lexer.ll"
+#line 490 "./glsl/glsl_lexer.ll"
 return VOID_TOK;
 	YY_BREAK
 case 156:
 YY_RULE_SETUP
-#line 493 "./glsl/glsl_lexer.ll"
+#line 492 "./glsl/glsl_lexer.ll"
 {
 		  if ((yyextra->is_version(140, 300))
 		      || yyextra->ARB_bindless_texture_enable
@@ -2806,6 +2568,7 @@ YY_RULE_SETUP
 		      || yyextra->ARB_conservative_depth_enable
 		      || yyextra->ARB_explicit_attrib_location_enable
 		      || yyextra->ARB_explicit_uniform_location_enable
+                      || yyextra->ARB_post_depth_coverage_enable
                       || yyextra->has_separate_shader_objects()
 		      || yyextra->ARB_uniform_buffer_object_enable
 		      || yyextra->ARB_fragment_coord_conventions_enable
@@ -3103,7 +2866,7 @@ KEYWORD(110, 100, 0, 0, SHORT_TOK);
 case 211:
 YY_RULE_SETUP
 #line 604 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(130, 300, 130, 300, yyextra->ARB_gpu_shader_fp64_enable, glsl_type::double_type);
+TYPE_WITH_ALT(130, 100, 130, 300, yyextra->ARB_gpu_shader_fp64_enable, glsl_type::double_type);
 	YY_BREAK
 case 212:
 YY_RULE_SETUP
@@ -3238,7 +3001,7 @@ KEYWORD(110, 100, 0, 0, FVEC4);
 case 238:
 YY_RULE_SETUP
 #line 631 "./glsl/glsl_lexer.ll"
-DEPRECATED_ES_TYPE_WITH_ALT(yyextra->ARB_texture_rectangle_enable, glsl_type::sampler2DRect_type);
+TYPE_WITH_ALT(110, 100, 0, 0, yyextra->ARB_texture_rectangle_enable, glsl_type::sampler2DRect_type);
 	YY_BREAK
 case 239:
 YY_RULE_SETUP
@@ -3248,7 +3011,7 @@ KEYWORD(110, 100, 0, 0, SAMPLER3DRECT);
 case 240:
 YY_RULE_SETUP
 #line 633 "./glsl/glsl_lexer.ll"
-DEPRECATED_ES_TYPE_WITH_ALT(yyextra->ARB_texture_rectangle_enable, glsl_type::sampler2DRectShadow_type);
+TYPE_WITH_ALT(110, 100, 0, 0, yyextra->ARB_texture_rectangle_enable, glsl_type::sampler2DRectShadow_type);
 	YY_BREAK
 case 241:
 YY_RULE_SETUP
@@ -3373,42 +3136,42 @@ KEYWORD_WITH_ALT(400, 300, 400, 0, yyextra->ARB_shader_subroutine_enable, SUBROU
 case 264:
 YY_RULE_SETUP
 #line 667 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable, glsl_type::int64_t_type);
+TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable || yyextra->AMD_gpu_shader_int64_enable, glsl_type::int64_t_type);
 	YY_BREAK
 case 265:
 YY_RULE_SETUP
 #line 668 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable, glsl_type::i64vec2_type);
+TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable || yyextra->AMD_gpu_shader_int64_enable, glsl_type::i64vec2_type);
 	YY_BREAK
 case 266:
 YY_RULE_SETUP
 #line 669 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable, glsl_type::i64vec3_type);
+TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable || yyextra->AMD_gpu_shader_int64_enable, glsl_type::i64vec3_type);
 	YY_BREAK
 case 267:
 YY_RULE_SETUP
 #line 670 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable, glsl_type::i64vec4_type);
+TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable || yyextra->AMD_gpu_shader_int64_enable, glsl_type::i64vec4_type);
 	YY_BREAK
 case 268:
 YY_RULE_SETUP
 #line 672 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable, glsl_type::uint64_t_type);
+TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable || yyextra->AMD_gpu_shader_int64_enable, glsl_type::uint64_t_type);
 	YY_BREAK
 case 269:
 YY_RULE_SETUP
 #line 673 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable, glsl_type::u64vec2_type);
+TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable || yyextra->AMD_gpu_shader_int64_enable, glsl_type::u64vec2_type);
 	YY_BREAK
 case 270:
 YY_RULE_SETUP
 #line 674 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable, glsl_type::u64vec3_type);
+TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable || yyextra->AMD_gpu_shader_int64_enable, glsl_type::u64vec3_type);
 	YY_BREAK
 case 271:
 YY_RULE_SETUP
 #line 675 "./glsl/glsl_lexer.ll"
-TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable, glsl_type::u64vec4_type);
+TYPE_WITH_ALT(0, 0, 0, 0, yyextra->ARB_gpu_shader_int64_enable || yyextra->AMD_gpu_shader_int64_enable, glsl_type::u64vec4_type);
 	YY_BREAK
 case 272:
 YY_RULE_SETUP
@@ -3440,7 +3203,7 @@ YY_RULE_SETUP
 #line 693 "./glsl/glsl_lexer.ll"
 YY_FATAL_ERROR( "flex scanner jammed" );
 	YY_BREAK
-#line 3443 "glsl/glsl_lexer.cpp"
+#line 3207 "glsl/glsl_lexer.cpp"
 case YY_STATE_EOF(INITIAL):
 case YY_STATE_EOF(PP):
 case YY_STATE_EOF(PRAGMA):
@@ -3460,7 +3223,7 @@ case YY_STATE_EOF(PRAGMA):
 			/* We're scanning a new file or input source.  It's
 			 * possible that this happened because the user
 			 * just pointed yyin at a new source and called
-			 * yylex().  If so, then we have to assure
+			 * _mesa_glsl_lexer_lex().  If so, then we have to assure
 			 * consistency between YY_CURRENT_BUFFER and our
 			 * globals.  Here is the right place to do so, because
 			 * this is the first action (other than possibly a
@@ -3521,7 +3284,7 @@ case YY_STATE_EOF(PRAGMA):
 				{
 				yyg->yy_did_buffer_switch_on_eof = 0;
 
-				if ( yywrap( yyscanner ) )
+				if ( _mesa_glsl_lexer_wrap(yyscanner ) )
 					{
 					/* Note: because we've taken care in
 					 * yy_get_next_buffer() to have set up
@@ -3574,8 +3337,7 @@ case YY_STATE_EOF(PRAGMA):
 			"fatal flex scanner internal error--no action found" );
 	} /* end of action switch */
 		} /* end of scanning one token */
-	} /* end of user's declarations */
-} /* end of yylex */
+} /* end of _mesa_glsl_lexer_lex */
 
 /* yy_get_next_buffer - try to read in a new buffer
  *
@@ -3587,9 +3349,9 @@ case YY_STATE_EOF(PRAGMA):
 static int yy_get_next_buffer (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-	char *dest = YY_CURRENT_BUFFER_LVALUE->yy_ch_buf;
-	char *source = yyg->yytext_ptr;
-	int number_to_move, i;
+	register char *dest = YY_CURRENT_BUFFER_LVALUE->yy_ch_buf;
+	register char *source = yyg->yytext_ptr;
+	register int number_to_move, i;
 	int ret_val;
 
 	if ( yyg->yy_c_buf_p > &YY_CURRENT_BUFFER_LVALUE->yy_ch_buf[yyg->yy_n_chars + 1] )
@@ -3618,7 +3380,7 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 	/* Try to read more data. */
 
 	/* First move last chars to start of buffer. */
-	number_to_move = (int) (yyg->yy_c_buf_p - yyg->yytext_ptr - 1);
+	number_to_move = (int) (yyg->yy_c_buf_p - yyg->yytext_ptr) - 1;
 
 	for ( i = 0; i < number_to_move; ++i )
 		*(dest++) = *(source++);
@@ -3631,21 +3393,21 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 
 	else
 		{
-			int num_to_read =
+			yy_size_t num_to_read =
 			YY_CURRENT_BUFFER_LVALUE->yy_buf_size - number_to_move - 1;
 
 		while ( num_to_read <= 0 )
 			{ /* Not enough room in the buffer - grow it. */
 
 			/* just a shorter name for the current buffer */
-			YY_BUFFER_STATE b = YY_CURRENT_BUFFER_LVALUE;
+			YY_BUFFER_STATE b = YY_CURRENT_BUFFER;
 
 			int yy_c_buf_p_offset =
 				(int) (yyg->yy_c_buf_p - b->yy_ch_buf);
 
 			if ( b->yy_is_our_buffer )
 				{
-				int new_size = b->yy_buf_size * 2;
+				yy_size_t new_size = b->yy_buf_size * 2;
 
 				if ( new_size <= 0 )
 					b->yy_buf_size += b->yy_buf_size / 8;
@@ -3654,12 +3416,11 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 
 				b->yy_ch_buf = (char *)
 					/* Include room in for 2 EOB chars. */
-					yyrealloc( (void *) b->yy_ch_buf,
-							 (yy_size_t) (b->yy_buf_size + 2) , yyscanner );
+					_mesa_glsl_lexer_realloc((void *) b->yy_ch_buf,b->yy_buf_size + 2 ,yyscanner );
 				}
 			else
 				/* Can't grow it, we don't own it. */
-				b->yy_ch_buf = NULL;
+				b->yy_ch_buf = 0;
 
 			if ( ! b->yy_ch_buf )
 				YY_FATAL_ERROR(
@@ -3687,7 +3448,7 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 		if ( number_to_move == YY_MORE_ADJ )
 			{
 			ret_val = EOB_ACT_END_OF_FILE;
-			yyrestart( yyin  , yyscanner);
+			_mesa_glsl_lexer_restart(yyin  ,yyscanner);
 			}
 
 		else
@@ -3701,15 +3462,12 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 	else
 		ret_val = EOB_ACT_CONTINUE_SCAN;
 
-	if ((yyg->yy_n_chars + number_to_move) > YY_CURRENT_BUFFER_LVALUE->yy_buf_size) {
+	if ((yy_size_t) (yyg->yy_n_chars + number_to_move) > YY_CURRENT_BUFFER_LVALUE->yy_buf_size) {
 		/* Extend the array by 50%, plus the number we really need. */
-		int new_size = yyg->yy_n_chars + number_to_move + (yyg->yy_n_chars >> 1);
-		YY_CURRENT_BUFFER_LVALUE->yy_ch_buf = (char *) yyrealloc(
-			(void *) YY_CURRENT_BUFFER_LVALUE->yy_ch_buf, (yy_size_t) new_size , yyscanner );
+		yy_size_t new_size = yyg->yy_n_chars + number_to_move + (yyg->yy_n_chars >> 1);
+		YY_CURRENT_BUFFER_LVALUE->yy_ch_buf = (char *) _mesa_glsl_lexer_realloc((void *) YY_CURRENT_BUFFER_LVALUE->yy_ch_buf,new_size ,yyscanner );
 		if ( ! YY_CURRENT_BUFFER_LVALUE->yy_ch_buf )
 			YY_FATAL_ERROR( "out of dynamic memory in yy_get_next_buffer()" );
-		/* "- 2" to take care of EOB's */
-		YY_CURRENT_BUFFER_LVALUE->yy_buf_size = (int) (new_size - 2);
 	}
 
 	yyg->yy_n_chars += number_to_move;
@@ -3725,8 +3483,8 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 
     static yy_state_type yy_get_previous_state (yyscan_t yyscanner)
 {
-	yy_state_type yy_current_state;
-	char *yy_cp;
+	register yy_state_type yy_current_state;
+	register char *yy_cp;
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
 	yy_current_state = yyg->yy_start;
@@ -3734,7 +3492,7 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 
 	for ( yy_cp = yyg->yytext_ptr + YY_MORE_ADJ; yy_cp < yyg->yy_c_buf_p; ++yy_cp )
 		{
-		YY_CHAR yy_c = (*yy_cp ? yy_ec[YY_SC_TO_UI(*yy_cp)] : 1);
+		register YY_CHAR yy_c = (*yy_cp ? yy_ec[YY_SC_TO_UI(*yy_cp)] : 1);
 		if ( yy_accept[yy_current_state] )
 			{
 			yyg->yy_last_accepting_state = yy_current_state;
@@ -3744,9 +3502,9 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 			{
 			yy_current_state = (int) yy_def[yy_current_state];
 			if ( yy_current_state >= 1078 )
-				yy_c = yy_meta[yy_c];
+				yy_c = yy_meta[(unsigned int) yy_c];
 			}
-		yy_current_state = yy_nxt[yy_base[yy_current_state] + yy_c];
+		yy_current_state = yy_nxt[yy_base[yy_current_state] + (unsigned int) yy_c];
 		}
 
 	return yy_current_state;
@@ -3759,11 +3517,11 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
  */
     static yy_state_type yy_try_NUL_trans  (yy_state_type yy_current_state , yyscan_t yyscanner)
 {
-	int yy_is_jam;
+	register int yy_is_jam;
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner; /* This var may be unused depending upon options. */
-	char *yy_cp = yyg->yy_c_buf_p;
+	register char *yy_cp = yyg->yy_c_buf_p;
 
-	YY_CHAR yy_c = 1;
+	register YY_CHAR yy_c = 1;
 	if ( yy_accept[yy_current_state] )
 		{
 		yyg->yy_last_accepting_state = yy_current_state;
@@ -3773,18 +3531,13 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 		{
 		yy_current_state = (int) yy_def[yy_current_state];
 		if ( yy_current_state >= 1078 )
-			yy_c = yy_meta[yy_c];
+			yy_c = yy_meta[(unsigned int) yy_c];
 		}
-	yy_current_state = yy_nxt[yy_base[yy_current_state] + yy_c];
+	yy_current_state = yy_nxt[yy_base[yy_current_state] + (unsigned int) yy_c];
 	yy_is_jam = (yy_current_state == 1077);
 
-	(void)yyg;
 	return yy_is_jam ? 0 : yy_current_state;
 }
-
-#ifndef YY_NO_UNPUT
-
-#endif
 
 #ifndef YY_NO_INPUT
 #ifdef __cplusplus
@@ -3811,7 +3564,7 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 
 		else
 			{ /* need more input */
-			int offset = (int) (yyg->yy_c_buf_p - yyg->yytext_ptr);
+			yy_size_t offset = yyg->yy_c_buf_p - yyg->yytext_ptr;
 			++yyg->yy_c_buf_p;
 
 			switch ( yy_get_next_buffer( yyscanner ) )
@@ -3828,13 +3581,13 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 					 */
 
 					/* Reset buffer status. */
-					yyrestart( yyin , yyscanner);
+					_mesa_glsl_lexer_restart(yyin ,yyscanner);
 
 					/*FALLTHROUGH*/
 
 				case EOB_ACT_END_OF_FILE:
 					{
-					if ( yywrap( yyscanner ) )
+					if ( _mesa_glsl_lexer_wrap(yyscanner ) )
 						return 0;
 
 					if ( ! yyg->yy_did_buffer_switch_on_eof )
@@ -3868,34 +3621,34 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
  * @param yyscanner The scanner object.
  * @note This function does not reset the start condition to @c INITIAL .
  */
-    void yyrestart  (FILE * input_file , yyscan_t yyscanner)
+    void _mesa_glsl_lexer_restart  (FILE * input_file , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
 	if ( ! YY_CURRENT_BUFFER ){
-        yyensure_buffer_stack (yyscanner);
+        _mesa_glsl_lexer_ensure_buffer_stack (yyscanner);
 		YY_CURRENT_BUFFER_LVALUE =
-            yy_create_buffer( yyin, YY_BUF_SIZE , yyscanner);
+            _mesa_glsl_lexer__create_buffer(yyin,YY_BUF_SIZE ,yyscanner);
 	}
 
-	yy_init_buffer( YY_CURRENT_BUFFER, input_file , yyscanner);
-	yy_load_buffer_state( yyscanner );
+	_mesa_glsl_lexer__init_buffer(YY_CURRENT_BUFFER,input_file ,yyscanner);
+	_mesa_glsl_lexer__load_buffer_state(yyscanner );
 }
 
 /** Switch to a different input buffer.
  * @param new_buffer The new input buffer.
  * @param yyscanner The scanner object.
  */
-    void yy_switch_to_buffer  (YY_BUFFER_STATE  new_buffer , yyscan_t yyscanner)
+    void _mesa_glsl_lexer__switch_to_buffer  (YY_BUFFER_STATE  new_buffer , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
 	/* TODO. We should be able to replace this entire function body
 	 * with
-	 *		yypop_buffer_state();
-	 *		yypush_buffer_state(new_buffer);
+	 *		_mesa_glsl_lexer_pop_buffer_state();
+	 *		_mesa_glsl_lexer_push_buffer_state(new_buffer);
      */
-	yyensure_buffer_stack (yyscanner);
+	_mesa_glsl_lexer_ensure_buffer_stack (yyscanner);
 	if ( YY_CURRENT_BUFFER == new_buffer )
 		return;
 
@@ -3908,17 +3661,17 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 		}
 
 	YY_CURRENT_BUFFER_LVALUE = new_buffer;
-	yy_load_buffer_state( yyscanner );
+	_mesa_glsl_lexer__load_buffer_state(yyscanner );
 
 	/* We don't actually know whether we did this switch during
-	 * EOF (yywrap()) processing, but the only time this flag
-	 * is looked at is after yywrap() is called, so it's safe
+	 * EOF (_mesa_glsl_lexer_wrap()) processing, but the only time this flag
+	 * is looked at is after _mesa_glsl_lexer_wrap() is called, so it's safe
 	 * to go ahead and always set it.
 	 */
 	yyg->yy_did_buffer_switch_on_eof = 1;
 }
 
-static void yy_load_buffer_state  (yyscan_t yyscanner)
+static void _mesa_glsl_lexer__load_buffer_state  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 	yyg->yy_n_chars = YY_CURRENT_BUFFER_LVALUE->yy_n_chars;
@@ -3933,35 +3686,35 @@ static void yy_load_buffer_state  (yyscan_t yyscanner)
  * @param yyscanner The scanner object.
  * @return the allocated buffer state.
  */
-    YY_BUFFER_STATE yy_create_buffer  (FILE * file, int  size , yyscan_t yyscanner)
+    YY_BUFFER_STATE _mesa_glsl_lexer__create_buffer  (FILE * file, int  size , yyscan_t yyscanner)
 {
 	YY_BUFFER_STATE b;
     
-	b = (YY_BUFFER_STATE) yyalloc( sizeof( struct yy_buffer_state ) , yyscanner );
+	b = (YY_BUFFER_STATE) _mesa_glsl_lexer_alloc(sizeof( struct yy_buffer_state ) ,yyscanner );
 	if ( ! b )
-		YY_FATAL_ERROR( "out of dynamic memory in yy_create_buffer()" );
+		YY_FATAL_ERROR( "out of dynamic memory in _mesa_glsl_lexer__create_buffer()" );
 
 	b->yy_buf_size = size;
 
 	/* yy_ch_buf has to be 2 characters longer than the size given because
 	 * we need to put in 2 end-of-buffer characters.
 	 */
-	b->yy_ch_buf = (char *) yyalloc( (yy_size_t) (b->yy_buf_size + 2) , yyscanner );
+	b->yy_ch_buf = (char *) _mesa_glsl_lexer_alloc(b->yy_buf_size + 2 ,yyscanner );
 	if ( ! b->yy_ch_buf )
-		YY_FATAL_ERROR( "out of dynamic memory in yy_create_buffer()" );
+		YY_FATAL_ERROR( "out of dynamic memory in _mesa_glsl_lexer__create_buffer()" );
 
 	b->yy_is_our_buffer = 1;
 
-	yy_init_buffer( b, file , yyscanner);
+	_mesa_glsl_lexer__init_buffer(b,file ,yyscanner);
 
 	return b;
 }
 
 /** Destroy the buffer.
- * @param b a buffer created with yy_create_buffer()
+ * @param b a buffer created with _mesa_glsl_lexer__create_buffer()
  * @param yyscanner The scanner object.
  */
-    void yy_delete_buffer (YY_BUFFER_STATE  b , yyscan_t yyscanner)
+    void _mesa_glsl_lexer__delete_buffer (YY_BUFFER_STATE  b , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
@@ -3972,28 +3725,28 @@ static void yy_load_buffer_state  (yyscan_t yyscanner)
 		YY_CURRENT_BUFFER_LVALUE = (YY_BUFFER_STATE) 0;
 
 	if ( b->yy_is_our_buffer )
-		yyfree( (void *) b->yy_ch_buf , yyscanner );
+		_mesa_glsl_lexer_free((void *) b->yy_ch_buf ,yyscanner );
 
-	yyfree( (void *) b , yyscanner );
+	_mesa_glsl_lexer_free((void *) b ,yyscanner );
 }
 
 /* Initializes or reinitializes a buffer.
  * This function is sometimes called more than once on the same buffer,
- * such as during a yyrestart() or at EOF.
+ * such as during a _mesa_glsl_lexer_restart() or at EOF.
  */
-    static void yy_init_buffer  (YY_BUFFER_STATE  b, FILE * file , yyscan_t yyscanner)
+    static void _mesa_glsl_lexer__init_buffer  (YY_BUFFER_STATE  b, FILE * file , yyscan_t yyscanner)
 
 {
 	int oerrno = errno;
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
-	yy_flush_buffer( b , yyscanner);
+	_mesa_glsl_lexer__flush_buffer(b ,yyscanner);
 
 	b->yy_input_file = file;
 	b->yy_fill_buffer = 1;
 
-    /* If b is the current buffer, then yy_init_buffer was _probably_
-     * called from yyrestart() or through yy_get_next_buffer.
+    /* If b is the current buffer, then _mesa_glsl_lexer__init_buffer was _probably_
+     * called from _mesa_glsl_lexer_restart() or through yy_get_next_buffer.
      * In that case, we don't want to reset the lineno or column.
      */
     if (b != YY_CURRENT_BUFFER){
@@ -4010,7 +3763,7 @@ static void yy_load_buffer_state  (yyscan_t yyscanner)
  * @param b the buffer state to be flushed, usually @c YY_CURRENT_BUFFER.
  * @param yyscanner The scanner object.
  */
-    void yy_flush_buffer (YY_BUFFER_STATE  b , yyscan_t yyscanner)
+    void _mesa_glsl_lexer__flush_buffer (YY_BUFFER_STATE  b , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 	if ( ! b )
@@ -4031,7 +3784,7 @@ static void yy_load_buffer_state  (yyscan_t yyscanner)
 	b->yy_buffer_status = YY_BUFFER_NEW;
 
 	if ( b == YY_CURRENT_BUFFER )
-		yy_load_buffer_state( yyscanner );
+		_mesa_glsl_lexer__load_buffer_state(yyscanner );
 }
 
 /** Pushes the new state onto the stack. The new state becomes
@@ -4040,15 +3793,15 @@ static void yy_load_buffer_state  (yyscan_t yyscanner)
  *  @param new_buffer The new state.
  *  @param yyscanner The scanner object.
  */
-void yypush_buffer_state (YY_BUFFER_STATE new_buffer , yyscan_t yyscanner)
+void _mesa_glsl_lexer_push_buffer_state (YY_BUFFER_STATE new_buffer , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 	if (new_buffer == NULL)
 		return;
 
-	yyensure_buffer_stack(yyscanner);
+	_mesa_glsl_lexer_ensure_buffer_stack(yyscanner);
 
-	/* This block is copied from yy_switch_to_buffer. */
+	/* This block is copied from _mesa_glsl_lexer__switch_to_buffer. */
 	if ( YY_CURRENT_BUFFER )
 		{
 		/* Flush out information for old buffer. */
@@ -4062,8 +3815,8 @@ void yypush_buffer_state (YY_BUFFER_STATE new_buffer , yyscan_t yyscanner)
 		yyg->yy_buffer_stack_top++;
 	YY_CURRENT_BUFFER_LVALUE = new_buffer;
 
-	/* copied from yy_switch_to_buffer. */
-	yy_load_buffer_state( yyscanner );
+	/* copied from _mesa_glsl_lexer__switch_to_buffer. */
+	_mesa_glsl_lexer__load_buffer_state(yyscanner );
 	yyg->yy_did_buffer_switch_on_eof = 1;
 }
 
@@ -4071,19 +3824,19 @@ void yypush_buffer_state (YY_BUFFER_STATE new_buffer , yyscan_t yyscanner)
  *  The next element becomes the new top.
  *  @param yyscanner The scanner object.
  */
-void yypop_buffer_state (yyscan_t yyscanner)
+void _mesa_glsl_lexer_pop_buffer_state (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 	if (!YY_CURRENT_BUFFER)
 		return;
 
-	yy_delete_buffer(YY_CURRENT_BUFFER , yyscanner);
+	_mesa_glsl_lexer__delete_buffer(YY_CURRENT_BUFFER ,yyscanner);
 	YY_CURRENT_BUFFER_LVALUE = NULL;
 	if (yyg->yy_buffer_stack_top > 0)
 		--yyg->yy_buffer_stack_top;
 
 	if (YY_CURRENT_BUFFER) {
-		yy_load_buffer_state( yyscanner );
+		_mesa_glsl_lexer__load_buffer_state(yyscanner );
 		yyg->yy_did_buffer_switch_on_eof = 1;
 	}
 }
@@ -4091,7 +3844,7 @@ void yypop_buffer_state (yyscan_t yyscanner)
 /* Allocates the stack if it does not exist.
  *  Guarantees space for at least one push.
  */
-static void yyensure_buffer_stack (yyscan_t yyscanner)
+static void _mesa_glsl_lexer_ensure_buffer_stack (yyscan_t yyscanner)
 {
 	yy_size_t num_to_alloc;
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
@@ -4102,15 +3855,15 @@ static void yyensure_buffer_stack (yyscan_t yyscanner)
 		 * scanner will even need a stack. We use 2 instead of 1 to avoid an
 		 * immediate realloc on the next call.
          */
-      num_to_alloc = 1; /* After all that talk, this was set to 1 anyways... */
-		yyg->yy_buffer_stack = (struct yy_buffer_state**)yyalloc
+		num_to_alloc = 1;
+		yyg->yy_buffer_stack = (struct yy_buffer_state**)_mesa_glsl_lexer_alloc
 								(num_to_alloc * sizeof(struct yy_buffer_state*)
 								, yyscanner);
 		if ( ! yyg->yy_buffer_stack )
-			YY_FATAL_ERROR( "out of dynamic memory in yyensure_buffer_stack()" );
-
+			YY_FATAL_ERROR( "out of dynamic memory in _mesa_glsl_lexer_ensure_buffer_stack()" );
+								  
 		memset(yyg->yy_buffer_stack, 0, num_to_alloc * sizeof(struct yy_buffer_state*));
-
+				
 		yyg->yy_buffer_stack_max = num_to_alloc;
 		yyg->yy_buffer_stack_top = 0;
 		return;
@@ -4119,15 +3872,15 @@ static void yyensure_buffer_stack (yyscan_t yyscanner)
 	if (yyg->yy_buffer_stack_top >= (yyg->yy_buffer_stack_max) - 1){
 
 		/* Increase the buffer to prepare for a possible push. */
-		yy_size_t grow_size = 8 /* arbitrary grow size */;
+		int grow_size = 8 /* arbitrary grow size */;
 
 		num_to_alloc = yyg->yy_buffer_stack_max + grow_size;
-		yyg->yy_buffer_stack = (struct yy_buffer_state**)yyrealloc
+		yyg->yy_buffer_stack = (struct yy_buffer_state**)_mesa_glsl_lexer_realloc
 								(yyg->yy_buffer_stack,
 								num_to_alloc * sizeof(struct yy_buffer_state*)
 								, yyscanner);
 		if ( ! yyg->yy_buffer_stack )
-			YY_FATAL_ERROR( "out of dynamic memory in yyensure_buffer_stack()" );
+			YY_FATAL_ERROR( "out of dynamic memory in _mesa_glsl_lexer_ensure_buffer_stack()" );
 
 		/* zero only the new slots.*/
 		memset(yyg->yy_buffer_stack + yyg->yy_buffer_stack_max, 0, grow_size * sizeof(struct yy_buffer_state*));
@@ -4139,9 +3892,9 @@ static void yyensure_buffer_stack (yyscan_t yyscanner)
  * @param base the character buffer
  * @param size the size in bytes of the character buffer
  * @param yyscanner The scanner object.
- * @return the newly allocated buffer state object.
+ * @return the newly allocated buffer state object. 
  */
-YY_BUFFER_STATE yy_scan_buffer  (char * base, yy_size_t  size , yyscan_t yyscanner)
+YY_BUFFER_STATE _mesa_glsl_lexer__scan_buffer  (char * base, yy_size_t  size , yyscan_t yyscanner)
 {
 	YY_BUFFER_STATE b;
     
@@ -4149,69 +3902,68 @@ YY_BUFFER_STATE yy_scan_buffer  (char * base, yy_size_t  size , yyscan_t yyscann
 	     base[size-2] != YY_END_OF_BUFFER_CHAR ||
 	     base[size-1] != YY_END_OF_BUFFER_CHAR )
 		/* They forgot to leave room for the EOB's. */
-		return NULL;
+		return 0;
 
-	b = (YY_BUFFER_STATE) yyalloc( sizeof( struct yy_buffer_state ) , yyscanner );
+	b = (YY_BUFFER_STATE) _mesa_glsl_lexer_alloc(sizeof( struct yy_buffer_state ) ,yyscanner );
 	if ( ! b )
-		YY_FATAL_ERROR( "out of dynamic memory in yy_scan_buffer()" );
+		YY_FATAL_ERROR( "out of dynamic memory in _mesa_glsl_lexer__scan_buffer()" );
 
-	b->yy_buf_size = (int) (size - 2);	/* "- 2" to take care of EOB's */
+	b->yy_buf_size = size - 2;	/* "- 2" to take care of EOB's */
 	b->yy_buf_pos = b->yy_ch_buf = base;
 	b->yy_is_our_buffer = 0;
-	b->yy_input_file = NULL;
+	b->yy_input_file = 0;
 	b->yy_n_chars = b->yy_buf_size;
 	b->yy_is_interactive = 0;
 	b->yy_at_bol = 1;
 	b->yy_fill_buffer = 0;
 	b->yy_buffer_status = YY_BUFFER_NEW;
 
-	yy_switch_to_buffer( b , yyscanner );
+	_mesa_glsl_lexer__switch_to_buffer(b ,yyscanner );
 
 	return b;
 }
 
-/** Setup the input buffer state to scan a string. The next call to yylex() will
+/** Setup the input buffer state to scan a string. The next call to _mesa_glsl_lexer_lex() will
  * scan from a @e copy of @a str.
  * @param yystr a NUL-terminated string to scan
  * @param yyscanner The scanner object.
  * @return the newly allocated buffer state object.
  * @note If you want to scan bytes that may contain NUL values, then use
- *       yy_scan_bytes() instead.
+ *       _mesa_glsl_lexer__scan_bytes() instead.
  */
-YY_BUFFER_STATE yy_scan_string (const char * yystr , yyscan_t yyscanner)
+YY_BUFFER_STATE _mesa_glsl_lexer__scan_string (yyconst char * yystr , yyscan_t yyscanner)
 {
     
-	return yy_scan_bytes( yystr, (int) strlen(yystr) , yyscanner);
+	return _mesa_glsl_lexer__scan_bytes(yystr,strlen(yystr) ,yyscanner);
 }
 
-/** Setup the input buffer state to scan the given bytes. The next call to yylex() will
+/** Setup the input buffer state to scan the given bytes. The next call to _mesa_glsl_lexer_lex() will
  * scan from a @e copy of @a bytes.
- * @param yybytes the byte buffer to scan
- * @param _yybytes_len the number of bytes in the buffer pointed to by @a bytes.
+ * @param bytes the byte buffer to scan
+ * @param len the number of bytes in the buffer pointed to by @a bytes.
  * @param yyscanner The scanner object.
  * @return the newly allocated buffer state object.
  */
-YY_BUFFER_STATE yy_scan_bytes  (const char * yybytes, int  _yybytes_len , yyscan_t yyscanner)
+YY_BUFFER_STATE _mesa_glsl_lexer__scan_bytes  (yyconst char * yybytes, yy_size_t  _yybytes_len , yyscan_t yyscanner)
 {
 	YY_BUFFER_STATE b;
 	char *buf;
-	yy_size_t n;
-	int i;
+	yy_size_t n, i;
     
 	/* Get memory for full buffer, including space for trailing EOB's. */
-	n = (yy_size_t) (_yybytes_len + 2);
-	buf = (char *) yyalloc( n , yyscanner );
+	n = _yybytes_len + 2;
+	buf = (char *) _mesa_glsl_lexer_alloc(n ,yyscanner );
 	if ( ! buf )
-		YY_FATAL_ERROR( "out of dynamic memory in yy_scan_bytes()" );
+		YY_FATAL_ERROR( "out of dynamic memory in _mesa_glsl_lexer__scan_bytes()" );
 
 	for ( i = 0; i < _yybytes_len; ++i )
 		buf[i] = yybytes[i];
 
 	buf[_yybytes_len] = buf[_yybytes_len+1] = YY_END_OF_BUFFER_CHAR;
 
-	b = yy_scan_buffer( buf, n , yyscanner);
+	b = _mesa_glsl_lexer__scan_buffer(buf,n ,yyscanner);
 	if ( ! b )
-		YY_FATAL_ERROR( "bad buffer in yy_scan_bytes()" );
+		YY_FATAL_ERROR( "bad buffer in _mesa_glsl_lexer__scan_bytes()" );
 
 	/* It's okay to grow etc. this buffer, and we should throw it
 	 * away when we're done.
@@ -4225,11 +3977,9 @@ YY_BUFFER_STATE yy_scan_bytes  (const char * yybytes, int  _yybytes_len , yyscan
 #define YY_EXIT_FAILURE 2
 #endif
 
-static void yynoreturn yy_fatal_error (const char* msg , yyscan_t yyscanner)
+static void yy_fatal_error (yyconst char* msg , yyscan_t yyscanner)
 {
-	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-	(void)yyg;
-	fprintf( stderr, "%s\n", msg );
+    	(void) fprintf( stderr, "%s\n", msg );
 	exit( YY_EXIT_FAILURE );
 }
 
@@ -4255,7 +4005,7 @@ static void yynoreturn yy_fatal_error (const char* msg , yyscan_t yyscanner)
 /** Get the user-defined data for this scanner.
  * @param yyscanner The scanner object.
  */
-YY_EXTRA_TYPE yyget_extra  (yyscan_t yyscanner)
+YY_EXTRA_TYPE _mesa_glsl_lexer_get_extra  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     return yyextra;
@@ -4264,10 +4014,10 @@ YY_EXTRA_TYPE yyget_extra  (yyscan_t yyscanner)
 /** Get the current line number.
  * @param yyscanner The scanner object.
  */
-int yyget_lineno  (yyscan_t yyscanner)
+int _mesa_glsl_lexer_get_lineno  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-
+    
         if (! YY_CURRENT_BUFFER)
             return 0;
     
@@ -4277,10 +4027,10 @@ int yyget_lineno  (yyscan_t yyscanner)
 /** Get the current column number.
  * @param yyscanner The scanner object.
  */
-int yyget_column  (yyscan_t yyscanner)
+int _mesa_glsl_lexer_get_column  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-
+    
         if (! YY_CURRENT_BUFFER)
             return 0;
     
@@ -4290,7 +4040,7 @@ int yyget_column  (yyscan_t yyscanner)
 /** Get the input stream.
  * @param yyscanner The scanner object.
  */
-FILE *yyget_in  (yyscan_t yyscanner)
+FILE *_mesa_glsl_lexer_get_in  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     return yyin;
@@ -4299,7 +4049,7 @@ FILE *yyget_in  (yyscan_t yyscanner)
 /** Get the output stream.
  * @param yyscanner The scanner object.
  */
-FILE *yyget_out  (yyscan_t yyscanner)
+FILE *_mesa_glsl_lexer_get_out  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     return yyout;
@@ -4308,7 +4058,7 @@ FILE *yyget_out  (yyscan_t yyscanner)
 /** Get the length of the current token.
  * @param yyscanner The scanner object.
  */
-int yyget_leng  (yyscan_t yyscanner)
+yy_size_t _mesa_glsl_lexer_get_leng  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     return yyleng;
@@ -4318,7 +4068,7 @@ int yyget_leng  (yyscan_t yyscanner)
  * @param yyscanner The scanner object.
  */
 
-char *yyget_text  (yyscan_t yyscanner)
+char *_mesa_glsl_lexer_get_text  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     return yytext;
@@ -4328,93 +4078,93 @@ char *yyget_text  (yyscan_t yyscanner)
  * @param user_defined The data to be associated with this scanner.
  * @param yyscanner The scanner object.
  */
-void yyset_extra (YY_EXTRA_TYPE  user_defined , yyscan_t yyscanner)
+void _mesa_glsl_lexer_set_extra (YY_EXTRA_TYPE  user_defined , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     yyextra = user_defined ;
 }
 
 /** Set the current line number.
- * @param _line_number line number
+ * @param line_number
  * @param yyscanner The scanner object.
  */
-void yyset_lineno (int  _line_number , yyscan_t yyscanner)
+void _mesa_glsl_lexer_set_lineno (int  line_number , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
         /* lineno is only valid if an input buffer exists. */
         if (! YY_CURRENT_BUFFER )
-           YY_FATAL_ERROR( "yyset_lineno called with no buffer" );
+           yy_fatal_error( "_mesa_glsl_lexer_set_lineno called with no buffer" , yyscanner); 
     
-    yylineno = _line_number;
+    yylineno = line_number;
 }
 
 /** Set the current column.
- * @param _column_no column number
+ * @param line_number
  * @param yyscanner The scanner object.
  */
-void yyset_column (int  _column_no , yyscan_t yyscanner)
+void _mesa_glsl_lexer_set_column (int  column_no , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
         /* column is only valid if an input buffer exists. */
         if (! YY_CURRENT_BUFFER )
-           YY_FATAL_ERROR( "yyset_column called with no buffer" );
+           yy_fatal_error( "_mesa_glsl_lexer_set_column called with no buffer" , yyscanner); 
     
-    yycolumn = _column_no;
+    yycolumn = column_no;
 }
 
 /** Set the input stream. This does not discard the current
  * input buffer.
- * @param _in_str A readable stream.
+ * @param in_str A readable stream.
  * @param yyscanner The scanner object.
- * @see yy_switch_to_buffer
+ * @see _mesa_glsl_lexer__switch_to_buffer
  */
-void yyset_in (FILE *  _in_str , yyscan_t yyscanner)
+void _mesa_glsl_lexer_set_in (FILE *  in_str , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-    yyin = _in_str ;
+    yyin = in_str ;
 }
 
-void yyset_out (FILE *  _out_str , yyscan_t yyscanner)
+void _mesa_glsl_lexer_set_out (FILE *  out_str , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-    yyout = _out_str ;
+    yyout = out_str ;
 }
 
-int yyget_debug  (yyscan_t yyscanner)
+int _mesa_glsl_lexer_get_debug  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     return yy_flex_debug;
 }
 
-void yyset_debug (int  _bdebug , yyscan_t yyscanner)
+void _mesa_glsl_lexer_set_debug (int  bdebug , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-    yy_flex_debug = _bdebug ;
+    yy_flex_debug = bdebug ;
 }
 
 /* Accessor methods for yylval and yylloc */
 
-YYSTYPE * yyget_lval  (yyscan_t yyscanner)
+YYSTYPE * _mesa_glsl_lexer_get_lval  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     return yylval;
 }
 
-void yyset_lval (YYSTYPE *  yylval_param , yyscan_t yyscanner)
+void _mesa_glsl_lexer_set_lval (YYSTYPE *  yylval_param , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     yylval = yylval_param;
 }
 
-YYLTYPE *yyget_lloc  (yyscan_t yyscanner)
+YYLTYPE *_mesa_glsl_lexer_get_lloc  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     return yylloc;
 }
     
-void yyset_lloc (YYLTYPE *  yylloc_param , yyscan_t yyscanner)
+void _mesa_glsl_lexer_set_lloc (YYLTYPE *  yylloc_param , yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     yylloc = yylloc_param;
@@ -4422,18 +4172,20 @@ void yyset_lloc (YYLTYPE *  yylloc_param , yyscan_t yyscanner)
     
 /* User-visible API */
 
-/* yylex_init is special because it creates the scanner itself, so it is
+/* _mesa_glsl_lexer_lex_init is special because it creates the scanner itself, so it is
  * the ONLY reentrant function that doesn't take the scanner as the last argument.
  * That's why we explicitly handle the declaration, instead of using our macros.
  */
-int yylex_init(yyscan_t* ptr_yy_globals)
+
+int _mesa_glsl_lexer_lex_init(yyscan_t* ptr_yy_globals)
+
 {
     if (ptr_yy_globals == NULL){
         errno = EINVAL;
         return 1;
     }
 
-    *ptr_yy_globals = (yyscan_t) yyalloc ( sizeof( struct yyguts_t ), NULL );
+    *ptr_yy_globals = (yyscan_t) _mesa_glsl_lexer_alloc ( sizeof( struct yyguts_t ), NULL );
 
     if (*ptr_yy_globals == NULL){
         errno = ENOMEM;
@@ -4446,37 +4198,39 @@ int yylex_init(yyscan_t* ptr_yy_globals)
     return yy_init_globals ( *ptr_yy_globals );
 }
 
-/* yylex_init_extra has the same functionality as yylex_init, but follows the
+/* _mesa_glsl_lexer_lex_init_extra has the same functionality as _mesa_glsl_lexer_lex_init, but follows the
  * convention of taking the scanner as the last argument. Note however, that
  * this is a *pointer* to a scanner, as it will be allocated by this call (and
  * is the reason, too, why this function also must handle its own declaration).
- * The user defined value in the first argument will be available to yyalloc in
+ * The user defined value in the first argument will be available to _mesa_glsl_lexer_alloc in
  * the yyextra field.
  */
-int yylex_init_extra( YY_EXTRA_TYPE yy_user_defined, yyscan_t* ptr_yy_globals )
+
+int _mesa_glsl_lexer_lex_init_extra(YY_EXTRA_TYPE yy_user_defined,yyscan_t* ptr_yy_globals )
+
 {
     struct yyguts_t dummy_yyguts;
 
-    yyset_extra (yy_user_defined, &dummy_yyguts);
+    _mesa_glsl_lexer_set_extra (yy_user_defined, &dummy_yyguts);
 
     if (ptr_yy_globals == NULL){
         errno = EINVAL;
         return 1;
     }
-
-    *ptr_yy_globals = (yyscan_t) yyalloc ( sizeof( struct yyguts_t ), &dummy_yyguts );
-
+	
+    *ptr_yy_globals = (yyscan_t) _mesa_glsl_lexer_alloc ( sizeof( struct yyguts_t ), &dummy_yyguts );
+	
     if (*ptr_yy_globals == NULL){
         errno = ENOMEM;
         return 1;
     }
-
+    
     /* By setting to 0xAA, we expose bugs in
     yy_init_globals. Leave at 0x00 for releases. */
     memset(*ptr_yy_globals,0x00,sizeof(struct yyguts_t));
-
-    yyset_extra (yy_user_defined, *ptr_yy_globals);
-
+    
+    _mesa_glsl_lexer_set_extra (yy_user_defined, *ptr_yy_globals);
+    
     return yy_init_globals ( *ptr_yy_globals );
 }
 
@@ -4484,13 +4238,13 @@ static int yy_init_globals (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
     /* Initialization is the same as for the non-reentrant scanner.
-     * This function is called from yylex_destroy(), so don't allocate here.
+     * This function is called from _mesa_glsl_lexer_lex_destroy(), so don't allocate here.
      */
 
-    yyg->yy_buffer_stack = NULL;
+    yyg->yy_buffer_stack = 0;
     yyg->yy_buffer_stack_top = 0;
     yyg->yy_buffer_stack_max = 0;
-    yyg->yy_c_buf_p = NULL;
+    yyg->yy_c_buf_p = (char *) 0;
     yyg->yy_init = 0;
     yyg->yy_start = 0;
 
@@ -4503,42 +4257,42 @@ static int yy_init_globals (yyscan_t yyscanner)
     yyin = stdin;
     yyout = stdout;
 #else
-    yyin = NULL;
-    yyout = NULL;
+    yyin = (FILE *) 0;
+    yyout = (FILE *) 0;
 #endif
 
     /* For future reference: Set errno on error, since we are called by
-     * yylex_init()
+     * _mesa_glsl_lexer_lex_init()
      */
     return 0;
 }
 
-/* yylex_destroy is for both reentrant and non-reentrant scanners. */
-int yylex_destroy  (yyscan_t yyscanner)
+/* _mesa_glsl_lexer_lex_destroy is for both reentrant and non-reentrant scanners. */
+int _mesa_glsl_lexer_lex_destroy  (yyscan_t yyscanner)
 {
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
     /* Pop the buffer stack, destroying each element. */
 	while(YY_CURRENT_BUFFER){
-		yy_delete_buffer( YY_CURRENT_BUFFER , yyscanner );
+		_mesa_glsl_lexer__delete_buffer(YY_CURRENT_BUFFER ,yyscanner );
 		YY_CURRENT_BUFFER_LVALUE = NULL;
-		yypop_buffer_state(yyscanner);
+		_mesa_glsl_lexer_pop_buffer_state(yyscanner);
 	}
 
 	/* Destroy the stack itself. */
-	yyfree(yyg->yy_buffer_stack , yyscanner);
+	_mesa_glsl_lexer_free(yyg->yy_buffer_stack ,yyscanner);
 	yyg->yy_buffer_stack = NULL;
 
     /* Destroy the start condition stack. */
-        yyfree( yyg->yy_start_stack , yyscanner );
+        _mesa_glsl_lexer_free(yyg->yy_start_stack ,yyscanner );
         yyg->yy_start_stack = NULL;
 
     /* Reset the globals. This is important in a non-reentrant scanner so the next time
-     * yylex() is called, initialization will occur. */
+     * _mesa_glsl_lexer_lex() is called, initialization will occur. */
     yy_init_globals( yyscanner);
 
     /* Destroy the main struct (reentrant only). */
-    yyfree ( yyscanner , yyscanner );
+    _mesa_glsl_lexer_free ( yyscanner , yyscanner );
     yyscanner = NULL;
     return 0;
 }
@@ -4548,21 +4302,18 @@ int yylex_destroy  (yyscan_t yyscanner)
  */
 
 #ifndef yytext_ptr
-static void yy_flex_strncpy (char* s1, const char * s2, int n , yyscan_t yyscanner)
+static void yy_flex_strncpy (char* s1, yyconst char * s2, int n , yyscan_t yyscanner)
 {
-	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-	(void)yyg;
-
-	int i;
+	register int i;
 	for ( i = 0; i < n; ++i )
 		s1[i] = s2[i];
 }
 #endif
 
 #ifdef YY_NEED_STRLEN
-static int yy_flex_strlen (const char * s , yyscan_t yyscanner)
+static int yy_flex_strlen (yyconst char * s , yyscan_t yyscanner)
 {
-	int n;
+	register int n;
 	for ( n = 0; s[n]; ++n )
 		;
 
@@ -4570,18 +4321,13 @@ static int yy_flex_strlen (const char * s , yyscan_t yyscanner)
 }
 #endif
 
-void *yyalloc (yy_size_t  size , yyscan_t yyscanner)
+void *_mesa_glsl_lexer_alloc (yy_size_t  size , yyscan_t yyscanner)
 {
-	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-	(void)yyg;
-	return malloc(size);
+	return (void *) malloc( size );
 }
 
-void *yyrealloc  (void * ptr, yy_size_t  size , yyscan_t yyscanner)
+void *_mesa_glsl_lexer_realloc  (void * ptr, yy_size_t  size , yyscan_t yyscanner)
 {
-	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-	(void)yyg;
-
 	/* The cast to (char *) in the following accommodates both
 	 * implementations that use char* generic pointers, and those
 	 * that use void* generic pointers.  It works with the latter
@@ -4589,19 +4335,18 @@ void *yyrealloc  (void * ptr, yy_size_t  size , yyscan_t yyscanner)
 	 * any pointer type to void*, and deal with argument conversions
 	 * as though doing an assignment.
 	 */
-	return realloc(ptr, size);
+	return (void *) realloc( (char *) ptr, size );
 }
 
-void yyfree (void * ptr , yyscan_t yyscanner)
+void _mesa_glsl_lexer_free (void * ptr , yyscan_t yyscanner)
 {
-	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
-	(void)yyg;
-	free( (char *) ptr );	/* see yyrealloc() for (char *) cast */
+	free( (char *) ptr );	/* see _mesa_glsl_lexer_realloc() for (char *) cast */
 }
 
 #define YYTABLES_NAME "yytables"
 
 #line 693 "./glsl/glsl_lexer.ll"
+
 
 
 int
@@ -4631,13 +4376,13 @@ classify_identifier(struct _mesa_glsl_parse_state *state, const char *name,
 void
 _mesa_glsl_lexer_ctor(struct _mesa_glsl_parse_state *state, const char *string)
 {
-   yylex_init_extra(state, & state->scanner);
-   yy_scan_string(string, state->scanner);
+   _mesa_glsl_lexer_lex_init_extra(state,& state->scanner);
+   _mesa_glsl_lexer__scan_string(string,state->scanner);
 }
 
 void
 _mesa_glsl_lexer_dtor(struct _mesa_glsl_parse_state *state)
 {
-   yylex_destroy(state->scanner);
+   _mesa_glsl_lexer_lex_destroy(state->scanner);
 }
 

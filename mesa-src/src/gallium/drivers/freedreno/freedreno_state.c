@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -103,12 +101,10 @@ fd_set_constant_buffer(struct pipe_context *pctx,
 	 */
 	if (unlikely(!cb)) {
 		so->enabled_mask &= ~(1 << index);
-		so->dirty_mask &= ~(1 << index);
 		return;
 	}
 
 	so->enabled_mask |= 1 << index;
-	so->dirty_mask |= 1 << index;
 	ctx->dirty_shader[shader] |= FD_DIRTY_SHADER_CONST;
 	ctx->dirty |= FD_DIRTY_CONST;
 }
@@ -157,7 +153,6 @@ fd_set_shader_buffers(struct pipe_context *pctx,
 		so->enabled_mask &= ~mask;
 	}
 
-	so->dirty_mask |= mask;
 	ctx->dirty_shader[shader] |= FD_DIRTY_SHADER_SSBO;
 }
 
@@ -204,7 +199,6 @@ fd_set_shader_images(struct pipe_context *pctx,
 		so->enabled_mask &= ~mask;
 	}
 
-	so->dirty_mask |= mask;
 	ctx->dirty_shader[shader] |= FD_DIRTY_SHADER_IMAGE;
 }
 
@@ -215,18 +209,25 @@ fd_set_framebuffer_state(struct pipe_context *pctx,
 	struct fd_context *ctx = fd_context(pctx);
 	struct pipe_framebuffer_state *cso;
 
+	DBG("%ux%u, %u layers, %u samples",
+		framebuffer->width, framebuffer->height,
+		framebuffer->layers, framebuffer->samples);
+
+	cso = &ctx->framebuffer;
+
+	util_copy_framebuffer_state(cso, framebuffer);
+
+	cso->samples = util_framebuffer_get_num_samples(cso);
+
 	if (ctx->screen->reorder) {
-		struct fd_batch *batch, *old_batch = NULL;
+		struct fd_batch *old_batch = NULL;
 
 		fd_batch_reference(&old_batch, ctx->batch);
 
 		if (likely(old_batch))
 			fd_batch_set_stage(old_batch, FD_STAGE_NULL);
 
-		batch = fd_batch_from_fb(&ctx->screen->batch_cache, ctx, framebuffer);
 		fd_batch_reference(&ctx->batch, NULL);
-		fd_reset_wfi(batch);
-		ctx->batch = batch;
 		fd_context_all_dirty(ctx);
 
 		if (old_batch && old_batch->blit && !old_batch->back_blit) {
@@ -243,11 +244,8 @@ fd_set_framebuffer_state(struct pipe_context *pctx,
 		DBG("%d: cbufs[0]=%p, zsbuf=%p", ctx->batch->needs_flush,
 				framebuffer->cbufs[0], framebuffer->zsbuf);
 		fd_batch_flush(ctx->batch, false, false);
+		util_copy_framebuffer_state(&ctx->batch->framebuffer, cso);
 	}
-
-	cso = &ctx->batch->framebuffer;
-
-	util_copy_framebuffer_state(cso, framebuffer);
 
 	ctx->dirty |= FD_DIRTY_FRAMEBUFFER;
 

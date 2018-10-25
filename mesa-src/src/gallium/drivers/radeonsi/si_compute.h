@@ -29,7 +29,7 @@
 
 #include "si_shader.h"
 
-#define MAX_GLOBAL_BUFFERS 22
+#define MAX_GLOBAL_BUFFERS 32
 
 struct si_compute {
 	struct pipe_reference reference;
@@ -53,11 +53,11 @@ struct si_compute {
 
 	struct pipe_resource *global_buffers[MAX_GLOBAL_BUFFERS];
 	unsigned use_code_object_v2 : 1;
-	unsigned variable_group_size : 1;
 	unsigned uses_grid_size:1;
-	unsigned uses_block_size:1;
 	unsigned uses_bindless_samplers:1;
 	unsigned uses_bindless_images:1;
+	bool reads_variable_block_size;
+	unsigned num_cs_user_data_dwords;
 };
 
 void si_destroy_compute(struct si_compute *program);

@@ -54,7 +54,7 @@ foreach g : [['40', isl_gen4_files], ['50', []], ['60', isl_gen6_files],
              ['90', isl_gen9_files], ['100', []], ['110', []]]
   _gen = g[0]
   isl_gen_libs += static_library(
-    'libisl_gen@0@'.format(_gen),
+    'isl_gen@0@'.format(_gen),
     [g[1], isl_gen_files, gen_xml_pack],
     include_directories : [inc_common, inc_intel],
     c_args : [c_vis_args, no_override_init_args,
@@ -66,7 +66,7 @@ isl_format_layout_c = custom_target(
   'isl_format_layout.c',
   input : ['gen_format_layout.py', 'isl_format_layout.csv'],
   output : 'isl_format_layout.c',
-  command : [prog_python2, '@INPUT0@', '--csv', '@INPUT1@', '--out', '@OUTPUT@'],
+  command : [prog_python, '@INPUT0@', '--csv', '@INPUT1@', '--out', '@OUTPUT@'],
 )
 
 libisl_files = files(
@@ -95,7 +95,7 @@ if with_tests
       'tests/isl_surf_get_image_offset_test.c',
       dependencies : dep_m,
       include_directories : [inc_common, inc_intel],
-      link_with : [libisl, libintel_dev],
+      link_with : [libisl, libintel_dev, libmesa_util],
     )
   )
 endif

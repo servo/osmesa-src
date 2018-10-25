@@ -57,7 +57,7 @@ build_instance_id(struct lower_multiview_state *state)
        */
       state->instance_id =
          nir_idiv(b, nir_load_instance_id(b),
-                     nir_imm_int(b, _mesa_bitcount(state->view_mask)));
+                     nir_imm_int(b, util_bitcount(state->view_mask)));
    }
 
    return state->instance_id;
@@ -72,7 +72,7 @@ build_view_index(struct lower_multiview_state *state)
       b->cursor = nir_before_block(nir_start_block(b->impl));
 
       assert(state->view_mask != 0);
-      if (_mesa_bitcount(state->view_mask) == 1) {
+      if (util_bitcount(state->view_mask) == 1) {
          /* Set the view index directly. */
          state->view_index = nir_imm_int(b, ffs(state->view_mask) - 1);
       } else if (state->builder.shader->info.stage == MESA_SHADER_VERTEX) {
@@ -85,7 +85,7 @@ build_view_index(struct lower_multiview_state *state)
           */
          nir_ssa_def *compacted =
             nir_umod(b, nir_load_instance_id(b),
-                        nir_imm_int(b, _mesa_bitcount(state->view_mask)));
+                        nir_imm_int(b, util_bitcount(state->view_mask)));
 
          if (util_is_power_of_two_or_zero(state->view_mask + 1)) {
             /* If we have a full view mask, then compacted is what we want */
@@ -134,18 +134,11 @@ build_view_index(struct lower_multiview_state *state)
          if (b->shader->info.stage == MESA_SHADER_FRAGMENT)
             idx_var->data.interpolation = INTERP_MODE_FLAT;
 
-         if (glsl_type_is_array(type)) {
-            nir_deref_var *deref = nir_deref_var_create(b->shader, idx_var);
-            nir_deref_array *arr = nir_deref_array_create(b->shader);
-            arr->deref.type = glsl_int_type();
-            arr->deref_array_type = nir_deref_array_type_direct;
-            arr->base_offset = 0;
-            deref->deref.child = &arr->deref;
+         nir_deref_instr *deref = nir_build_deref_var(b, idx_var);
+         if (glsl_type_is_array(type))
+            deref = nir_build_deref_array(b, deref, nir_imm_int(b, 0));
 
-            state->view_index = nir_load_deref_var(b, deref);
-         } else {
-            state->view_index = nir_load_var(b, idx_var);
-         }
+         state->view_index = nir_load_deref(b, deref);
       }
    }
 
@@ -213,7 +206,7 @@ anv_nir_lower_multiview(nir_shader *shader, uint32_t view_mask)
 
       /* Unless there is only one possible view index (that would be set
        * directly), pass it to the next stage. */
-      if (_mesa_bitcount(state.view_mask) != 1) {
+      if (util_bitcount(state.view_mask) != 1) {
          nir_variable *view_index_out =
             nir_variable_create(shader, nir_var_shader_out,
                                 glsl_int_type(), "view index");

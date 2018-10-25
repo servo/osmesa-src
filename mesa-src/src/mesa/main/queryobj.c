@@ -31,7 +31,6 @@
 #include "imports.h"
 #include "queryobj.h"
 #include "mtypes.h"
-#include "main/dispatch.h"
 
 
 /**
@@ -699,6 +698,7 @@ _mesa_GetQueryIndexediv(GLenum target, GLuint index, GLenum pname,
             *params = ctx->Const.QueryCounterBits.SamplesPassed;
             break;
          case GL_ANY_SAMPLES_PASSED:
+         case GL_ANY_SAMPLES_PASSED_CONSERVATIVE:
             /* The minimum value of this is 1 if it's nonzero, and the value
              * is only ever GL_TRUE or GL_FALSE, so no sense in reporting more
              * bits.
@@ -822,8 +822,7 @@ get_query_object(struct gl_context *ctx, const char *func,
    if (buf && buf != ctx->Shared->NullBufferObj) {
       bool is_64bit = ptype == GL_INT64_ARB ||
          ptype == GL_UNSIGNED_INT64_ARB;
-      if (!ctx->Extensions.ARB_query_buffer_object &&
-          !ctx->Extensions.EXT_disjoint_timer_query) {
+      if (!ctx->Extensions.ARB_query_buffer_object) {
          _mesa_error(ctx, GL_INVALID_OPERATION, "%s(not supported)", func);
          return;
       }

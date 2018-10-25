@@ -376,6 +376,15 @@ brw_int_type(unsigned sz, bool is_signed)
    }
 }
 
+static inline bool
+type_is_unsigned_int(enum brw_reg_type tp)
+{
+   return tp == BRW_REGISTER_TYPE_UB ||
+          tp == BRW_REGISTER_TYPE_UW ||
+          tp == BRW_REGISTER_TYPE_UD ||
+          tp == BRW_REGISTER_TYPE_UQ;
+}
+
 /**
  * Construct a brw_reg.
  * \param file      one of the BRW_x_REGISTER_FILE values
@@ -705,7 +714,7 @@ static inline struct brw_reg
 brw_imm_w(int16_t w)
 {
    struct brw_reg imm = brw_imm_reg(BRW_REGISTER_TYPE_W);
-   imm.d = w | (w << 16);
+   imm.ud = (uint16_t)w | (uint32_t)(uint16_t)w << 16;
    return imm;
 }
 

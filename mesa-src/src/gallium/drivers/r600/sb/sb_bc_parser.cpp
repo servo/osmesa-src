@@ -75,7 +75,7 @@ int bc_parser::decode() {
 	}
 
 	sh = new shader(ctx, t, bc->debug_id);
-	sh->safe_math = sb_context::safe_math || (t == TARGET_COMPUTE);
+	sh->safe_math = sb_context::safe_math || (t == TARGET_COMPUTE || bc->precise);
 
 	int r = decode_shader();
 
@@ -617,7 +617,7 @@ int bc_parser::decode_fetch_clause(cf_node* cf) {
 	int r;
 	unsigned i = cf->bc.addr << 1, cnt = cf->bc.count + 1;
 
-	if (cf->bc.op_ptr->flags && FF_GDS)
+	if (cf->bc.op_ptr->flags & FF_GDS)
 		cf->subtype = NST_GDS_CLAUSE;
 	else
 		cf->subtype = NST_TEX_CLAUSE;

@@ -64,6 +64,55 @@ dri3_flush_present_events(struct loader_dri3_drawable *draw);
 static struct loader_dri3_buffer *
 dri3_find_back_alloc(struct loader_dri3_drawable *draw);
 
+static xcb_screen_t *
+get_screen_for_root(xcb_connection_t *conn, xcb_window_t root)
+{
+   xcb_screen_iterator_t screen_iter =
+   xcb_setup_roots_iterator(xcb_get_setup(conn));
+
+   for (; screen_iter.rem; xcb_screen_next (&screen_iter)) {
+      if (screen_iter.data->root == root)
+         return screen_iter.data;
+   }
+
+   return NULL;
+}
+
+static xcb_visualtype_t *
+get_xcb_visualtype_for_depth(struct loader_dri3_drawable *draw, int depth)
+{
+   xcb_visualtype_iterator_t visual_iter;
+   xcb_screen_t *screen = draw->screen;
+   xcb_depth_iterator_t depth_iter;
+
+   if (!screen)
+      return NULL;
+
+   depth_iter = xcb_screen_allowed_depths_iterator(screen);
+   for (; depth_iter.rem; xcb_depth_next(&depth_iter)) {
+      if (depth_iter.data->depth != depth)
+         continue;
+
+      visual_iter = xcb_depth_visuals_iterator(depth_iter.data);
+      if (visual_iter.rem)
+         return visual_iter.data;
+   }
+
+   return NULL;
+}
+
+/* Get red channel mask for given drawable at given depth. */
+static unsigned int
+dri3_get_red_mask_for_depth(struct loader_dri3_drawable *draw, int depth)
+{
+   xcb_visualtype_t *visual = get_xcb_visualtype_for_depth(draw, depth);
+
+   if (visual)
+      return visual->red_mask;
+
+   return 0;
+}
+
 /**
  * Do we have blit functionality in the image blit extension?
  *
@@ -323,6 +372,7 @@ loader_dri3_drawable_init(xcb_connection_t *conn,
       return 1;
    }
 
+   draw->screen = get_screen_for_root(draw->conn, reply->root);
    draw->width = reply->width;
    draw->height = reply->height;
    draw->depth = reply->depth;
@@ -370,9 +420,17 @@ dri3_handle_present_event(struct loader_dri3_drawable *draw,
        * checking for wrap.
        */
       if (ce->kind == XCB_PRESENT_COMPLETE_KIND_PIXMAP) {
-         draw->recv_sbc = (draw->send_sbc & 0xffffffff00000000LL) | ce->serial;
-         if (draw->recv_sbc > draw->send_sbc)
-            draw->recv_sbc -= 0x100000000;
+         uint64_t recv_sbc = (draw->send_sbc & 0xffffffff00000000LL) | ce->serial;
+
+         /* Only assume wraparound if that results in exactly the previous
+          * SBC + 1, otherwise ignore received SBC > sent SBC (those are
+          * probably from a previous loader_dri3_drawable instance) to avoid
+          * calculating bogus target MSC values in loader_dri3_swap_buffers_msc
+          */
+         if (recv_sbc <= draw->send_sbc)
+            draw->recv_sbc = recv_sbc;
+         else if (recv_sbc == (draw->recv_sbc + 0x100000001ULL))
+            draw->recv_sbc = recv_sbc - 0x100000000ULL;
 
          /* When moving from flip to copy, we assume that we can allocate in
           * a more optimal way if we don't need to cater for the display
@@ -386,7 +444,7 @@ dri3_handle_present_event(struct loader_dri3_drawable *draw,
             }
          }
 
-	 /* If the server tells us that our allocation is suboptimal, we
+         /* If the server tells us that our allocation is suboptimal, we
           * reallocate once.
           */
 #ifdef HAVE_DRI3_MODIFIERS
@@ -420,13 +478,6 @@ dri3_handle_present_event(struct loader_dri3_drawable *draw,
 
          if (buf && buf->pixmap == ie->pixmap)
             buf->busy = 0;
-
-         if (buf && draw->cur_blit_source != b && !buf->busy &&
-             (buf->reallocate ||
-             (draw->num_back <= b && b < LOADER_DRI3_MAX_BACK))) {
-            dri3_free_render_buffer(draw, buf);
-            draw->buffers[b] = NULL;
-         }
       }
       break;
    }
@@ -559,7 +610,6 @@ dri3_find_back(struct loader_dri3_drawable *draw)
    /* Check whether we need to reuse the current back buffer as new back.
     * In that case, wait until it's not busy anymore.
     */
-   dri3_update_num_back(draw);
    num_to_consider = draw->num_back;
    if (!loader_dri3_have_image_blit(draw) && draw->cur_blit_source != -1) {
       num_to_consider = 1;
@@ -1022,10 +1072,41 @@ dri3_cpp_for_format(uint32_t format) {
    case  __DRI_IMAGE_FORMAT_XBGR2101010:
    case  __DRI_IMAGE_FORMAT_ABGR2101010:
    case  __DRI_IMAGE_FORMAT_SARGB8:
+   case  __DRI_IMAGE_FORMAT_SABGR8:
       return 4;
    case  __DRI_IMAGE_FORMAT_NONE:
    default:
       return 0;
+   }
+}
+
+/* Map format of render buffer to corresponding format for the linear_buffer
+ * used for sharing with the display gpu of a Prime setup (== is_different_gpu).
+ * Usually linear_format == format, except for depth >= 30 formats, where
+ * different gpu vendors have different preferences wrt. color channel ordering.
+ */
+static uint32_t
+dri3_linear_format_for_format(struct loader_dri3_drawable *draw, uint32_t format)
+{
+   switch (format) {
+      case  __DRI_IMAGE_FORMAT_XRGB2101010:
+      case  __DRI_IMAGE_FORMAT_XBGR2101010:
+         /* Different preferred formats for different hw */
+         if (dri3_get_red_mask_for_depth(draw, 30) == 0x3ff)
+            return __DRI_IMAGE_FORMAT_XBGR2101010;
+         else
+            return __DRI_IMAGE_FORMAT_XRGB2101010;
+
+      case  __DRI_IMAGE_FORMAT_ARGB2101010:
+      case  __DRI_IMAGE_FORMAT_ABGR2101010:
+         /* Different preferred formats for different hw */
+         if (dri3_get_red_mask_for_depth(draw, 30) == 0x3ff)
+            return __DRI_IMAGE_FORMAT_ABGR2101010;
+         else
+            return __DRI_IMAGE_FORMAT_ARGB2101010;
+
+      default:
+         return format;
    }
 }
 
@@ -1041,6 +1122,7 @@ image_format_to_fourcc(int format)
    /* Convert from __DRI_IMAGE_FORMAT to __DRI_IMAGE_FOURCC (sigh) */
    switch (format) {
    case __DRI_IMAGE_FORMAT_SARGB8: return __DRI_IMAGE_FOURCC_SARGB8888;
+   case __DRI_IMAGE_FORMAT_SABGR8: return __DRI_IMAGE_FOURCC_SABGR8888;
    case __DRI_IMAGE_FORMAT_RGB565: return __DRI_IMAGE_FOURCC_RGB565;
    case __DRI_IMAGE_FORMAT_XRGB8888: return __DRI_IMAGE_FOURCC_XRGB8888;
    case __DRI_IMAGE_FORMAT_ARGB8888: return __DRI_IMAGE_FOURCC_ARGB8888;
@@ -1147,7 +1229,7 @@ dri3_alloc_render_buffer(struct loader_dri3_drawable *draw, unsigned int format,
          uint32_t count = 0;
 
          mod_cookie = xcb_dri3_get_supported_modifiers(draw->conn,
-                                                       draw->drawable,
+                                                       draw->window,
                                                        depth, buffer->cpp * 8);
          mod_reply = xcb_dri3_get_supported_modifiers_reply(draw->conn,
                                                             mod_cookie,
@@ -1225,7 +1307,8 @@ dri3_alloc_render_buffer(struct loader_dri3_drawable *draw, unsigned int format,
 
       buffer->linear_buffer =
         draw->ext->image->createImage(draw->dri_screen,
-                                      width, height, format,
+                                      width, height,
+                                      dri3_linear_format_for_format(draw, format),
                                       __DRI_IMAGE_USE_SHARE |
                                       __DRI_IMAGE_USE_LINEAR |
                                       __DRI_IMAGE_USE_BACKBUFFER,
@@ -1279,7 +1362,7 @@ dri3_alloc_render_buffer(struct loader_dri3_drawable *draw, unsigned int format,
        buffer->modifier != DRM_FORMAT_MOD_INVALID) {
       xcb_dri3_pixmap_from_buffers(draw->conn,
                                    pixmap,
-                                   draw->drawable,
+                                   draw->window,
                                    num_planes,
                                    width, height,
                                    buffer->strides[0], buffer->offsets[0],
@@ -1344,8 +1427,7 @@ no_shm_fence:
  * track the geometry of the drawable
  */
 static int
-dri3_update_drawable(__DRIdrawable *driDrawable,
-                     struct loader_dri3_drawable *draw)
+dri3_update_drawable(struct loader_dri3_drawable *draw)
 {
    mtx_lock(&draw->mtx);
    if (draw->first_init) {
@@ -1355,6 +1437,7 @@ dri3_update_drawable(__DRIdrawable *driDrawable,
       xcb_generic_error_t                       *error;
       xcb_present_query_capabilities_cookie_t   present_capabilities_cookie;
       xcb_present_query_capabilities_reply_t    *present_capabilities_reply;
+      xcb_window_t                               root_win;
 
       draw->first_init = false;
 
@@ -1392,11 +1475,11 @@ dri3_update_drawable(__DRIdrawable *driDrawable,
          mtx_unlock(&draw->mtx);
          return false;
       }
-
       draw->width = geom_reply->width;
       draw->height = geom_reply->height;
       draw->depth = geom_reply->depth;
       draw->vtable->set_drawable_size(draw, draw->width, draw->height);
+      root_win = geom_reply->root;
 
       free(geom_reply);
 
@@ -1430,6 +1513,11 @@ dri3_update_drawable(__DRIdrawable *driDrawable,
          xcb_unregister_for_special_event(draw->conn, draw->special_event);
          draw->special_event = NULL;
       }
+
+      if (draw->is_pixmap)
+         draw->window = root_win;
+      else
+         draw->window = draw->drawable;
    }
    dri3_flush_present_events(draw);
    mtx_unlock(&draw->mtx);
@@ -1648,6 +1736,7 @@ dri3_get_buffer(__DRIdrawable *driDrawable,
                 struct loader_dri3_drawable *draw)
 {
    struct loader_dri3_buffer *buffer;
+   bool fence_await = buffer_type == loader_dri3_buffer_back;
    int buf_id;
 
    if (buffer_type == loader_dri3_buffer_back) {
@@ -1689,7 +1778,6 @@ dri3_get_buffer(__DRIdrawable *driDrawable,
           && buffer) {
 
          /* Fill the new buffer with data from an old buffer */
-         dri3_fence_await(draw->conn, draw, buffer);
          if (!loader_dri3_blit_image(draw,
                                      new_buffer->image,
                                      buffer->image,
@@ -1704,6 +1792,7 @@ dri3_get_buffer(__DRIdrawable *driDrawable,
                            0, 0, 0, 0,
                            draw->width, draw->height);
             dri3_fence_trigger(draw->conn, new_buffer);
+            fence_await = true;
          }
          dri3_free_render_buffer(draw, buffer);
       } else if (buffer_type == loader_dri3_buffer_front) {
@@ -1725,12 +1814,15 @@ dri3_get_buffer(__DRIdrawable *driDrawable,
                                           new_buffer->linear_buffer,
                                           0, 0, draw->width, draw->height,
                                           0, 0, 0);
-         }
+         } else
+            fence_await = true;
       }
       buffer = new_buffer;
       draw->buffers[buf_id] = buffer;
    }
-   dri3_fence_await(draw->conn, draw, buffer);
+
+   if (fence_await)
+      dri3_fence_await(draw->conn, draw, buffer);
 
    /*
     * Do we need to preserve the content of a previous buffer?
@@ -1813,6 +1905,7 @@ loader_dri3_get_buffers(__DRIdrawable *driDrawable,
 {
    struct loader_dri3_drawable *draw = loaderPrivate;
    struct loader_dri3_buffer   *front, *back;
+   int buf_id;
 
    buffers->image_mask = 0;
    buffers->front = NULL;
@@ -1821,8 +1914,18 @@ loader_dri3_get_buffers(__DRIdrawable *driDrawable,
    front = NULL;
    back = NULL;
 
-   if (!dri3_update_drawable(driDrawable, draw))
+   if (!dri3_update_drawable(draw))
       return false;
+
+   dri3_update_num_back(draw);
+
+   /* Free no longer needed back buffers */
+   for (buf_id = draw->num_back; buf_id < LOADER_DRI3_MAX_BACK; buf_id++) {
+      if (draw->cur_blit_source != buf_id && draw->buffers[buf_id]) {
+         dri3_free_render_buffer(draw, draw->buffers[buf_id]);
+         draw->buffers[buf_id] = NULL;
+      }
+   }
 
    /* pixmaps always have front buffers.
     * Exchange swaps also mandate fake front buffers.
@@ -1966,7 +2069,7 @@ dri3_find_back_alloc(struct loader_dri3_drawable *draw)
    back = draw->buffers[id];
    /* Allocate a new back if we haven't got one */
    if (!back && draw->back_format != __DRI_IMAGE_FORMAT_NONE &&
-       dri3_update_drawable(draw->dri_drawable, draw))
+       dri3_update_drawable(draw))
       back = dri3_alloc_render_buffer(draw, draw->back_format,
                                       draw->width, draw->height, draw->depth);
 

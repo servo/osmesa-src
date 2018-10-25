@@ -77,12 +77,14 @@ noinst_HEADERS = \
 	include/drm-uapi/drm_mode.h \
 	include/drm-uapi/i915_drm.h \
 	include/drm-uapi/tegra_drm.h \
+	include/drm-uapi/v3d_drm.h \
 	include/drm-uapi/vc4_drm.h \
 	include/D3D9 \
 	include/GL/wglext.h \
 	include/HaikuGL \
 	include/no_extern_c.h \
-	include/pci_ids
+	include/pci_ids \
+	include/vulkan
 
 # We list some directories in EXTRA_DIST, but don't actually want to include
 # the .gitignore files in the tarball.

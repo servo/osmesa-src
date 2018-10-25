@@ -31,8 +31,6 @@
 #include "gallivm/lp_bld_tgsi.h"
 #include "tgsi/tgsi_parse.h"
 #include "ac_shader_abi.h"
-#include "ac_llvm_util.h"
-#include "ac_llvm_build.h"
 
 #include <llvm-c/Core.h>
 #include <llvm-c/TargetMachine.h>
@@ -61,9 +59,6 @@ struct si_shader_context {
 	unsigned num_shader_buffers;
 	unsigned num_images;
 	unsigned num_samplers;
-
-	/* Whether the prolog will be compiled separately. */
-	bool separate_prolog;
 
 	struct ac_shader_abi abi;
 
@@ -178,8 +173,9 @@ struct si_shader_context {
 	int param_gs_vtx45_offset; /* in dwords (GFX9) */
 	/* CS */
 	int param_block_size;
+	int param_cs_user_data;
 
-	LLVMTargetMachineRef tm;
+	struct ac_llvm_compiler *compiler;
 
 	/* Preloaded descriptors. */
 	LLVMValueRef esgs_ring;
@@ -205,6 +201,8 @@ struct si_shader_context {
 
 	LLVMValueRef i32_0;
 	LLVMValueRef i32_1;
+	LLVMValueRef i1false;
+	LLVMValueRef i1true;
 };
 
 static inline struct si_shader_context *
@@ -221,8 +219,9 @@ si_shader_context_from_abi(struct ac_shader_abi *abi)
 }
 
 unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
-			 LLVMTargetMachineRef tm,
-			 struct pipe_debug_callback *debug);
+			 struct ac_llvm_compiler *compiler,
+			 struct pipe_debug_callback *debug,
+			 bool less_optimized);
 
 LLVMTypeRef tgsi2llvmtype(struct lp_build_tgsi_context *bld_base,
 			  enum tgsi_opcode_type type);
@@ -236,7 +235,7 @@ LLVMValueRef si_llvm_bound_index(struct si_shader_context *ctx,
 
 void si_llvm_context_init(struct si_shader_context *ctx,
 			  struct si_screen *sscreen,
-			  LLVMTargetMachineRef tm);
+			  struct ac_llvm_compiler *compiler);
 void si_llvm_context_set_tgsi(struct si_shader_context *ctx,
 			      struct si_shader *shader);
 
@@ -290,11 +289,6 @@ void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 			unsigned index,
 			LLVMValueRef dst[4]);
 
-/* Combine these with & instead of |. */
-#define NOOP_WAITCNT 0xf7f
-#define LGKM_CNT 0x07f
-#define VM_CNT 0xf70
-
 LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
 				   const struct tgsi_ind_register *ind,
 				   unsigned addr_mul, int rel_index);
@@ -311,7 +305,8 @@ LLVMValueRef si_load_sampler_desc(struct si_shader_context *ctx,
 				  enum ac_descriptor_type type);
 LLVMValueRef si_load_image_desc(struct si_shader_context *ctx,
 				LLVMValueRef list, LLVMValueRef index,
-				enum ac_descriptor_type desc_type, bool dcc_off);
+				enum ac_descriptor_type desc_type, bool dcc_off,
+				bool bindless);
 
 void si_load_system_value(struct si_shader_context *ctx,
 			  unsigned index,

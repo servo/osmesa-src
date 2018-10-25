@@ -32,6 +32,24 @@
 #include "compiler/nir/nir.h"
 #include "compiler/nir_types.h"
 
+static nir_variable* tex_get_texture_var(nir_tex_instr *instr)
+{
+	for (unsigned i = 0; i < instr->num_srcs; i++) {
+		switch (instr->src[i].src_type) {
+		case nir_tex_src_texture_deref:
+			return nir_deref_instr_get_variable(nir_src_as_deref(instr->src[i].src));
+		default:
+			break;
+		}
+	}
+
+	return NULL;
+}
+
+static nir_variable* intrinsic_get_var(nir_intrinsic_instr *instr)
+{
+	return nir_deref_instr_get_variable(nir_src_as_deref(instr->src[0]));
+}
 
 static void scan_instruction(struct tgsi_shader_info *info,
 			     nir_instr *instr)
@@ -53,12 +71,13 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		}
 	} else if (instr->type == nir_instr_type_tex) {
 		nir_tex_instr *tex = nir_instr_as_tex(instr);
+		nir_variable *texture = tex_get_texture_var(tex);
 
-		if (!tex->texture) {
+		if (!texture) {
 			info->samplers_declared |=
 				u_bit_consecutive(tex->sampler_index, 1);
 		} else {
-			if (tex->texture->var->data.bindless)
+			if (texture->data.bindless)
 				info->uses_bindless_samplers = true;
 		}
 
@@ -124,25 +143,25 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_load_tess_level_outer:
 			info->reads_tess_factors = true;
 			break;
-		case nir_intrinsic_image_var_load:
-		case nir_intrinsic_image_var_size:
-		case nir_intrinsic_image_var_samples: {
-			nir_variable *var = intr->variables[0]->var;
+		case nir_intrinsic_image_deref_load:
+		case nir_intrinsic_image_deref_size:
+		case nir_intrinsic_image_deref_samples: {
+			nir_variable *var = intrinsic_get_var(intr);
 			if (var->data.bindless)
 				info->uses_bindless_images = true;
 
 			break;
 		}
-		case nir_intrinsic_image_var_store:
-		case nir_intrinsic_image_var_atomic_add:
-		case nir_intrinsic_image_var_atomic_min:
-		case nir_intrinsic_image_var_atomic_max:
-		case nir_intrinsic_image_var_atomic_and:
-		case nir_intrinsic_image_var_atomic_or:
-		case nir_intrinsic_image_var_atomic_xor:
-		case nir_intrinsic_image_var_atomic_exchange:
-		case nir_intrinsic_image_var_atomic_comp_swap: {
-			nir_variable *var = intr->variables[0]->var;
+		case nir_intrinsic_image_deref_store:
+		case nir_intrinsic_image_deref_atomic_add:
+		case nir_intrinsic_image_deref_atomic_min:
+		case nir_intrinsic_image_deref_atomic_max:
+		case nir_intrinsic_image_deref_atomic_and:
+		case nir_intrinsic_image_deref_atomic_or:
+		case nir_intrinsic_image_deref_atomic_xor:
+		case nir_intrinsic_image_deref_atomic_exchange:
+		case nir_intrinsic_image_deref_atomic_comp_swap: {
+			nir_variable *var = intrinsic_get_var(intr);
 			if (var->data.bindless)
 				info->uses_bindless_images = true;
 
@@ -161,8 +180,8 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_ssbo_atomic_comp_swap:
 			info->writes_memory = true;
 			break;
-		case nir_intrinsic_load_var: {
-			nir_variable *var = intr->variables[0]->var;
+		case nir_intrinsic_load_deref: {
+			nir_variable *var = intrinsic_get_var(intr);
 			nir_variable_mode mode = var->data.mode;
 			enum glsl_base_type base_type =
 				glsl_get_base_type(glsl_without_array(var->type));
@@ -195,25 +214,24 @@ static void scan_instruction(struct tgsi_shader_info *info,
 			}
 			break;
 		}
-		case nir_intrinsic_interp_var_at_centroid:
-		case nir_intrinsic_interp_var_at_sample:
-		case nir_intrinsic_interp_var_at_offset: {
-			enum glsl_interp_mode interp =
-				intr->variables[0]->var->data.interpolation;
+		case nir_intrinsic_interp_deref_at_centroid:
+		case nir_intrinsic_interp_deref_at_sample:
+		case nir_intrinsic_interp_deref_at_offset: {
+			enum glsl_interp_mode interp = intrinsic_get_var(intr)->data.interpolation;
 			switch (interp) {
 			case INTERP_MODE_SMOOTH:
 			case INTERP_MODE_NONE:
-				if (intr->intrinsic == nir_intrinsic_interp_var_at_centroid)
+				if (intr->intrinsic == nir_intrinsic_interp_deref_at_centroid)
 					info->uses_persp_opcode_interp_centroid = true;
-				else if (intr->intrinsic == nir_intrinsic_interp_var_at_sample)
+				else if (intr->intrinsic == nir_intrinsic_interp_deref_at_sample)
 					info->uses_persp_opcode_interp_sample = true;
 				else
 					info->uses_persp_opcode_interp_offset = true;
 				break;
 			case INTERP_MODE_NOPERSPECTIVE:
-				if (intr->intrinsic == nir_intrinsic_interp_var_at_centroid)
+				if (intr->intrinsic == nir_intrinsic_interp_deref_at_centroid)
 					info->uses_linear_opcode_interp_centroid = true;
-				else if (intr->intrinsic == nir_intrinsic_interp_var_at_sample)
+				else if (intr->intrinsic == nir_intrinsic_interp_deref_at_sample)
 					info->uses_linear_opcode_interp_sample = true;
 				else
 					info->uses_linear_opcode_interp_offset = true;
@@ -607,7 +625,8 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		}
 
 		unsigned loc = variable->data.location;
-		if (loc == FRAG_RESULT_COLOR &&
+		if (nir->info.stage == MESA_SHADER_FRAGMENT &&
+		    loc == FRAG_RESULT_COLOR &&
 		    nir->info.outputs_written & (1ull << loc)) {
 			assert(attrib_count == 1);
 			info->properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS] = true;
@@ -729,13 +748,6 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 void
 si_lower_nir(struct si_shader_selector* sel)
 {
-	/* Disable const buffer fast path for old LLVM versions */
-	if (sel->screen->info.chip_class == SI && HAVE_LLVM < 0x0600 &&
-	    sel->info.const_buffers_declared == 1 &&
-	    sel->info.shader_buffers_declared == 0) {
-		sel->info.const_buffers_declared |= 0x2;
-	}
-
 	/* Adjust the driver location of inputs and outputs. The state tracker
 	 * interprets them as slots, while the ac/nir backend interprets them
 	 * as individual components.
@@ -782,6 +794,8 @@ si_lower_nir(struct si_shader_selector* sel)
 	NIR_PASS_V(sel->nir, nir_lower_subgroups, &subgroups_options);
 
 	ac_lower_indirect_derefs(sel->nir, sel->screen->info.chip_class);
+
+	NIR_PASS_V(sel->nir, nir_lower_load_const_to_scalar);
 
 	bool progress;
 	do {
@@ -883,40 +897,70 @@ si_nir_load_sampler_desc(struct ac_shader_abi *abi,
 			 bool write, bool bindless)
 {
 	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+	const struct tgsi_shader_info *info = &ctx->shader->selector->info;
 	LLVMBuilderRef builder = ctx->ac.builder;
-	LLVMValueRef list = LLVMGetParam(ctx->main_fn, ctx->param_samplers_and_images);
-	LLVMValueRef index;
+	unsigned const_index = base_index + constant_index;
+	bool dcc_off = write;
+
+	/* TODO: images_store and images_atomic are not set */
+	if (!dynamic_index && image &&
+	    (info->images_store | info->images_atomic) & (1 << const_index))
+		dcc_off = true;
 
 	assert(!descriptor_set);
+	assert(!image || desc_type == AC_DESC_IMAGE || desc_type == AC_DESC_BUFFER);
 
-	dynamic_index = dynamic_index ? dynamic_index : ctx->ac.i32_0;
-	index = LLVMBuildAdd(builder, dynamic_index,
-			     LLVMConstInt(ctx->ac.i32, base_index + constant_index, false),
-			     "");
+	if (bindless) {
+		LLVMValueRef list =
+			LLVMGetParam(ctx->main_fn, ctx->param_bindless_samplers_and_images);
 
-	if (image) {
-		assert(desc_type == AC_DESC_IMAGE || desc_type == AC_DESC_BUFFER);
-		assert(base_index + constant_index < ctx->num_images);
+		/* dynamic_index is the bindless handle */
+		if (image) {
+			return si_load_image_desc(ctx, list, dynamic_index, desc_type,
+						  dcc_off, true);
+		}
 
-		if (dynamic_index)
-			index = si_llvm_bound_index(ctx, index, ctx->num_images);
-
-		index = LLVMBuildSub(ctx->gallivm.builder,
-				     LLVMConstInt(ctx->i32, SI_NUM_IMAGES - 1, 0),
-				     index, "");
-
-		/* TODO: be smarter about when we use dcc_off */
-		return si_load_image_desc(ctx, list, index, desc_type, write);
+		/* Since bindless handle arithmetic can contain an unsigned integer
+		 * wraparound and si_load_sampler_desc assumes there isn't any,
+		 * use GEP without "inbounds" (inside ac_build_pointer_add)
+		 * to prevent incorrect code generation and hangs.
+		 */
+		dynamic_index = LLVMBuildMul(ctx->ac.builder, dynamic_index,
+					     LLVMConstInt(ctx->i32, 2, 0), "");
+		list = ac_build_pointer_add(&ctx->ac, list, dynamic_index);
+		return si_load_sampler_desc(ctx, list, ctx->i32_0, desc_type);
 	}
 
-	assert(base_index + constant_index < ctx->num_samplers);
+	unsigned num_slots = image ? ctx->num_images : ctx->num_samplers;
+	assert(const_index < num_slots);
 
-	if (dynamic_index)
-		index = si_llvm_bound_index(ctx, index, ctx->num_samplers);
+	LLVMValueRef list = LLVMGetParam(ctx->main_fn, ctx->param_samplers_and_images);
+	LLVMValueRef index = LLVMConstInt(ctx->ac.i32, const_index, false);
 
-	index = LLVMBuildAdd(ctx->gallivm.builder, index,
+	if (dynamic_index) {
+		index = LLVMBuildAdd(builder, index, dynamic_index, "");
+
+		/* From the GL_ARB_shader_image_load_store extension spec:
+		 *
+		 *    If a shader performs an image load, store, or atomic
+		 *    operation using an image variable declared as an array,
+		 *    and if the index used to select an individual element is
+		 *    negative or greater than or equal to the size of the
+		 *    array, the results of the operation are undefined but may
+		 *    not lead to termination.
+		 */
+		index = si_llvm_bound_index(ctx, index, num_slots);
+	}
+
+	if (image) {
+		index = LLVMBuildSub(ctx->ac.builder,
+				     LLVMConstInt(ctx->i32, SI_NUM_IMAGES - 1, 0),
+				     index, "");
+		return si_load_image_desc(ctx, list, index, desc_type, dcc_off, false);
+	}
+
+	index = LLVMBuildAdd(ctx->ac.builder, index,
 			     LLVMConstInt(ctx->i32, SI_NUM_IMAGES / 2, 0), "");
-
 	return si_load_sampler_desc(ctx, list, index, desc_type);
 }
 
@@ -980,7 +1024,7 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 	ctx->num_samplers = util_last_bit(info->samplers_declared);
 	ctx->num_images = util_last_bit(info->images_declared);
 
-	if (ctx->shader->selector->local_size) {
+	if (ctx->shader->selector->info.properties[TGSI_PROPERTY_CS_LOCAL_SIZE]) {
 		assert(nir->info.stage == MESA_SHADER_COMPUTE);
 		si_declare_compute_memory(ctx);
 	}

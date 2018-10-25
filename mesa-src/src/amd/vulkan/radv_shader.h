@@ -55,8 +55,21 @@ struct radv_shader_module {
 	char data[0];
 };
 
+enum {
+	RADV_ALPHA_ADJUST_NONE = 0,
+	RADV_ALPHA_ADJUST_SNORM = 1,
+	RADV_ALPHA_ADJUST_SINT = 2,
+	RADV_ALPHA_ADJUST_SSCALED = 3,
+};
+
 struct radv_vs_variant_key {
 	uint32_t instance_rate_inputs;
+	uint32_t instance_rate_divisors[MAX_VERTEX_ATTRIBS];
+
+	/* For 2_10_10_10 formats the alpha is handled as unsigned by pre-vega HW.
+	 * so we may need to fix it up. */
+	uint64_t alpha_adjust;
+
 	uint32_t as_es:1;
 	uint32_t as_ls:1;
 	uint32_t export_prim_id:1;
@@ -82,10 +95,9 @@ struct radv_tcs_variant_key {
 struct radv_fs_variant_key {
 	uint32_t col_format;
 	uint8_t log2_ps_iter_samples;
-	uint8_t log2_num_samples;
+	uint8_t num_samples;
 	uint32_t is_int8;
 	uint32_t is_int10;
-	uint32_t multisample : 1;
 };
 
 struct radv_shader_variant_key {
@@ -107,9 +119,11 @@ struct radv_nir_compiler_options {
 	bool dump_shader;
 	bool dump_preoptir;
 	bool record_llvm_ir;
+	bool check_ir;
 	enum radeon_family family;
 	enum chip_class chip_class;
 	uint32_t tess_offchip_block_dw_size;
+	uint32_t address32_hi;
 };
 
 enum radv_ud_index {
@@ -121,7 +135,6 @@ enum radv_ud_index {
 	AC_UD_VS_VERTEX_BUFFERS = AC_UD_SHADER_START,
 	AC_UD_VS_BASE_VERTEX_START_INSTANCE,
 	AC_UD_VS_MAX_UD,
-	AC_UD_PS_SAMPLE_POS_OFFSET = AC_UD_SHADER_START,
 	AC_UD_PS_MAX_UD,
 	AC_UD_CS_GRID_SIZE = AC_UD_SHADER_START,
 	AC_UD_CS_MAX_UD,
@@ -146,6 +159,9 @@ struct radv_shader_info {
 	} vs;
 	struct {
 		uint8_t output_usage_mask[VARYING_SLOT_VAR31 + 1];
+	} gs;
+	struct {
+		uint8_t output_usage_mask[VARYING_SLOT_VAR31 + 1];
 	} tes;
 	struct {
 		bool force_persample;
@@ -158,6 +174,7 @@ struct radv_shader_info {
 		bool has_pcoord;
 		bool prim_id_input;
 		bool layer_input;
+		uint8_t num_input_clips_culls;
 	} ps;
 	struct {
 		bool uses_grid_size;
@@ -175,12 +192,12 @@ struct radv_userdata_info {
 	int8_t sgpr_idx;
 	uint8_t num_sgprs;
 	bool indirect;
-	uint32_t indirect_offset;
 };
 
 struct radv_userdata_locations {
 	struct radv_userdata_info descriptor_sets[RADV_UD_MAX_SETS];
 	struct radv_userdata_info shader_data[AC_UD_MAX_UD];
+	uint32_t descriptor_sets_enabled;
 };
 
 struct radv_vs_output_info {
@@ -281,14 +298,16 @@ struct radv_shader_slab {
 };
 
 void
-radv_optimize_nir(struct nir_shader *shader);
+radv_optimize_nir(struct nir_shader *shader, bool optimize_conservatively,
+		  bool allow_copies);
 
 nir_shader *
 radv_shader_compile_to_nir(struct radv_device *device,
 			   struct radv_shader_module *module,
 			   const char *entrypoint_name,
 			   gl_shader_stage stage,
-			   const VkSpecializationInfo *spec_info);
+			   const VkSpecializationInfo *spec_info,
+			   const VkPipelineCreateFlags flags);
 
 void *
 radv_alloc_shader_memory(struct radv_device *device,
@@ -327,11 +346,14 @@ radv_shader_dump_stats(struct radv_device *device,
 
 static inline bool
 radv_can_dump_shader(struct radv_device *device,
-		     struct radv_shader_module *module)
+		     struct radv_shader_module *module,
+		     bool is_gs_copy_shader)
 {
+	if (!(device->instance->debug_flags & RADV_DEBUG_DUMP_SHADERS))
+		return false;
+
 	/* Only dump non-meta shaders, useful for debugging purposes. */
-	return device->instance->debug_flags & RADV_DEBUG_DUMP_SHADERS &&
-	       module && !module->nir;
+	return (module && !module->nir) || is_gs_copy_shader;
 }
 
 static inline bool

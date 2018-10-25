@@ -1,5 +1,5 @@
 # Copyright © 2017 Dylan Baker
-# Copyright © 2017 Intel Corporation
+# Copyright © 2017-2018 Intel Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -24,10 +24,6 @@ inc_gallium_winsys = include_directories('winsys')
 
 subdir('auxiliary')
 subdir('auxiliary/pipe-loader')
-subdir('drivers/ddebug')
-subdir('drivers/noop')
-subdir('drivers/trace')
-subdir('drivers/rbug')
 subdir('winsys/sw/null')
 if with_dri
   subdir('winsys/sw/dri')
@@ -44,9 +40,6 @@ if with_platform_haiku
   subdir('winsys/sw/hgl')
 endif
 if with_gallium_swr
-  if meson.version().version_compare('< 0.44.0')
-    error('SWR requires meson 0.44.0 or greater.')
-  endif
   subdir('drivers/swr')
 else
   driver_swr = declare_dependency()
@@ -101,11 +94,11 @@ if with_gallium_pl111
 else
   driver_pl111 = declare_dependency()
 endif
-if with_gallium_vc5
-  subdir('winsys/vc5/drm')
-  subdir('drivers/vc5')
+if with_gallium_v3d
+  subdir('winsys/v3d/drm')
+  subdir('drivers/v3d')
 else
-  driver_vc5 = declare_dependency()
+  driver_v3d = declare_dependency()
 endif
 if with_gallium_etnaviv
   subdir('winsys/etnaviv/drm')
@@ -148,9 +141,6 @@ if with_gallium_opencl
   # consumer
   subdir('targets/pipe-loader')
 
-  if meson.version().version_compare('< 0.44.0')
-    error('OpenCL requires meson 0.44.0 or greater.')
-  endif
   subdir('state_trackers/clover')
   subdir('targets/opencl')
 endif
@@ -195,4 +185,10 @@ if with_gallium_st_nine
   subdir('state_trackers/nine')
   subdir('targets/d3dadapter9')
 endif
-# TODO: tests
+if with_tests
+  subdir('targets/graw-null')
+  if with_glx == 'gallium-xlib'
+    subdir('targets/graw-xlib')
+  endif
+  subdir('tests')
+endif

@@ -41,6 +41,7 @@
 #include "texcompress.h"
 #include "texcompress_etc.h"
 #include "texstore.h"
+#include "config.h"
 #include "macros.h"
 #include "format_unpack.h"
 #include "util/format_srgb.h"
@@ -718,7 +719,8 @@ etc2_unpack_srgb8(uint8_t *dst_row,
                   const uint8_t *src_row,
                   unsigned src_stride,
                   unsigned width,
-                  unsigned height)
+		  unsigned height,
+		  bool bgra)
 {
    const unsigned bw = 4, bh = 4, bs = 8, comps = 4;
    struct etc2_block block;
@@ -740,11 +742,14 @@ etc2_unpack_srgb8(uint8_t *dst_row,
             for (i = 0; i < w; i++) {
                etc2_rgb8_fetch_texel(&block, i, j, dst,
                                      false /* punchthrough_alpha */);
-               /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
-               tmp = dst[0];
-               dst[0] = dst[2];
-               dst[2] = tmp;
-               dst[3] = 255;
+
+	       if (bgra) {
+		  /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
+		  tmp = dst[0];
+		  dst[0] = dst[2];
+		  dst[2] = tmp;
+		  dst[3] = 255;
+	       }
 
                dst += comps;
             }
@@ -800,7 +805,8 @@ etc2_unpack_srgb8_alpha8(uint8_t *dst_row,
                          const uint8_t *src_row,
                          unsigned src_stride,
                          unsigned width,
-                         unsigned height)
+			 unsigned height,
+			 bool bgra)
 {
    /* If internalformat is COMPRESSED_SRGB8_ALPHA8_ETC2_EAC, each 4 × 4 block
     * of RGBA8888 information is compressed to 128 bits. To decode a block, the
@@ -824,11 +830,13 @@ etc2_unpack_srgb8_alpha8(uint8_t *dst_row,
             for (i = 0; i < w; i++) {
                etc2_rgba8_fetch_texel(&block, i, j, dst);
 
-               /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
-               tmp = dst[0];
-               dst[0] = dst[2];
-               dst[2] = tmp;
-               dst[3] = dst[3];
+	       if (bgra) {
+		  /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
+		  tmp = dst[0];
+		  dst[0] = dst[2];
+		  dst[2] = tmp;
+		  dst[3] = dst[3];
+	       }
 
                dst += comps;
             }
@@ -1057,7 +1065,8 @@ etc2_unpack_srgb8_punchthrough_alpha1(uint8_t *dst_row,
                                      const uint8_t *src_row,
                                      unsigned src_stride,
                                      unsigned width,
-                                     unsigned height)
+				     unsigned height,
+				     bool bgra)
 {
    const unsigned bw = 4, bh = 4, bs = 8, comps = 4;
    struct etc2_block block;
@@ -1077,11 +1086,14 @@ etc2_unpack_srgb8_punchthrough_alpha1(uint8_t *dst_row,
             for (i = 0; i < w; i++) {
                etc2_rgb8_fetch_texel(&block, i, j, dst,
                                      true /* punchthrough_alpha */);
-               /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
-               tmp = dst[0];
-               dst[0] = dst[2];
-               dst[2] = tmp;
-               dst[3] = dst[3];
+
+	       if (bgra) {
+		  /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
+		  tmp = dst[0];
+		  dst[0] = dst[2];
+		  dst[2] = tmp;
+		  dst[3] = dst[3];
+	       }
 
                dst += comps;
             }
@@ -1205,7 +1217,8 @@ _mesa_unpack_etc2_format(uint8_t *dst_row,
                          unsigned src_stride,
                          unsigned src_width,
                          unsigned src_height,
-                         mesa_format format)
+			 mesa_format format,
+			 bool bgra)
 {
    if (format == MESA_FORMAT_ETC2_RGB8)
       etc2_unpack_rgb8(dst_row, dst_stride,
@@ -1214,7 +1227,7 @@ _mesa_unpack_etc2_format(uint8_t *dst_row,
    else if (format == MESA_FORMAT_ETC2_SRGB8)
       etc2_unpack_srgb8(dst_row, dst_stride,
                         src_row, src_stride,
-                        src_width, src_height);
+			src_width, src_height, bgra);
    else if (format == MESA_FORMAT_ETC2_RGBA8_EAC)
       etc2_unpack_rgba8(dst_row, dst_stride,
                         src_row, src_stride,
@@ -1222,7 +1235,7 @@ _mesa_unpack_etc2_format(uint8_t *dst_row,
    else if (format == MESA_FORMAT_ETC2_SRGB8_ALPHA8_EAC)
       etc2_unpack_srgb8_alpha8(dst_row, dst_stride,
                                src_row, src_stride,
-                               src_width, src_height);
+			       src_width, src_height, bgra);
    else if (format == MESA_FORMAT_ETC2_R11_EAC)
       etc2_unpack_r11(dst_row, dst_stride,
                       src_row, src_stride,
@@ -1246,7 +1259,7 @@ _mesa_unpack_etc2_format(uint8_t *dst_row,
    else if (format == MESA_FORMAT_ETC2_SRGB8_PUNCHTHROUGH_ALPHA1)
       etc2_unpack_srgb8_punchthrough_alpha1(dst_row, dst_stride,
                                             src_row, src_stride,
-                                            src_width, src_height);
+					    src_width, src_height, bgra);
 }
 
 

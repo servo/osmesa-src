@@ -75,18 +75,6 @@ brw_blorp_surface_info_init(struct blorp_context *blorp,
    if (format == ISL_FORMAT_UNSUPPORTED)
       format = surf->surf->format;
 
-   if (format == ISL_FORMAT_R24_UNORM_X8_TYPELESS) {
-      /* Unfortunately, ISL_FORMAT_R24_UNORM_X8_TYPELESS it isn't supported as
-       * a render target, which would prevent us from blitting to 24-bit
-       * depth.  The miptree consists of 32 bits per pixel, arranged as 24-bit
-       * depth values interleaved with 8 "don't care" bits.  Since depth
-       * values don't require any blending, it doesn't matter how we interpret
-       * the bit pattern as long as we copy the right amount of data, so just
-       * map it as 8-bit BGRA.
-       */
-      format = ISL_FORMAT_B8G8R8A8_UNORM;
-   }
-
    info->surf = *surf->surf;
    info->addr = surf->addr;
 
@@ -137,6 +125,28 @@ brw_blorp_surface_info_init(struct blorp_context *blorp,
     */
    if (is_render_target && blorp->isl_dev->info->gen <= 6)
       info->view.array_len = MIN2(info->view.array_len, 512);
+
+   if (surf->tile_x_sa || surf->tile_y_sa) {
+      /* This is only allowed on simple 2D surfaces without MSAA */
+      assert(info->surf.dim == ISL_SURF_DIM_2D);
+      assert(info->surf.samples == 1);
+      assert(info->surf.levels == 1);
+      assert(info->surf.logical_level0_px.array_len == 1);
+      assert(info->aux_usage == ISL_AUX_USAGE_NONE);
+
+      info->tile_x_sa = surf->tile_x_sa;
+      info->tile_y_sa = surf->tile_y_sa;
+
+      /* Instead of using the X/Y Offset fields in RENDER_SURFACE_STATE, we
+       * place the image at the tile boundary and offset our sampling or
+       * rendering.  For this reason, we need to grow the image by the offset
+       * to ensure that the hardware doesn't think we've gone past the edge.
+       */
+      info->surf.logical_level0_px.w += surf->tile_x_sa;
+      info->surf.logical_level0_px.h += surf->tile_y_sa;
+      info->surf.phys_level0_sa.w += surf->tile_x_sa;
+      info->surf.phys_level0_sa.h += surf->tile_y_sa;
+   }
 }
 
 
@@ -195,7 +205,7 @@ blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
 
    const unsigned *program =
       brw_compile_fs(compiler, blorp->driver_ctx, mem_ctx, wm_key,
-                     wm_prog_data, nir, NULL, -1, -1, false, use_repclear,
+                     wm_prog_data, nir, NULL, -1, -1, -1, false, use_repclear,
                      NULL, NULL);
 
    return program;

@@ -727,7 +727,6 @@ validate_block(nir_block *block, validate_state *state)
       }
    }
 
-   struct set_entry *entry;
    set_foreach(block->predecessors, entry) {
       const nir_block *pred = entry->key;
       validate_assert(state, pred->successors[0] == block ||
@@ -936,7 +935,6 @@ postvalidate_reg_decl(nir_register *reg, validate_state *state)
 
    if (reg_state->uses->entries != 0) {
       printf("extra entries in register uses:\n");
-      struct set_entry *entry;
       set_foreach(reg_state->uses, entry)
          printf("%p\n", entry->key);
 
@@ -951,7 +949,6 @@ postvalidate_reg_decl(nir_register *reg, validate_state *state)
 
    if (reg_state->if_uses->entries != 0) {
       printf("extra entries in register if_uses:\n");
-      struct set_entry *entry;
       set_foreach(reg_state->if_uses, entry)
          printf("%p\n", entry->key);
 
@@ -966,7 +963,6 @@ postvalidate_reg_decl(nir_register *reg, validate_state *state)
 
    if (reg_state->defs->entries != 0) {
       printf("extra entries in register defs:\n");
-      struct set_entry *entry;
       set_foreach(reg_state->defs, entry)
          printf("%p\n", entry->key);
 
@@ -1033,7 +1029,6 @@ postvalidate_ssa_def(nir_ssa_def *def, void *void_state)
 
    if (def_state->uses->entries != 0) {
       printf("extra entries in SSA def uses:\n");
-      struct set_entry *entry;
       set_foreach(def_state->uses, entry)
          printf("%p\n", entry->key);
 
@@ -1048,7 +1043,6 @@ postvalidate_ssa_def(nir_ssa_def *def, void *void_state)
 
    if (def_state->if_uses->entries != 0) {
       printf("extra entries in SSA def uses:\n");
-      struct set_entry *entry;
       set_foreach(def_state->if_uses, entry)
          printf("%p\n", entry->key);
 
@@ -1146,18 +1140,23 @@ destroy_validate_state(validate_state *state)
 }
 
 static void
-dump_errors(validate_state *state)
+dump_errors(validate_state *state, const char *when)
 {
    struct hash_table *errors = state->errors;
 
-   fprintf(stderr, "%d errors:\n", _mesa_hash_table_num_entries(errors));
+   if (when) {
+      fprintf(stderr, "NIR validation failed %s\n", when);
+      fprintf(stderr, "%d errors:\n", _mesa_hash_table_num_entries(errors));
+   } else {
+      fprintf(stderr, "NIR validation failed with %d errors:\n",
+              _mesa_hash_table_num_entries(errors));
+   }
 
    nir_print_shader_annotated(state->shader, stderr, errors);
 
    if (_mesa_hash_table_num_entries(errors) > 0) {
       fprintf(stderr, "%d additional errors:\n",
               _mesa_hash_table_num_entries(errors));
-      struct hash_entry *entry;
       hash_table_foreach(errors, entry) {
          fprintf(stderr, "%s\n", (char *)entry->data);
       }
@@ -1167,7 +1166,7 @@ dump_errors(validate_state *state)
 }
 
 void
-nir_validate_shader(nir_shader *shader)
+nir_validate_shader(nir_shader *shader, const char *when)
 {
    static int should_validate = -1;
    if (should_validate < 0)
@@ -1230,7 +1229,7 @@ nir_validate_shader(nir_shader *shader)
    }
 
    if (_mesa_hash_table_num_entries(state.errors) > 0)
-      dump_errors(&state);
+      dump_errors(&state, when);
 
    destroy_validate_state(&state);
 }

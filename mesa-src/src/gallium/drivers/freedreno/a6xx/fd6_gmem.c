@@ -408,7 +408,7 @@ emit_binning_pass(struct fd_batch *batch)
 			A6XX_SP_TP_WINDOW_OFFSET_Y(0));
 
 	/* emit IB to binning drawcmds: */
-	ctx->emit_ib(ring, batch->draw);
+	fd6_emit_ib(ring, batch->draw);
 
 	fd_reset_wfi(batch);
 
@@ -464,7 +464,7 @@ fd6_emit_tile_init(struct fd_batch *batch)
 	fd6_emit_lrz_flush(ring);
 
 	if (batch->lrz_clear)
-		ctx->emit_ib(ring, batch->lrz_clear);
+		fd6_emit_ib(ring, batch->lrz_clear);
 
 	fd6_cache_flush(batch, ring);
 
@@ -591,8 +591,8 @@ set_blit_scissor(struct fd_batch *batch)
 
 	blit_scissor.minx = batch->max_scissor.minx;
 	blit_scissor.miny = batch->max_scissor.miny;
-	blit_scissor.maxx = MIN2(pfb->width - 1, batch->max_scissor.maxx);
-	blit_scissor.maxy = MIN2(pfb->height - 1, batch->max_scissor.maxy);
+	blit_scissor.maxx = MIN2(pfb->width, batch->max_scissor.maxx);
+	blit_scissor.maxy = MIN2(pfb->height, batch->max_scissor.maxy);
 
 	OUT_PKT4(ring, REG_A6XX_RB_BLIT_SCISSOR_TL, 2);
 	OUT_RING(ring,

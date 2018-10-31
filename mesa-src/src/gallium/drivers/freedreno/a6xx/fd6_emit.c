@@ -359,8 +359,7 @@ fd6_emit_textures(struct fd_pipe *pipe, struct fd_ringbuffer *ring,
 
 	if (tex->num_samplers > 0) {
 		struct fd_ringbuffer *state =
-			fd_ringbuffer_new_flags(pipe, tex->num_samplers * 4 * 4,
-					FD_RINGBUFFER_OBJECT);
+			fd_ringbuffer_new_object(pipe, tex->num_samplers * 4 * 4);
 		for (unsigned i = 0; i < tex->num_samplers; i++) {
 			static const struct fd6_sampler_stateobj dummy_sampler = {};
 			const struct fd6_sampler_stateobj *sampler = tex->samplers[i] ?
@@ -390,8 +389,7 @@ fd6_emit_textures(struct fd_pipe *pipe, struct fd_ringbuffer *ring,
 
 	if (tex->num_textures > 0) {
 		struct fd_ringbuffer *state =
-			fd_ringbuffer_new_flags(pipe, tex->num_textures * 16 * 4,
-					FD_RINGBUFFER_OBJECT);
+			fd_ringbuffer_new_object(pipe, tex->num_textures * 16 * 4);
 		for (unsigned i = 0; i < tex->num_textures; i++) {
 			static const struct fd6_pipe_sampler_view dummy_view = {};
 			const struct fd6_pipe_sampler_view *view = tex->textures[i] ?
@@ -528,15 +526,14 @@ emit_ssbos(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	}
 }
 
-struct fd_ringbuffer *
-fd6_build_vbo_state(struct fd6_emit *emit, const struct ir3_shader_variant *vp)
+static struct fd_ringbuffer *
+build_vbo_state(struct fd6_emit *emit, const struct ir3_shader_variant *vp)
 {
 	const struct fd_vertex_state *vtx = emit->vtx;
 	int32_t i, j;
 
-	struct fd_ringbuffer *ring =
-		fd_ringbuffer_new_flags(emit->ctx->pipe, 4 * (10 * vp->inputs_count + 2),
-				FD_RINGBUFFER_OBJECT | FD_RINGBUFFER_STREAMING);
+	struct fd_ringbuffer *ring = fd_submit_new_ringbuffer(emit->ctx->batch->submit,
+			4 * (10 * vp->inputs_count + 2), FD_RINGBUFFER_STREAMING);
 
 	for (i = 0, j = 0; i <= vp->inputs_count; i++) {
 		if (vp->inputs[i].sysval)
@@ -589,7 +586,7 @@ fd6_build_vbo_state(struct fd6_emit *emit, const struct ir3_shader_variant *vp)
 }
 
 static struct fd_ringbuffer *
-build_zsa(struct fd6_emit *emit, bool binning_pass)
+build_lrz(struct fd6_emit *emit, bool binning_pass)
 {
 	struct fd6_zsa_stateobj *zsa = fd6_zsa_stateobj(emit->ctx->zsa);
 	struct pipe_framebuffer_state *pfb = &emit->ctx->batch->framebuffer;
@@ -597,9 +594,8 @@ build_zsa(struct fd6_emit *emit, bool binning_pass)
 	uint32_t gras_lrz_cntl = zsa->gras_lrz_cntl;
 	uint32_t rb_lrz_cntl = zsa->rb_lrz_cntl;
 
-	struct fd_ringbuffer *ring =
-		fd_ringbuffer_new_flags(emit->ctx->pipe, 16,
-				FD_RINGBUFFER_OBJECT | FD_RINGBUFFER_STREAMING);
+	struct fd_ringbuffer *ring = fd_submit_new_ringbuffer(emit->ctx->batch->submit,
+			16, FD_RINGBUFFER_STREAMING);
 
 	if (emit->no_lrz_write || !rsc->lrz || !rsc->lrz_valid) {
 		gras_lrz_cntl = 0;
@@ -630,44 +626,45 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 
 	emit_marker6(ring, 5);
 
+	if (emit->dirty & (FD_DIRTY_VTXBUF | FD_DIRTY_VTXSTATE)) {
+		struct fd_ringbuffer *state;
+
+		state = build_vbo_state(emit, emit->vs);
+		fd6_emit_add_group(emit, state, FD6_GROUP_VBO, 0x6);
+		fd_ringbuffer_del(state);
+
+		state = build_vbo_state(emit, emit->bs);
+		fd6_emit_add_group(emit, state, FD6_GROUP_VBO_BINNING, 0x1);
+		fd_ringbuffer_del(state);
+	}
+
 	if (dirty & FD_DIRTY_ZSA) {
 		struct fd6_zsa_stateobj *zsa = fd6_zsa_stateobj(ctx->zsa);
-		uint32_t rb_alpha_control = zsa->rb_alpha_control;
 
 		if (util_format_is_pure_integer(pipe_surface_format(pfb->cbufs[0])))
-			rb_alpha_control &= ~A6XX_RB_ALPHA_CONTROL_ALPHA_TEST;
-
-		OUT_PKT4(ring, REG_A6XX_RB_ALPHA_CONTROL, 1);
-		OUT_RING(ring, rb_alpha_control);
-
-		OUT_PKT4(ring, REG_A6XX_RB_STENCIL_CONTROL, 1);
-		OUT_RING(ring, zsa->rb_stencil_control);
-
-		OUT_PKT4(ring, REG_A6XX_RB_DEPTH_CNTL, 1);
-		OUT_RING(ring, zsa->rb_depth_cntl);
+			fd6_emit_add_group(emit, zsa->stateobj_no_alpha, FD6_GROUP_ZSA, 0x7);
+		else
+			fd6_emit_add_group(emit, zsa->stateobj, FD6_GROUP_ZSA, 0x7);
 	}
 
 	if ((dirty & (FD_DIRTY_ZSA | FD_DIRTY_PROG)) && pfb->zsbuf) {
 		struct fd_ringbuffer *state;
 
-		state = build_zsa(emit, false);
-		fd6_emit_add_group(emit, state, FD6_GROUP_ZSA, 0x6);
+		state = build_lrz(emit, false);
+		fd6_emit_add_group(emit, state, FD6_GROUP_LRZ, 0x6);
 		fd_ringbuffer_del(state);
 
-		state = build_zsa(emit, true);
-		fd6_emit_add_group(emit, state, FD6_GROUP_ZSA_BINNING, 0x1);
+		state = build_lrz(emit, true);
+		fd6_emit_add_group(emit, state, FD6_GROUP_LRZ_BINNING, 0x1);
 		fd_ringbuffer_del(state);
 	}
 
-	if (dirty & (FD_DIRTY_ZSA | FD_DIRTY_STENCIL_REF)) {
-		struct fd6_zsa_stateobj *zsa = fd6_zsa_stateobj(ctx->zsa);
+	if (dirty & FD_DIRTY_STENCIL_REF) {
 		struct pipe_stencil_ref *sr = &ctx->stencil_ref;
 
-		OUT_PKT4(ring, REG_A6XX_RB_STENCILREF, 3);
+		OUT_PKT4(ring, REG_A6XX_RB_STENCILREF, 1);
 		OUT_RING(ring, A6XX_RB_STENCILREF_REF(sr->ref_value[0]) |
 				A6XX_RB_STENCILREF_BFREF(sr->ref_value[1]));
-		OUT_RING(ring, zsa->rb_stencilmask);
-		OUT_RING(ring, zsa->rb_stencilwrmask);
 	}
 
 	/* NOTE: scissor enabled bit is part of rasterizer state: */
@@ -719,33 +716,8 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 	if (dirty & FD_DIRTY_RASTERIZER) {
 		struct fd6_rasterizer_stateobj *rasterizer =
 				fd6_rasterizer_stateobj(ctx->rasterizer);
-
-		OUT_PKT4(ring, REG_A6XX_GRAS_UNKNOWN_8000, 1);
-		OUT_RING(ring, 0x80);
-		OUT_PKT4(ring, REG_A6XX_GRAS_UNKNOWN_8001, 1);
-		OUT_RING(ring, 0x0);
-		OUT_PKT4(ring, REG_A6XX_GRAS_UNKNOWN_8004, 1);
-		OUT_RING(ring, 0x0);
-
-		OUT_PKT4(ring, REG_A6XX_GRAS_SU_CNTL, 1);
-		OUT_RING(ring, rasterizer->gras_su_cntl);
-
-		OUT_PKT4(ring, REG_A6XX_GRAS_SU_POINT_MINMAX, 2);
-		OUT_RING(ring, rasterizer->gras_su_point_minmax);
-		OUT_RING(ring, rasterizer->gras_su_point_size);
-
-		OUT_PKT4(ring, REG_A6XX_GRAS_SU_POLY_OFFSET_SCALE, 3);
-		OUT_RING(ring, rasterizer->gras_su_poly_offset_scale);
-		OUT_RING(ring, rasterizer->gras_su_poly_offset_offset);
-		OUT_RING(ring, rasterizer->gras_su_poly_offset_clamp);
-
-#if 0
-		OUT_PKT4(ring, REG_A6XX_PC_RASTER_CNTL, 1);
-		OUT_RING(ring, rasterizer->pc_raster_cntl);
-
-		OUT_PKT4(ring, REG_A6XX_GRAS_CL_CNTL, 1);
-		OUT_RING(ring, rasterizer->gras_cl_clip_cntl);
-#endif
+		fd6_emit_add_group(emit, rasterizer->stateobj,
+						   FD6_GROUP_RASTERIZER, 0x7);
 	}
 
 	/* Since the primitive restart state is not part of a tracked object, we
@@ -786,9 +758,8 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 					 FD_DIRTY_SHADER_SSBO | FD_DIRTY_SHADER_IMAGE)
 
 	if (ctx->dirty_shader[PIPE_SHADER_VERTEX] & DIRTY_CONST) {
-		struct fd_ringbuffer *vsconstobj =
-			fd_ringbuffer_new_flags(ctx->pipe, 0x1000,
-					FD_RINGBUFFER_OBJECT | FD_RINGBUFFER_STREAMING);
+		struct fd_ringbuffer *vsconstobj = fd_submit_new_ringbuffer(
+				ctx->batch->submit, 0x1000, FD_RINGBUFFER_STREAMING);
 
 		ir3_emit_vs_consts(vp, vsconstobj, ctx, emit->info);
 		fd6_emit_add_group(emit, vsconstobj, FD6_GROUP_VS_CONST, 0x7);
@@ -796,9 +767,8 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 	}
 
 	if (ctx->dirty_shader[PIPE_SHADER_FRAGMENT] & DIRTY_CONST) {
-		struct fd_ringbuffer *fsconstobj =
-			fd_ringbuffer_new_flags(ctx->pipe, 0x1000,
-					FD_RINGBUFFER_OBJECT | FD_RINGBUFFER_STREAMING);
+		struct fd_ringbuffer *fsconstobj = fd_submit_new_ringbuffer(
+				ctx->batch->submit, 0x1000, FD_RINGBUFFER_STREAMING);
 
 		ir3_emit_fs_consts(fp, fsconstobj, ctx);
 		fd6_emit_add_group(emit, fsconstobj, FD6_GROUP_FS_CONST, 0x6);
@@ -871,7 +841,7 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 		}
 	}
 
-	if ((dirty & FD_DIRTY_BLEND)) {
+	if (dirty & FD_DIRTY_BLEND) {
 		struct fd6_blend_stateobj *blend = fd6_blend_stateobj(ctx->blend);
 		uint32_t i;
 
@@ -954,10 +924,19 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 			struct fd6_state_group *g = &emit->groups[i];
 			unsigned n = fd_ringbuffer_size(g->stateobj) / 4;
 
-			OUT_RING(ring, CP_SET_DRAW_STATE__0_COUNT(n) |
-					CP_SET_DRAW_STATE__0_ENABLE_MASK(g->enable_mask) |
-					CP_SET_DRAW_STATE__0_GROUP_ID(g->group_id));
-			OUT_RB(ring, g->stateobj);
+			if (n == 0) {
+				OUT_RING(ring, CP_SET_DRAW_STATE__0_COUNT(0) |
+						CP_SET_DRAW_STATE__0_DISABLE |
+						CP_SET_DRAW_STATE__0_ENABLE_MASK(g->enable_mask) |
+						CP_SET_DRAW_STATE__0_GROUP_ID(g->group_id));
+				OUT_RING(ring, 0x00000000);
+				OUT_RING(ring, 0x00000000);
+			} else {
+				OUT_RING(ring, CP_SET_DRAW_STATE__0_COUNT(n) |
+						CP_SET_DRAW_STATE__0_ENABLE_MASK(g->enable_mask) |
+						CP_SET_DRAW_STATE__0_GROUP_ID(g->group_id));
+				OUT_RB(ring, g->stateobj);
+			}
 
 			fd_ringbuffer_del(g->stateobj);
 		}
@@ -1190,14 +1169,6 @@ t7              opcode: CP_WAIT_FOR_IDLE (26) (1 dwords)
 
 	OUT_PKT4(ring, REG_A6XX_RB_LRZ_CNTL, 1);
 	OUT_RING(ring, 0x00000000);
-}
-
-static void
-fd6_emit_ib(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
-{
-	emit_marker6(ring, 6);
-	__OUT_IB5(ring, target);
-	emit_marker6(ring, 6);
 }
 
 static void

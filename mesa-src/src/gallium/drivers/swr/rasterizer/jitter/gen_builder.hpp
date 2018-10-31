@@ -29,7 +29,7 @@
 // Generation Command Line:
 //  ./rasterizer/codegen/gen_llvm_ir_macros.py
 //    --input
-//    /usr/local/Cellar/llvm@6/6.0.1/include/llvm/IR/IRBuilder.h
+//    /usr/local/Cellar/llvm/6.0.1/include/llvm/IR/IRBuilder.h
 //    --output
 //    rasterizer/jitter
 //    --gen_h
@@ -64,16 +64,6 @@ CallInst* MEMCOPY(Value *Dst, Value *Src, uint64_t Size, unsigned Align, bool is
 CallInst* MEMCOPY(Value *Dst, Value *Src, Value *Size, unsigned Align, bool isVolatile = false, MDNode *TBAATag = nullptr, MDNode *TBAAStructTag = nullptr, MDNode *ScopeTag = nullptr, MDNode *NoAliasTag = nullptr)
 {
     return IRB()->CreateMemCpy(Dst, Src, Size, Align, isVolatile, TBAATag, TBAAStructTag, ScopeTag, NoAliasTag);
-}
-
-CallInst* ELEMENT_UNORDERED_ATOMIC_MEM_CPY(Value *Dst, unsigned DstAlign, Value *Src, unsigned SrcAlign, uint64_t Size, uint32_t ElementSize, MDNode *TBAATag = nullptr, MDNode *TBAAStructTag = nullptr, MDNode *ScopeTag = nullptr, MDNode *NoAliasTag = nullptr)
-{
-    return IRB()->CreateElementUnorderedAtomicMemCpy(Dst, DstAlign, Src, SrcAlign, Size, ElementSize, TBAATag, TBAAStructTag, ScopeTag, NoAliasTag);
-}
-
-CallInst* ELEMENT_UNORDERED_ATOMIC_MEM_CPY(Value *Dst, unsigned DstAlign, Value *Src, unsigned SrcAlign, Value *Size, uint32_t ElementSize, MDNode *TBAATag = nullptr, MDNode *TBAAStructTag = nullptr, MDNode *ScopeTag = nullptr, MDNode *NoAliasTag = nullptr)
-{
-    return IRB()->CreateElementUnorderedAtomicMemCpy(Dst, DstAlign, Src, SrcAlign, Size, ElementSize, TBAATag, TBAAStructTag, ScopeTag, NoAliasTag);
 }
 
 CallInst* MEMMOVE(Value *Dst, Value *Src, uint64_t Size, unsigned Align, bool isVolatile = false, MDNode *TBAATag = nullptr, MDNode *ScopeTag = nullptr, MDNode *NoAliasTag = nullptr)

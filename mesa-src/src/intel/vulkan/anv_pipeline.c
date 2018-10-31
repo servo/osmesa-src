@@ -165,7 +165,7 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
                    stage, entrypoint_name, &spirv_options, nir_options);
    nir_shader *nir = entry_point->shader;
    assert(nir->info.stage == stage);
-   nir_validate_shader(nir);
+   nir_validate_shader(nir, "after spirv_to_nir");
    ralloc_steal(mem_ctx, nir);
 
    free(spec_entries);
@@ -191,7 +191,6 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
          exec_node_remove(&func->node);
    }
    assert(exec_list_length(&nir->functions) == 1);
-   entry_point->name = ralloc_strdup(entry_point, "main");
 
    /* Now that we've deleted all but the main function, we can go ahead and
     * lower the rest of the constant initializers.  We do this here so that

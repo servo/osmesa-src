@@ -27,7 +27,7 @@
 
 enum {
    RADV_INSTANCE_EXTENSION_COUNT = 16,
-   RADV_DEVICE_EXTENSION_COUNT = 51,
+   RADV_DEVICE_EXTENSION_COUNT = 53,
 };
 
 struct radv_instance_extension_table {
@@ -66,6 +66,7 @@ struct radv_device_extension_table {
         bool KHR_descriptor_update_template;
         bool KHR_device_group;
         bool KHR_draw_indirect_count;
+        bool KHR_driver_properties;
         bool KHR_external_fence;
         bool KHR_external_fence_fd;
         bool KHR_external_memory;
@@ -100,6 +101,7 @@ struct radv_device_extension_table {
         bool EXT_sampler_filter_minmax;
         bool EXT_shader_viewport_index_layer;
         bool EXT_shader_stencil_export;
+        bool EXT_transform_feedback;
         bool EXT_vertex_attribute_divisor;
         bool AMD_draw_indirect_count;
         bool AMD_gcn_shader;

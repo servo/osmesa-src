@@ -70,8 +70,6 @@
 #define NINE_STATE_VDECL       (1 << 12)
 #define NINE_STATE_IDXBUF      (1 << 13)
 #define NINE_STATE_STREAMFREQ  (1 << 14)
-#define NINE_STATE_PRIM        (1 << 15)
-#define NINE_STATE_MATERIAL    (1 << 16)
 #define NINE_STATE_BLEND_COLOR (1 << 17)
 #define NINE_STATE_STENCIL_REF (1 << 18)
 #define NINE_STATE_SAMPLE_MASK (1 << 19)
@@ -611,6 +609,9 @@ void nine_state_prepare_draw_sw(struct NineDevice9 *device,
 void nine_state_after_draw_sw(struct NineDevice9 *device);
 void nine_state_destroy_sw(struct NineDevice9 *device);
 
+void
+nine_state_resize_transform(struct nine_ff_state *ff_state, unsigned N);
+
 /* If @alloc is FALSE, the return value may be a const identity matrix.
  * Therefore, do not modify if you set alloc to FALSE !
  */
@@ -622,7 +623,7 @@ HRESULT
 nine_state_set_light(struct nine_ff_state *, DWORD, const D3DLIGHT9 *);
 
 HRESULT
-nine_state_light_enable(struct nine_ff_state *, uint32_t *,
+nine_state_light_enable(struct nine_ff_state *,
                         DWORD, BOOL);
 
 const char *nine_d3drs_to_string(DWORD State);

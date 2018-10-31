@@ -376,7 +376,7 @@ handle_3dstate_vertex_buffers(struct aub_viewer_decode_ctx *ctx,
          if (!ready)
             continue;
 
-         ImGui::Text("vertex buffer %d, size %d", index, vb_size);
+         ImGui::Text("vertex buffer %d, size %d, pitch %d", index, vb_size, pitch);
 
          if (vb.map == NULL) {
             ImGui::TextColored(ctx->cfg->missing_color,
@@ -861,34 +861,13 @@ struct custom_decoder info_decoders[] = {
    { "3DSTATE_CONSTANT_PS", handle_urb_constant, AUB_DECODE_STAGE_PS, },
 };
 
-static inline uint64_t
-get_address(struct gen_spec *spec, const uint32_t *p)
-{
-   /* Addresses are always guaranteed to be page-aligned and sometimes
-    * hardware packets have extra stuff stuffed in the bottom 12 bits.
-    */
-   uint64_t addr = p[0] & ~0xfffu;
-
-   if (gen_spec_get_gen(spec) >= gen_make_gen(8,0)) {
-      /* On Broadwell and above, we have 48-bit addresses which consume two
-       * dwords.  Some packets require that these get stored in a "canonical
-       * form" which means that bit 47 is sign-extended through the upper
-       * bits. In order to correctly handle those aub dumps, we need to mask
-       * off the top 16 bits.
-       */
-      addr |= ((uint64_t)p[1] & 0xffff) << 32;
-   }
-
-   return addr;
-}
-
 void
 aub_viewer_render_batch(struct aub_viewer_decode_ctx *ctx,
                         const void *_batch, uint32_t batch_size,
                         uint64_t batch_addr)
 {
    struct gen_group *inst;
-   const uint32_t *p, *batch = (const uint32_t *) _batch, *end = batch + batch_size;
+   const uint32_t *p, *batch = (const uint32_t *) _batch, *end = batch + batch_size / sizeof(uint32_t);
    int length;
 
    for (p = batch; p < end; p += length) {

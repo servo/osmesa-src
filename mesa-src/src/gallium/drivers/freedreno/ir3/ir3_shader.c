@@ -569,13 +569,20 @@ ir3_shader_outputs(const struct ir3_shader *so)
 
 #include "freedreno_resource.h"
 
+static inline bool
+is_stateobj(struct fd_ringbuffer *ring)
+{
+	/* XXX this is an ugly way to differentiate.. */
+	return !!(ring->flags & FD_RINGBUFFER_STREAMING);
+}
+
 static inline void
 ring_wfi(struct fd_batch *batch, struct fd_ringbuffer *ring)
 {
 	/* when we emit const state via ring (IB2) we need a WFI, but when
 	 * it is emit'd via stateobj, we don't
 	 */
-	if (ring->flags & FD_RINGBUFFER_OBJECT)
+	if (is_stateobj(ring))
 		return;
 
 	fd_wfi(batch, ring);
@@ -699,6 +706,16 @@ emit_image_dims(struct fd_context *ctx, const struct ir3_shader_variant *v,
 				} else {
 					dims[off + 2] = rsc->slices[lvl].size0;
 				}
+			} else {
+				/* For buffer-backed images, the log2 of the format's
+				 * bytes-per-pixel is placed on the 2nd slot. This is useful
+				 * when emitting image_size instructions, for which we need
+				 * to divide by bpp for image buffers. Since the bpp
+				 * can only be power-of-two, the division is implemented
+				 * as a SHR, and for that it is handy to have the log2 of
+				 * bpp as a constant. (log2 = first-set-bit - 1)
+				 */
+				dims[off + 1] = ffs(dims[off + 0]) - 1;
 			}
 		}
 
@@ -826,7 +843,7 @@ emit_common_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 	 * Possibly if we split up different parts of the const state to
 	 * different state-objects we could avoid this.
 	 */
-	if (dirty && (ring->flags & FD_RINGBUFFER_OBJECT))
+	if (dirty && is_stateobj(ring))
 		dirty = ~0;
 
 	if (dirty & (FD_DIRTY_SHADER_PROG | FD_DIRTY_SHADER_CONST)) {

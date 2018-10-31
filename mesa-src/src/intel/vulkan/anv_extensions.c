@@ -74,7 +74,7 @@
 
 #define ANV_HAS_SURFACE (VK_USE_PLATFORM_WAYLAND_KHR ||                          VK_USE_PLATFORM_XCB_KHR ||                          VK_USE_PLATFORM_XLIB_KHR ||                          VK_USE_PLATFORM_DISPLAY_KHR)
 
-static const uint32_t MAX_API_VERSION = VK_MAKE_VERSION(1, 1, 80);
+static const uint32_t MAX_API_VERSION = VK_MAKE_VERSION(1, 1, 90);
 
 VkResult anv_EnumerateInstanceVersion(
     uint32_t*                                   pApiVersion)
@@ -132,11 +132,11 @@ anv_physical_device_api_version(struct anv_physical_device *device)
 
     if (!(true))
         return version;
-    version = VK_MAKE_VERSION(1, 0, 80);
+    version = VK_MAKE_VERSION(1, 0, 90);
 
     if (!(device->has_syncobj_wait))
         return version;
-    version = VK_MAKE_VERSION(1, 1, 80);
+    version = VK_MAKE_VERSION(1, 1, 90);
 
     return version;
 }

@@ -103,6 +103,7 @@ const VkExtensionProperties radv_device_extensions[RADV_DEVICE_EXTENSION_COUNT] 
    {"VK_KHR_descriptor_update_template", 1},
    {"VK_KHR_device_group", 1},
    {"VK_KHR_draw_indirect_count", 1},
+   {"VK_KHR_driver_properties", 1},
    {"VK_KHR_external_fence", 1},
    {"VK_KHR_external_fence_fd", 1},
    {"VK_KHR_external_memory", 1},
@@ -137,6 +138,7 @@ const VkExtensionProperties radv_device_extensions[RADV_DEVICE_EXTENSION_COUNT] 
    {"VK_EXT_sampler_filter_minmax", 1},
    {"VK_EXT_shader_viewport_index_layer", 1},
    {"VK_EXT_shader_stencil_export", 1},
+   {"VK_EXT_transform_feedback", 1},
    {"VK_EXT_vertex_attribute_divisor", 3},
    {"VK_AMD_draw_indirect_count", 1},
    {"VK_AMD_gcn_shader", 1},
@@ -178,6 +180,7 @@ void radv_fill_device_extension_table(const struct radv_physical_device *device,
    table->KHR_descriptor_update_template = true;
    table->KHR_device_group = true;
    table->KHR_draw_indirect_count = true;
+   table->KHR_driver_properties = true;
    table->KHR_external_fence = device->rad_info.has_syncobj_wait_for_submit;
    table->KHR_external_fence_fd = device->rad_info.has_syncobj_wait_for_submit;
    table->KHR_external_memory = true;
@@ -212,6 +215,7 @@ void radv_fill_device_extension_table(const struct radv_physical_device *device,
    table->EXT_sampler_filter_minmax = device->rad_info.chip_class >= CIK;
    table->EXT_shader_viewport_index_layer = true;
    table->EXT_shader_stencil_export = true;
+   table->EXT_transform_feedback = true;
    table->EXT_vertex_attribute_divisor = true;
    table->AMD_draw_indirect_count = true;
    table->AMD_gcn_shader = true;

@@ -771,8 +771,6 @@ SWR_AVX2_CXXFLAGS
 SWR_AVX_CXXFLAGS
 ETNAVIV_LIBS
 ETNAVIV_CFLAGS
-FREEDRENO_LIBS
-FREEDRENO_CFLAGS
 NOUVEAU_LIBS
 NOUVEAU_CFLAGS
 D3D_DRIVER_INSTALL_DIR
@@ -1090,6 +1088,7 @@ am__nodep
 AMDEPBACKSLASH
 AMDEP_FALSE
 AMDEP_TRUE
+am__quote
 am__include
 DEPDIR
 OBJEXT
@@ -1177,8 +1176,7 @@ PACKAGE_VERSION
 PACKAGE_TARNAME
 PACKAGE_NAME
 PATH_SEPARATOR
-SHELL
-am__quote'
+SHELL'
 ac_subst_files=''
 ac_user_opts='
 enable_option_checking
@@ -1350,8 +1348,6 @@ VA_CFLAGS
 VA_LIBS
 NOUVEAU_CFLAGS
 NOUVEAU_LIBS
-FREEDRENO_CFLAGS
-FREEDRENO_LIBS
 ETNAVIV_CFLAGS
 ETNAVIV_LIBS
 VC4_CFLAGS
@@ -2274,10 +2270,6 @@ Some influential environment variables:
               C compiler flags for NOUVEAU, overriding pkg-config
   NOUVEAU_LIBS
               linker flags for NOUVEAU, overriding pkg-config
-  FREEDRENO_CFLAGS
-              C compiler flags for FREEDRENO, overriding pkg-config
-  FREEDRENO_LIBS
-              linker flags for FREEDRENO, overriding pkg-config
   ETNAVIV_CFLAGS
               C compiler flags for ETNAVIV, overriding pkg-config
   ETNAVIV_LIBS
@@ -3573,7 +3565,7 @@ test -n "$target_alias" &&
     NONENONEs,x,x, &&
   program_prefix=${target_alias}-
 
-am__api_version='1.16'
+am__api_version='1.15'
 
 # Find a good install program.  We prefer a C program (faster),
 # so one script is as good as another.  But avoid the broken or
@@ -4089,8 +4081,8 @@ MAKEINFO=${MAKEINFO-"${am_missing_run}makeinfo"}
 
 # For better backward compatibility.  To be removed once Automake 1.9.x
 # dies out for good.  For more background, see:
-# <https://lists.gnu.org/archive/html/automake/2012-07/msg00001.html>
-# <https://lists.gnu.org/archive/html/automake/2012-07/msg00014.html>
+# <http://lists.gnu.org/archive/html/automake/2012-07/msg00001.html>
+# <http://lists.gnu.org/archive/html/automake/2012-07/msg00014.html>
 mkdir_p='$(MKDIR_P)'
 
 # We need awk for the "check" target (and possibly the TAP driver).  The
@@ -4257,7 +4249,7 @@ END
 Aborting the configuration process, to ensure you take notice of the issue.
 
 You can download and install GNU coreutils to get an 'rm' implementation
-that behaves properly: <https://www.gnu.org/software/coreutils/>.
+that behaves properly: <http://www.gnu.org/software/coreutils/>.
 
 If you want to complete the configuration process using your problematic
 'rm' anyway, export the environment variable ACCEPT_INFERIOR_RM_PROGRAM
@@ -4322,45 +4314,45 @@ DEPDIR="${am__leading_dot}deps"
 
 ac_config_commands="$ac_config_commands depfiles"
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether ${MAKE-make} supports the include directive" >&5
-$as_echo_n "checking whether ${MAKE-make} supports the include directive... " >&6; }
-cat > confinc.mk << 'END'
+
+am_make=${MAKE-make}
+cat > confinc << 'END'
 am__doit:
-	@echo this is the am__doit target >confinc.out
+	@echo this is the am__doit target
 .PHONY: am__doit
 END
+# If we don't find an include directive, just comment out the code.
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for style of include used by $am_make" >&5
+$as_echo_n "checking for style of include used by $am_make... " >&6; }
 am__include="#"
 am__quote=
-# BSD make does it like this.
-echo '.include "confinc.mk" # ignored' > confmf.BSD
-# Other make implementations (GNU, Solaris 10, AIX) do it like this.
-echo 'include confinc.mk # ignored' > confmf.GNU
-_am_result=no
-for s in GNU BSD; do
-  { echo "$as_me:$LINENO: ${MAKE-make} -f confmf.$s && cat confinc.out" >&5
-   (${MAKE-make} -f confmf.$s && cat confinc.out) >&5 2>&5
-   ac_status=$?
-   echo "$as_me:$LINENO: \$? = $ac_status" >&5
-   (exit $ac_status); }
-  case $?:`cat confinc.out 2>/dev/null` in #(
-  '0:this is the am__doit target') :
-    case $s in #(
-  BSD) :
-    am__include='.include' am__quote='"' ;; #(
-  *) :
-    am__include='include' am__quote='' ;;
-esac ;; #(
-  *) :
-     ;;
+_am_result=none
+# First try GNU make style include.
+echo "include confinc" > confmf
+# Ignore all kinds of additional output from 'make'.
+case `$am_make -s -f confmf 2> /dev/null` in #(
+*the\ am__doit\ target*)
+  am__include=include
+  am__quote=
+  _am_result=GNU
+  ;;
 esac
-  if test "$am__include" != "#"; then
-    _am_result="yes ($s style)"
-    break
-  fi
-done
-rm -f confinc.* confmf.*
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: ${_am_result}" >&5
-$as_echo "${_am_result}" >&6; }
+# Now try BSD make style include.
+if test "$am__include" = "#"; then
+   echo '.include "confinc"' > confmf
+   case `$am_make -s -f confmf 2> /dev/null` in #(
+   *the\ am__doit\ target*)
+     am__include=.include
+     am__quote="\""
+     _am_result=BSD
+     ;;
+   esac
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $_am_result" >&5
+$as_echo "$_am_result" >&6; }
+rm -f confinc confmf
 
 # Check whether --enable-dependency-tracking was given.
 if test "${enable_dependency_tracking+set}" = set; then :
@@ -5543,11 +5535,10 @@ OPENCL_VERSION=1
 # in the first entry.
 LIBDRM_REQUIRED=2.4.75
 LIBDRM_RADEON_REQUIRED=2.4.71
-LIBDRM_AMDGPU_REQUIRED=2.4.93
+LIBDRM_AMDGPU_REQUIRED=2.4.95
 LIBDRM_INTEL_REQUIRED=2.4.75
 LIBDRM_NVVIEUX_REQUIRED=2.4.66
 LIBDRM_NOUVEAU_REQUIRED=2.4.66
-LIBDRM_FREEDRENO_REQUIRED=2.4.96
 LIBDRM_ETNAVIV_REQUIRED=2.4.89
 LIBDRM_VC4_REQUIRED=2.4.89
 
@@ -7299,7 +7290,7 @@ if ${am_cv_pathless_PYTHON+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-	for am_cv_pathless_PYTHON in python python2 python3  python3.9 python3.8 python3.7 python3.6 python3.5 python3.4 python3.3  python3.2 python3.1 python3.0  python2.7 python2.6 python2.5 python2.4 python2.3 python2.2 python2.1  python2.0 none; do
+	for am_cv_pathless_PYTHON in python python2 python3 python3.3 python3.2 python3.1 python3.0 python2.7  python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0 none; do
 	  test "$am_cv_pathless_PYTHON" = none && break
 	  prog="import sys
 # split strings by '.' and convert to numeric.  Append some zeros
@@ -20517,6 +20508,12 @@ else
 fi
 
 
+# Toggle Werror since at some point clang started treating unknown -W
+# flags as warnings, succeeding with the build, yet issuing an annoying
+# warning.
+save_CFLAGS="$CFLAGS"
+export CFLAGS="$CFLAGS -Werror"
+
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether C compiler accepts -Wall" >&5
 $as_echo_n "checking whether C compiler accepts -Wall... " >&6; }
 if ${ax_cv_check_cflags___Wall+:} false; then :
@@ -20524,7 +20521,7 @@ if ${ax_cv_check_cflags___Wall+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Wall"
+  CFLAGS="$CFLAGS  -Wall -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20559,7 +20556,7 @@ if ${ax_cv_check_cflags___Werror_implicit_function_declaration+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Werror=implicit-function-declaration"
+  CFLAGS="$CFLAGS  -Werror=implicit-function-declaration -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20594,7 +20591,7 @@ if ${ax_cv_check_cflags___Werror_missing_prototypes+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Werror=missing-prototypes"
+  CFLAGS="$CFLAGS  -Werror=missing-prototypes -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20629,7 +20626,7 @@ if ${ax_cv_check_cflags___Wmissing_prototypes+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Wmissing-prototypes"
+  CFLAGS="$CFLAGS  -Wmissing-prototypes -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20664,7 +20661,7 @@ if ${ax_cv_check_cflags___Wmissing_field_initializers+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Wmissing-field-initializers"
+  CFLAGS="$CFLAGS  -Wmissing-field-initializers -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20699,7 +20696,7 @@ if ${ax_cv_check_cflags___Wformat_truncation+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Wformat-truncation"
+  CFLAGS="$CFLAGS  -Wformat-truncation -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20734,7 +20731,7 @@ if ${ax_cv_check_cflags___fno_math_errno+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -fno-math-errno"
+  CFLAGS="$CFLAGS  -fno-math-errno -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20770,7 +20767,7 @@ if ${ax_cv_check_cflags___fno_trapping_math+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -fno-trapping-math"
+  CFLAGS="$CFLAGS  -fno-trapping-math -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20805,7 +20802,7 @@ if ${ax_cv_check_cflags___fvisibility_hidden+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -fvisibility=hidden"
+  CFLAGS="$CFLAGS  -fvisibility=hidden -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20834,6 +20831,11 @@ else
 fi
 
 
+CFLAGS="$save_CFLAGS"
+
+# Toggle Werror since at some point clang started treating unknown -W
+# flags as warnings, succeeding with the build, yet issuing an annoying
+# warning.
 ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -20847,7 +20849,7 @@ if ${ax_cv_check_cxxflags___Wall+:} false; then :
 else
 
   ax_check_save_flags=$CXXFLAGS
-  CXXFLAGS="$CXXFLAGS  -Wall"
+  CXXFLAGS="$CXXFLAGS  -Wall -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20882,7 +20884,7 @@ if ${ax_cv_check_cxxflags___fno_math_errno+:} false; then :
 else
 
   ax_check_save_flags=$CXXFLAGS
-  CXXFLAGS="$CXXFLAGS  -fno-math-errno"
+  CXXFLAGS="$CXXFLAGS  -fno-math-errno -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20917,7 +20919,7 @@ if ${ax_cv_check_cxxflags___fno_trapping_math+:} false; then :
 else
 
   ax_check_save_flags=$CXXFLAGS
-  CXXFLAGS="$CXXFLAGS  -fno-trapping-math"
+  CXXFLAGS="$CXXFLAGS  -fno-trapping-math -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20952,7 +20954,7 @@ if ${ax_cv_check_cxxflags___fvisibility_hidden+:} false; then :
 else
 
   ax_check_save_flags=$CXXFLAGS
-  CXXFLAGS="$CXXFLAGS  -fvisibility=hidden"
+  CXXFLAGS="$CXXFLAGS  -fvisibility=hidden -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -20987,7 +20989,7 @@ if ${ax_cv_check_cxxflags___Wmissing_field_initializers+:} false; then :
 else
 
   ax_check_save_flags=$CXXFLAGS
-  CXXFLAGS="$CXXFLAGS  -Wmissing-field-initializers"
+  CXXFLAGS="$CXXFLAGS  -Wmissing-field-initializers -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -21022,7 +21024,7 @@ if ${ax_cv_check_cxxflags___Wformat_truncation+:} false; then :
 else
 
   ax_check_save_flags=$CXXFLAGS
-  CXXFLAGS="$CXXFLAGS  -Wformat-truncation"
+  CXXFLAGS="$CXXFLAGS  -Wformat-truncation -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -21070,7 +21072,7 @@ if ${ax_cv_check_cflags___Werror_pointer_arith+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Werror=pointer-arith"
+  CFLAGS="$CFLAGS  -Werror=pointer-arith -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -21105,7 +21107,7 @@ if ${ax_cv_check_cflags___Werror_vla+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Werror=vla"
+  CFLAGS="$CFLAGS  -Werror=vla -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -21146,7 +21148,7 @@ if ${ax_cv_check_cxxflags___Werror_pointer_arith+:} false; then :
 else
 
   ax_check_save_flags=$CXXFLAGS
-  CXXFLAGS="$CXXFLAGS  -Werror=pointer-arith"
+  CXXFLAGS="$CXXFLAGS  -Werror=pointer-arith -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -21181,7 +21183,7 @@ if ${ax_cv_check_cxxflags___Werror_vla+:} false; then :
 else
 
   ax_check_save_flags=$CXXFLAGS
-  CXXFLAGS="$CXXFLAGS  -Werror=vla"
+  CXXFLAGS="$CXXFLAGS  -Werror=vla -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -21324,7 +21326,7 @@ if ${ax_cv_check_cflags___Woverride_init+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Woverride-init"
+  CFLAGS="$CFLAGS  -Woverride-init -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -21359,7 +21361,7 @@ if ${ax_cv_check_cflags___Winitializer_overrides+:} false; then :
 else
 
   ax_check_save_flags=$CFLAGS
-  CFLAGS="$CFLAGS  -Winitializer-overrides"
+  CFLAGS="$CFLAGS  -Winitializer-overrides -Werror"
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -29312,97 +29314,6 @@ fi
             ;;
         xfreedreno)
             HAVE_GALLIUM_FREEDRENO=yes
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED" >&5
-$as_echo_n "checking for libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED... " >&6; }
-
-if test -n "$FREEDRENO_CFLAGS"; then
-    pkg_cv_FREEDRENO_CFLAGS="$FREEDRENO_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libdrm >= \$LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= \$LIBDRM_FREEDRENO_REQUIRED\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_FREEDRENO_CFLAGS=`$PKG_CONFIG --cflags "libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$FREEDRENO_LIBS"; then
-    pkg_cv_FREEDRENO_LIBS="$FREEDRENO_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libdrm >= \$LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= \$LIBDRM_FREEDRENO_REQUIRED\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_FREEDRENO_LIBS=`$PKG_CONFIG --libs "libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        FREEDRENO_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED" 2>&1`
-        else
-	        FREEDRENO_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$FREEDRENO_PKG_ERRORS" >&5
-
-	as_fn_error $? "Package requirements (libdrm >= $LIBDRM_FREEDRENO_REQUIRED libdrm_freedreno >= $LIBDRM_FREEDRENO_REQUIRED) were not met:
-
-$FREEDRENO_PKG_ERRORS
-
-Consider adjusting the PKG_CONFIG_PATH environment variable if you
-installed software in a non-standard prefix.
-
-Alternatively, you may set the environment variables FREEDRENO_CFLAGS
-and FREEDRENO_LIBS to avoid the need to call pkg-config.
-See the pkg-config man page for more details." "$LINENO" 5
-elif test $pkg_failed = untried; then
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	{ { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
-$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
-as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
-is in your PATH or set the PKG_CONFIG environment variable to the full
-path to pkg-config.
-
-Alternatively, you may set the environment variables FREEDRENO_CFLAGS
-and FREEDRENO_LIBS to avoid the need to call pkg-config.
-See the pkg-config man page for more details.
-
-To get pkg-config, see <http://pkg-config.freedesktop.org/>.
-See \`config.log' for more details" "$LINENO" 5; }
-else
-	FREEDRENO_CFLAGS=$pkg_cv_FREEDRENO_CFLAGS
-	FREEDRENO_LIBS=$pkg_cv_FREEDRENO_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-
-fi
             require_libdrm "freedreno"
             ;;
         xetnaviv)
@@ -31690,7 +31601,7 @@ cat >>$CONFIG_STATUS <<_ACEOF || ac_write_fail=1
 #
 # INIT-COMMANDS
 #
-AMDEP_TRUE="$AMDEP_TRUE" MAKE="${MAKE-make}"
+AMDEP_TRUE="$AMDEP_TRUE" ac_aux_dir="$ac_aux_dir"
 
 
 # The HP-UX ksh and POSIX shell print the target directory to stdout
@@ -32632,35 +32543,29 @@ $as_echo "$as_me: executing $ac_file commands" >&6;}
   # Older Autoconf quotes --file arguments for eval, but not when files
   # are listed without --file.  Let's play safe and only enable the eval
   # if we detect the quoting.
-  # TODO: see whether this extra hack can be removed once we start
-  # requiring Autoconf 2.70 or later.
-  case $CONFIG_FILES in #(
-  *\'*) :
-    eval set x "$CONFIG_FILES" ;; #(
-  *) :
-    set x $CONFIG_FILES ;; #(
-  *) :
-     ;;
-esac
+  case $CONFIG_FILES in
+  *\'*) eval set x "$CONFIG_FILES" ;;
+  *)   set x $CONFIG_FILES ;;
+  esac
   shift
-  # Used to flag and report bootstrapping failures.
-  am_rc=0
-  for am_mf
+  for mf
   do
     # Strip MF so we end up with the name of the file.
-    am_mf=`$as_echo "$am_mf" | sed -e 's/:.*$//'`
-    # Check whether this is an Automake generated Makefile which includes
-    # dependency-tracking related rules and includes.
-    # Grep'ing the whole file directly is not great: AIX grep has a line
+    mf=`echo "$mf" | sed -e 's/:.*$//'`
+    # Check whether this is an Automake generated Makefile or not.
+    # We used to match only the files named 'Makefile.in', but
+    # some people rename them; so instead we look at the file content.
+    # Grep'ing the first line is not enough: some people post-process
+    # each Makefile.in and add a new line on top of each file to say so.
+    # Grep'ing the whole file is not good either: AIX grep has a line
     # limit of 2048, but all sed's we know have understand at least 4000.
-    sed -n 's,^am--depfiles:.*,X,p' "$am_mf" | grep X >/dev/null 2>&1 \
-      || continue
-    am_dirpart=`$as_dirname -- "$am_mf" ||
-$as_expr X"$am_mf" : 'X\(.*[^/]\)//*[^/][^/]*/*$' \| \
-	 X"$am_mf" : 'X\(//\)[^/]' \| \
-	 X"$am_mf" : 'X\(//\)$' \| \
-	 X"$am_mf" : 'X\(/\)' \| . 2>/dev/null ||
-$as_echo X"$am_mf" |
+    if sed -n 's,^#.*generated by automake.*,X,p' "$mf" | grep X >/dev/null 2>&1; then
+      dirpart=`$as_dirname -- "$mf" ||
+$as_expr X"$mf" : 'X\(.*[^/]\)//*[^/][^/]*/*$' \| \
+	 X"$mf" : 'X\(//\)[^/]' \| \
+	 X"$mf" : 'X\(//\)$' \| \
+	 X"$mf" : 'X\(/\)' \| . 2>/dev/null ||
+$as_echo X"$mf" |
     sed '/^X\(.*[^/]\)\/\/*[^/][^/]*\/*$/{
 	    s//\1/
 	    q
@@ -32678,48 +32583,53 @@ $as_echo X"$am_mf" |
 	    q
 	  }
 	  s/.*/./; q'`
-    am_filepart=`$as_basename -- "$am_mf" ||
-$as_expr X/"$am_mf" : '.*/\([^/][^/]*\)/*$' \| \
-	 X"$am_mf" : 'X\(//\)$' \| \
-	 X"$am_mf" : 'X\(/\)' \| . 2>/dev/null ||
-$as_echo X/"$am_mf" |
-    sed '/^.*\/\([^/][^/]*\)\/*$/{
+    else
+      continue
+    fi
+    # Extract the definition of DEPDIR, am__include, and am__quote
+    # from the Makefile without running 'make'.
+    DEPDIR=`sed -n 's/^DEPDIR = //p' < "$mf"`
+    test -z "$DEPDIR" && continue
+    am__include=`sed -n 's/^am__include = //p' < "$mf"`
+    test -z "$am__include" && continue
+    am__quote=`sed -n 's/^am__quote = //p' < "$mf"`
+    # Find all dependency output files, they are included files with
+    # $(DEPDIR) in their names.  We invoke sed twice because it is the
+    # simplest approach to changing $(DEPDIR) to its actual value in the
+    # expansion.
+    for file in `sed -n "
+      s/^$am__include $am__quote\(.*(DEPDIR).*\)$am__quote"'$/\1/p' <"$mf" | \
+	 sed -e 's/\$(DEPDIR)/'"$DEPDIR"'/g'`; do
+      # Make sure the directory exists.
+      test -f "$dirpart/$file" && continue
+      fdir=`$as_dirname -- "$file" ||
+$as_expr X"$file" : 'X\(.*[^/]\)//*[^/][^/]*/*$' \| \
+	 X"$file" : 'X\(//\)[^/]' \| \
+	 X"$file" : 'X\(//\)$' \| \
+	 X"$file" : 'X\(/\)' \| . 2>/dev/null ||
+$as_echo X"$file" |
+    sed '/^X\(.*[^/]\)\/\/*[^/][^/]*\/*$/{
 	    s//\1/
 	    q
 	  }
-	  /^X\/\(\/\/\)$/{
+	  /^X\(\/\/\)[^/].*/{
 	    s//\1/
 	    q
 	  }
-	  /^X\/\(\/\).*/{
+	  /^X\(\/\/\)$/{
+	    s//\1/
+	    q
+	  }
+	  /^X\(\/\).*/{
 	    s//\1/
 	    q
 	  }
 	  s/.*/./; q'`
-    { echo "$as_me:$LINENO: cd "$am_dirpart" \
-      && sed -e '/# am--include-marker/d' "$am_filepart" \
-        | $MAKE -f - am--depfiles" >&5
-   (cd "$am_dirpart" \
-      && sed -e '/# am--include-marker/d' "$am_filepart" \
-        | $MAKE -f - am--depfiles) >&5 2>&5
-   ac_status=$?
-   echo "$as_me:$LINENO: \$? = $ac_status" >&5
-   (exit $ac_status); } || am_rc=$?
+      as_dir=$dirpart/$fdir; as_fn_mkdir_p
+      # echo "creating $dirpart/$file"
+      echo '# dummy' > "$dirpart/$file"
+    done
   done
-  if test $am_rc -ne 0; then
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
-$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
-as_fn_error $? "Something went wrong bootstrapping makefile fragments
-    for automatic dependency tracking.  Try re-running configure with the
-    '--disable-dependency-tracking' option to at least be able to build
-    the package (albeit without support for automatic dependency tracking).
-See \`config.log' for more details" "$LINENO" 5; }
-  fi
-  { am_dirpart=; unset am_dirpart;}
-  { am_filepart=; unset am_filepart;}
-  { am_mf=; unset am_mf;}
-  { am_rc=; unset am_rc;}
-  rm -f conftest-deps.mk
 }
  ;;
     "libtool":C)

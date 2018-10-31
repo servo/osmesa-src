@@ -34,6 +34,7 @@
 
 #include "freedreno_draw.h"
 #include "freedreno_context.h"
+#include "freedreno_fence.h"
 #include "freedreno_state.h"
 #include "freedreno_resource.h"
 #include "freedreno_query_acc.h"
@@ -98,6 +99,8 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 		return;
 	}
 
+	fd_fence_ref(pctx->screen, &ctx->last_fence, NULL);
+
 	/* Upload a user index buffer. */
 	struct pipe_resource *indexbuf = NULL;
 	unsigned index_offset = 0;
@@ -134,7 +137,7 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
 	mtx_lock(&ctx->screen->lock);
 
-	if (ctx->dirty & FD_DIRTY_FRAMEBUFFER) {
+	if (ctx->dirty & (FD_DIRTY_FRAMEBUFFER | FD_DIRTY_ZSA)) {
 		if (fd_depth_enabled(ctx)) {
 			if (fd_resource(pfb->zsbuf->texture)->valid) {
 				restore_buffers |= FD_BUFFER_DEPTH;
@@ -156,7 +159,9 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 			resource_written(batch, pfb->zsbuf->texture);
 			batch->gmem_reason |= FD_GMEM_STENCIL_ENABLED;
 		}
+	}
 
+	if (ctx->dirty & FD_DIRTY_FRAMEBUFFER) {
 		for (i = 0; i < pfb->nr_cbufs; i++) {
 			if (!pfb->cbufs[i])
 				continue;
@@ -382,6 +387,8 @@ fd_clear(struct pipe_context *pctx, unsigned buffers,
 	if (!fd_render_condition_check(pctx))
 		return;
 
+	fd_fence_ref(pctx->screen, &ctx->last_fence, NULL);
+
 	if (ctx->in_blit) {
 		fd_batch_reset(batch);
 		fd_context_all_dirty(ctx);
@@ -485,6 +492,7 @@ fd_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
 	batch = fd_bc_alloc_batch(&ctx->screen->batch_cache, ctx, true);
 	fd_batch_reference(&save_batch, ctx->batch);
 	fd_batch_reference(&ctx->batch, batch);
+	fd_context_all_dirty(ctx);
 
 	mtx_lock(&ctx->screen->lock);
 
@@ -528,6 +536,7 @@ fd_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
 	fd_batch_flush(batch, false, false);
 
 	fd_batch_reference(&ctx->batch, save_batch);
+	fd_context_all_dirty(ctx);
 	fd_batch_reference(&save_batch, NULL);
 	fd_batch_reference(&batch, NULL);
 }

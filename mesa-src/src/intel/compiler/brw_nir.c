@@ -674,7 +674,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
    /* Lower int64 instructions before nir_optimize so that loop unrolling
     * sees their actual cost.
     */
-   nir_lower_int64(nir, nir_lower_imul64 |
+   OPT(nir_lower_int64, nir_lower_imul64 |
                         nir_lower_isign64 |
                         nir_lower_divmod64);
 
@@ -687,7 +687,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
       OPT(nir_opt_large_constants, NULL, 32);
    }
 
-   nir_lower_bit_size(nir, lower_bit_size_callback, NULL);
+   OPT(nir_lower_bit_size, lower_bit_size_callback, NULL);
 
    if (is_scalar) {
       OPT(nir_lower_load_const_to_scalar);
@@ -712,7 +712,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
 
    nir_variable_mode indirect_mask =
       brw_nir_no_indirect_mask(compiler, nir->info.stage);
-   nir_lower_indirect_derefs(nir, indirect_mask);
+   OPT(nir_lower_indirect_derefs, indirect_mask);
 
    /* Get rid of split copies */
    nir = brw_nir_optimize(nir, compiler, is_scalar, false);
@@ -725,8 +725,8 @@ brw_nir_link_shaders(const struct brw_compiler *compiler,
                      nir_shader **producer, nir_shader **consumer)
 {
    nir_lower_io_arrays_to_elements(*producer, *consumer);
-   nir_validate_shader(*producer);
-   nir_validate_shader(*consumer);
+   nir_validate_shader(*producer, "after nir_lower_io_arrays_to_elements");
+   nir_validate_shader(*consumer, "after nir_lower_io_arrays_to_elements");
 
    const bool p_is_scalar =
       compiler->scalar_stage[(*producer)->info.stage];
@@ -879,7 +879,7 @@ brw_nir_apply_sampler_key(nir_shader *nir,
    tex_options.lower_xy_uxvx_external = key_tex->xy_uxvx_image_mask;
 
    if (nir_lower_tex(nir, &tex_options)) {
-      nir_validate_shader(nir);
+      nir_validate_shader(nir, "after nir_lower_tex");
       nir = brw_nir_optimize(nir, compiler, is_scalar, false);
    }
 
@@ -1034,7 +1034,7 @@ brw_nir_create_passthrough_tcs(void *mem_ctx, const struct brw_compiler *compile
       varyings &= ~BITFIELD64_BIT(varying);
    }
 
-   nir_validate_shader(nir);
+   nir_validate_shader(nir, "in brw_nir_create_passthrough_tcs");
 
    nir = brw_preprocess_nir(compiler, nir);
 

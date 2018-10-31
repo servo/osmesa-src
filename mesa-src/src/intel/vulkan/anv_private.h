@@ -381,6 +381,11 @@ vk_to_isl_color(VkClearColorValue color)
  * propagating errors. Might be useful to plug in a stack trace here.
  */
 
+VkResult __vk_errorv(struct anv_instance *instance, const void *object,
+                     VkDebugReportObjectTypeEXT type, VkResult error,
+                     const char *file, int line, const char *format,
+                     va_list args);
+
 VkResult __vk_errorf(struct anv_instance *instance, const void *object,
                      VkDebugReportObjectTypeEXT type, VkResult error,
                      const char *file, int line, const char *format, ...);
@@ -389,6 +394,9 @@ VkResult __vk_errorf(struct anv_instance *instance, const void *object,
 #define vk_error(error) __vk_errorf(NULL, NULL,\
                                     VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,\
                                     error, __FILE__, __LINE__, NULL)
+#define vk_errorv(instance, obj, error, format, args)\
+    __vk_errorv(instance, obj, REPORT_OBJECT_TYPE(obj), error,\
+                __FILE__, __LINE__, format, args)
 #define vk_errorf(instance, obj, error, format, ...)\
     __vk_errorf(instance, obj, REPORT_OBJECT_TYPE(obj), error,\
                 __FILE__, __LINE__, format, ## __VA_ARGS__)
@@ -1028,7 +1036,7 @@ struct anv_device {
 
     pthread_mutex_t                             mutex;
     pthread_cond_t                              queue_submit;
-    bool                                        lost;
+    bool                                        _lost;
 };
 
 static inline struct anv_state_pool *
@@ -1074,6 +1082,18 @@ anv_state_flush(struct anv_device *device, struct anv_state state)
 
 void anv_device_init_blorp(struct anv_device *device);
 void anv_device_finish_blorp(struct anv_device *device);
+
+VkResult _anv_device_set_lost(struct anv_device *device,
+                              const char *file, int line,
+                              const char *msg, ...);
+#define anv_device_set_lost(dev, ...) \
+   _anv_device_set_lost(dev, __FILE__, __LINE__, __VA_ARGS__)
+
+static inline bool
+anv_device_is_lost(struct anv_device *device)
+{
+   return unlikely(device->_lost);
+}
 
 VkResult anv_device_execbuf(struct anv_device *device,
                             struct drm_i915_gem_execbuffer2 *execbuf,
@@ -1685,7 +1705,8 @@ anv_buffer_get_range(struct anv_buffer *buffer, uint64_t offset, uint64_t range)
    if (range == VK_WHOLE_SIZE) {
       return buffer->size - offset;
    } else {
-      assert(range <= buffer->size);
+      assert(range + offset >= range);
+      assert(range + offset <= buffer->size);
       return range;
    }
 }

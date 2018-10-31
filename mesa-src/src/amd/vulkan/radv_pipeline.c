@@ -1591,7 +1591,7 @@ calculate_gs_ring_sizes(struct radv_pipeline *pipeline, const struct radv_gs_sta
 	unsigned esgs_ring_size = max_gs_waves * 2 * wave_size *
 		gs->vgt_esgs_ring_itemsize * 4 * gs_info->gs.vertices_in;
 	unsigned gsvs_ring_size = max_gs_waves * 2 * wave_size *
-		gs_info->gs.max_gsvs_emit_size * 1; // no streams in VK (gs->max_gs_stream + 1);
+		gs_info->gs.max_gsvs_emit_size;
 
 	min_esgs_ring_size = align(min_esgs_ring_size, alignment);
 	esgs_ring_size = align(esgs_ring_size, alignment);
@@ -1786,6 +1786,28 @@ radv_link_shaders(struct radv_pipeline *pipeline, nir_shader **shaders)
 	}
 	if(shaders[MESA_SHADER_VERTEX]) {
 		ordered_shaders[shader_count++] = shaders[MESA_SHADER_VERTEX];
+	}
+
+	if (shader_count > 1) {
+		unsigned first = ordered_shaders[shader_count - 1]->info.stage;
+		unsigned last = ordered_shaders[0]->info.stage;
+
+		if (ordered_shaders[0]->info.stage == MESA_SHADER_FRAGMENT &&
+		    ordered_shaders[1]->info.has_transform_feedback_varyings)
+			nir_link_xfb_varyings(ordered_shaders[1], ordered_shaders[0]);
+
+		for (int i = 0; i < shader_count; ++i)  {
+			nir_variable_mode mask = 0;
+
+			if (ordered_shaders[i]->info.stage != first)
+				mask = mask | nir_var_shader_in;
+
+			if (ordered_shaders[i]->info.stage != last)
+				mask = mask | nir_var_shader_out;
+
+			nir_lower_io_to_scalar_early(ordered_shaders[i], mask);
+			radv_optimize_nir(ordered_shaders[i], false, false);
+		}
 	}
 
 	for (int i = 1; i < shader_count; ++i)  {
@@ -2033,17 +2055,6 @@ void radv_create_shaders(struct radv_pipeline *pipeline,
 		modules[MESA_SHADER_FRAGMENT] = &fs_m;
 	}
 
-	/* Determine first and last stage. */
-	unsigned first = MESA_SHADER_STAGES;
-	unsigned last = 0;
-	for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
-		if (!pStages[i])
-			continue;
-		if (first == MESA_SHADER_STAGES)
-			first = i;
-		last = i;
-	}
-
 	for (unsigned i = 0; i < MESA_SHADER_STAGES; ++i) {
 		const VkPipelineShaderStageCreateInfo *stage = pStages[i];
 
@@ -2060,21 +2071,6 @@ void radv_create_shaders(struct radv_pipeline *pipeline,
 		 */
 		if (nir[i]->info.name) {
 			nir[i] = nir_shader_clone(NULL, nir[i]);
-		}
-
-		if (first != last) {
-			nir_variable_mode mask = 0;
-
-			if (i != first)
-				mask = mask | nir_var_shader_in;
-
-			if (i != last)
-				mask = mask | nir_var_shader_out;
-
-			if (!(flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT)) {
-				nir_lower_io_to_scalar_early(nir[i], mask);
-				radv_optimize_nir(nir[i], false, false);
-			}
 		}
 	}
 
@@ -2992,29 +2988,41 @@ radv_pipeline_generate_geometry_shader(struct radeon_cmdbuf *cs,
 				       const struct radv_gs_state *gs_state)
 {
 	struct radv_shader_variant *gs;
+	unsigned gs_max_out_vertices;
+	uint8_t *num_components;
+	uint8_t max_stream;
+	unsigned offset;
 	uint64_t va;
 
 	gs = pipeline->shaders[MESA_SHADER_GEOMETRY];
 	if (!gs)
 		return;
 
-	uint32_t gsvs_itemsize = gs->info.gs.max_gsvs_emit_size >> 2;
+	gs_max_out_vertices = gs->info.gs.vertices_out;
+	max_stream = gs->info.info.gs.max_stream;
+	num_components = gs->info.info.gs.num_stream_output_components;
+
+	offset = num_components[0] * gs_max_out_vertices;
 
 	radeon_set_context_reg_seq(cs, R_028A60_VGT_GSVS_RING_OFFSET_1, 3);
-	radeon_emit(cs, gsvs_itemsize);
-	radeon_emit(cs, gsvs_itemsize);
-	radeon_emit(cs, gsvs_itemsize);
-
-	radeon_set_context_reg(cs, R_028AB0_VGT_GSVS_RING_ITEMSIZE, gsvs_itemsize);
+	radeon_emit(cs, offset);
+	if (max_stream >= 1)
+		offset += num_components[1] * gs_max_out_vertices;
+	radeon_emit(cs, offset);
+	if (max_stream >= 2)
+		offset += num_components[2] * gs_max_out_vertices;
+	radeon_emit(cs, offset);
+	if (max_stream >= 3)
+		offset += num_components[3] * gs_max_out_vertices;
+	radeon_set_context_reg(cs, R_028AB0_VGT_GSVS_RING_ITEMSIZE, offset);
 
 	radeon_set_context_reg(cs, R_028B38_VGT_GS_MAX_VERT_OUT, gs->info.gs.vertices_out);
 
-	uint32_t gs_vert_itemsize = gs->info.gs.gsvs_vertex_size;
 	radeon_set_context_reg_seq(cs, R_028B5C_VGT_GS_VERT_ITEMSIZE, 4);
-	radeon_emit(cs, gs_vert_itemsize >> 2);
-	radeon_emit(cs, 0);
-	radeon_emit(cs, 0);
-	radeon_emit(cs, 0);
+	radeon_emit(cs, num_components[0]);
+	radeon_emit(cs, (max_stream >= 1) ? num_components[1] : 0);
+	radeon_emit(cs, (max_stream >= 2) ? num_components[2] : 0);
+	radeon_emit(cs, (max_stream >= 3) ? num_components[3] : 0);
 
 	uint32_t gs_num_invocations = gs->info.gs.invocations;
 	radeon_set_context_reg(cs, R_028B90_VGT_GS_INSTANCE_CNT,
@@ -3474,6 +3482,22 @@ radv_compute_vertex_input_state(struct radv_pipeline *pipeline,
 	}
 }
 
+static struct radv_shader_variant *
+radv_pipeline_get_streamout_shader(struct radv_pipeline *pipeline)
+{
+	int i;
+
+	for (i = MESA_SHADER_GEOMETRY; i >= MESA_SHADER_VERTEX; i--) {
+		struct radv_shader_variant *shader =
+			radv_get_shader(pipeline, i);
+
+		if (shader && shader->info.info.so.num_outputs > 0)
+			return shader;
+	}
+
+	return NULL;
+}
+
 static VkResult
 radv_pipeline_init(struct radv_pipeline *pipeline,
 		   struct radv_device *device,
@@ -3588,6 +3612,9 @@ radv_pipeline_init(struct radv_pipeline *pipeline,
 		else
 			pipeline->graphics.vtx_emit_num = 2;
 	}
+
+	/* Find the last vertex shader stage that eventually uses streamout. */
+	pipeline->streamout_shader = radv_pipeline_get_streamout_shader(pipeline);
 
 	result = radv_pipeline_scratch_init(device, pipeline);
 	radv_pipeline_generate_pm4(pipeline, pCreateInfo, extra, &blend, &tess, &gs, prim, gs_out);

@@ -116,55 +116,6 @@ draw_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 	}
 }
 
-static void
-draw_impl(struct fd_context *ctx, struct fd_ringbuffer *ring,
-		struct fd6_emit *emit, unsigned index_offset)
-{
-	const struct pipe_draw_info *info = emit->info;
-	enum pc_di_primtype primtype = ctx->primtypes[info->mode];
-
-	if (emit->dirty & (FD_DIRTY_VTXBUF | FD_DIRTY_VTXSTATE)) {
-		struct fd_ringbuffer *state;
-
-		state = fd6_build_vbo_state(emit, emit->vs);
-		fd6_emit_add_group(emit, state, FD6_GROUP_VBO, 0x6);
-		fd_ringbuffer_del(state);
-
-		state = fd6_build_vbo_state(emit, emit->bs);
-		fd6_emit_add_group(emit, state, FD6_GROUP_VBO_BINNING, 0x1);
-		fd_ringbuffer_del(state);
-	}
-
-	fd6_emit_state(ring, emit);
-
-	OUT_PKT4(ring, REG_A6XX_VFD_INDEX_OFFSET, 2);
-	OUT_RING(ring, info->index_size ? info->index_bias : info->start); /* VFD_INDEX_OFFSET */
-	OUT_RING(ring, info->start_instance);   /* VFD_INSTANCE_START_OFFSET */
-
-	OUT_PKT4(ring, REG_A6XX_PC_RESTART_INDEX, 1);
-	OUT_RING(ring, info->primitive_restart ? /* PC_RESTART_INDEX */
-			info->restart_index : 0xffffffff);
-
-	/* for debug after a lock up, write a unique counter value
-	 * to scratch7 for each draw, to make it easier to match up
-	 * register dumps to cmdstream.  The combination of IB
-	 * (scratch6) and DRAW is enough to "triangulate" the
-	 * particular draw that caused lockup.
-	 */
-	emit_marker6(ring, 7);
-
-	if (info->indirect) {
-		draw_emit_indirect(ctx->batch, ring, primtype,
-						   info, index_offset);
-	} else {
-		draw_emit(ctx->batch, ring, primtype,
-				  info, index_offset);
-	}
-
-	emit_marker6(ring, 7);
-	fd_reset_wfi(ctx->batch);
-}
-
 /* fixup dirty shader state in case some "unrelated" (from the state-
  * tracker's perspective) state change causes us to switch to a
  * different variant.
@@ -256,7 +207,37 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 	 */
 	emit.no_lrz_write = fp->writes_pos || fp->has_kill;
 
-	draw_impl(ctx, ctx->batch->draw, &emit, index_offset);
+	struct fd_ringbuffer *ring = ctx->batch->draw;
+	enum pc_di_primtype primtype = ctx->primtypes[info->mode];
+
+	fd6_emit_state(ring, &emit);
+
+	OUT_PKT4(ring, REG_A6XX_VFD_INDEX_OFFSET, 2);
+	OUT_RING(ring, info->index_size ? info->index_bias : info->start); /* VFD_INDEX_OFFSET */
+	OUT_RING(ring, info->start_instance);   /* VFD_INSTANCE_START_OFFSET */
+
+	OUT_PKT4(ring, REG_A6XX_PC_RESTART_INDEX, 1);
+	OUT_RING(ring, info->primitive_restart ? /* PC_RESTART_INDEX */
+			info->restart_index : 0xffffffff);
+
+	/* for debug after a lock up, write a unique counter value
+	 * to scratch7 for each draw, to make it easier to match up
+	 * register dumps to cmdstream.  The combination of IB
+	 * (scratch6) and DRAW is enough to "triangulate" the
+	 * particular draw that caused lockup.
+	 */
+	emit_marker6(ring, 7);
+
+	if (info->indirect) {
+		draw_emit_indirect(ctx->batch, ring, primtype,
+						   info, index_offset);
+	} else {
+		draw_emit(ctx->batch, ring, primtype,
+				  info, index_offset);
+	}
+
+	emit_marker6(ring, 7);
+	fd_reset_wfi(ctx->batch);
 
 	if (emit.streamout_mask) {
 		struct fd_ringbuffer *ring = ctx->batch->draw;
@@ -297,8 +278,7 @@ fd6_clear_lrz(struct fd_batch *batch, struct fd_resource *zsbuf, double depth)
 	// draw
 
 	if (!batch->lrz_clear) {
-		batch->lrz_clear = fd_ringbuffer_new(batch->ctx->pipe, 0x1000);
-		fd_ringbuffer_set_parent(batch->lrz_clear, batch->gmem);
+		batch->lrz_clear = fd_submit_new_ringbuffer(batch->submit, 0x1000, 0);
 	}
 
 	ring = batch->lrz_clear;

@@ -1,5 +1,6 @@
 
 #include "nir.h"
+#include "nir_builder.h"
 #include "nir_search.h"
 #include "nir_search_helpers.h"
 
@@ -35887,8 +35888,8 @@ static const struct transform nir_opt_algebraic_ldexp_xforms[] = {
 };
 
 static bool
-nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
-                   void *mem_ctx)
+nir_opt_algebraic_block(nir_builder *build, nir_block *block,
+                   const bool *condition_flags)
 {
    bool progress = false;
 
@@ -35905,8 +35906,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_imul_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_imul_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -35916,8 +35916,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_udiv_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_udiv_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -35927,8 +35926,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_idiv_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_idiv_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -35938,8 +35936,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_umod_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_umod_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -35949,8 +35946,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_imod_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_imod_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -35960,8 +35956,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fneg_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fneg_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -35971,8 +35966,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ineg_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ineg_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -35982,8 +35976,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fabs_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fabs_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -35993,8 +35986,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_iabs_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_iabs_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36004,8 +35996,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fadd_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fadd_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36015,8 +36006,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_iadd_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_iadd_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36026,8 +36016,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_usadd_4x8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_usadd_4x8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36037,8 +36026,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fmul_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fmul_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36048,8 +36036,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_umul_unorm_4x8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_umul_unorm_4x8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36059,8 +36046,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ffma_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ffma_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36070,8 +36056,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_flrp_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_flrp_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36081,8 +36066,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ffract_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ffract_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36092,8 +36076,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fdot4_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fdot4_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36103,8 +36086,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fdot3_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fdot3_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36114,8 +36096,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ishl_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ishl_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36125,8 +36106,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_inot_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_inot_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36136,8 +36116,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fge_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fge_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36147,8 +36126,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fne_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fne_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36158,8 +36136,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_feq_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_feq_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36169,8 +36146,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_flt_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_flt_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36180,8 +36156,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ieq_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ieq_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36191,8 +36166,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ine_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ine_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36202,8 +36176,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fmax_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fmax_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36213,8 +36186,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fmin_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fmin_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36224,8 +36196,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_bcsel_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_bcsel_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36235,8 +36206,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_imin_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_imin_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36246,8 +36216,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_imax_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_imax_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36257,8 +36226,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_umin_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_umin_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36268,8 +36236,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_umax_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_umax_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36279,8 +36246,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fsat_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fsat_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36290,8 +36256,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_extract_u8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_extract_u8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36301,8 +36266,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ior_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ior_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36312,8 +36276,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_iand_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_iand_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36323,8 +36286,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ilt_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ilt_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36334,8 +36296,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ige_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ige_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36345,8 +36306,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ult_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ult_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36356,8 +36316,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_uge_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_uge_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36367,8 +36326,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_slt_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_slt_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36378,8 +36336,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_sge_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_sge_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36389,8 +36346,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_seq_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_seq_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36400,8 +36356,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_sne_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_sne_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36411,8 +36366,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fand_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fand_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36422,8 +36376,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fxor_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fxor_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36433,8 +36386,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ixor_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ixor_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36444,8 +36396,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ishr_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ishr_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36455,8 +36406,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ushr_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ushr_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36466,8 +36416,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fexp2_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fexp2_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36477,8 +36426,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_flog2_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_flog2_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36488,8 +36436,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fpow_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fpow_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36499,8 +36446,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fsqrt_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fsqrt_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36510,8 +36456,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_frcp_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_frcp_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36521,8 +36466,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_frsq_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_frsq_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36532,8 +36476,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fdiv_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fdiv_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36543,8 +36486,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fcsel_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fcsel_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36554,8 +36496,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_i2b_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_i2b_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36565,8 +36506,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2i32_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2i32_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36576,8 +36516,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2u32_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2u32_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36587,8 +36526,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_unpack_64_2x32_split_x_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_unpack_64_2x32_split_x_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36598,8 +36536,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_unpack_64_2x32_split_y_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_unpack_64_2x32_split_y_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36609,8 +36546,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_pack_64_2x32_split_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_pack_64_2x32_split_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36620,8 +36556,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fsub_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fsub_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36631,8 +36566,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_isub_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_isub_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36642,8 +36576,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ussub_4x8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ussub_4x8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36653,8 +36586,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_fmod_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_fmod_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36664,8 +36596,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_frem_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_frem_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36675,8 +36606,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_uadd_carry_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_uadd_carry_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36686,8 +36616,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_usub_borrow_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_usub_borrow_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36697,8 +36626,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_bitfield_insert_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_bitfield_insert_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36708,8 +36636,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_bfm_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_bfm_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36719,8 +36646,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ibitfield_extract_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ibitfield_extract_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36730,8 +36656,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ubitfield_extract_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ubitfield_extract_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36741,8 +36666,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ifind_msb_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ifind_msb_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36752,8 +36676,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_find_lsb_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_find_lsb_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36763,8 +36686,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_extract_i8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_extract_i8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36774,8 +36696,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_extract_i16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_extract_i16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36785,8 +36706,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_extract_u16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_extract_u16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36796,8 +36716,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_pack_unorm_2x16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_pack_unorm_2x16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36807,8 +36726,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_pack_unorm_4x8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_pack_unorm_4x8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36818,8 +36736,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_pack_snorm_2x16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_pack_snorm_2x16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36829,8 +36746,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_pack_snorm_4x8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_pack_snorm_4x8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36840,8 +36756,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_unpack_unorm_2x16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_unpack_unorm_2x16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36851,8 +36766,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_unpack_unorm_4x8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_unpack_unorm_4x8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36862,8 +36776,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_unpack_snorm_2x16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_unpack_snorm_2x16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36873,8 +36786,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_unpack_snorm_4x8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_unpack_snorm_4x8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36884,8 +36796,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2b_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2b_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36895,8 +36806,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2f16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2f16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36906,8 +36816,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2f32_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2f32_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36917,8 +36826,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2f64_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2f64_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36928,8 +36836,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2u8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2u8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36939,8 +36846,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2u16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2u16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36950,8 +36856,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2u64_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2u64_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36961,8 +36866,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2i8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2i8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36972,8 +36876,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2i16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2i16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36983,8 +36886,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_f2i64_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_f2i64_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -36994,8 +36896,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_u2f16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_u2f16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37005,8 +36906,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_u2f32_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_u2f32_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37016,8 +36916,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_u2f64_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_u2f64_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37027,8 +36926,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_u2u8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_u2u8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37038,8 +36936,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_u2u16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_u2u16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37049,8 +36946,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_u2u32_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_u2u32_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37060,8 +36956,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_u2u64_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_u2u64_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37071,8 +36966,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_i2f16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_i2f16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37082,8 +36976,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_i2f32_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_i2f32_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37093,8 +36986,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_i2f64_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_i2f64_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37104,8 +36996,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_i2i8_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_i2i8_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37115,8 +37006,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_i2i16_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_i2i16_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37126,8 +37016,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_i2i32_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_i2i32_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37137,8 +37026,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_i2i64_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_i2i64_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37148,8 +37036,7 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_ldexp_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_ldexp_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -37166,11 +37053,13 @@ nir_opt_algebraic_block(nir_block *block, const bool *condition_flags,
 static bool
 nir_opt_algebraic_impl(nir_function_impl *impl, const bool *condition_flags)
 {
-   void *mem_ctx = ralloc_parent(impl);
    bool progress = false;
 
+   nir_builder build;
+   nir_builder_init(&build, impl);
+
    nir_foreach_block_reverse(block, impl) {
-      progress |= nir_opt_algebraic_block(block, condition_flags, mem_ctx);
+      progress |= nir_opt_algebraic_block(&build, block, condition_flags);
    }
 
    if (progress)
@@ -37244,6 +37133,7 @@ nir_opt_algebraic(nir_shader *shader)
 
 
 #include "nir.h"
+#include "nir_builder.h"
 #include "nir_search.h"
 #include "nir_search_helpers.h"
 
@@ -38052,8 +37942,8 @@ static const struct transform nir_opt_algebraic_before_ffma_iadd_xforms[] = {
 };
 
 static bool
-nir_opt_algebraic_before_ffma_block(nir_block *block, const bool *condition_flags,
-                   void *mem_ctx)
+nir_opt_algebraic_before_ffma_block(nir_builder *build, nir_block *block,
+                   const bool *condition_flags)
 {
    bool progress = false;
 
@@ -38070,8 +37960,7 @@ nir_opt_algebraic_before_ffma_block(nir_block *block, const bool *condition_flag
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_before_ffma_fmul_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_before_ffma_fmul_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -38081,8 +37970,7 @@ nir_opt_algebraic_before_ffma_block(nir_block *block, const bool *condition_flag
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_before_ffma_imul_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_before_ffma_imul_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -38092,8 +37980,7 @@ nir_opt_algebraic_before_ffma_block(nir_block *block, const bool *condition_flag
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_before_ffma_fadd_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_before_ffma_fadd_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -38103,8 +37990,7 @@ nir_opt_algebraic_before_ffma_block(nir_block *block, const bool *condition_flag
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_before_ffma_iadd_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_before_ffma_iadd_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -38121,11 +38007,13 @@ nir_opt_algebraic_before_ffma_block(nir_block *block, const bool *condition_flag
 static bool
 nir_opt_algebraic_before_ffma_impl(nir_function_impl *impl, const bool *condition_flags)
 {
-   void *mem_ctx = ralloc_parent(impl);
    bool progress = false;
 
+   nir_builder build;
+   nir_builder_init(&build, impl);
+
    nir_foreach_block_reverse(block, impl) {
-      progress |= nir_opt_algebraic_before_ffma_block(block, condition_flags, mem_ctx);
+      progress |= nir_opt_algebraic_before_ffma_block(&build, block, condition_flags);
    }
 
    if (progress)
@@ -38199,6 +38087,7 @@ nir_opt_algebraic_before_ffma(nir_shader *shader)
 
 
 #include "nir.h"
+#include "nir_builder.h"
 #include "nir_search.h"
 #include "nir_search_helpers.h"
 
@@ -39305,8 +39194,8 @@ static const struct transform nir_opt_algebraic_late_fmax_xforms[] = {
 };
 
 static bool
-nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
-                   void *mem_ctx)
+nir_opt_algebraic_late_block(nir_builder *build, nir_block *block,
+                   const bool *condition_flags)
 {
    bool progress = false;
 
@@ -39323,8 +39212,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_flt_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_flt_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39334,8 +39222,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fge_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fge_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39345,8 +39232,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_feq_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_feq_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39356,8 +39242,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fne_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fne_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39367,8 +39252,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fdot2_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fdot2_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39378,8 +39262,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fdot3_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fdot3_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39389,8 +39272,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fdot4_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fdot4_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39400,8 +39282,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fdph_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fdph_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39411,8 +39292,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_b2f_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_b2f_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39422,8 +39302,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fneg_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fneg_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39433,8 +39312,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fmin_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fmin_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39444,8 +39322,7 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(nir_opt_algebraic_late_fmax_xforms); i++) {
             const struct transform *xform = &nir_opt_algebraic_late_fmax_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -39462,11 +39339,13 @@ nir_opt_algebraic_late_block(nir_block *block, const bool *condition_flags,
 static bool
 nir_opt_algebraic_late_impl(nir_function_impl *impl, const bool *condition_flags)
 {
-   void *mem_ctx = ralloc_parent(impl);
    bool progress = false;
 
+   nir_builder build;
+   nir_builder_init(&build, impl);
+
    nir_foreach_block_reverse(block, impl) {
-      progress |= nir_opt_algebraic_late_block(block, condition_flags, mem_ctx);
+      progress |= nir_opt_algebraic_late_block(&build, block, condition_flags);
    }
 
    if (progress)

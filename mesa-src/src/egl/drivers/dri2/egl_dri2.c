@@ -341,7 +341,7 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
       _eglLinkConfig(&conf->base);
    }
    else {
-      assert(0);
+      unreachable("duplicates should not be possible");
       return NULL;
    }
 
@@ -1108,7 +1108,7 @@ dri2_create_context_attribs_error(int dri_error)
       break;
 
    default:
-      assert(0);
+      assert(!"unknown dri_error code");
       egl_error = EGL_BAD_MATCH;
       break;
    }
@@ -1815,7 +1815,7 @@ dri2_release_tex_image(_EGLDriver *drv,
       target = GL_TEXTURE_2D;
       break;
    default:
-      assert(0);
+      assert(!"missing texture target");
    }
 
    if (dri2_dpy->tex_buffer->base.version >= 3 &&
@@ -1878,7 +1878,7 @@ egl_error_from_dri_image_error(int dri_error)
    case __DRI_IMAGE_ERROR_BAD_ACCESS:
       return EGL_BAD_ACCESS;
    default:
-      assert(0);
+      assert(!"unknown dri_error code");
       return EGL_BAD_ALLOC;
    }
 }
@@ -3255,16 +3255,11 @@ dri2_interop_export_object(_EGLDisplay *dpy, _EGLContext *ctx,
 
 /**
  * This is the main entrypoint into the driver, called by libEGL.
- * Create a new _EGLDriver object and init its dispatch table.
+ * Gets an _EGLDriver object and init its dispatch table.
  */
-_EGLDriver *
-_eglBuiltInDriver(void)
+void
+_eglInitDriver(_EGLDriver *dri2_drv)
 {
-   _EGLDriver *dri2_drv = calloc(1, sizeof *dri2_drv);
-   if (!dri2_drv)
-      return NULL;
-
-   _eglInitDriverFallbacks(dri2_drv);
    dri2_drv->API.Initialize = dri2_initialize;
    dri2_drv->API.Terminate = dri2_terminate;
    dri2_drv->API.CreateContext = dri2_create_context;
@@ -3314,8 +3309,4 @@ _eglBuiltInDriver(void)
    dri2_drv->API.GLInteropExportObject = dri2_interop_export_object;
    dri2_drv->API.DupNativeFenceFDANDROID = dri2_dup_native_fence_fd;
    dri2_drv->API.SetBlobCacheFuncsANDROID = dri2_set_blob_cache_funcs;
-
-   dri2_drv->Name = "DRI2";
-
-   return dri2_drv;
 }

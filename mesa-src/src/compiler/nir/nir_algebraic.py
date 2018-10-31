@@ -362,8 +362,8 @@ class BitSizeValidator(object):
       if var_class == 0:
          self._var_classes[var.index] = bit_class
       else:
-         canon_bit_class = self._class_relation.get_canonical(var_class)
-         canon_var_class = self._class_relation.get_canonical(bit_class)
+         canon_var_class = self._class_relation.get_canonical(var_class)
+         canon_bit_class = self._class_relation.get_canonical(bit_class)
          assert canon_var_class < 0 or canon_bit_class < 0 or \
                 canon_var_class == canon_bit_class, \
                 'Variable {0} cannot be both {1}-bit and {2}-bit' \
@@ -563,6 +563,7 @@ class SearchAndReplace(object):
 
 _algebraic_pass_template = mako.template.Template("""
 #include "nir.h"
+#include "nir_builder.h"
 #include "nir_search.h"
 #include "nir_search_helpers.h"
 
@@ -591,8 +592,8 @@ static const struct transform ${pass_name}_${opcode}_xforms[] = {
 % endfor
 
 static bool
-${pass_name}_block(nir_block *block, const bool *condition_flags,
-                   void *mem_ctx)
+${pass_name}_block(nir_builder *build, nir_block *block,
+                   const bool *condition_flags)
 {
    bool progress = false;
 
@@ -610,8 +611,7 @@ ${pass_name}_block(nir_block *block, const bool *condition_flags,
          for (unsigned i = 0; i < ARRAY_SIZE(${pass_name}_${opcode}_xforms); i++) {
             const struct transform *xform = &${pass_name}_${opcode}_xforms[i];
             if (condition_flags[xform->condition_offset] &&
-                nir_replace_instr(alu, xform->search, xform->replace,
-                                  mem_ctx)) {
+                nir_replace_instr(build, alu, xform->search, xform->replace)) {
                progress = true;
                break;
             }
@@ -629,11 +629,13 @@ ${pass_name}_block(nir_block *block, const bool *condition_flags,
 static bool
 ${pass_name}_impl(nir_function_impl *impl, const bool *condition_flags)
 {
-   void *mem_ctx = ralloc_parent(impl);
    bool progress = false;
 
+   nir_builder build;
+   nir_builder_init(&build, impl);
+
    nir_foreach_block_reverse(block, impl) {
-      progress |= ${pass_name}_block(block, condition_flags, mem_ctx);
+      progress |= ${pass_name}_block(&build, block, condition_flags);
    }
 
    if (progress)

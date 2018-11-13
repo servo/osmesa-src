@@ -1,6 +1,18 @@
 use std::env;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::process::Command;
+
+fn find_make() -> OsString {
+    if let Some(make) = env::var_os("MAKE") {
+        return make
+    }
+
+    match Command::new("gmake").status() {
+        Ok(_) => OsStr::new("gmake").to_os_string(),
+        Err(_) => OsStr::new("make").to_os_string(),
+    }
+}
 
 fn main() {
     let src = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
@@ -45,7 +57,7 @@ fn main() {
                 .arg("--enable-gallium-osmesa")
                 .arg("--with-gallium-drivers=swrast"));
 
-    run(Command::new("make")
+    run(Command::new(find_make())
                 .env("MAKEFLAGS", env::var("CARGO_MAKEFLAGS").unwrap_or_default())
                 .env("PYTHONPATH", src.join("Mako-1.0.7.zip"))
                 .current_dir(&dst));

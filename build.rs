@@ -45,6 +45,8 @@ fn main() {
                 .env("XCB_DRI2_LIBS", ".")
                 .env("EXPAT_CFLAGS", ".")
                 .env("EXPAT_LIBS", ".")
+                .arg(format!("--host={}", env::var("TARGET").unwrap()))
+                .arg(format!("--build={}", env::var("HOST").unwrap()))
                 .arg("--disable-dri")
                 .arg("--disable-driglx-direct")
                 .arg("--disable-dri3")
@@ -53,6 +55,7 @@ fn main() {
                 .arg("--disable-gles1")
                 .arg("--disable-gles2")
                 .arg("--disable-glx")
+                .arg("--disable-glx-tls")
                 .arg("--with-platforms=")
                 .arg("--enable-gallium-osmesa")
                 .arg("--with-gallium-drivers=swrast"));

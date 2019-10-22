@@ -915,6 +915,10 @@ OSMesaGetDepthBuffer(OSMesaContext c, GLint *width, GLint *height,
    struct pipe_transfer *transfer = NULL;
    struct pipe_box box;
 
+   if (!res) {
+      return GL_FALSE;
+   }
+
    /*
     * Note: we can't really implement this function with gallium as
     * we did for swrast.  We can't just map the resource and leave it

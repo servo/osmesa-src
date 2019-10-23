@@ -242,7 +242,7 @@ osmesa_choose_format(GLenum format, GLenum type)
       break;
    case OSMESA_RGB:
       if (type == GL_UNSIGNED_BYTE) {
-         return PIPE_FORMAT_R8G8B8_UNORM;
+         return PIPE_FORMAT_R8G8B8X8_UNORM;
       }
       else if (type == GL_UNSIGNED_SHORT) {
          return PIPE_FORMAT_R16G16B16_UNORM;

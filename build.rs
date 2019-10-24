@@ -1,78 +1,69 @@
+extern crate meson;
+
 use std::env;
-use std::ffi::{OsStr, OsString};
+use std::fs::DirBuilder;
 use std::path::PathBuf;
 use std::process::Command;
 
-fn find_make() -> OsString {
-    if let Some(make) = env::var_os("MAKE") {
-        return make
+/// Runs meson and/or ninja to build a project.
+fn run_meson(lib: &str, dir: &str, args: &[&str]) {
+    if !is_configured(dir) {
+        let mut meson_args = vec![".", dir];
+        meson_args.extend(args);
+        run_command(lib, "meson", &meson_args);
     }
-
-    match Command::new("gmake").status() {
-        Ok(_) => OsStr::new("gmake").to_os_string(),
-        Err(_) => OsStr::new("make").to_os_string(),
-    }
+    run_command(dir, "ninja", &[]);
 }
+
+fn run_command(dir: &str, name: &str, args: &[&str]) {
+    let mut cmd = Command::new(name);
+    cmd.current_dir(dir);
+    if args.len() > 0 {
+        cmd.args(args);
+    }
+    eprintln!("{:?}", dir);
+    eprintln!("{:?}", cmd);
+    let status = cmd.status().expect("cannot run command");
+    assert!(status.success());
+}
+
+fn is_configured(dir: &str) -> bool {
+    let mut path = PathBuf::from(dir);
+    path.push("build.ninja");
+    return path.as_path().exists();
+}
+
+//XXX pip3 install mako
 
 fn main() {
-    let src = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-
-    // Prevent aclocal being run due to timestamps being messed up by git.
-    // https://stackoverflow.com/questions/18769770/user-of-autotools-generated-tarball-gets-error-message-aclocal-1-13-command-no
-    run(Command::new("touch")
-                .current_dir(src.join("mesa-src"))
-                .arg("configure.ac")
-                .arg("aclocal.m4")
-                .arg("configure")
-                .arg("Makefile.am")
-                .arg("Makefile.in")
-                .arg("src/compiler/glsl/glcpp/glcpp-lex.c")
-                .arg("src/mesa/program/lex.yy.c")
-                .arg("src/compiler/glsl/glcpp/glcpp-parse.c")
-                .arg("src/compiler/glsl/glsl_parser.cpp")
-                .arg("src/mesa/program/program_parse.tab.c")
-                .arg("src/compiler/glsl/glsl_lexer.cpp")
-                .arg("src/glx/indirect.h")
-                .arg("src/glx/indirect_init.c")
-                .arg("src/mapi/glapi/glapi_mapi_tmp.h"));
-
-    run(Command::new(src.join("mesa-src/configure"))
-                .current_dir(&dst)
-                .env("PTHREADSTUBS_CFLAGS", ".")
-                .env("PTHREADSTUBS_LIBS", ".")
-                .env("XCB_DRI2_CFLAGS", ".")
-                .env("XCB_DRI2_LIBS", ".")
-                .env("EXPAT_CFLAGS", ".")
-                .env("EXPAT_LIBS", ".")
-                .arg(format!("--host={}", env::var("TARGET").unwrap()))
-                .arg(format!("--build={}", env::var("HOST").unwrap()))
-                .arg("--disable-dri")
-                .arg("--disable-driglx-direct")
-                .arg("--disable-dri3")
-                .arg("--disable-egl")
-                .arg("--disable-gbm")
-                .arg("--disable-gles1")
-                .arg("--disable-gles2")
-                .arg("--disable-glx")
-                .arg("--disable-glx-tls")
-                .arg("--with-platforms=")
-                .arg("--enable-gallium-osmesa")
-                .arg("--with-gallium-drivers=swrast"));
-
-    run(Command::new(find_make())
-                .env("MAKEFLAGS", env::var("CARGO_MAKEFLAGS").unwrap_or_default())
-                .env("PYTHONPATH", src.join("Mako-1.0.7.zip"))
-                .current_dir(&dst));
-}
-
-fn run(cmd: &mut Command) {
-    println!("running: {:?}", cmd);
-    let status = match cmd.status() {
-        Ok(s) => s,
-        Err(e) => panic!("failed to get status: {}", e),
-    };
-    if !status.success() {
-        panic!("failed with: {}", status);
+    if env::var_os("HOST").unwrap() != env::var_os("TARGET").unwrap() {
+        panic!("meson build is not set up for cross-compilation");
     }
+
+    let mut src = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    src.push("mesa-src");
+    let src = src.to_str().unwrap();
+    let mut dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    dst.push("build");
+    if !dst.as_path().exists() {
+        DirBuilder::new().create(&dst).unwrap();
+    }
+
+    let dst = dst.to_str().unwrap();
+
+    run_meson(src, dst, &[
+        "-D", "platforms=[]",
+        "-D", "dri3=false",
+        "-D", "gles1=false",
+        "-D", "gles2=false",
+        "-D", "egl=false",
+        "-D", "osmesa=gallium",
+        "-D", "glx=disabled",
+        "-D", "gbm=false",
+        "-D", "glx-direct=false",
+        "-D", "gallium-drivers=['swrast']",
+        "-D", "vulkan-drivers=[]",
+        "-D", "dri-drivers=[]",
+        "-D", "c_std=c11",
+    ]);
 }

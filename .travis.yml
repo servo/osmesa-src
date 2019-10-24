@@ -4,8 +4,9 @@ before_install:
   - sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
   - sudo add-apt-repository 'deb http://apt.llvm.org/xenial/ llvm-toolchain-xenial-3.9 main' -y
   - sudo apt-get update -q
-  - sudo apt-get install clang-3.9 llvm-3.9-dev llvm-3.9-runtime -y
+  - sudo apt-get install clang-3.9 llvm-3.9-dev llvm-3.9-runtime python3-pip python3-setuptools -y
   - export LLVM_CONFIG=llvm-config-3.9
+  - pip3 install mako meson wheel ninja
 rust:
   - nightly
   - beta

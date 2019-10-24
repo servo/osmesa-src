@@ -43,14 +43,15 @@ si_create_so_target(struct pipe_context *ctx,
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_streamout_target *t;
-	struct r600_resource *rbuffer = r600_resource(buffer);
+	struct si_resource *buf = si_resource(buffer);
 
 	t = CALLOC_STRUCT(si_streamout_target);
 	if (!t) {
 		return NULL;
 	}
 
-	u_suballocator_alloc(sctx->allocator_zeroed_memory, 4, 4,
+	unsigned buf_filled_size_size = sctx->screen->use_ngg_streamout ? 8 : 4;
+	u_suballocator_alloc(sctx->allocator_zeroed_memory, buf_filled_size_size, 4,
 			     &t->buf_filled_size_offset,
 			     (struct pipe_resource**)&t->buf_filled_size);
 	if (!t->buf_filled_size) {
@@ -64,7 +65,7 @@ si_create_so_target(struct pipe_context *ctx,
 	t->b.buffer_offset = buffer_offset;
 	t->b.buffer_size = buffer_size;
 
-	util_range_add(&rbuffer->valid_buffer_range, buffer_offset,
+	util_range_add(&buf->b.b, &buf->valid_buffer_range, buffer_offset,
 		       buffer_offset + buffer_size);
 	return &t->b;
 }
@@ -74,7 +75,7 @@ static void si_so_target_destroy(struct pipe_context *ctx,
 {
 	struct si_streamout_target *t = (struct si_streamout_target*)target;
 	pipe_resource_reference(&t->b.buffer, NULL);
-	r600_resource_reference(&t->buf_filled_size, NULL);
+	si_resource_reference(&t->buf_filled_size, NULL);
 	FREE(t);
 }
 
@@ -93,10 +94,9 @@ static void si_set_streamout_targets(struct pipe_context *ctx,
 				     const unsigned *offsets)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_buffer_resources *buffers = &sctx->rw_buffers;
-	struct si_descriptors *descs = &sctx->descriptors[SI_DESCS_RW_BUFFERS];
 	unsigned old_num_targets = sctx->streamout.num_targets;
-	unsigned i, bufidx;
+	unsigned i;
+	bool wait_now = false;
 
 	/* We are going to unbind the buffers. Mark which caches need to be flushed. */
 	if (sctx->streamout.num_targets && sctx->streamout.begin_emitted) {
@@ -105,13 +105,13 @@ static void si_set_streamout_targets(struct pipe_context *ctx,
 		 * to flush it.
 		 *
 		 * The only cases which requires flushing it is VGT DMA index
-		 * fetching (on <= CIK) and indirect draw data, which are rare
+		 * fetching (on <= GFX7) and indirect draw data, which are rare
 		 * cases. Thus, flag the TC L2 dirtiness in the resource and
 		 * handle it at draw call time.
 		 */
 		for (i = 0; i < sctx->streamout.num_targets; i++)
 			if (sctx->streamout.targets[i])
-				r600_resource(sctx->streamout.targets[i]->b.buffer)->TC_L2_dirty = true;
+				si_resource(sctx->streamout.targets[i]->b.buffer)->TC_L2_dirty = true;
 
 		/* Invalidate the scalar cache in case a streamout buffer is
 		 * going to be used as a constant buffer.
@@ -123,17 +123,35 @@ static void si_set_streamout_targets(struct pipe_context *ctx,
 		 * VS_PARTIAL_FLUSH is required if the buffers are going to be
 		 * used as an input immediately.
 		 */
-		sctx->flags |= SI_CONTEXT_INV_SMEM_L1 |
-				 SI_CONTEXT_INV_VMEM_L1 |
-				 SI_CONTEXT_VS_PARTIAL_FLUSH;
+		sctx->flags |= SI_CONTEXT_INV_SCACHE |
+			       SI_CONTEXT_INV_VCACHE;
+
+		/* The BUFFER_FILLED_SIZE is written using a PS_DONE event. */
+		if (sctx->screen->use_ngg_streamout) {
+			sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH;
+
+			/* Wait now. This is needed to make sure that GDS is not
+			 * busy at the end of IBs.
+			 *
+			 * Also, the next streamout operation will overwrite GDS,
+			 * so we need to make sure that it's idle.
+			 */
+			wait_now = true;
+		} else {
+			sctx->flags |= SI_CONTEXT_VS_PARTIAL_FLUSH;
+		}
 	}
 
 	/* All readers of the streamout targets need to be finished before we can
 	 * start writing to the targets.
 	 */
-	if (num_targets)
+	if (num_targets) {
+		if (sctx->screen->use_ngg_streamout)
+			si_allocate_gds(sctx);
+
 		sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH |
-		                 SI_CONTEXT_CS_PARTIAL_FLUSH;
+			       SI_CONTEXT_CS_PARTIAL_FLUSH;
+	}
 
 	/* Streamout buffers must be bound in 2 places:
 	 * 1) in VGT by setting the VGT_STRMOUT registers
@@ -175,57 +193,98 @@ static void si_set_streamout_targets(struct pipe_context *ctx,
 
 	/* Set the shader resources.*/
 	for (i = 0; i < num_targets; i++) {
-		bufidx = SI_VS_STREAMOUT_BUF0 + i;
-
 		if (targets[i]) {
-			struct pipe_resource *buffer = targets[i]->buffer;
-			uint64_t va = r600_resource(buffer)->gpu_address;
+			struct pipe_shader_buffer sbuf;
+			sbuf.buffer = targets[i]->buffer;
 
-			/* Set the descriptor.
-			 *
-			 * On VI, the format must be non-INVALID, otherwise
-			 * the buffer will be considered not bound and store
-			 * instructions will be no-ops.
-			 */
-			uint32_t *desc = descs->list + bufidx*4;
-			desc[0] = va;
-			desc[1] = S_008F04_BASE_ADDRESS_HI(va >> 32);
-			desc[2] = 0xffffffff;
-			desc[3] = S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) |
-				  S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
-				  S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) |
-				  S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W) |
-				  S_008F0C_DATA_FORMAT(V_008F0C_BUF_DATA_FORMAT_32);
+			if (sctx->screen->use_ngg_streamout) {
+				sbuf.buffer_offset = targets[i]->buffer_offset;
+				sbuf.buffer_size = targets[i]->buffer_size;
+			} else {
+				sbuf.buffer_offset = 0;
+				sbuf.buffer_size = targets[i]->buffer_offset +
+						   targets[i]->buffer_size;
+			}
 
-			/* Set the resource. */
-			pipe_resource_reference(&buffers->buffers[bufidx],
-						buffer);
-			radeon_add_to_gfx_buffer_list_check_mem(sctx,
-							    r600_resource(buffer),
-							    buffers->shader_usage,
-							    RADEON_PRIO_SHADER_RW_BUFFER,
-							    true);
-			r600_resource(buffer)->bind_history |= PIPE_BIND_STREAM_OUTPUT;
-
-			buffers->enabled_mask |= 1u << bufidx;
+			si_set_rw_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, &sbuf);
+			si_resource(targets[i]->buffer)->bind_history |= PIPE_BIND_STREAM_OUTPUT;
 		} else {
-			/* Clear the descriptor and unset the resource. */
-			memset(descs->list + bufidx*4, 0,
-			       sizeof(uint32_t) * 4);
-			pipe_resource_reference(&buffers->buffers[bufidx],
-						NULL);
-			buffers->enabled_mask &= ~(1u << bufidx);
+			si_set_rw_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, NULL);
 		}
 	}
-	for (; i < old_num_targets; i++) {
-		bufidx = SI_VS_STREAMOUT_BUF0 + i;
-		/* Clear the descriptor and unset the resource. */
-		memset(descs->list + bufidx*4, 0, sizeof(uint32_t) * 4);
-		pipe_resource_reference(&buffers->buffers[bufidx], NULL);
-		buffers->enabled_mask &= ~(1u << bufidx);
+	for (; i < old_num_targets; i++)
+		si_set_rw_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, NULL);
+
+	if (wait_now)
+		sctx->emit_cache_flush(sctx);
+}
+
+static void gfx10_emit_streamout_begin(struct si_context *sctx)
+{
+	struct si_streamout_target **t = sctx->streamout.targets;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
+	unsigned last_target = 0;
+
+	for (unsigned i = 0; i < sctx->streamout.num_targets; i++) {
+		if (t[i])
+			last_target = i;
 	}
 
-	sctx->descriptors_dirty |= 1u << SI_DESCS_RW_BUFFERS;
+	for (unsigned i = 0; i < sctx->streamout.num_targets; i++) {
+		if (!t[i])
+			continue;
+
+		t[i]->stride_in_dw = sctx->streamout.stride_in_dw[i];
+
+		bool append = sctx->streamout.append_bitmask & (1 << i);
+		uint64_t va = 0;
+
+		if (append) {
+			radeon_add_to_buffer_list(sctx,  sctx->gfx_cs,
+						  t[i]->buf_filled_size,
+						  RADEON_USAGE_READ,
+						  RADEON_PRIO_SO_FILLED_SIZE);
+
+			va = t[i]->buf_filled_size->gpu_address +
+			     t[i]->buf_filled_size_offset;
+		}
+
+		radeon_emit(cs, PKT3(PKT3_DMA_DATA, 5, 0));
+		radeon_emit(cs, S_411_SRC_SEL(append ? V_411_SRC_ADDR_TC_L2 : V_411_DATA) |
+				S_411_DST_SEL(V_411_GDS) |
+				S_411_CP_SYNC(i == last_target));
+		radeon_emit(cs, va);
+		radeon_emit(cs, va >> 32);
+		radeon_emit(cs, 4 * i); /* destination in GDS */
+		radeon_emit(cs, 0);
+		radeon_emit(cs, S_414_BYTE_COUNT_GFX9(4) |
+				S_414_DISABLE_WR_CONFIRM_GFX9(i != last_target));
+	}
+
+	sctx->streamout.begin_emitted = true;
+}
+
+static void gfx10_emit_streamout_end(struct si_context *sctx)
+{
+	struct si_streamout_target **t = sctx->streamout.targets;
+
+	for (unsigned i = 0; i < sctx->streamout.num_targets; i++) {
+		if (!t[i])
+			continue;
+
+		uint64_t va = t[i]->buf_filled_size->gpu_address + t[i]->buf_filled_size_offset;
+
+		si_cp_release_mem(sctx, sctx->gfx_cs, V_028A90_PS_DONE, 0,
+				  EOP_DST_SEL_TC_L2,
+				  EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM,
+				  EOP_DATA_SEL_GDS,
+				  t[i]->buf_filled_size, va,
+				  EOP_DATA_GDS(i, 1), 0);
+
+		t[i]->buf_filled_size_valid = true;
+	}
+
+	sctx->streamout.begin_emitted = false;
 }
 
 static void si_flush_vgt_streamout(struct si_context *sctx)
@@ -234,7 +293,7 @@ static void si_flush_vgt_streamout(struct si_context *sctx)
 	unsigned reg_strmout_cntl;
 
 	/* The register is at different places on different ASICs. */
-	if (sctx->chip_class >= CIK) {
+	if (sctx->chip_class >= GFX7) {
 		reg_strmout_cntl = R_0300FC_CP_STRMOUT_CNTL;
 		radeon_set_uconfig_reg(cs, reg_strmout_cntl, 0);
 	} else {
@@ -269,7 +328,7 @@ static void si_emit_streamout_begin(struct si_context *sctx)
 
 		t[i]->stride_in_dw = stride_in_dw[i];
 
-		/* SI binds streamout buffers as shader resources.
+		/* AMD GCN binds streamout buffers as shader resources.
 		 * VGT only counts primitives and tells the shader
 		 * through SGPRs what to do. */
 		radeon_set_context_reg_seq(cs, R_028AD0_VGT_STRMOUT_BUFFER_SIZE_0 + 16*i, 2);
@@ -311,6 +370,11 @@ static void si_emit_streamout_begin(struct si_context *sctx)
 
 void si_emit_streamout_end(struct si_context *sctx)
 {
+	if (sctx->screen->use_ngg_streamout) {
+		gfx10_emit_streamout_end(sctx);
+		return;
+	}
+
 	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 	struct si_streamout_target **t = sctx->streamout.targets;
 	unsigned i;
@@ -342,6 +406,7 @@ void si_emit_streamout_end(struct si_context *sctx)
 		 * buffer bound. This ensures that the primitives-emitted query
 		 * won't increment. */
 		radeon_set_context_reg(cs, R_028AD0_VGT_STRMOUT_BUFFER_SIZE_0 + 16*i, 0);
+		sctx->context_roll = true;
 
 		t[i]->buf_filled_size_valid = true;
 	}
@@ -358,6 +423,8 @@ void si_emit_streamout_end(struct si_context *sctx)
 
 static void si_emit_streamout_enable(struct si_context *sctx)
 {
+	assert(!sctx->screen->use_ngg_streamout);
+
 	radeon_set_context_reg_seq(sctx->gfx_cs, R_028B94_VGT_STRMOUT_CONFIG, 2);
 	radeon_emit(sctx->gfx_cs,
 		    S_028B94_STREAMOUT_0_EN(si_get_strmout_en(sctx)) |
@@ -382,15 +449,17 @@ static void si_set_streamout_enable(struct si_context *sctx, bool enable)
 					  (sctx->streamout.enabled_mask << 8) |
 					  (sctx->streamout.enabled_mask << 12);
 
-	if ((old_strmout_en != si_get_strmout_en(sctx)) ||
-            (old_hw_enabled_mask != sctx->streamout.hw_enabled_mask))
+	if (!sctx->screen->use_ngg_streamout &&
+	    ((old_strmout_en != si_get_strmout_en(sctx)) ||
+	     (old_hw_enabled_mask != sctx->streamout.hw_enabled_mask)))
 		si_mark_atom_dirty(sctx, &sctx->atoms.s.streamout_enable);
 }
 
 void si_update_prims_generated_query_state(struct si_context *sctx,
 					   unsigned type, int diff)
 {
-	if (type == PIPE_QUERY_PRIMITIVES_GENERATED) {
+	if (!sctx->screen->use_ngg_streamout &&
+	    type == PIPE_QUERY_PRIMITIVES_GENERATED) {
 		bool old_strmout_en = si_get_strmout_en(sctx);
 
 		sctx->streamout.num_prims_gen_queries += diff;
@@ -401,6 +470,11 @@ void si_update_prims_generated_query_state(struct si_context *sctx,
 
 		if (old_strmout_en != si_get_strmout_en(sctx))
 			si_mark_atom_dirty(sctx, &sctx->atoms.s.streamout_enable);
+
+		if (si_update_ngg(sctx)) {
+			si_shader_change_notify(sctx);
+			sctx->do_update_shaders = true;
+		}
 	}
 }
 
@@ -409,6 +483,11 @@ void si_init_streamout_functions(struct si_context *sctx)
 	sctx->b.create_stream_output_target = si_create_so_target;
 	sctx->b.stream_output_target_destroy = si_so_target_destroy;
 	sctx->b.set_stream_output_targets = si_set_streamout_targets;
-	sctx->atoms.s.streamout_begin.emit = si_emit_streamout_begin;
-	sctx->atoms.s.streamout_enable.emit = si_emit_streamout_enable;
+
+	if (sctx->screen->use_ngg_streamout) {
+		sctx->atoms.s.streamout_begin.emit = gfx10_emit_streamout_begin;
+	} else {
+		sctx->atoms.s.streamout_begin.emit = si_emit_streamout_begin;
+		sctx->atoms.s.streamout_enable.emit = si_emit_streamout_enable;
+	}
 }

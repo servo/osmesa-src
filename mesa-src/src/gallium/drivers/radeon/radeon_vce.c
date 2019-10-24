@@ -352,7 +352,9 @@ static void rvce_get_feedback(struct pipe_video_codec *encoder,
 	struct rvid_buffer *fb = feedback;
 
 	if (size) {
-		uint32_t *ptr = enc->ws->buffer_map(fb->res->buf, enc->cs, PIPE_TRANSFER_READ_WRITE);
+		uint32_t *ptr = enc->ws->buffer_map(
+			fb->res->buf, enc->cs,
+			PIPE_TRANSFER_READ_WRITE | RADEON_TRANSFER_TEMPORARY);
 
 		if (ptr[1]) {
 			*size = ptr[4] - ptr[9];
@@ -408,10 +410,10 @@ struct pipe_video_codec *si_vce_create_encoder(struct pipe_context *context,
 	if (!enc)
 		return NULL;
 
-	if (sscreen->info.drm_major == 3)
+	if (sscreen->info.is_amdgpu)
 		enc->use_vm = true;
-	if ((sscreen->info.drm_major == 2 && sscreen->info.drm_minor >= 42) ||
-            sscreen->info.drm_major == 3)
+	if ((!sscreen->info.is_amdgpu && sscreen->info.drm_minor >= 42) ||
+            sscreen->info.is_amdgpu)
 		enc->use_vui = true;
 	if (sscreen->info.family >= CHIP_TONGA &&
 	    sscreen->info.family != CHIP_STONEY &&
@@ -438,7 +440,7 @@ struct pipe_video_codec *si_vce_create_encoder(struct pipe_context *context,
 
 	enc->screen = context->screen;
 	enc->ws = ws;
-	enc->cs = ws->cs_create(sctx->ctx, RING_VCE, rvce_cs_flush, enc);
+	enc->cs = ws->cs_create(sctx->ctx, RING_VCE, rvce_cs_flush, enc, false);
 	if (!enc->cs) {
 		RVID_ERR("Can't get command submission context.\n");
 		goto error;

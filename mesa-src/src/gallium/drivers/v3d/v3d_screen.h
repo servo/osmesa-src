@@ -25,6 +25,7 @@
 #define VC5_SCREEN_H
 
 #include "pipe/p_screen.h"
+#include "renderonly/renderonly.h"
 #include "os/os_thread.h"
 #include "state_tracker/drm_driver.h"
 #include "util/list.h"
@@ -33,12 +34,6 @@
 #include "broadcom/common/v3d_device_info.h"
 
 struct v3d_bo;
-
-#define VC5_MAX_MIP_LEVELS 12
-#define VC5_MAX_TEXTURE_SAMPLERS 32
-#define VC5_MAX_SAMPLES 4
-#define VC5_MAX_DRAW_BUFFERS 4
-#define VC5_MAX_ATTRIBUTES 16
 
 /* These are tunable parameters in the HW design, but all the V3D
  * implementations agree.
@@ -55,6 +50,7 @@ struct v3d_simulator_file;
 
 struct v3d_screen {
         struct pipe_screen base;
+        struct renderonly *ro;
         int fd;
 
         struct v3d_device_info devinfo;
@@ -81,6 +77,10 @@ struct v3d_screen {
         uint32_t bo_size;
         uint32_t bo_count;
 
+        bool has_csd;
+        bool has_cache_flush;
+        bool nonmsaa_texture_size_limit;
+
         struct v3d_simulator_file *sim_file;
 };
 
@@ -90,7 +90,9 @@ v3d_screen(struct pipe_screen *screen)
         return (struct v3d_screen *)screen;
 }
 
-struct pipe_screen *v3d_screen_create(int fd);
+struct pipe_screen *v3d_screen_create(int fd,
+                                      const struct pipe_screen_config *config,
+                                      struct renderonly *ro);
 
 void
 v3d_fence_init(struct v3d_screen *screen);

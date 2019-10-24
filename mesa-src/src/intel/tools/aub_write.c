@@ -29,7 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "i915_drm.h"
+#include "drm-uapi/i915_drm.h"
 #include "intel_aub.h"
 #include "gen_context.h"
 
@@ -51,33 +51,10 @@
          _a > _b ? _a : _b;                     \
       })
 
-
-enum gen_ring {
-   GEN_RING_RENDER,
-   GEN_RING_BLITTER,
-   GEN_RING_VIDEO,
-};
-
-static const uint32_t *
-get_context_init(const struct gen_device_info *devinfo, enum gen_ring ring)
-{
-   static const uint32_t *gen8_contexts[] = {
-      [GEN_RING_RENDER] = gen8_render_context_init,
-      [GEN_RING_BLITTER] = gen8_blitter_context_init,
-      [GEN_RING_VIDEO] = gen8_video_context_init,
-   };
-   static const uint32_t *gen10_contexts[] = {
-      [GEN_RING_RENDER] = gen10_render_context_init,
-      [GEN_RING_BLITTER] = gen10_blitter_context_init,
-      [GEN_RING_VIDEO] = gen10_video_context_init,
-   };
-
-   assert(devinfo->gen >= 8);
-
-   if (devinfo->gen <= 10)
-      return gen8_contexts[ring];
-   return gen10_contexts[ring];
-}
+static void
+mem_trace_memory_write_header_out(struct aub_file *aub, uint64_t addr,
+                                  uint32_t len, uint32_t addr_space,
+                                  const char *desc);
 
 static void __attribute__ ((format(__printf__, 2, 3)))
 fail_if(int cond, const char *format, ...)
@@ -114,33 +91,6 @@ aub_ppgtt_table_finish(struct aub_ppgtt_table *table, int level)
    }
 }
 
-void
-aub_file_init(struct aub_file *aub, FILE *file, uint16_t pci_id)
-{
-   memset(aub, 0, sizeof(*aub));
-
-   aub->file = file;
-   aub->pci_id = pci_id;
-   fail_if(!gen_get_device_info(pci_id, &aub->devinfo),
-           "failed to identify chipset=0x%x\n", pci_id);
-   aub->addr_bits = aub->devinfo.gen >= 8 ? 48 : 32;
-
-   aub->pml4.phys_addr = PML4_PHYS_ADDR;
-}
-
-void
-aub_file_finish(struct aub_file *aub)
-{
-   aub_ppgtt_table_finish(&aub->pml4, 4);
-   fclose(aub->file);
-}
-
-uint32_t
-aub_gtt_size(struct aub_file *aub)
-{
-   return NUM_PT_ENTRIES * (aub->addr_bits > 32 ? GEN8_PTE_SIZE : PTE_SIZE);
-}
-
 static void
 data_out(struct aub_file *aub, const void *data, size_t size)
 {
@@ -155,6 +105,104 @@ static void
 dword_out(struct aub_file *aub, uint32_t data)
 {
    data_out(aub, &data, sizeof(data));
+}
+
+static void
+write_execlists_header(struct aub_file *aub, const char *name)
+{
+   char app_name[8 * 4];
+   int app_name_len, dwords;
+
+   app_name_len =
+      snprintf(app_name, sizeof(app_name), "PCI-ID=0x%X %s",
+               aub->pci_id, name);
+   app_name_len = ALIGN(app_name_len, sizeof(uint32_t));
+
+   dwords = 5 + app_name_len / sizeof(uint32_t);
+   dword_out(aub, CMD_MEM_TRACE_VERSION | (dwords - 1));
+   dword_out(aub, AUB_MEM_TRACE_VERSION_FILE_VERSION);
+   dword_out(aub, aub->devinfo.simulator_id << AUB_MEM_TRACE_VERSION_DEVICE_SHIFT);
+   dword_out(aub, 0);      /* version */
+   dword_out(aub, 0);      /* version */
+   data_out(aub, app_name, app_name_len);
+}
+
+static void
+write_legacy_header(struct aub_file *aub, const char *name)
+{
+   char app_name[8 * 4];
+   char comment[16];
+   int comment_len, comment_dwords, dwords;
+
+   comment_len = snprintf(comment, sizeof(comment), "PCI-ID=0x%x", aub->pci_id);
+   comment_dwords = ((comment_len + 3) / 4);
+
+   /* Start with a (required) version packet. */
+   dwords = 13 + comment_dwords;
+   dword_out(aub, CMD_AUB_HEADER | (dwords - 2));
+   dword_out(aub, (4 << AUB_HEADER_MAJOR_SHIFT) |
+                  (0 << AUB_HEADER_MINOR_SHIFT));
+
+   /* Next comes a 32-byte application name. */
+   strncpy(app_name, name, sizeof(app_name));
+   app_name[sizeof(app_name) - 1] = 0;
+   data_out(aub, app_name, sizeof(app_name));
+
+   dword_out(aub, 0); /* timestamp */
+   dword_out(aub, 0); /* timestamp */
+   dword_out(aub, comment_len);
+   data_out(aub, comment, comment_dwords * 4);
+}
+
+
+static void
+aub_write_header(struct aub_file *aub, const char *app_name)
+{
+   if (aub_use_execlists(aub))
+      write_execlists_header(aub, app_name);
+   else
+      write_legacy_header(aub, app_name);
+}
+
+void
+aub_file_init(struct aub_file *aub, FILE *file, FILE *debug, uint16_t pci_id, const char *app_name)
+{
+   memset(aub, 0, sizeof(*aub));
+
+   aub->verbose_log_file = debug;
+   aub->file = file;
+   aub->pci_id = pci_id;
+   fail_if(!gen_get_device_info_from_pci_id(pci_id, &aub->devinfo),
+           "failed to identify chipset=0x%x\n", pci_id);
+   aub->addr_bits = aub->devinfo.gen >= 8 ? 48 : 32;
+
+   aub_write_header(aub, app_name);
+
+   aub->phys_addrs_allocator = 0;
+   aub->ggtt_addrs_allocator = 0;
+   aub->pml4.phys_addr = aub->phys_addrs_allocator++ << 12;
+
+   mem_trace_memory_write_header_out(aub, aub->ggtt_addrs_allocator++,
+                                     GEN8_PTE_SIZE,
+                                     AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT_ENTRY,
+                                     "GGTT PT");
+   dword_out(aub, 1);
+   dword_out(aub, 0);
+
+   aub->next_context_handle = 1;
+}
+
+void
+aub_file_finish(struct aub_file *aub)
+{
+   aub_ppgtt_table_finish(&aub->pml4, 4);
+   fclose(aub->file);
+}
+
+uint32_t
+aub_gtt_size(struct aub_file *aub)
+{
+   return NUM_PT_ENTRIES * (aub->addr_bits > 32 ? GEN8_PTE_SIZE : PTE_SIZE);
 }
 
 static void
@@ -182,6 +230,11 @@ register_write_out(struct aub_file *aub, uint32_t addr, uint32_t value)
 {
    uint32_t dwords = 1;
 
+   if (aub->verbose_log_file) {
+      fprintf(aub->verbose_log_file,
+              "  MMIO WRITE (0x%08x = 0x%08x)\n", addr, value);
+   }
+
    dword_out(aub, CMD_MEM_TRACE_REGISTER_WRITE | (5 + dwords - 1));
    dword_out(aub, addr);
    dword_out(aub, AUB_MEM_TRACE_REGISTER_SIZE_DWORD |
@@ -195,7 +248,6 @@ static void
 populate_ppgtt_table(struct aub_file *aub, struct aub_ppgtt_table *table,
                      int start, int end, int level)
 {
-   static uint64_t phys_addrs_allocator = (PML4_PHYS_ADDR >> 12) + 1;
    uint64_t entries[512] = {0};
    int dirty_start = 512, dirty_end = 0;
 
@@ -211,7 +263,7 @@ populate_ppgtt_table(struct aub_file *aub, struct aub_ppgtt_table *table,
          dirty_end = max(dirty_end, i);
          if (level == 1) {
             table->subtables[i] =
-               (void *)(phys_addrs_allocator++ << 12);
+               (void *)(aub->phys_addrs_allocator++ << 12);
             if (aub->verbose_log_file) {
                fprintf(aub->verbose_log_file,
                        "   Adding entry: %x, phys_addr: 0x%016" PRIx64 "\n",
@@ -221,7 +273,7 @@ populate_ppgtt_table(struct aub_file *aub, struct aub_ppgtt_table *table,
             table->subtables[i] =
                calloc(1, sizeof(struct aub_ppgtt_table));
             table->subtables[i]->phys_addr =
-               phys_addrs_allocator++ << 12;
+               aub->phys_addrs_allocator++ << 12;
             if (aub->verbose_log_file) {
                fprintf(aub->verbose_log_file,
                        "   Adding entry: %x, phys_addr: 0x%016" PRIx64 "\n",
@@ -306,128 +358,239 @@ ppgtt_lookup(struct aub_file *aub, uint64_t ppgtt_addr)
    return (uint64_t)L1_table(ppgtt_addr)->subtables[L1_index(ppgtt_addr)];
 }
 
+static const struct engine {
+   const char *name;
+   enum drm_i915_gem_engine_class engine_class;
+   uint32_t hw_class;
+   uint32_t elsp_reg;
+   uint32_t elsq_reg;
+   uint32_t status_reg;
+   uint32_t control_reg;
+} engines[] = {
+   [I915_ENGINE_CLASS_RENDER] = {
+      .name = "RENDER",
+      .engine_class = I915_ENGINE_CLASS_RENDER,
+      .hw_class = 1,
+      .elsp_reg = EXECLIST_SUBMITPORT_RCSUNIT,
+      .elsq_reg = EXECLIST_SQ_CONTENTS0_RCSUNIT,
+      .status_reg = EXECLIST_STATUS_RCSUNIT,
+      .control_reg = EXECLIST_CONTROL_RCSUNIT,
+   },
+   [I915_ENGINE_CLASS_VIDEO] = {
+      .name = "VIDEO",
+      .engine_class = I915_ENGINE_CLASS_VIDEO,
+      .hw_class = 3,
+      .elsp_reg = EXECLIST_SUBMITPORT_VCSUNIT0,
+      .elsq_reg = EXECLIST_SQ_CONTENTS0_VCSUNIT0,
+      .status_reg = EXECLIST_STATUS_VCSUNIT0,
+      .control_reg = EXECLIST_CONTROL_VCSUNIT0,
+   },
+   [I915_ENGINE_CLASS_COPY] = {
+      .name = "BLITTER",
+      .engine_class = I915_ENGINE_CLASS_COPY,
+      .hw_class = 2,
+      .elsp_reg = EXECLIST_SUBMITPORT_BCSUNIT,
+      .elsq_reg = EXECLIST_SQ_CONTENTS0_BCSUNIT,
+      .status_reg = EXECLIST_STATUS_BCSUNIT,
+      .control_reg = EXECLIST_CONTROL_BCSUNIT,
+   },
+};
+
 static void
-write_execlists_header(struct aub_file *aub, const char *name)
+aub_map_ggtt(struct aub_file *aub, uint64_t virt_addr, uint64_t size)
 {
-   char app_name[8 * 4];
-   int app_name_len, dwords;
-
-   app_name_len =
-      snprintf(app_name, sizeof(app_name), "PCI-ID=0x%X %s",
-               aub->pci_id, name);
-   app_name_len = ALIGN(app_name_len, sizeof(uint32_t));
-
-   dwords = 5 + app_name_len / sizeof(uint32_t);
-   dword_out(aub, CMD_MEM_TRACE_VERSION | (dwords - 1));
-   dword_out(aub, AUB_MEM_TRACE_VERSION_FILE_VERSION);
-   dword_out(aub, aub->devinfo.simulator_id << AUB_MEM_TRACE_VERSION_DEVICE_SHIFT);
-   dword_out(aub, 0);      /* version */
-   dword_out(aub, 0);      /* version */
-   data_out(aub, app_name, app_name_len);
+   /* Makes the code below a bit simpler. In practice all of the write we
+    * receive from error2aub are page aligned.
+    */
+   assert(virt_addr % 4096 == 0);
+   assert((aub->phys_addrs_allocator + size) < (1UL << 32));
 
    /* GGTT PT */
-   uint32_t ggtt_ptes = STATIC_GGTT_MAP_SIZE >> 12;
+   uint32_t ggtt_ptes = DIV_ROUND_UP(size, 4096);
+   uint64_t phys_addr = aub->phys_addrs_allocator << 12;
+   aub->phys_addrs_allocator += ggtt_ptes;
 
-   mem_trace_memory_write_header_out(aub, STATIC_GGTT_MAP_START >> 12,
+   if (aub->verbose_log_file) {
+      fprintf(aub->verbose_log_file,
+              " Mapping GGTT address: 0x%" PRIx64 ", size: %" PRIu64" phys_addr=0x%" PRIx64 " entries=%u\n",
+              virt_addr, size, phys_addr, ggtt_ptes);
+   }
+
+   mem_trace_memory_write_header_out(aub,
+                                     (virt_addr >> 12) * GEN8_PTE_SIZE,
                                      ggtt_ptes * GEN8_PTE_SIZE,
                                      AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT_ENTRY,
                                      "GGTT PT");
    for (uint32_t i = 0; i < ggtt_ptes; i++) {
-      dword_out(aub, 1 + 0x1000 * i + STATIC_GGTT_MAP_START);
+      dword_out(aub, 1 + phys_addr + i * 4096);
       dword_out(aub, 0);
    }
+}
 
-   /* RENDER_RING */
-   mem_trace_memory_write_header_out(aub, RENDER_RING_ADDR, RING_SIZE,
+void
+aub_write_ggtt(struct aub_file *aub, uint64_t virt_addr, uint64_t size, const void *data)
+{
+   /* Default setup assumes a 1 to 1 mapping between physical and virtual GGTT
+    * addresses. This is somewhat incompatible with the aub_write_ggtt()
+    * function. In practice it doesn't matter as the GGTT writes are used to
+    * replace the default setup and we've taken care to setup the PML4 as the
+    * top of the GGTT.
+    */
+   assert(!aub->has_default_setup);
+
+   aub_map_ggtt(aub, virt_addr, size);
+
+   /* We write the GGTT buffer through the GGTT aub command rather than the
+    * PHYSICAL aub command. This is because the Gen9 simulator seems to have 2
+    * different set of memory pools for GGTT and physical (probably someone
+    * didn't really understand the concept?).
+    */
+   static const char null_block[8 * 4096];
+   for (uint64_t offset = 0; offset < size; offset += 4096) {
+      uint32_t block_size = min(4096, size - offset);
+
+      mem_trace_memory_write_header_out(aub, virt_addr + offset, block_size,
+                                        AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
+                                        "GGTT buffer");
+      data_out(aub, (char *) data + offset, block_size);
+
+      /* Pad to a multiple of 4 bytes. */
+      data_out(aub, null_block, -block_size & 3);
+   }
+}
+
+static const struct engine *
+engine_from_engine_class(enum drm_i915_gem_engine_class engine_class)
+{
+   switch (engine_class) {
+   case I915_ENGINE_CLASS_RENDER:
+   case I915_ENGINE_CLASS_COPY:
+   case I915_ENGINE_CLASS_VIDEO:
+      return &engines[engine_class];
+   default:
+      unreachable("unknown ring");
+   }
+}
+
+static void
+get_context_init(const struct gen_device_info *devinfo,
+                 const struct gen_context_parameters *params,
+                 enum drm_i915_gem_engine_class engine_class,
+                 uint32_t *data,
+                 uint32_t *size)
+{
+   static const gen_context_init_t gen8_contexts[] = {
+      [I915_ENGINE_CLASS_RENDER] = gen8_render_context_init,
+      [I915_ENGINE_CLASS_COPY] = gen8_blitter_context_init,
+      [I915_ENGINE_CLASS_VIDEO] = gen8_video_context_init,
+   };
+   static const gen_context_init_t gen10_contexts[] = {
+      [I915_ENGINE_CLASS_RENDER] = gen10_render_context_init,
+      [I915_ENGINE_CLASS_COPY] = gen10_blitter_context_init,
+      [I915_ENGINE_CLASS_VIDEO] = gen10_video_context_init,
+   };
+
+   assert(devinfo->gen >= 8);
+
+   if (devinfo->gen <= 10)
+      gen8_contexts[engine_class](params, data, size);
+   else
+      gen10_contexts[engine_class](params, data, size);
+}
+
+static uint64_t
+alloc_ggtt_address(struct aub_file *aub, uint64_t size)
+{
+   uint32_t ggtt_ptes = DIV_ROUND_UP(size, 4096);
+   uint64_t addr = aub->ggtt_addrs_allocator << 12;
+
+   aub->ggtt_addrs_allocator += ggtt_ptes;
+   aub_map_ggtt(aub, addr, size);
+
+   return addr;
+}
+
+static void
+write_hwsp(struct aub_file *aub,
+           enum drm_i915_gem_engine_class engine_class)
+{
+   uint32_t reg = 0;
+   switch (engine_class) {
+   case I915_ENGINE_CLASS_RENDER: reg = HWS_PGA_RCSUNIT; break;
+   case I915_ENGINE_CLASS_COPY: reg = HWS_PGA_BCSUNIT; break;
+   case I915_ENGINE_CLASS_VIDEO: reg = HWS_PGA_VCSUNIT0; break;
+   default:
+      unreachable("unknown ring");
+   }
+
+   register_write_out(aub, reg, aub->engine_setup[engine_class].hwsp_addr);
+}
+
+static uint32_t
+write_engine_execlist_setup(struct aub_file *aub,
+                            uint32_t ctx_id,
+                            struct aub_hw_context *hw_ctx,
+                            enum drm_i915_gem_engine_class engine_class)
+{
+   const struct engine *cs = engine_from_engine_class(engine_class);
+   uint32_t context_size;
+
+   get_context_init(&aub->devinfo, NULL, engine_class, NULL, &context_size);
+
+   /* GGTT PT */
+   uint32_t total_size = RING_SIZE + PPHWSP_SIZE + context_size;
+   char name[80];
+   uint64_t ggtt_addr = alloc_ggtt_address(aub, total_size);
+
+   snprintf(name, sizeof(name), "%s (ctx id: %d) GGTT PT", cs->name, ctx_id);
+
+   /* RING */
+   hw_ctx->ring_addr = ggtt_addr;
+   snprintf(name, sizeof(name), "%s RING", cs->name);
+   mem_trace_memory_write_header_out(aub, ggtt_addr, RING_SIZE,
                                      AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
-                                     "RENDER RING");
+                                     name);
    for (uint32_t i = 0; i < RING_SIZE; i += sizeof(uint32_t))
       dword_out(aub, 0);
+   ggtt_addr += RING_SIZE;
 
-   /* RENDER_PPHWSP */
-   mem_trace_memory_write_header_out(aub, RENDER_CONTEXT_ADDR,
-                                     PPHWSP_SIZE +
-                                     CONTEXT_RENDER_SIZE,
+   /* PPHWSP */
+   hw_ctx->pphwsp_addr = ggtt_addr;
+   snprintf(name, sizeof(name), "%s PPHWSP", cs->name);
+   mem_trace_memory_write_header_out(aub, ggtt_addr,
+                                     PPHWSP_SIZE + context_size,
                                      AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
-                                     "RENDER PPHWSP");
+                                     name);
    for (uint32_t i = 0; i < PPHWSP_SIZE; i += sizeof(uint32_t))
       dword_out(aub, 0);
 
-   /* RENDER_CONTEXT */
-   data_out(aub, get_context_init(&aub->devinfo, GEN_RING_RENDER), CONTEXT_RENDER_SIZE);
+   /* CONTEXT */
+   struct gen_context_parameters params = {
+      .ring_addr = hw_ctx->ring_addr,
+      .ring_size = RING_SIZE,
+      .pml4_addr = aub->pml4.phys_addr,
+   };
+   uint32_t *context_data = calloc(1, context_size);
+   get_context_init(&aub->devinfo, &params, engine_class, context_data, &context_size);
+   data_out(aub, context_data, context_size);
+   free(context_data);
 
-   /* BLITTER_RING */
-   mem_trace_memory_write_header_out(aub, BLITTER_RING_ADDR, RING_SIZE,
-                                     AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
-                                     "BLITTER RING");
-   for (uint32_t i = 0; i < RING_SIZE; i += sizeof(uint32_t))
-      dword_out(aub, 0);
+   hw_ctx->initialized = true;
 
-   /* BLITTER_PPHWSP */
-   mem_trace_memory_write_header_out(aub, BLITTER_CONTEXT_ADDR,
-                                     PPHWSP_SIZE +
-                                     CONTEXT_OTHER_SIZE,
-                                     AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
-                                     "BLITTER PPHWSP");
-   for (uint32_t i = 0; i < PPHWSP_SIZE; i += sizeof(uint32_t))
-      dword_out(aub, 0);
+   return total_size;
+}
 
-   /* BLITTER_CONTEXT */
-   data_out(aub, get_context_init(&aub->devinfo, GEN_RING_BLITTER), CONTEXT_OTHER_SIZE);
-
-   /* VIDEO_RING */
-   mem_trace_memory_write_header_out(aub, VIDEO_RING_ADDR, RING_SIZE,
-                                     AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
-                                     "VIDEO RING");
-   for (uint32_t i = 0; i < RING_SIZE; i += sizeof(uint32_t))
-      dword_out(aub, 0);
-
-   /* VIDEO_PPHWSP */
-   mem_trace_memory_write_header_out(aub, VIDEO_CONTEXT_ADDR,
-                                     PPHWSP_SIZE +
-                                     CONTEXT_OTHER_SIZE,
-                                     AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
-                                     "VIDEO PPHWSP");
-   for (uint32_t i = 0; i < PPHWSP_SIZE; i += sizeof(uint32_t))
-      dword_out(aub, 0);
-
-   /* VIDEO_CONTEXT */
-   data_out(aub, get_context_init(&aub->devinfo, GEN_RING_VIDEO), CONTEXT_OTHER_SIZE);
-
-   register_write_out(aub, HWS_PGA_RCSUNIT, RENDER_CONTEXT_ADDR);
-   register_write_out(aub, HWS_PGA_VCSUNIT0, VIDEO_CONTEXT_ADDR);
-   register_write_out(aub, HWS_PGA_BCSUNIT, BLITTER_CONTEXT_ADDR);
-
+static void
+write_execlists_default_setup(struct aub_file *aub)
+{
    register_write_out(aub, GFX_MODE_RCSUNIT, 0x80008000 /* execlist enable */);
    register_write_out(aub, GFX_MODE_VCSUNIT0, 0x80008000 /* execlist enable */);
    register_write_out(aub, GFX_MODE_BCSUNIT, 0x80008000 /* execlist enable */);
 }
 
-static void write_legacy_header(struct aub_file *aub, const char *name)
+static void write_legacy_default_setup(struct aub_file *aub)
 {
-   char app_name[8 * 4];
-   char comment[16];
-   int comment_len, comment_dwords, dwords;
    uint32_t entry = 0x200003;
-
-   comment_len = snprintf(comment, sizeof(comment), "PCI-ID=0x%x", aub->pci_id);
-   comment_dwords = ((comment_len + 3) / 4);
-
-   /* Start with a (required) version packet. */
-   dwords = 13 + comment_dwords;
-   dword_out(aub, CMD_AUB_HEADER | (dwords - 2));
-   dword_out(aub, (4 << AUB_HEADER_MAJOR_SHIFT) |
-                  (0 << AUB_HEADER_MINOR_SHIFT));
-
-   /* Next comes a 32-byte application name. */
-   strncpy(app_name, name, sizeof(app_name));
-   app_name[sizeof(app_name) - 1] = 0;
-   data_out(aub, app_name, sizeof(app_name));
-
-   dword_out(aub, 0); /* timestamp */
-   dword_out(aub, 0); /* timestamp */
-   dword_out(aub, comment_len);
-   data_out(aub, comment, comment_dwords * 4);
 
    /* Set up the GTT. The max we can handle is 64M */
    dword_out(aub, CMD_AUB_TRACE_HEADER_BLOCK |
@@ -446,13 +609,77 @@ static void write_legacy_header(struct aub_file *aub, const char *name)
    }
 }
 
+/**
+ * Sets up a default GGTT/PPGTT address space and execlists context (when
+ * supported).
+ */
 void
-aub_write_header(struct aub_file *aub, const char *app_name)
+aub_write_default_setup(struct aub_file *aub)
 {
    if (aub_use_execlists(aub))
-      write_execlists_header(aub, app_name);
+      write_execlists_default_setup(aub);
    else
-      write_legacy_header(aub, app_name);
+      write_legacy_default_setup(aub);
+
+   aub->has_default_setup = true;
+}
+
+static struct aub_context *
+aub_context_new(struct aub_file *aub, uint32_t new_id)
+{
+   assert(aub->num_contexts < MAX_CONTEXT_COUNT);
+
+   struct aub_context *ctx = &aub->contexts[aub->num_contexts++];
+   memset(ctx, 0, sizeof(*ctx));
+   ctx->id = new_id;
+
+   return ctx;
+}
+
+uint32_t
+aub_write_context_create(struct aub_file *aub, uint32_t *ctx_id)
+{
+   uint32_t new_id = ctx_id ? *ctx_id : aub->next_context_handle;
+
+   aub_context_new(aub, new_id);
+
+   if (!ctx_id)
+      aub->next_context_handle++;
+
+   return new_id;
+}
+
+static struct aub_context *
+aub_context_find(struct aub_file *aub, uint32_t id)
+{
+   for (int i = 0; i < aub->num_contexts; i++) {
+      if (aub->contexts[i].id == id)
+         return &aub->contexts[i];
+   }
+
+   return NULL;
+}
+
+static struct aub_hw_context *
+aub_write_ensure_context(struct aub_file *aub, uint32_t ctx_id,
+                         enum drm_i915_gem_engine_class engine_class)
+{
+   struct aub_context *ctx = aub_context_find(aub, ctx_id);
+   assert(ctx != NULL);
+
+   struct aub_hw_context *hw_ctx = &ctx->hw_contexts[engine_class];
+   if (!hw_ctx->initialized)
+      write_engine_execlist_setup(aub, ctx->id, hw_ctx, engine_class);
+
+   return hw_ctx;
+}
+
+static uint64_t
+get_context_descriptor(struct aub_file *aub,
+                       const struct engine *cs,
+                       struct aub_hw_context *hw_ctx)
+{
+   return cs->hw_class | hw_ctx->pphwsp_addr | CONTEXT_FLAGS;
 }
 
 /**
@@ -502,46 +729,12 @@ aub_write_trace_block(struct aub_file *aub,
 }
 
 static void
-aub_dump_execlist(struct aub_file *aub, uint64_t batch_offset, int ring_flag)
+aub_dump_ring_buffer_execlist(struct aub_file *aub,
+                              struct aub_hw_context *hw_ctx,
+                              const struct engine *cs,
+                              uint64_t batch_offset)
 {
-   uint32_t ring_addr;
-   uint64_t descriptor;
-   uint32_t elsp_reg;
-   uint32_t elsq_reg;
-   uint32_t status_reg;
-   uint32_t control_reg;
-
-   switch (ring_flag) {
-   case I915_EXEC_DEFAULT:
-   case I915_EXEC_RENDER:
-      ring_addr = RENDER_RING_ADDR;
-      descriptor = RENDER_CONTEXT_DESCRIPTOR;
-      elsp_reg = EXECLIST_SUBMITPORT_RCSUNIT;
-      elsq_reg = EXECLIST_SQ_CONTENTS0_RCSUNIT;
-      status_reg = EXECLIST_STATUS_RCSUNIT;
-      control_reg = EXECLIST_CONTROL_RCSUNIT;
-      break;
-   case I915_EXEC_BSD:
-      ring_addr = VIDEO_RING_ADDR;
-      descriptor = VIDEO_CONTEXT_DESCRIPTOR;
-      elsp_reg = EXECLIST_SUBMITPORT_VCSUNIT0;
-      elsq_reg = EXECLIST_SQ_CONTENTS0_VCSUNIT0;
-      status_reg = EXECLIST_STATUS_VCSUNIT0;
-      control_reg = EXECLIST_CONTROL_VCSUNIT0;
-      break;
-   case I915_EXEC_BLT:
-      ring_addr = BLITTER_RING_ADDR;
-      descriptor = BLITTER_CONTEXT_DESCRIPTOR;
-      elsp_reg = EXECLIST_SUBMITPORT_BCSUNIT;
-      elsq_reg = EXECLIST_SQ_CONTENTS0_BCSUNIT;
-      status_reg = EXECLIST_STATUS_BCSUNIT;
-      control_reg = EXECLIST_CONTROL_BCSUNIT;
-      break;
-   default:
-      unreachable("unknown ring");
-   }
-
-   mem_trace_memory_write_header_out(aub, ring_addr, 16,
+   mem_trace_memory_write_header_out(aub, hw_ctx->ring_addr, 16,
                                      AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
                                      "RING MI_BATCH_BUFFER_START user");
    dword_out(aub, AUB_MI_BATCH_BUFFER_START | MI_BATCH_NON_SECURE_I965 | (3 - 2));
@@ -549,28 +742,32 @@ aub_dump_execlist(struct aub_file *aub, uint64_t batch_offset, int ring_flag)
    dword_out(aub, batch_offset >> 32);
    dword_out(aub, 0 /* MI_NOOP */);
 
-   mem_trace_memory_write_header_out(aub, ring_addr + 8192 + 20, 4,
+   mem_trace_memory_write_header_out(aub, hw_ctx->ring_addr + 8192 + 20, 4,
                                      AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
                                      "RING BUFFER HEAD");
    dword_out(aub, 0); /* RING_BUFFER_HEAD */
-   mem_trace_memory_write_header_out(aub, ring_addr + 8192 + 28, 4,
+   mem_trace_memory_write_header_out(aub, hw_ctx->ring_addr + 8192 + 28, 4,
                                      AUB_MEM_TRACE_MEMORY_ADDRESS_SPACE_GGTT,
                                      "RING BUFFER TAIL");
    dword_out(aub, 16); /* RING_BUFFER_TAIL */
+}
 
+static void
+aub_dump_execlist(struct aub_file *aub, const struct engine *cs, uint64_t descriptor)
+{
    if (aub->devinfo.gen >= 11) {
-      register_write_out(aub, elsq_reg, descriptor & 0xFFFFFFFF);
-      register_write_out(aub, elsq_reg + sizeof(uint32_t), descriptor >> 32);
-      register_write_out(aub, control_reg, 1);
+      register_write_out(aub, cs->elsq_reg, descriptor & 0xFFFFFFFF);
+      register_write_out(aub, cs->elsq_reg + sizeof(uint32_t), descriptor >> 32);
+      register_write_out(aub, cs->control_reg, 1);
    } else {
-      register_write_out(aub, elsp_reg, 0);
-      register_write_out(aub, elsp_reg, 0);
-      register_write_out(aub, elsp_reg, descriptor >> 32);
-      register_write_out(aub, elsp_reg, descriptor & 0xFFFFFFFF);
+      register_write_out(aub, cs->elsp_reg, 0);
+      register_write_out(aub, cs->elsp_reg, 0);
+      register_write_out(aub, cs->elsp_reg, descriptor >> 32);
+      register_write_out(aub, cs->elsp_reg, descriptor & 0xFFFFFFFF);
    }
 
    dword_out(aub, CMD_MEM_TRACE_REGISTER_POLL | (5 + 1 - 1));
-   dword_out(aub, status_reg);
+   dword_out(aub, cs->status_reg);
    dword_out(aub, AUB_MEM_TRACE_REGISTER_SIZE_DWORD |
                   AUB_MEM_TRACE_REGISTER_SPACE_MMIO);
    if (aub->devinfo.gen >= 11) {
@@ -585,18 +782,20 @@ aub_dump_execlist(struct aub_file *aub, uint64_t batch_offset, int ring_flag)
 }
 
 static void
-aub_dump_ringbuffer(struct aub_file *aub, uint64_t batch_offset,
-                    uint64_t offset, int ring_flag)
+aub_dump_ring_buffer_legacy(struct aub_file *aub,
+                            uint64_t batch_offset,
+                            uint64_t offset,
+                            enum drm_i915_gem_engine_class engine_class)
 {
    uint32_t ringbuffer[4096];
    unsigned aub_mi_bbs_len;
-   int ring = AUB_TRACE_TYPE_RING_PRB0; /* The default ring */
    int ring_count = 0;
-
-   if (ring_flag == I915_EXEC_BSD)
-      ring = AUB_TRACE_TYPE_RING_PRB1;
-   else if (ring_flag == I915_EXEC_BLT)
-      ring = AUB_TRACE_TYPE_RING_PRB2;
+   static const int engine_class_to_ring[] = {
+      [I915_ENGINE_CLASS_RENDER] = AUB_TRACE_TYPE_RING_PRB0,
+      [I915_ENGINE_CLASS_VIDEO]  = AUB_TRACE_TYPE_RING_PRB1,
+      [I915_ENGINE_CLASS_COPY]   = AUB_TRACE_TYPE_RING_PRB2,
+   };
+   int ring = engine_class_to_ring[engine_class];
 
    /* Make a ring buffer to execute our batchbuffer. */
    memset(ringbuffer, 0, sizeof(ringbuffer));
@@ -621,15 +820,44 @@ aub_dump_ringbuffer(struct aub_file *aub, uint64_t batch_offset,
    data_out(aub, ringbuffer, ring_count * 4);
 }
 
-void
-aub_write_exec(struct aub_file *aub, uint64_t batch_addr,
-               uint64_t offset, int ring_flag)
+static void
+aub_write_ensure_hwsp(struct aub_file *aub,
+                      enum drm_i915_gem_engine_class engine_class)
 {
+   uint64_t *hwsp_addr = &aub->engine_setup[engine_class].hwsp_addr;
+
+   if (*hwsp_addr != 0)
+      return;
+
+   *hwsp_addr = alloc_ggtt_address(aub, 4096);
+   write_hwsp(aub, engine_class);
+}
+
+void
+aub_write_exec(struct aub_file *aub, uint32_t ctx_id, uint64_t batch_addr,
+               uint64_t offset, enum drm_i915_gem_engine_class engine_class)
+{
+   const struct engine *cs = engine_from_engine_class(engine_class);
+
    if (aub_use_execlists(aub)) {
-      aub_dump_execlist(aub, batch_addr, ring_flag);
+      struct aub_hw_context *hw_ctx =
+         aub_write_ensure_context(aub, ctx_id, engine_class);
+      uint64_t descriptor = get_context_descriptor(aub, cs, hw_ctx);
+      aub_write_ensure_hwsp(aub, engine_class);
+      aub_dump_ring_buffer_execlist(aub, hw_ctx, cs, batch_addr);
+      aub_dump_execlist(aub, cs, descriptor);
    } else {
       /* Dump ring buffer */
-      aub_dump_ringbuffer(aub, batch_addr, offset, ring_flag);
+      aub_dump_ring_buffer_legacy(aub, batch_addr, offset, engine_class);
    }
    fflush(aub->file);
+}
+
+void
+aub_write_context_execlists(struct aub_file *aub, uint64_t context_addr,
+                            enum drm_i915_gem_engine_class engine_class)
+{
+   const struct engine *cs = engine_from_engine_class(engine_class);
+   uint64_t descriptor = ((uint64_t)1 << 62 | context_addr  | CONTEXT_FLAGS);
+   aub_dump_execlist(aub, cs, descriptor);
 }

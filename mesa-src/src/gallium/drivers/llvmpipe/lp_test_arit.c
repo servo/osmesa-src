@@ -399,7 +399,7 @@ static boolean
 test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned length)
 {
    char test_name[128];
-   util_snprintf(test_name, sizeof test_name, "%s.v%u", test->name, length);
+   snprintf(test_name, sizeof test_name, "%s.v%u", test->name, length);
    LLVMContextRef context;
    struct gallivm_state *gallivm;
    LLVMValueRef test_func;
@@ -458,7 +458,8 @@ test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned
             continue;
          }
 
-         if (test->ref == &nearbyintf && length == 2 && 
+         if (!util_cpu_caps.has_neon &&
+             test->ref == &nearbyintf && length == 2 &&
              ref != roundf(testval)) {
             /* FIXME: The generic (non SSE) path in lp_build_iround, which is
              * always taken for length==2 regardless of native round support,

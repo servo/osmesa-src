@@ -63,11 +63,19 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
    if (result != VK_SUCCESS)
       anv_batch_set_error(&cmd_buffer->batch, result);
 
-   void *dest = cmd_buffer->device->surface_state_pool.block_pool.map +
-      ss_offset;
+   void *dest = anv_block_pool_map(
+      &cmd_buffer->device->surface_state_pool.block_pool, ss_offset);
    uint64_t val = ((struct anv_bo*)address.buffer)->offset + address.offset +
       delta;
    write_reloc(cmd_buffer->device, dest, val, false);
+}
+
+static uint64_t
+blorp_get_surface_address(struct blorp_batch *blorp_batch,
+                          struct blorp_address address)
+{
+   /* We'll let blorp_surface_reloc write the address. */
+   return 0ull;
 }
 
 #if GEN_GEN >= 7 && GEN_GEN < 10
@@ -76,7 +84,7 @@ blorp_get_surface_base_address(struct blorp_batch *batch)
 {
    struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
    return (struct blorp_address) {
-      .buffer = &cmd_buffer->device->surface_state_pool.block_pool.bo,
+      .buffer = cmd_buffer->device->surface_state_pool.block_pool.bo,
       .offset = 0,
    };
 }
@@ -124,8 +132,6 @@ blorp_alloc_binding_table(struct blorp_batch *batch, unsigned num_entries,
       surface_offsets[i] = surface_state.offset;
       surface_maps[i] = surface_state.map;
    }
-
-   anv_state_flush(cmd_buffer->device, bt_state);
 }
 
 static void *
@@ -150,7 +156,7 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
       anv_cmd_buffer_alloc_dynamic_state(cmd_buffer, size, 64);
 
    *addr = (struct blorp_address) {
-      .buffer = &cmd_buffer->device->dynamic_state_pool.block_pool.bo,
+      .buffer = cmd_buffer->device->dynamic_state_pool.block_pool.bo,
       .offset = vb_state.offset,
       .mocs = cmd_buffer->device->default_mocs,
    };
@@ -183,9 +189,8 @@ blorp_get_workaround_page(struct blorp_batch *batch)
 static void
 blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
 {
-   struct anv_device *device = batch->blorp->driver_ctx;
-   if (!device->info.has_llc)
-      gen_flush_range(start, size);
+   /* We don't need to flush states anymore, since everything will be snooped.
+    */
 }
 
 static void
@@ -217,6 +222,10 @@ genX(blorp_exec)(struct blorp_batch *batch,
          gen_get_default_l3_config(&cmd_buffer->device->info);
       genX(cmd_buffer_config_l3)(cmd_buffer, cfg);
    }
+
+   const unsigned scale = params->fast_clear_op ? UINT_MAX : 1;
+   genX(cmd_buffer_emit_hashing_mode)(cmd_buffer, params->x1 - params->x0,
+                                      params->y1 - params->y0, scale);
 
 #if GEN_GEN >= 11
    /* The PIPE_CONTROL command description says:
@@ -252,11 +261,6 @@ genX(blorp_exec)(struct blorp_batch *batch,
     * the PMA fix off.  Also, off is always the safe option.
     */
    genX(cmd_buffer_enable_pma_fix)(cmd_buffer, false);
-
-   /* Disable VF statistics */
-   blorp_emit(batch, GENX(3DSTATE_VF_STATISTICS), vf) {
-      vf.StatisticsEnable = false;
-   }
 
    blorp_exec(batch, params);
 

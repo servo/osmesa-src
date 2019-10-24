@@ -48,6 +48,7 @@
 #include "vmw_surface.h"
 #include "vmw_buffer.h"
 #include "vmw_fence.h"
+#include "vmw_msg.h"
 #include "vmw_shader.h"
 #include "vmw_query.h"
 #include "svga3d_surfacedefs.h"
@@ -79,8 +80,11 @@ vmw_svga_winsys_buffer_create(struct svga_winsys_screen *sws,
       provider = vws->pools.query_fenced;
    } else if (usage == SVGA_BUFFER_USAGE_SHADER) {
       provider = vws->pools.mob_shader_slab_fenced;
-   } else
+   } else {
+      if (size > VMW_GMR_POOL_SIZE)
+         return NULL;
       provider = vws->pools.gmr_fenced;
+   }
 
    assert(provider);
    buffer = provider->create_buffer(provider, size, &desc.pb_desc);
@@ -508,6 +512,8 @@ vmw_winsys_screen_init_svga(struct vmw_winsys_screen *vws)
    vws->base.stats_inc = vmw_svga_winsys_stats_inc;
    vws->base.stats_time_push = vmw_svga_winsys_stats_time_push;
    vws->base.stats_time_pop = vmw_svga_winsys_stats_time_pop;
+
+   vws->base.host_log = vmw_svga_winsys_host_log;
 
    return TRUE;
 }

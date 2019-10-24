@@ -426,7 +426,7 @@ compare_vao(gl_vertex_processing_mode mode,
       return false;
 
    /* If the enabled arrays are not the same we are not equal. */
-   if (vao_enabled != vao->_Enabled)
+   if (vao_enabled != vao->Enabled)
       return false;
 
    /* Check the buffer binding at 0 */
@@ -450,15 +450,14 @@ compare_vao(gl_vertex_processing_mode mode,
       const struct gl_array_attributes *attrib = &vao->VertexAttrib[attr];
       if (attrib->RelativeOffset + vao->BufferBinding[0].Offset != off)
          return false;
-      if (attrib->Type != tp)
+      if (attrib->Format.Type != tp)
          return false;
-      if (attrib->Size != size[vbo_attr])
+      if (attrib->Format.Size != size[vbo_attr])
          return false;
-      assert(attrib->Format == GL_RGBA);
-      assert(attrib->Enabled == GL_TRUE);
-      assert(attrib->Normalized == GL_FALSE);
-      assert(attrib->Integer == vbo_attrtype_to_integer_flag(tp));
-      assert(attrib->Doubles == vbo_attrtype_to_double_flag(tp));
+      assert(attrib->Format.Format == GL_RGBA);
+      assert(attrib->Format.Normalized == GL_FALSE);
+      assert(attrib->Format.Integer == vbo_attrtype_to_integer_flag(tp));
+      assert(attrib->Format.Doubles == vbo_attrtype_to_double_flag(tp));
       assert(attrib->BufferBindingIndex == 0);
    }
 
@@ -515,9 +514,9 @@ update_vao(struct gl_context *ctx,
       _vbo_set_attrib_format(ctx, *vao, vao_attr, buffer_offset,
                              size[vbo_attr], type[vbo_attr], offset[vbo_attr]);
       _mesa_vertex_attrib_binding(ctx, *vao, vao_attr, 0);
-      _mesa_enable_vertex_array_attrib(ctx, *vao, vao_attr);
    }
-   assert(vao_enabled == (*vao)->_Enabled);
+   _mesa_enable_vertex_array_attribs(ctx, *vao, vao_enabled);
+   assert(vao_enabled == (*vao)->Enabled);
    assert((vao_enabled & ~(*vao)->VertexAttribBufferMask) == 0);
 
    /* Finalize and freeze the VAO */
@@ -602,7 +601,7 @@ compile_vertex_list(struct gl_context *ctx)
 
    node->prim_store->refcount++;
 
-   if (node->prims[0].no_current_update) {
+   if (save->no_current_update) {
       node->current_data = NULL;
    }
    else {
@@ -720,8 +719,6 @@ wrap_buffers(struct gl_context *ctx)
    struct vbo_save_context *save = &vbo_context(ctx)->save;
    GLint i = save->prim_count - 1;
    GLenum mode;
-   GLboolean weak;
-   GLboolean no_current_update;
 
    assert(i < (GLint) save->prim_max);
    assert(i >= 0);
@@ -730,8 +727,6 @@ wrap_buffers(struct gl_context *ctx)
     */
    save->prims[i].count = (save->vert_count - save->prims[i].start);
    mode = save->prims[i].mode;
-   weak = save->prims[i].weak;
-   no_current_update = save->prims[i].no_current_update;
 
    /* store the copied vertices, and allocate a new list.
     */
@@ -740,8 +735,6 @@ wrap_buffers(struct gl_context *ctx)
    /* Restart interrupted primitive
     */
    save->prims[0].mode = mode;
-   save->prims[0].weak = weak;
-   save->prims[0].no_current_update = no_current_update;
    save->prims[0].begin = 0;
    save->prims[0].end = 0;
    save->prims[0].pad = 0;
@@ -986,6 +979,20 @@ reset_vertex(struct gl_context *ctx)
 }
 
 
+/**
+ * If index=0, does glVertexAttrib*() alias glVertex() to emit a vertex?
+ * It depends on a few things, including whether we're inside or outside
+ * of glBegin/glEnd.
+ */
+static inline bool
+is_vertex_position(const struct gl_context *ctx, GLuint index)
+{
+   return (index == 0 &&
+           _mesa_attr_zero_aliases_vertex(ctx) &&
+           _mesa_inside_dlist_begin_end(ctx));
+}
+
+
 
 #define ERROR(err)   _mesa_compile_error(ctx, err, __func__);
 
@@ -1199,24 +1206,26 @@ _save_CallLists(GLsizei n, GLenum type, const GLvoid * v)
  * Updating of ctx->Driver.CurrentSavePrimitive is already taken care of.
  */
 void
-vbo_save_NotifyBegin(struct gl_context *ctx, GLenum mode)
+vbo_save_NotifyBegin(struct gl_context *ctx, GLenum mode,
+                     bool no_current_update)
 {
    struct vbo_save_context *save = &vbo_context(ctx)->save;
    const GLuint i = save->prim_count++;
+
+   ctx->Driver.CurrentSavePrimitive = mode;
 
    assert(i < save->prim_max);
    save->prims[i].mode = mode & VBO_SAVE_PRIM_MODE_MASK;
    save->prims[i].begin = 1;
    save->prims[i].end = 0;
-   save->prims[i].weak = (mode & VBO_SAVE_PRIM_WEAK) ? 1 : 0;
-   save->prims[i].no_current_update =
-      (mode & VBO_SAVE_PRIM_NO_CURRENT_UPDATE) ? 1 : 0;
    save->prims[i].pad = 0;
    save->prims[i].start = save->vert_count;
    save->prims[i].count = 0;
    save->prims[i].num_instances = 1;
    save->prims[i].base_instance = 0;
    save->prims[i].is_indirect = 0;
+
+   save->no_current_update = no_current_update;
 
    if (save->out_of_memory) {
       _mesa_install_save_vtxfmt(ctx, &save->vtxfmt_noop);
@@ -1283,10 +1292,11 @@ _save_PrimitiveRestartNV(void)
    } else {
       /* get current primitive mode */
       GLenum curPrim = save->prims[save->prim_count - 1].mode;
+      bool no_current_update = save->no_current_update;
 
       /* restart primitive */
       CALL_End(GET_DISPATCH(), ());
-      vbo_save_NotifyBegin(ctx, curPrim);
+      vbo_save_NotifyBegin(ctx, curPrim, no_current_update);
    }
 }
 
@@ -1300,7 +1310,7 @@ static void GLAPIENTRY
 _save_OBE_Rectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2)
 {
    GET_CURRENT_CONTEXT(ctx);
-   vbo_save_NotifyBegin(ctx, GL_QUADS | VBO_SAVE_PRIM_WEAK);
+   vbo_save_NotifyBegin(ctx, GL_QUADS, false);
    CALL_Vertex2f(GET_DISPATCH(), (x1, y1));
    CALL_Vertex2f(GET_DISPATCH(), (x2, y1));
    CALL_Vertex2f(GET_DISPATCH(), (x2, y2));
@@ -1313,6 +1323,7 @@ static void GLAPIENTRY
 _save_OBE_DrawArrays(GLenum mode, GLint start, GLsizei count)
 {
    GET_CURRENT_CONTEXT(ctx);
+   struct gl_vertex_array_object *vao = ctx->Array.VAO;
    struct vbo_save_context *save = &vbo_context(ctx)->save;
    GLint i;
 
@@ -1331,16 +1342,15 @@ _save_OBE_DrawArrays(GLenum mode, GLint start, GLsizei count)
    /* Make sure to process any VBO binding changes */
    _mesa_update_state(ctx);
 
-   _ae_map_vbos(ctx);
+   _mesa_vao_map_arrays(ctx, vao, GL_MAP_READ_BIT);
 
-   vbo_save_NotifyBegin(ctx, (mode | VBO_SAVE_PRIM_WEAK
-                              | VBO_SAVE_PRIM_NO_CURRENT_UPDATE));
+   vbo_save_NotifyBegin(ctx, mode, true);
 
    for (i = 0; i < count; i++)
-      CALL_ArrayElement(GET_DISPATCH(), (start + i));
+      _mesa_array_element(ctx, start + i);
    CALL_End(GET_DISPATCH(), ());
 
-   _ae_unmap_vbos(ctx);
+   _mesa_vao_unmap_arrays(ctx, vao);
 }
 
 
@@ -1378,6 +1388,29 @@ _save_OBE_MultiDrawArrays(GLenum mode, const GLint *first,
 }
 
 
+static void
+array_element(struct gl_context *ctx,
+              GLint basevertex, GLuint elt, unsigned index_size)
+{
+   /* Section 10.3.5 Primitive Restart:
+    * [...]
+    *    When one of the *BaseVertex drawing commands specified in section 10.5
+    * is used, the primitive restart comparison occurs before the basevertex
+    * offset is added to the array index.
+    */
+   /* If PrimitiveRestart is enabled and the index is the RestartIndex
+    * then we call PrimitiveRestartNV and return.
+    */
+   if (ctx->Array._PrimitiveRestart &&
+       elt == _mesa_primitive_restart_index(ctx, index_size)) {
+      CALL_PrimitiveRestartNV(GET_DISPATCH(), ());
+      return;
+   }
+
+   _mesa_array_element(ctx, basevertex + elt);
+}
+
+
 /* Could do better by copying the arrays and element list intact and
  * then emitting an indexed prim at runtime.
  */
@@ -1387,7 +1420,8 @@ _save_OBE_DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type,
 {
    GET_CURRENT_CONTEXT(ctx);
    struct vbo_save_context *save = &vbo_context(ctx)->save;
-   struct gl_buffer_object *indexbuf = ctx->Array.VAO->IndexBufferObj;
+   struct gl_vertex_array_object *vao = ctx->Array.VAO;
+   struct gl_buffer_object *indexbuf = vao->IndexBufferObj;
    GLint i;
 
    if (!_mesa_is_valid_prim_mode(ctx, mode)) {
@@ -1411,27 +1445,26 @@ _save_OBE_DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type,
    /* Make sure to process any VBO binding changes */
    _mesa_update_state(ctx);
 
-   _ae_map_vbos(ctx);
+   _mesa_vao_map(ctx, vao, GL_MAP_READ_BIT);
 
    if (_mesa_is_bufferobj(indexbuf))
       indices =
          ADD_POINTERS(indexbuf->Mappings[MAP_INTERNAL].Pointer, indices);
 
-   vbo_save_NotifyBegin(ctx, (mode | VBO_SAVE_PRIM_WEAK |
-                              VBO_SAVE_PRIM_NO_CURRENT_UPDATE));
+   vbo_save_NotifyBegin(ctx, mode, true);
 
    switch (type) {
    case GL_UNSIGNED_BYTE:
       for (i = 0; i < count; i++)
-         CALL_ArrayElement(GET_DISPATCH(), (basevertex + ((GLubyte *) indices)[i]));
+         array_element(ctx, basevertex, ((GLubyte *) indices)[i], 1);
       break;
    case GL_UNSIGNED_SHORT:
       for (i = 0; i < count; i++)
-         CALL_ArrayElement(GET_DISPATCH(), (basevertex + ((GLushort *) indices)[i]));
+         array_element(ctx, basevertex, ((GLushort *) indices)[i], 2);
       break;
    case GL_UNSIGNED_INT:
       for (i = 0; i < count; i++)
-         CALL_ArrayElement(GET_DISPATCH(), (basevertex + ((GLuint *) indices)[i]));
+         array_element(ctx, basevertex, ((GLuint *) indices)[i], 4);
       break;
    default:
       _mesa_error(ctx, GL_INVALID_ENUM, "glDrawElements(type)");
@@ -1440,7 +1473,7 @@ _save_OBE_DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type,
 
    CALL_End(GET_DISPATCH(), ());
 
-   _ae_unmap_vbos(ctx);
+   _mesa_vao_unmap(ctx, vao);
 }
 
 static void GLAPIENTRY
@@ -1804,12 +1837,8 @@ vbo_save_EndCallList(struct gl_context *ctx)
 {
    struct vbo_save_context *save = &vbo_context(ctx)->save;
 
-   if (ctx->ListState.CallDepth == 1) {
-      /* This is correct: want to keep only the VBO_SAVE_FALLBACK
-       * flag, if it is set:
-       */
-      save->replay_flags &= VBO_SAVE_FALLBACK;
-   }
+   if (ctx->ListState.CallDepth == 1)
+      save->replay_flags = 0;
 }
 
 
@@ -1848,10 +1877,9 @@ vbo_print_vertex_list(struct gl_context *ctx, void *data, FILE *f)
 
    for (i = 0; i < node->prim_count; i++) {
       struct _mesa_prim *prim = &node->prims[i];
-      fprintf(f, "   prim %d: %s%s %d..%d %s %s\n",
+      fprintf(f, "   prim %d: %s %d..%d %s %s\n",
              i,
              _mesa_lookup_prim_by_nr(prim->mode),
-             prim->weak ? " (weak)" : "",
              prim->start,
              prim->start + prim->count,
              (prim->begin) ? "BEGIN" : "(wrap)",

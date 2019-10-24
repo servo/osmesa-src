@@ -102,7 +102,7 @@ static void si_update_mmio_counters(struct si_screen *sscreen,
 	UPDATE_COUNTER(gui, GUI_ACTIVE);
 	gui_busy = GUI_ACTIVE(value);
 
-	if (sscreen->info.chip_class == CIK || sscreen->info.chip_class == VI) {
+	if (sscreen->info.chip_class == GFX7 || sscreen->info.chip_class == GFX8) {
 		/* SRBM_STATUS2 */
 		sscreen->ws->read_registers(sscreen->ws, SRBM_STATUS2, 1, &value);
 
@@ -110,7 +110,7 @@ static void si_update_mmio_counters(struct si_screen *sscreen,
 		sdma_busy = SDMA_BUSY(value);
 	}
 
-	if (sscreen->info.chip_class >= VI) {
+	if (sscreen->info.chip_class >= GFX8) {
 		/* CP_STAT */
 		sscreen->ws->read_registers(sscreen->ws, CP_STAT, 1, &value);
 
@@ -175,12 +175,12 @@ static uint64_t si_read_mmio_counter(struct si_screen *sscreen,
 {
 	/* Start the thread if needed. */
 	if (!sscreen->gpu_load_thread) {
-		mtx_lock(&sscreen->gpu_load_mutex);
+		simple_mtx_lock(&sscreen->gpu_load_mutex);
 		/* Check again inside the mutex. */
 		if (!sscreen->gpu_load_thread)
 			sscreen->gpu_load_thread =
 				u_thread_create(si_gpu_load_thread, sscreen);
-		mtx_unlock(&sscreen->gpu_load_mutex);
+		simple_mtx_unlock(&sscreen->gpu_load_mutex);
 	}
 
 	unsigned busy = p_atomic_read(&sscreen->mmio_counters.array[busy_index]);
@@ -213,8 +213,8 @@ static unsigned si_end_mmio_counter(struct si_screen *sscreen,
 	}
 }
 
-#define BUSY_INDEX(rscreen, field) (&rscreen->mmio_counters.named.field.busy - \
-				    rscreen->mmio_counters.array)
+#define BUSY_INDEX(sscreen, field) (&sscreen->mmio_counters.named.field.busy - \
+				    sscreen->mmio_counters.array)
 
 static unsigned busy_index_from_type(struct si_screen *sscreen,
 				     unsigned type)

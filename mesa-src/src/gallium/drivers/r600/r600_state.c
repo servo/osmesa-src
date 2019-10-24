@@ -158,19 +158,19 @@ static bool r600_is_zs_format_supported(enum pipe_format format)
 	return r600_translate_dbformat(format) != ~0U;
 }
 
-boolean r600_is_format_supported(struct pipe_screen *screen,
-				 enum pipe_format format,
-				 enum pipe_texture_target target,
-				 unsigned sample_count,
-				 unsigned storage_sample_count,
-				 unsigned usage)
+bool r600_is_format_supported(struct pipe_screen *screen,
+			      enum pipe_format format,
+			      enum pipe_texture_target target,
+			      unsigned sample_count,
+			      unsigned storage_sample_count,
+			      unsigned usage)
 {
 	struct r600_screen *rscreen = (struct r600_screen*)screen;
 	unsigned retval = 0;
 
 	if (target >= PIPE_MAX_TEXTURE_TYPES) {
 		R600_ERR("r600: unsupported texture type %d\n", target);
-		return FALSE;
+		return false;
 	}
 
 	if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
@@ -178,17 +178,17 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 
 	if (sample_count > 1) {
 		if (!rscreen->has_msaa)
-			return FALSE;
+			return false;
 
 		/* R11G11B10 is broken on R6xx. */
 		if (rscreen->b.chip_class == R600 &&
 		    format == PIPE_FORMAT_R11G11B10_FLOAT)
-			return FALSE;
+			return false;
 
 		/* MSAA integer colorbuffers hang. */
 		if (util_format_is_pure_integer(format) &&
 		    !util_format_is_depth_or_stencil(format))
-			return FALSE;
+			return false;
 
 		switch (sample_count) {
 		case 2:
@@ -196,7 +196,7 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 		case 8:
 			break;
 		default:
-			return FALSE;
+			return false;
 		}
 	}
 
@@ -1837,18 +1837,17 @@ static void r600_emit_sampler_states(struct r600_context *rctx,
 
 		/* TEX_ARRAY_OVERRIDE must be set for array textures to disable
 		 * filtering between layers.
-		 * Don't update TEX_ARRAY_OVERRIDE if we don't have the sampler view.
 		 */
-		if (rview) {
-			enum pipe_texture_target target = rview->base.texture->target;
-			if (target == PIPE_TEXTURE_1D_ARRAY ||
-			    target == PIPE_TEXTURE_2D_ARRAY) {
-				rstate->tex_sampler_words[0] |= S_03C000_TEX_ARRAY_OVERRIDE(1);
-				texinfo->is_array_sampler[i] = true;
-			} else {
-				rstate->tex_sampler_words[0] &= C_03C000_TEX_ARRAY_OVERRIDE;
-				texinfo->is_array_sampler[i] = false;
-			}
+		enum pipe_texture_target target = PIPE_BUFFER;
+		if (rview)
+			target = rview->base.texture->target;
+		if (target == PIPE_TEXTURE_1D_ARRAY ||
+		    target == PIPE_TEXTURE_2D_ARRAY) {
+			rstate->tex_sampler_words[0] |= S_03C000_TEX_ARRAY_OVERRIDE(1);
+			texinfo->is_array_sampler[i] = true;
+		} else {
+			rstate->tex_sampler_words[0] &= C_03C000_TEX_ARRAY_OVERRIDE;
+			texinfo->is_array_sampler[i] = false;
 		}
 
 		radeon_emit(cs, PKT3(PKT3_SET_SAMPLER, 3, 0));

@@ -93,6 +93,8 @@ public:
 void
 array_refcount_test::SetUp()
 {
+   glsl_type_singleton_init_or_ref();
+
    mem_ctx = ralloc_context(NULL);
 
    instructions.make_empty();
@@ -117,6 +119,8 @@ array_refcount_test::TearDown()
 
    ralloc_free(mem_ctx);
    mem_ctx = NULL;
+
+   glsl_type_singleton_decref();
 }
 
 static operand
@@ -477,7 +481,7 @@ TEST_F(array_refcount_test, do_not_process_array_inside_structure)
    };
 
    const glsl_type *const record_of_array_3_of_int =
-      glsl_type::get_record_instance(fields, ARRAY_SIZE(fields), "S");
+      glsl_type::get_struct_instance(fields, ARRAY_SIZE(fields), "S");
 
    ir_variable *var_a = new(mem_ctx) ir_variable(glsl_type::int_type,
                                                  "a",

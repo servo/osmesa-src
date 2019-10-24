@@ -132,7 +132,7 @@ pipe_loader_sw_probe_teardown_common(struct pipe_loader_sw_device *sdev)
 
 #ifdef HAVE_PIPE_LOADER_DRI
 bool
-pipe_loader_sw_probe_dri(struct pipe_loader_device **devs, struct drisw_loader_funcs *drisw_lf)
+pipe_loader_sw_probe_dri(struct pipe_loader_device **devs, const struct drisw_loader_funcs *drisw_lf)
 {
    struct pipe_loader_sw_device *sdev = CALLOC_STRUCT(pipe_loader_sw_device);
    int i;
@@ -277,7 +277,7 @@ fail:
 static void
 pipe_loader_sw_release(struct pipe_loader_device **dev)
 {
-   MAYBE_UNUSED struct pipe_loader_sw_device *sdev =
+   UNUSED struct pipe_loader_sw_device *sdev =
       pipe_loader_sw_device(*dev);
 
 #ifndef GALLIUM_STATIC_TARGETS
@@ -293,9 +293,8 @@ pipe_loader_sw_release(struct pipe_loader_device **dev)
    pipe_loader_base_release(dev);
 }
 
-static const struct drm_conf_ret *
-pipe_loader_sw_configuration(struct pipe_loader_device *dev,
-                             enum drm_conf conf)
+static const char *
+pipe_loader_sw_get_driconf_xml(struct pipe_loader_device *dev)
 {
    return NULL;
 }
@@ -316,6 +315,6 @@ pipe_loader_sw_create_screen(struct pipe_loader_device *dev,
 
 static const struct pipe_loader_ops pipe_loader_sw_ops = {
    .create_screen = pipe_loader_sw_create_screen,
-   .configuration = pipe_loader_sw_configuration,
+   .get_driconf_xml = pipe_loader_sw_get_driconf_xml,
    .release = pipe_loader_sw_release
 };

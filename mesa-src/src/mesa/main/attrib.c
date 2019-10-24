@@ -43,6 +43,7 @@
 #include "macros.h"
 #include "matrix.h"
 #include "multisample.h"
+#include "pixelstore.h"
 #include "points.h"
 #include "polygon.h"
 #include "shared.h"
@@ -1576,8 +1577,8 @@ copy_array_object(struct gl_context *ctx,
       _mesa_copy_vertex_buffer_binding(ctx, &dest->BufferBinding[i], &src->BufferBinding[i]);
    }
 
-   /* _Enabled must be the same than on push */
-   dest->_Enabled = src->_Enabled;
+   /* Enabled must be the same than on push */
+   dest->Enabled = src->Enabled;
    dest->_EffEnabledVBO = src->_EffEnabledVBO;
    /* The bitmask of bound VBOs needs to match the VertexBinding array */
    dest->VertexAttribBufferMask = src->VertexAttribBufferMask;
@@ -1839,7 +1840,6 @@ _mesa_PopClientAttrib(void)
                (struct gl_array_attrib *) node->data;
             restore_array_attrib(ctx, &ctx->Array, attr);
             free_array_attrib_data(ctx, attr);
-            ctx->NewState |= _NEW_ARRAY;
             break;
          }
          default:
@@ -1851,6 +1851,80 @@ _mesa_PopClientAttrib(void)
       free(node);
       node = next;
    }
+}
+
+void GLAPIENTRY
+_mesa_ClientAttribDefaultEXT( GLbitfield mask )
+{
+   if (mask & GL_CLIENT_PIXEL_STORE_BIT) {
+      _mesa_PixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
+      _mesa_PixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+      _mesa_PixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+      _mesa_PixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+      _mesa_PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+      _mesa_PixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+      _mesa_PixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+      _mesa_PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+      _mesa_PixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
+      _mesa_PixelStorei(GL_PACK_LSB_FIRST, GL_FALSE);
+      _mesa_PixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
+      _mesa_PixelStorei(GL_PACK_SKIP_IMAGES, 0);
+      _mesa_PixelStorei(GL_PACK_ROW_LENGTH, 0);
+      _mesa_PixelStorei(GL_PACK_SKIP_ROWS, 0);
+      _mesa_PixelStorei(GL_PACK_SKIP_PIXELS, 0);
+      _mesa_PixelStorei(GL_PACK_ALIGNMENT, 4);
+
+      _mesa_BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+      _mesa_BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+   }
+   if (mask & GL_CLIENT_VERTEX_ARRAY_BIT) {
+      GET_CURRENT_CONTEXT(ctx);
+      int i;
+
+      _mesa_BindBuffer(GL_ARRAY_BUFFER, 0);
+      _mesa_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+      _mesa_DisableClientState(GL_EDGE_FLAG_ARRAY);
+      _mesa_EdgeFlagPointer(0, 0);
+
+      _mesa_DisableClientState(GL_INDEX_ARRAY);
+      _mesa_IndexPointer(GL_FLOAT, 0, 0);
+
+      _mesa_DisableClientState(GL_SECONDARY_COLOR_ARRAY);
+      _mesa_SecondaryColorPointer(4, GL_FLOAT, 0, 0);
+
+      _mesa_DisableClientState(GL_FOG_COORD_ARRAY);
+      _mesa_FogCoordPointer(GL_FLOAT, 0, 0);
+
+      for (i = 0; i < ctx->Const.MaxTextureCoordUnits; i++) {
+         _mesa_ClientActiveTexture(GL_TEXTURE0 + i);
+         _mesa_DisableClientState(GL_TEXTURE_COORD_ARRAY);
+         _mesa_TexCoordPointer(4, GL_FLOAT, 0, 0);
+      }
+
+      _mesa_DisableClientState(GL_COLOR_ARRAY);
+      _mesa_ColorPointer(4, GL_FLOAT, 0, 0);
+
+      _mesa_DisableClientState(GL_NORMAL_ARRAY);
+      _mesa_NormalPointer(GL_FLOAT, 0, 0);
+
+      _mesa_DisableClientState(GL_VERTEX_ARRAY);
+      _mesa_VertexPointer(4, GL_FLOAT, 0, 0);
+
+      for (i = 0; i < ctx->Const.Program[MESA_SHADER_VERTEX].MaxAttribs; i++) {
+         _mesa_DisableVertexAttribArray(i);
+         _mesa_VertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 0, 0);
+      }
+
+      _mesa_ClientActiveTexture(GL_TEXTURE0);
+   }
+}
+
+void GLAPIENTRY
+_mesa_PushClientAttribDefaultEXT( GLbitfield mask )
+{
+   _mesa_PushClientAttrib(mask);
+   _mesa_ClientAttribDefaultEXT(mask);
 }
 
 

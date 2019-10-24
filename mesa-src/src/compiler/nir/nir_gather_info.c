@@ -198,6 +198,8 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
                       void *dead_ctx)
 {
    switch (instr->intrinsic) {
+   case nir_intrinsic_demote:
+   case nir_intrinsic_demote_if:
    case nir_intrinsic_discard:
    case nir_intrinsic_discard_if:
       assert(shader->info.stage == MESA_SHADER_FRAGMENT);
@@ -210,10 +212,9 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
    case nir_intrinsic_load_deref:
    case nir_intrinsic_store_deref:{
       nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
-      nir_variable *var = nir_deref_instr_get_variable(deref);
-
-      if (var->data.mode == nir_var_shader_in ||
-          var->data.mode == nir_var_shader_out) {
+      if (deref->mode == nir_var_shader_in ||
+          deref->mode == nir_var_shader_out) {
+         nir_variable *var = nir_deref_instr_get_variable(deref);
          bool is_output_read = false;
          if (var->data.mode == nir_var_shader_out &&
              instr->intrinsic == nir_intrinsic_load_deref)
@@ -238,6 +239,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
 
    case nir_intrinsic_load_draw_id:
    case nir_intrinsic_load_frag_coord:
+   case nir_intrinsic_load_point_coord:
    case nir_intrinsic_load_front_face:
    case nir_intrinsic_load_vertex_id:
    case nir_intrinsic_load_vertex_id_zero_base:
@@ -263,6 +265,14 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
          (1ull << nir_system_value_from_intrinsic(instr->intrinsic));
       break;
 
+   case nir_intrinsic_quad_broadcast:
+   case nir_intrinsic_quad_swap_horizontal:
+   case nir_intrinsic_quad_swap_vertical:
+   case nir_intrinsic_quad_swap_diagonal:
+      if (shader->info.stage == MESA_SHADER_FRAGMENT)
+         shader->info.fs.needs_helper_invocations = true;
+      break;
+
    case nir_intrinsic_end_primitive:
    case nir_intrinsic_end_primitive_with_counter:
       assert(shader->info.stage == MESA_SHADER_GEOMETRY);
@@ -283,16 +293,13 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
 static void
 gather_tex_info(nir_tex_instr *instr, nir_shader *shader)
 {
+   if (shader->info.stage == MESA_SHADER_FRAGMENT &&
+       nir_tex_instr_has_implicit_derivative(instr))
+      shader->info.fs.needs_helper_invocations = true;
+
    switch (instr->op) {
    case nir_texop_tg4:
       shader->info.uses_texture_gather = true;
-      break;
-   case nir_texop_txf:
-   case nir_texop_txf_ms:
-   case nir_texop_txf_ms_mcs:
-      shader->info.textures_used_by_txf |=
-         ((1 << MAX2(instr->texture_array_size, 1)) - 1) <<
-         instr->texture_index;
       break;
    default:
       break;
@@ -306,9 +313,22 @@ gather_alu_info(nir_alu_instr *instr, nir_shader *shader)
    case nir_op_fddx:
    case nir_op_fddy:
       shader->info.uses_fddx_fddy = true;
+      /* Fall through */
+   case nir_op_fddx_fine:
+   case nir_op_fddy_fine:
+   case nir_op_fddx_coarse:
+   case nir_op_fddy_coarse:
+      if (shader->info.stage == MESA_SHADER_FRAGMENT)
+         shader->info.fs.needs_helper_invocations = true;
       break;
    default:
       break;
+   }
+
+   shader->info.uses_64bit |= instr->dest.dest.ssa.bit_size == 64;
+   unsigned num_srcs = nir_op_infos[instr->op].num_inputs;
+   for (unsigned i = 0; i < num_srcs; i++) {
+      shader->info.uses_64bit |= nir_src_bit_size(instr->src[i].src) == 64;
    }
 }
 
@@ -335,56 +355,24 @@ gather_info_block(nir_block *block, nir_shader *shader, void *dead_ctx)
    }
 }
 
-static unsigned
-glsl_type_get_sampler_count(const struct glsl_type *type)
-{
-   if (glsl_type_is_array(type)) {
-      return (glsl_get_aoa_size(type) *
-              glsl_type_get_sampler_count(glsl_without_array(type)));
-   }
-
-   if (glsl_type_is_struct(type)) {
-      unsigned count = 0;
-      for (int i = 0; i < glsl_get_length(type); i++)
-         count += glsl_type_get_sampler_count(glsl_get_struct_field(type, i));
-      return count;
-   }
-
-   if (glsl_type_is_sampler(type))
-      return 1;
-
-   return 0;
-}
-
-static unsigned
-glsl_type_get_image_count(const struct glsl_type *type)
-{
-   if (glsl_type_is_array(type)) {
-      return (glsl_get_aoa_size(type) *
-              glsl_type_get_image_count(glsl_without_array(type)));
-   }
-
-   if (glsl_type_is_struct(type)) {
-      unsigned count = 0;
-      for (int i = 0; i < glsl_get_length(type); i++)
-         count += glsl_type_get_image_count(glsl_get_struct_field(type, i));
-      return count;
-   }
-
-   if (glsl_type_is_image(type))
-      return 1;
-
-   return 0;
-}
-
 void
 nir_shader_gather_info(nir_shader *shader, nir_function_impl *entrypoint)
 {
    shader->info.num_textures = 0;
    shader->info.num_images = 0;
+   shader->info.last_msaa_image = -1;
    nir_foreach_variable(var, &shader->uniforms) {
+      /* Bindless textures and images don't use non-bindless slots. */
+      if (var->data.bindless)
+         continue;
+
       shader->info.num_textures += glsl_type_get_sampler_count(var->type);
       shader->info.num_images += glsl_type_get_image_count(var->type);
+
+      /* Assuming image slots don't have holes (e.g. OpenGL) */
+      if (glsl_type_is_image(var->type) &&
+          glsl_get_sampler_dim(var->type) == GLSL_SAMPLER_DIM_MS)
+         shader->info.last_msaa_image = shader->info.num_images - 1;
    }
 
    shader->info.inputs_read = 0;
@@ -399,6 +387,8 @@ nir_shader_gather_info(nir_shader *shader, nir_function_impl *entrypoint)
    }
    if (shader->info.stage == MESA_SHADER_FRAGMENT) {
       shader->info.fs.uses_sample_qualifier = false;
+      shader->info.fs.uses_discard = false;
+      shader->info.fs.needs_helper_invocations = false;
    }
 
    void *dead_ctx = ralloc_context(NULL);

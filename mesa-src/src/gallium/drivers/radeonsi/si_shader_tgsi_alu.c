@@ -23,6 +23,7 @@
  */
 
 #include "si_shader_internal.h"
+#include "si_pipe.h"
 #include "ac_llvm_util.h"
 
 void si_llvm_emit_kill(struct ac_shader_abi *abi, LLVMValueRef visible)
@@ -496,36 +497,23 @@ static void emit_bfe(const struct lp_build_tgsi_action *action,
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 
-	if (HAVE_LLVM < 0x0700) {
-		LLVMValueRef bfe_sm5 =
-			ac_build_bfe(&ctx->ac, emit_data->args[0],
-				     emit_data->args[1], emit_data->args[2],
-				     emit_data->info->opcode == TGSI_OPCODE_IBFE);
+	/* FIXME: LLVM 7 returns incorrect result when count is 0.
+	 * https://bugs.freedesktop.org/show_bug.cgi?id=107276
+	 */
+	LLVMValueRef zero = ctx->i32_0;
+	LLVMValueRef bfe_sm5 =
+		ac_build_bfe(&ctx->ac, emit_data->args[0],
+			     emit_data->args[1], emit_data->args[2],
+			     emit_data->info->opcode == TGSI_OPCODE_IBFE);
 
-		/* Correct for GLSL semantics. */
-		LLVMValueRef cond = LLVMBuildICmp(ctx->ac.builder, LLVMIntUGE, emit_data->args[2],
-						  LLVMConstInt(ctx->i32, 32, 0), "");
-		emit_data->output[emit_data->chan] =
-			LLVMBuildSelect(ctx->ac.builder, cond, emit_data->args[0], bfe_sm5, "");
-	} else {
-		/* FIXME: LLVM 7 returns incorrect result when count is 0.
-		 * https://bugs.freedesktop.org/show_bug.cgi?id=107276
-		 */
-		LLVMValueRef zero = ctx->i32_0;
-		LLVMValueRef bfe_sm5 =
-			ac_build_bfe(&ctx->ac, emit_data->args[0],
-				     emit_data->args[1], emit_data->args[2],
-				     emit_data->info->opcode == TGSI_OPCODE_IBFE);
-
-		/* Correct for GLSL semantics. */
-		LLVMValueRef cond = LLVMBuildICmp(ctx->ac.builder, LLVMIntUGE, emit_data->args[2],
-						  LLVMConstInt(ctx->i32, 32, 0), "");
-		LLVMValueRef cond2 = LLVMBuildICmp(ctx->ac.builder, LLVMIntEQ, emit_data->args[2],
-						   zero, "");
-		bfe_sm5 = LLVMBuildSelect(ctx->ac.builder, cond, emit_data->args[0], bfe_sm5, "");
-		emit_data->output[emit_data->chan] =
-			LLVMBuildSelect(ctx->ac.builder, cond2, zero, bfe_sm5, "");
-	}
+	/* Correct for GLSL semantics. */
+	LLVMValueRef cond = LLVMBuildICmp(ctx->ac.builder, LLVMIntUGE, emit_data->args[2],
+					  LLVMConstInt(ctx->i32, 32, 0), "");
+	LLVMValueRef cond2 = LLVMBuildICmp(ctx->ac.builder, LLVMIntEQ, emit_data->args[2],
+					   zero, "");
+	bfe_sm5 = LLVMBuildSelect(ctx->ac.builder, cond, emit_data->args[0], bfe_sm5, "");
+	emit_data->output[emit_data->chan] =
+		LLVMBuildSelect(ctx->ac.builder, cond2, zero, bfe_sm5, "");
 }
 
 /* this is ffs in C */
@@ -690,8 +678,10 @@ static void dfracexp_emit(const struct lp_build_tgsi_action *action,
 				   ctx->ac.i32, &in, 1, 0);
 }
 
-void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base)
+void si_shader_context_init_alu(struct si_shader_context *ctx)
 {
+	struct lp_build_tgsi_context *bld_base = &ctx->bld_base;
+
 	lp_set_default_actions(bld_base);
 
 	bld_base->op_actions[TGSI_OPCODE_AND].emit = emit_and;
@@ -735,8 +725,16 @@ void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base)
 	bld_base->op_actions[TGSI_OPCODE_EX2].intr_name = "llvm.exp2.f32";
 	bld_base->op_actions[TGSI_OPCODE_FLR].emit = build_tgsi_intrinsic_nomem;
 	bld_base->op_actions[TGSI_OPCODE_FLR].intr_name = "llvm.floor.f32";
-	bld_base->op_actions[TGSI_OPCODE_FMA].emit =
-		bld_base->op_actions[TGSI_OPCODE_MAD].emit;
+
+	/* FMA is better on GFX10, because it has FMA units instead of MUL-ADD units. */
+	if (ctx->screen->info.chip_class >= GFX10) {
+		bld_base->op_actions[TGSI_OPCODE_FMA].emit = build_tgsi_intrinsic_nomem;
+		bld_base->op_actions[TGSI_OPCODE_FMA].intr_name = "llvm.fma.f32";
+	} else {
+		bld_base->op_actions[TGSI_OPCODE_FMA].emit =
+			bld_base->op_actions[TGSI_OPCODE_MAD].emit;
+	}
+
 	bld_base->op_actions[TGSI_OPCODE_FRC].emit = emit_frac;
 	bld_base->op_actions[TGSI_OPCODE_F2I].emit = emit_f2i;
 	bld_base->op_actions[TGSI_OPCODE_F2U].emit = emit_f2u;

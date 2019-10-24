@@ -39,13 +39,22 @@ radv_extensions_c = custom_target(
   ],
 )
 
-vk_format_table_c = custom_target(
-  'vk_format_table.c',
+amd_vk_format_table_c = custom_target(
+  'amd_vk_format_table.c',
   input : ['vk_format_table.py', 'vk_format_layout.csv'],
   output : 'vk_format_table.c',
   command : [prog_python, '@INPUT@'],
   depend_files : files('vk_format_parse.py'),
   capture : true,
+)
+
+radv_gfx10_format_table_h = custom_target(
+  'radv_gfx10_format_table.h',
+  input : ['gfx10_format_table.py', 'vk_format_layout.csv', '../registers/gfx10-rsrc.json'],
+  output : 'gfx10_format_table.h',
+  command : [prog_python, '@INPUT@'],
+  capture : true,
+  depend_files : files('../registers/regdb.py')
 )
 
 libradv_files = files(
@@ -58,6 +67,7 @@ libradv_files = files(
   'winsys/amdgpu/radv_amdgpu_winsys.c',
   'winsys/amdgpu/radv_amdgpu_winsys.h',
   'winsys/amdgpu/radv_amdgpu_winsys_public.h',
+  'radv_android.c',
   'radv_cmd_buffer.c',
   'radv_cs.h',
   'radv_debug.c',
@@ -78,9 +88,11 @@ libradv_files = files(
   'radv_meta_copy.c',
   'radv_meta_decompress.c',
   'radv_meta_fast_clear.c',
+  'radv_meta_fmask_expand.c',
   'radv_meta_resolve.c',
   'radv_meta_resolve_cs.c',
   'radv_meta_resolve_fs.c',
+  'radv_nir_lower_ycbcr_textures.c',
   'radv_nir_to_llvm.c',
   'radv_pass.c',
   'radv_pipeline.c',
@@ -127,27 +139,45 @@ if with_xlib_lease
   radv_flags += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
 endif
 
+if with_platform_android
+  radv_deps += dep_android
+  radv_flags += [
+    '-DVK_USE_PLATFORM_ANDROID_KHR'
+  ]
+endif
+
 libvulkan_radeon = shared_library(
   'vulkan_radeon',
-  [libradv_files, radv_entrypoints, radv_extensions_c, vk_format_table_c, sha1_h],
+  [libradv_files, radv_entrypoints, radv_extensions_c, amd_vk_format_table_c, sha1_h, xmlpool_options_h, radv_gfx10_format_table_h],
   include_directories : [
-    inc_common, inc_amd, inc_amd_common, inc_compiler, inc_vulkan_util,
-    inc_vulkan_wsi,
+    inc_common, inc_amd, inc_amd_common, inc_amd_common_llvm, inc_compiler, inc_util, inc_vulkan_wsi,
   ],
   link_with : [
-    libamd_common, libamdgpu_addrlib, libvulkan_util, libvulkan_wsi,
-    libmesa_util,
+    libamd_common, libamd_common_llvm, libamdgpu_addrlib, libvulkan_wsi,
   ],
   dependencies : [
     dep_llvm, dep_libdrm_amdgpu, dep_thread, dep_elf, dep_dl, dep_m,
-    dep_valgrind,
-    idep_nir,
+    dep_valgrind, radv_deps, idep_aco,
+    idep_mesautil, idep_nir, idep_vulkan_util, idep_amdgfxregs_h, idep_xmlconfig,
   ],
   c_args : [c_vis_args, no_override_init_args, radv_flags],
   cpp_args : [cpp_vis_args, radv_flags],
   link_args : [ld_args_bsymbolic, ld_args_gc_sections],
   install : true,
 )
+
+if with_tests and prog_nm.found()
+  test(
+    'radv symbols check',
+    symbols_check,
+    args : [
+      '--lib', libvulkan_radeon,
+      '--symbols-file', vulkan_icd_symbols,
+      '--nm', prog_nm.path(),
+    ],
+    suite : ['amd'],
+  )
+endif
 
 radeon_icd = custom_target(
   'radeon_icd',
@@ -162,17 +192,4 @@ radeon_icd = custom_target(
   build_by_default : true,
   install_dir : with_vulkan_icd_dir,
   install : true,
-)
-
-radv_dev_icd = custom_target(
-  'radv_dev_icd',
-  input : 'radv_icd.py',
-  output : 'dev_icd.json',
-  command : [
-    prog_python, '@INPUT@', '--lib-path', meson.current_build_dir(),
-    '--out', '@OUTPUT@'
-  ],
-  depend_files : files('radv_extensions.py'),
-  build_by_default : true,
-  install : false,
 )

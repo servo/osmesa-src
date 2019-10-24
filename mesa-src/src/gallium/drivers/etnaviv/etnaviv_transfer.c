@@ -28,6 +28,7 @@
 #include "etnaviv_clear_blit.h"
 #include "etnaviv_context.h"
 #include "etnaviv_debug.h"
+#include "etnaviv_etc2.h"
 #include "etnaviv_screen.h"
 
 #include "pipe/p_defines.h"
@@ -42,7 +43,7 @@
 
 #include "hw/common_3d.xml.h"
 
-#include <drm_fourcc.h>
+#include "drm-uapi/drm_fourcc.h"
 
 /* Compute offset into a 1D/2D/3D buffer of a certain box.
  * This box must be aligned to the block width and height of the
@@ -55,6 +56,46 @@ etna_compute_offset(enum pipe_format format, const struct pipe_box *box,
           box->y / util_format_get_blockheight(format) * stride +
           box->x / util_format_get_blockwidth(format) *
              util_format_get_blocksize(format);
+}
+
+static void etna_patch_data(void *buffer, const struct pipe_transfer *ptrans)
+{
+   struct pipe_resource *prsc = ptrans->resource;
+   struct etna_resource *rsc = etna_resource(prsc);
+   struct etna_resource_level *level = &rsc->levels[ptrans->level];
+
+   if (likely(!etna_etc2_needs_patching(prsc)))
+      return;
+
+   if (level->patched)
+      return;
+
+   /* do have the offsets of blocks to patch? */
+   if (!level->patch_offsets) {
+      level->patch_offsets = CALLOC_STRUCT(util_dynarray);
+
+      etna_etc2_calculate_blocks(buffer, ptrans->stride,
+                                         ptrans->box.width, ptrans->box.height,
+                                         prsc->format, level->patch_offsets);
+   }
+
+   etna_etc2_patch(buffer, level->patch_offsets);
+
+   level->patched = true;
+}
+
+static void etna_unpatch_data(void *buffer, const struct pipe_transfer *ptrans)
+{
+   struct pipe_resource *prsc = ptrans->resource;
+   struct etna_resource *rsc = etna_resource(prsc);
+   struct etna_resource_level *level = &rsc->levels[ptrans->level];
+
+   if (!level->patched)
+      return;
+
+   etna_etc2_patch(buffer, level->patch_offsets);
+
+   level->patched = false;
 }
 
 static void
@@ -91,16 +132,18 @@ etna_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
       } else if (trans->staging) {
          /* map buffer object */
          struct etna_resource_level *res_level = &rsc->levels[ptrans->level];
-         void *mapped = etna_bo_map(rsc->bo) + res_level->offset;
 
          if (rsc->layout == ETNA_LAYOUT_TILED) {
-            etna_texture_tile(
-               mapped + ptrans->box.z * res_level->layer_stride,
-               trans->staging, ptrans->box.x, ptrans->box.y,
-               res_level->stride, ptrans->box.width, ptrans->box.height,
-               ptrans->stride, util_format_get_blocksize(rsc->base.format));
+            for (unsigned z = 0; z < ptrans->box.depth; z++) {
+               etna_texture_tile(
+                  trans->mapped + (ptrans->box.z + z) * res_level->layer_stride,
+                  trans->staging + z * ptrans->layer_stride,
+                  ptrans->box.x, ptrans->box.y,
+                  res_level->stride, ptrans->box.width, ptrans->box.height,
+                  ptrans->stride, util_format_get_blocksize(rsc->base.format));
+            }
          } else if (rsc->layout == ETNA_LAYOUT_LINEAR) {
-            util_copy_box(mapped, rsc->base.format, res_level->stride,
+            util_copy_box(trans->mapped, rsc->base.format, res_level->stride,
                           res_level->layer_stride, ptrans->box.x,
                           ptrans->box.y, ptrans->box.z, ptrans->box.width,
                           ptrans->box.height, ptrans->box.depth,
@@ -120,6 +163,9 @@ etna_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
       }
    }
 
+   /* We need to have the patched data ready for the GPU. */
+   etna_patch_data(trans->mapped, ptrans);
+
    /*
     * Transfers without a temporary are only pulled into the CPU domain if they
     * are not mapped unsynchronized. If they are, must push them back into GPU
@@ -127,6 +173,14 @@ etna_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
     */
    if (!trans->rsc && !(ptrans->usage & PIPE_TRANSFER_UNSYNCHRONIZED))
       etna_bo_cpu_fini(rsc->bo);
+
+   if ((ptrans->resource->target == PIPE_BUFFER) &&
+       (ptrans->usage & PIPE_TRANSFER_WRITE)) {
+      util_range_add(&rsc->base,
+                     &rsc->valid_buffer_range,
+                     ptrans->box.x,
+                     ptrans->box.x + ptrans->box.width);
+      }
 
    pipe_resource_reference(&trans->rsc, NULL);
    pipe_resource_reference(&ptrans->resource, NULL);
@@ -153,13 +207,16 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
    /* slab_alloc() doesn't zero */
    memset(trans, 0, sizeof(*trans));
 
-   ptrans = &trans->base;
-   pipe_resource_reference(&ptrans->resource, prsc);
-   ptrans->level = level;
-   ptrans->usage = usage;
-   ptrans->box = *box;
-
-   assert(level <= prsc->last_level);
+   /*
+    * Upgrade to UNSYNCHRONIZED if target is PIPE_BUFFER and range is uninitialized.
+    */
+   if ((usage & PIPE_TRANSFER_WRITE) &&
+       (prsc->target == PIPE_BUFFER) &&
+       !util_ranges_intersect(&rsc->valid_buffer_range,
+                              box->x,
+                              box->x + box->width)) {
+      usage |= PIPE_TRANSFER_UNSYNCHRONIZED;
+   }
 
    /* Upgrade DISCARD_RANGE to WHOLE_RESOURCE if the whole resource is
     * being mapped. If we add buffer reallocation to avoid CPU/GPU sync this
@@ -174,6 +231,14 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
        prsc->array_size == 1) {
       usage |= PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE;
    }
+
+   ptrans = &trans->base;
+   pipe_resource_reference(&ptrans->resource, prsc);
+   ptrans->level = level;
+   ptrans->usage = usage;
+   ptrans->box = *box;
+
+   assert(level <= prsc->last_level);
 
    if (rsc->texture && !etna_resource_newer(rsc, etna_resource(rsc->texture))) {
       /* We have a texture resource which is the same age or newer than the
@@ -197,7 +262,7 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
          return NULL;
       }
 
-      if (prsc->depth0 > 1) {
+      if (prsc->depth0 > 1 && rsc->ts_bo) {
          slab_free(&ctx->transfer_pool, trans);
          BUG("resource has depth >1 with tile status");
          return NULL;
@@ -221,21 +286,19 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
          unsigned w_align, h_align;
 
          if (rsc->layout & ETNA_LAYOUT_BIT_SUPER) {
-            w_align = h_align = 64;
+            w_align = 64;
+            h_align = 64 * ctx->screen->specs.pixel_pipes;
          } else {
             w_align = ETNA_RS_WIDTH_MASK + 1;
             h_align = ETNA_RS_HEIGHT_MASK + 1;
          }
-         h_align *= ctx->screen->specs.pixel_pipes;
 
          ptrans->box.width += ptrans->box.x & (w_align - 1);
          ptrans->box.x = ptrans->box.x & ~(w_align - 1);
          ptrans->box.width = align(ptrans->box.width, (ETNA_RS_WIDTH_MASK + 1));
          ptrans->box.height += ptrans->box.y & (h_align - 1);
          ptrans->box.y = ptrans->box.y & ~(h_align - 1);
-         ptrans->box.height = align(ptrans->box.height,
-                                    (ETNA_RS_HEIGHT_MASK + 1) *
-                                     ctx->screen->specs.pixel_pipes);
+         ptrans->box.height = align(ptrans->box.height, ETNA_RS_HEIGHT_MASK + 1);
       }
 
       if (!(usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE))
@@ -310,15 +373,33 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
        * current GPU usage (reads must wait for GPU writes, writes must have
        * exclusive access to the buffer).
        */
+      mtx_lock(&ctx->lock);
+
       if ((trans->rsc && (etna_resource(trans->rsc)->status & ETNA_PENDING_WRITE)) ||
           (!trans->rsc &&
            (((usage & PIPE_TRANSFER_READ) && (rsc->status & ETNA_PENDING_WRITE)) ||
-           ((usage & PIPE_TRANSFER_WRITE) && rsc->status))))
-         pctx->flush(pctx, NULL, 0);
+           ((usage & PIPE_TRANSFER_WRITE) && rsc->status)))) {
+         set_foreach(rsc->pending_ctx, entry) {
+            struct etna_context *pend_ctx = (struct etna_context *)entry->key;
+            struct pipe_context *pend_pctx = &pend_ctx->base;
+
+            pend_pctx->flush(pend_pctx, NULL, 0);
+         }
+      }
+
+      mtx_unlock(&ctx->lock);
 
       if (usage & PIPE_TRANSFER_READ)
          prep_flags |= DRM_ETNA_PREP_READ;
       if (usage & PIPE_TRANSFER_WRITE)
+         prep_flags |= DRM_ETNA_PREP_WRITE;
+
+      /*
+       * The ETC2 patching operates in-place on the resource, so the resource will
+       * get written even on read-only transfers. This blocks the GPU to sample
+       * from this resource.
+       */
+      if ((usage & PIPE_TRANSFER_READ) && etna_etc2_needs_patching(prsc))
          prep_flags |= DRM_ETNA_PREP_WRITE;
 
       if (etna_bo_cpu_prep(rsc->bo, prep_flags))
@@ -326,8 +407,8 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
    }
 
    /* map buffer object */
-   void *mapped = etna_bo_map(rsc->bo);
-   if (!mapped)
+   trans->mapped = etna_bo_map(rsc->bo);
+   if (!trans->mapped)
       goto fail;
 
    *out_transfer = ptrans;
@@ -336,9 +417,15 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
       ptrans->stride = res_level->stride;
       ptrans->layer_stride = res_level->layer_stride;
 
-      return mapped + res_level->offset +
+      trans->mapped += res_level->offset +
              etna_compute_offset(prsc->format, box, res_level->stride,
                                  res_level->layer_stride);
+
+      /* We need to have the unpatched data ready for the gfx stack. */
+      if (usage & PIPE_TRANSFER_READ)
+         etna_unpatch_data(trans->mapped, ptrans);
+
+      return trans->mapped;
    } else {
       unsigned divSizeX = util_format_get_blockwidth(format);
       unsigned divSizeY = util_format_get_blockheight(format);
@@ -349,7 +436,7 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
       if (usage & PIPE_TRANSFER_MAP_DIRECTLY)
          goto fail;
 
-      mapped += res_level->offset;
+      trans->mapped += res_level->offset;
       ptrans->stride = align(box->width, divSizeX) * util_format_get_blocksize(format); /* row stride in bytes */
       ptrans->layer_stride = align(box->height, divSizeY) * ptrans->stride;
       size_t size = ptrans->layer_stride * box->depth;
@@ -360,16 +447,18 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
 
       if (usage & PIPE_TRANSFER_READ) {
          if (rsc->layout == ETNA_LAYOUT_TILED) {
-            etna_texture_untile(trans->staging,
-                                mapped + ptrans->box.z * res_level->layer_stride,
-                                ptrans->box.x, ptrans->box.y, res_level->stride,
-                                ptrans->box.width, ptrans->box.height, ptrans->stride,
-                                util_format_get_blocksize(rsc->base.format));
+            for (unsigned z = 0; z < ptrans->box.depth; z++) {
+               etna_texture_untile(trans->staging + z * ptrans->layer_stride,
+                                   trans->mapped + (ptrans->box.z + z) * res_level->layer_stride,
+                                   ptrans->box.x, ptrans->box.y, res_level->stride,
+                                   ptrans->box.width, ptrans->box.height, ptrans->stride,
+                                   util_format_get_blocksize(rsc->base.format));
+            }
          } else if (rsc->layout == ETNA_LAYOUT_LINEAR) {
             util_copy_box(trans->staging, rsc->base.format, ptrans->stride,
                           ptrans->layer_stride, 0, 0, 0, /* dst x,y,z */
                           ptrans->box.width, ptrans->box.height,
-                          ptrans->box.depth, mapped, res_level->stride,
+                          ptrans->box.depth, trans->mapped, res_level->stride,
                           res_level->layer_stride, ptrans->box.x,
                           ptrans->box.y, ptrans->box.z);
          } else {
@@ -390,10 +479,16 @@ fail_prep:
 
 static void
 etna_transfer_flush_region(struct pipe_context *pctx,
-                           struct pipe_transfer *transfer,
+                           struct pipe_transfer *ptrans,
                            const struct pipe_box *box)
 {
-   /* NOOP for now */
+   struct etna_resource *rsc = etna_resource(ptrans->resource);
+
+   if (ptrans->resource->target == PIPE_BUFFER)
+      util_range_add(&rsc->base,
+                     &rsc->valid_buffer_range,
+                     ptrans->box.x + box->x,
+                     ptrans->box.x + box->x + box->width);
 }
 
 void

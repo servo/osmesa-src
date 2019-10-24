@@ -21,6 +21,7 @@
 
 inc_gallium_drivers = include_directories('drivers')
 inc_gallium_winsys = include_directories('winsys')
+inc_gallium_winsys_sw = include_directories('winsys/sw')
 
 subdir('auxiliary')
 subdir('auxiliary/pipe-loader')
@@ -34,6 +35,11 @@ if with_gallium_drisw_kms
   subdir('winsys/sw/kms-dri')
 else
   libswkmsdri = []
+endif
+if with_platform_windows
+  subdir('winsys/sw/gdi')
+else
+  libwsgdi = null_dep
 endif
 subdir('winsys/sw/wrapper')
 if with_platform_haiku
@@ -89,16 +95,11 @@ if with_gallium_vc4
 else
   driver_vc4 = declare_dependency()
 endif
-if with_gallium_pl111
-  subdir('winsys/pl111/drm')
+if with_gallium_panfrost
+  subdir('winsys/panfrost/drm')
+  subdir('drivers/panfrost')
 else
-  driver_pl111 = declare_dependency()
-endif
-if with_gallium_v3d
-  subdir('winsys/v3d/drm')
-  subdir('drivers/v3d')
-else
-  driver_v3d = declare_dependency()
+  driver_panfrost = declare_dependency()
 endif
 if with_gallium_etnaviv
   subdir('winsys/etnaviv/drm')
@@ -106,16 +107,28 @@ if with_gallium_etnaviv
 else
   driver_etnaviv = declare_dependency()
 endif
-if with_gallium_imx
-  subdir('winsys/imx/drm')
+if with_gallium_kmsro
+  subdir('winsys/kmsro/drm')
 else
-  driver_imx = declare_dependency()
+  driver_kmsro = declare_dependency()
+endif
+if with_gallium_v3d
+  subdir('winsys/v3d/drm')
+  subdir('drivers/v3d')
+else
+  driver_v3d = declare_dependency()
 endif
 if with_gallium_tegra
   subdir('winsys/tegra/drm')
   subdir('drivers/tegra')
 else
   driver_tegra = declare_dependency()
+endif
+if with_gallium_iris
+  subdir('winsys/iris/drm')
+  subdir('drivers/iris')
+else
+  driver_iris = declare_dependency()
 endif
 if with_gallium_i915
   subdir('winsys/i915/drm')
@@ -130,11 +143,18 @@ else
   driver_svga = declare_dependency()
 endif
 if with_gallium_virgl
+  subdir('winsys/virgl/common')
   subdir('winsys/virgl/drm')
   subdir('winsys/virgl/vtest')
   subdir('drivers/virgl')
 else
   driver_virgl = declare_dependency()
+endif
+if with_gallium_lima
+  subdir('winsys/lima/drm')
+  subdir('drivers/lima')
+else
+  driver_lima = declare_dependency()
 endif
 if with_gallium_opencl
   # TODO: this isn't really clover specific, but ATM clover is the only
@@ -185,9 +205,15 @@ if with_gallium_st_nine
   subdir('state_trackers/nine')
   subdir('targets/d3dadapter9')
 endif
+if with_platform_windows
+  subdir('state_trackers/wgl')
+  subdir('targets/libgl-gdi')
+endif
 if with_tests
   subdir('targets/graw-null')
-  if with_glx == 'gallium-xlib'
+  if with_platform_windows
+    subdir('targets/graw-gdi')
+  elif with_glx == 'gallium-xlib'
     subdir('targets/graw-xlib')
   endif
   subdir('tests')

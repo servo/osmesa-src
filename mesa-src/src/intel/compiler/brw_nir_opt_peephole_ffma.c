@@ -50,8 +50,7 @@ are_all_uses_fadd(nir_ssa_def *def)
       case nir_op_fadd:
          break; /* This one's ok */
 
-      case nir_op_imov:
-      case nir_op_fmov:
+      case nir_op_mov:
       case nir_op_fneg:
       case nir_op_fabs:
          assert(use_alu->dest.dest.is_ssa);
@@ -68,7 +67,7 @@ are_all_uses_fadd(nir_ssa_def *def)
 }
 
 static nir_alu_instr *
-get_mul_for_src(nir_alu_src *src, int num_components,
+get_mul_for_src(nir_alu_src *src, unsigned num_components,
                 uint8_t swizzle[4], bool *negate, bool *abs)
 {
    uint8_t swizzle_tmp[4];
@@ -91,18 +90,20 @@ get_mul_for_src(nir_alu_src *src, int num_components,
       return NULL;
 
    switch (alu->op) {
-   case nir_op_imov:
-   case nir_op_fmov:
-      alu = get_mul_for_src(&alu->src[0], num_components, swizzle, negate, abs);
+   case nir_op_mov:
+      alu = get_mul_for_src(&alu->src[0], alu->dest.dest.ssa.num_components,
+                            swizzle, negate, abs);
       break;
 
    case nir_op_fneg:
-      alu = get_mul_for_src(&alu->src[0], num_components, swizzle, negate, abs);
+      alu = get_mul_for_src(&alu->src[0], alu->dest.dest.ssa.num_components,
+                            swizzle, negate, abs);
       *negate = !*negate;
       break;
 
    case nir_op_fabs:
-      alu = get_mul_for_src(&alu->src[0], num_components, swizzle, negate, abs);
+      alu = get_mul_for_src(&alu->src[0], alu->dest.dest.ssa.num_components,
+                            swizzle, negate, abs);
       *negate = false;
       *abs = true;
       break;

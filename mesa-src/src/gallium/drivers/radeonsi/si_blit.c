@@ -58,7 +58,7 @@ void si_blitter_begin(struct si_context *sctx, enum si_blitter_op op)
 		util_blitter_save_stencil_ref(sctx->blitter, &sctx->stencil_ref.state);
 		util_blitter_save_fragment_shader(sctx->blitter, sctx->ps_shader.cso);
 		util_blitter_save_sample_mask(sctx->blitter, sctx->sample_mask);
-		util_blitter_save_scissor(sctx->blitter, &sctx->scissors.states[0]);
+		util_blitter_save_scissor(sctx->blitter, &sctx->scissors[0]);
 		util_blitter_save_window_rectangles(sctx->blitter,
 						    sctx->window_rectangles_include,
 						    sctx->num_window_rectangles,
@@ -178,31 +178,6 @@ si_blit_dbcb_copy(struct si_context *sctx,
 	si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 
 	return fully_copied_levels;
-}
-
-void si_blit_decompress_depth(struct pipe_context *ctx,
-			      struct si_texture *texture,
-			      struct si_texture *staging,
-			      unsigned first_level, unsigned last_level,
-			      unsigned first_layer, unsigned last_layer,
-			      unsigned first_sample, unsigned last_sample)
-{
-	const struct util_format_description *desc;
-	unsigned planes = 0;
-
-	assert(staging != NULL && "use si_blit_decompress_zs_in_place instead");
-
-	desc = util_format_description(staging->buffer.b.b.format);
-
-	if (util_format_has_depth(desc))
-		planes |= PIPE_MASK_Z;
-	if (util_format_has_stencil(desc))
-		planes |= PIPE_MASK_S;
-
-	si_blit_dbcb_copy(
-		(struct si_context *)ctx, texture, staging, planes,
-		u_bit_consecutive(first_level, last_level - first_level + 1),
-		first_layer, last_layer, first_sample, last_sample);
 }
 
 /* Helper function for si_blit_decompress_zs_in_place.
@@ -355,7 +330,7 @@ si_decompress_depth(struct si_context *sctx,
 	 */
 	if (copy_planes &&
 	    (tex->flushed_depth_texture ||
-	     si_init_flushed_depth_texture(&sctx->b, &tex->buffer.b.b, NULL))) {
+	     si_init_flushed_depth_texture(&sctx->b, &tex->buffer.b.b))) {
 		struct si_texture *dst = tex->flushed_depth_texture;
 		unsigned fully_copied_levels;
 		unsigned levels = 0;
@@ -386,8 +361,9 @@ si_decompress_depth(struct si_context *sctx,
 	}
 
 	if (inplace_planes) {
-		bool has_htile = si_htile_enabled(tex, first_level);
-		bool tc_compat_htile = vi_tc_compat_htile_enabled(tex, first_level);
+		bool has_htile = si_htile_enabled(tex, first_level, inplace_planes);
+		bool tc_compat_htile = vi_tc_compat_htile_enabled(tex, first_level,
+								  inplace_planes);
 
 		/* Don't decompress if there is no HTILE or when HTILE is
 		 * TC-compatible. */
@@ -421,7 +397,7 @@ si_decompress_depth(struct si_context *sctx,
 	 */
 	if (copy_planes && tex->buffer.b.b.nr_samples > 1)
 		si_make_CB_shader_coherent(sctx, tex->buffer.b.b.nr_samples,
-					   false);
+					   false, true /* no DCC */);
 }
 
 static void
@@ -456,7 +432,8 @@ static void si_blit_decompress_color(struct si_context *sctx,
 				     struct si_texture *tex,
 				     unsigned first_level, unsigned last_level,
 				     unsigned first_layer, unsigned last_layer,
-				     bool need_dcc_decompress)
+				     bool need_dcc_decompress,
+				     bool need_fmask_expand)
 {
 	void* custom_blend;
 	unsigned layer, checked_last_layer, max_layer;
@@ -477,7 +454,7 @@ static void si_blit_decompress_color(struct si_context *sctx,
 	if (need_dcc_decompress) {
 		custom_blend = sctx->custom_blend_dcc_decompress;
 
-		assert(tex->dcc_offset);
+		assert(tex->surface.dcc_offset);
 
 		/* disable levels without DCC */
 		for (int i = first_level; i <= last_level; i++) {
@@ -534,20 +511,27 @@ static void si_blit_decompress_color(struct si_context *sctx,
 
 	sctx->decompression_enabled = false;
 	si_make_CB_shader_coherent(sctx, tex->buffer.b.b.nr_samples,
-				   vi_dcc_enabled(tex, first_level));
+				   vi_dcc_enabled(tex, first_level),
+				   tex->surface.u.gfx9.dcc.pipe_aligned);
+
+	if (need_fmask_expand && tex->surface.fmask_offset && tex->fmask_is_not_identity) {
+		si_compute_expand_fmask(&sctx->b, &tex->buffer.b.b);
+		tex->fmask_is_not_identity = false;
+	}
 }
 
 static void
 si_decompress_color_texture(struct si_context *sctx, struct si_texture *tex,
-			    unsigned first_level, unsigned last_level)
+			    unsigned first_level, unsigned last_level,
+			    bool need_fmask_expand)
 {
 	/* CMASK or DCC can be discarded and we can still end up here. */
-	if (!tex->cmask_buffer && !tex->surface.fmask_size && !tex->dcc_offset)
+	if (!tex->cmask_buffer && !tex->surface.fmask_size && !tex->surface.dcc_offset)
 		return;
 
 	si_blit_decompress_color(sctx, tex, first_level, last_level, 0,
 				 util_max_layer(&tex->buffer.b.b, first_level),
-				 false);
+				 false, need_fmask_expand);
 }
 
 static void
@@ -569,7 +553,7 @@ si_decompress_sampler_color_textures(struct si_context *sctx,
 		tex = (struct si_texture *)view->texture;
 
 		si_decompress_color_texture(sctx, tex, view->u.tex.first_level,
-					    view->u.tex.last_level);
+					    view->u.tex.last_level, false);
 	}
 }
 
@@ -592,7 +576,8 @@ si_decompress_image_color_textures(struct si_context *sctx,
 		tex = (struct si_texture *)view->resource;
 
 		si_decompress_color_texture(sctx, tex, view->u.tex.level,
-					    view->u.tex.level);
+					    view->u.tex.level,
+					    view->access & PIPE_IMAGE_ACCESS_WRITE);
 	}
 }
 
@@ -605,7 +590,7 @@ static void si_check_render_feedback_texture(struct si_context *sctx,
 {
 	bool render_feedback = false;
 
-	if (!tex->dcc_offset)
+	if (!tex->surface.dcc_offset)
 		return;
 
 	for (unsigned j = 0; j < sctx->framebuffer.state.nr_cbufs; ++j) {
@@ -752,7 +737,7 @@ static void si_decompress_resident_textures(struct si_context *sctx)
 		struct si_texture *tex = (struct si_texture *)view->texture;
 
 		si_decompress_color_texture(sctx, tex, view->u.tex.first_level,
-					    view->u.tex.last_level);
+					    view->u.tex.last_level, false);
 	}
 
 	util_dynarray_foreach(&sctx->resident_tex_needs_depth_decompress,
@@ -776,7 +761,8 @@ static void si_decompress_resident_images(struct si_context *sctx)
 		struct si_texture *tex = (struct si_texture *)view->resource;
 
 		si_decompress_color_texture(sctx, tex, view->u.tex.level,
-					    view->u.tex.level);
+					    view->u.tex.level,
+					    view->access & PIPE_IMAGE_ACCESS_WRITE);
 	}
 }
 
@@ -821,14 +807,14 @@ void si_decompress_textures(struct si_context *sctx, unsigned shader_mask)
 			si_decompress_color_texture(sctx,
 						    (struct si_texture*)cb0->texture,
 						    cb0->u.tex.first_layer,
-						    cb0->u.tex.last_layer);
+						    cb0->u.tex.last_layer, false);
 		}
 
 		si_check_render_feedback(sctx);
 	} else if (shader_mask & (1 << PIPE_SHADER_COMPUTE)) {
-		if (sctx->cs_shader_state.program->uses_bindless_samplers)
+		if (sctx->cs_shader_state.program->sel.info.uses_bindless_samplers)
 			si_decompress_resident_textures(sctx);
-		if (sctx->cs_shader_state.program->uses_bindless_images)
+		if (sctx->cs_shader_state.program->sel.info.uses_bindless_images)
 			si_decompress_resident_images(sctx);
 	}
 }
@@ -863,7 +849,7 @@ static void si_decompress_subresource(struct pipe_context *ctx,
 		si_decompress_depth(sctx, stex, planes,
 				    level, level,
 				    first_layer, last_layer);
-	} else if (stex->surface.fmask_size || stex->cmask_buffer || stex->dcc_offset) {
+	} else if (stex->surface.fmask_size || stex->cmask_buffer || stex->surface.dcc_offset) {
 		/* If we've rendered into the framebuffer and it's a blitting
 		 * source, make sure the decompression pass is invoked
 		 * by dirtying the framebuffer.
@@ -878,7 +864,7 @@ static void si_decompress_subresource(struct pipe_context *ctx,
 		}
 
 		si_blit_decompress_color(sctx, stex, level, level,
-					 first_layer, last_layer, false);
+					 first_layer, last_layer, false, false);
 	}
 }
 
@@ -902,6 +888,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_texture *ssrc = (struct si_texture*)src;
+	struct si_texture *sdst = (struct si_texture*)dst;
 	struct pipe_surface *dst_view, dst_templ;
 	struct pipe_sampler_view src_templ, *src_view;
 	unsigned dst_width, dst_height, src_width0, src_height0;
@@ -911,6 +898,17 @@ void si_resource_copy_region(struct pipe_context *ctx,
 	/* Handle buffers first. */
 	if (dst->target == PIPE_BUFFER && src->target == PIPE_BUFFER) {
 		si_copy_buffer(sctx, dst, src, dstx, src_box->x, src_box->width);
+		return;
+	}
+
+	if (!util_format_is_compressed(src->format) &&
+	    !util_format_is_compressed(dst->format) &&
+	    !util_format_is_depth_or_stencil(src->format) &&
+	    src->nr_samples <= 1 &&
+	    !sdst->surface.dcc_offset &&
+	    !(dst->target != src->target &&
+	      (src->target == PIPE_TEXTURE_1D_ARRAY || dst->target == PIPE_TEXTURE_1D_ARRAY))) {
+		si_compute_copy_image(sctx, dst, dst_level, src, src_level, dstx, dsty, dstz, src_box);
 		return;
 	}
 
@@ -1012,36 +1010,8 @@ void si_resource_copy_region(struct pipe_context *ctx,
 	 * Note that some chips avoid this issue by using SDMA.
 	 */
 	if (util_format_is_snorm8(dst_templ.format)) {
-		switch (dst_templ.format) {
-		case PIPE_FORMAT_R8_SNORM:
-			dst_templ.format = src_templ.format = PIPE_FORMAT_R8_SINT;
-			break;
-		case PIPE_FORMAT_R8G8_SNORM:
-			dst_templ.format = src_templ.format = PIPE_FORMAT_R8G8_SINT;
-			break;
-		case PIPE_FORMAT_R8G8B8X8_SNORM:
-			dst_templ.format = src_templ.format = PIPE_FORMAT_R8G8B8X8_SINT;
-			break;
-		case PIPE_FORMAT_R8G8B8A8_SNORM:
-		/* There are no SINT variants for ABGR and XBGR, so we have to use RGBA. */
-		case PIPE_FORMAT_A8B8G8R8_SNORM:
-		case PIPE_FORMAT_X8B8G8R8_SNORM:
-			dst_templ.format = src_templ.format = PIPE_FORMAT_R8G8B8A8_SINT;
-			break;
-		case PIPE_FORMAT_A8_SNORM:
-			dst_templ.format = src_templ.format = PIPE_FORMAT_A8_SINT;
-			break;
-		case PIPE_FORMAT_L8_SNORM:
-			dst_templ.format = src_templ.format = PIPE_FORMAT_L8_SINT;
-			break;
-		case PIPE_FORMAT_L8A8_SNORM:
-			dst_templ.format = src_templ.format = PIPE_FORMAT_L8A8_SINT;
-			break;
-		case PIPE_FORMAT_I8_SNORM:
-			dst_templ.format = src_templ.format = PIPE_FORMAT_I8_SINT;
-			break;
-		default:; /* fall through */
-		}
+		dst_templ.format = src_templ.format =
+			util_format_snorm8_to_sint8(dst_templ.format);
 	}
 
 	vi_disable_dcc_if_incompatible_format(sctx, dst, dst_level,
@@ -1092,7 +1062,7 @@ static void si_do_CB_resolve(struct si_context *sctx,
 	si_blitter_end(sctx);
 
 	/* Flush caches for possible texturing. */
-	si_make_CB_shader_coherent(sctx, 1, false);
+	si_make_CB_shader_coherent(sctx, 1, false, true /* no DCC */);
 }
 
 static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
@@ -1101,7 +1071,7 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	struct si_context *sctx = (struct si_context*)ctx;
 	struct si_texture *src = (struct si_texture*)info->src.resource;
 	struct si_texture *dst = (struct si_texture*)info->dst.resource;
-	MAYBE_UNUSED struct si_texture *stmp;
+	ASSERTED struct si_texture *stmp;
 	unsigned dst_width = u_minify(info->dst.resource->width0, info->dst.level);
 	unsigned dst_height = u_minify(info->dst.resource->height0, info->dst.level);
 	enum pipe_format format = info->src.format;
@@ -1149,6 +1119,12 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 			/* The next fast clear will switch to this mode to
 			 * get direct hw resolve next time if the mode is
 			 * different now.
+			 *
+			 * TODO-GFX10: This does not work in GFX10 because MSAA
+			 * is restricted to 64KB_R_X and 64KB_Z_X swizzle modes.
+			 * In some cases we could change the swizzle of the
+			 * destination texture instead, but the more general
+			 * solution is to implement compute shader resolve.
 			 */
 			src->last_msaa_resolve_target_micro_mode =
 				dst->surface.micro_tile_mode;
@@ -1160,18 +1136,10 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 		 * This is still the fastest codepath even with this clear.
 		 */
 		if (vi_dcc_enabled(dst, info->dst.level)) {
-			/* TODO: Implement per-level DCC clears for GFX9. */
-			if (sctx->chip_class >= GFX9 &&
-			    info->dst.resource->last_level != 0)
+			if (!vi_dcc_clear_level(sctx, dst, info->dst.level,
+						DCC_UNCOMPRESSED))
 				goto resolve_to_temp;
 
-			/* This can happen with mipmapping. */
-			if (sctx->chip_class == VI &&
-			    !dst->surface.u.legacy.level[info->dst.level].dcc_fast_clear_size)
-				goto resolve_to_temp;
-
-			vi_dcc_clear_level(sctx, dst, info->dst.level,
-					   0xFFFFFFFF);
 			dst->dirty_level_mask &= ~(1 << info->dst.level);
 		}
 
@@ -1193,7 +1161,7 @@ resolve_to_temp:
 	templ.depth0 = 1;
 	templ.array_size = 1;
 	templ.usage = PIPE_USAGE_DEFAULT;
-	templ.flags = SI_RESOURCE_FLAG_FORCE_TILING |
+	templ.flags = SI_RESOURCE_FLAG_FORCE_MSAA_TILING |
 		      SI_RESOURCE_FLAG_DISABLE_DCC;
 
 	/* The src and dst microtile modes must be the same. */
@@ -1264,7 +1232,7 @@ static void si_blit(struct pipe_context *ctx,
 	vi_disable_dcc_if_incompatible_format(sctx, info->dst.resource,
 					      info->dst.level,
 					      info->dst.format);
-	si_decompress_subresource(ctx, info->src.resource, info->mask,
+	si_decompress_subresource(ctx, info->src.resource, PIPE_MASK_RGBAZS,
 				  info->src.level,
 				  info->src.box.z,
 				  info->src.box.z + info->src.box.depth - 1);
@@ -1279,11 +1247,11 @@ static void si_blit(struct pipe_context *ctx,
 	si_blitter_end(sctx);
 }
 
-static boolean si_generate_mipmap(struct pipe_context *ctx,
-				  struct pipe_resource *tex,
-				  enum pipe_format format,
-				  unsigned base_level, unsigned last_level,
-				  unsigned first_layer, unsigned last_layer)
+static bool si_generate_mipmap(struct pipe_context *ctx,
+			       struct pipe_resource *tex,
+			       enum pipe_format format,
+			       unsigned base_level, unsigned last_level,
+			       unsigned first_layer, unsigned last_layer)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
 	struct si_texture *stex = (struct si_texture *)tex;
@@ -1329,10 +1297,13 @@ static void si_flush_resource(struct pipe_context *ctx,
 	if (tex->dcc_separate_buffer && !tex->separate_dcc_dirty)
 		return;
 
-	if (!tex->is_depth && (tex->cmask_buffer || tex->dcc_offset)) {
+	if (!tex->is_depth && (tex->cmask_buffer || tex->surface.dcc_offset)) {
 		si_blit_decompress_color(sctx, tex, 0, res->last_level,
 					 0, util_max_layer(res, 0),
-					 tex->dcc_separate_buffer != NULL);
+					 tex->dcc_separate_buffer != NULL, false);
+
+		if (tex->surface.display_dcc_offset)
+			si_retile_dcc(sctx, tex);
 	}
 
 	/* Always do the analysis even if DCC is disabled at the moment. */
@@ -1368,18 +1339,24 @@ static void si_flush_resource(struct pipe_context *ctx,
 
 void si_decompress_dcc(struct si_context *sctx, struct si_texture *tex)
 {
-	if (!tex->dcc_offset)
+	/* If graphics is disabled, we can't decompress DCC, but it shouldn't
+	 * be compressed either. The caller should simply discard it.
+	 */
+	if (!tex->surface.dcc_offset || !sctx->has_graphics)
 		return;
 
 	si_blit_decompress_color(sctx, tex, 0, tex->buffer.b.b.last_level,
 				 0, util_max_layer(&tex->buffer.b.b, 0),
-				 true);
+				 true, false);
 }
 
 void si_init_blit_functions(struct si_context *sctx)
 {
 	sctx->b.resource_copy_region = si_resource_copy_region;
-	sctx->b.blit = si_blit;
-	sctx->b.flush_resource = si_flush_resource;
-	sctx->b.generate_mipmap = si_generate_mipmap;
+
+	if (sctx->has_graphics) {
+		sctx->b.blit = si_blit;
+		sctx->b.flush_resource = si_flush_resource;
+		sctx->b.generate_mipmap = si_generate_mipmap;
+	}
 }

@@ -34,7 +34,6 @@
 #include <amdgpu.h>
 #include <amdgpu_drm.h>
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
-#include "ac_llvm_util.h"
 #include "vk_format.h"
 #include "sid.h"
 #include "util/debug.h"
@@ -283,8 +282,6 @@ radv_RegisterDeviceEventEXT(VkDevice                    _device,
 		return VK_ERROR_OUT_OF_HOST_MEMORY;
 
 	fence->fence = NULL;
-	fence->submitted = true;
-	fence->signalled = false;
 	fence->syncobj = 0;
 	fence->temp_syncobj = 0;
 
@@ -318,8 +315,6 @@ radv_RegisterDisplayEventEXT(VkDevice                           _device,
 		return VK_ERROR_OUT_OF_HOST_MEMORY;
 
 	fence->fence = NULL;
-	fence->submitted = true;
-	fence->signalled = false;
 	fence->syncobj = 0;
 	fence->temp_syncobj = 0;
 

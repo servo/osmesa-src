@@ -52,7 +52,9 @@ enum radeon_bo_layout {
 enum radeon_bo_domain { /* bitfield */
     RADEON_DOMAIN_GTT  = 2,
     RADEON_DOMAIN_VRAM = 4,
-    RADEON_DOMAIN_VRAM_GTT = RADEON_DOMAIN_VRAM | RADEON_DOMAIN_GTT
+    RADEON_DOMAIN_VRAM_GTT = RADEON_DOMAIN_VRAM | RADEON_DOMAIN_GTT,
+    RADEON_DOMAIN_GDS = 8,
+    RADEON_DOMAIN_OA = 16,
 };
 
 enum radeon_bo_flag { /* bitfield */
@@ -65,6 +67,16 @@ enum radeon_bo_flag { /* bitfield */
     RADEON_FLAG_32BIT =    (1 << 6),
 };
 
+enum radeon_dependency_flag {
+    /* Add the dependency to the parallel compute IB only. */
+    RADEON_DEPENDENCY_PARALLEL_COMPUTE_ONLY = 1 << 0,
+
+    /* Instead of waiting for a job to finish execution, the dependency will
+     * be signaled when the job starts execution.
+     */
+    RADEON_DEPENDENCY_START_FENCE = 1 << 1,
+};
+
 enum radeon_bo_usage { /* bitfield */
     RADEON_USAGE_READ = 2,
     RADEON_USAGE_WRITE = 4,
@@ -74,6 +86,15 @@ enum radeon_bo_usage { /* bitfield */
      * previously flushed CSs referencing this BO in a conflicting way.
      */
     RADEON_USAGE_SYNCHRONIZED = 8
+};
+
+enum radeon_transfer_flags {
+   /* Indicates that the caller will unmap the buffer.
+    *
+    * Not unmapping buffers is an important performance optimization for
+    * OpenGL (avoids kernel overhead for frequently mapped buffers).
+    */
+   RADEON_TRANSFER_TEMPORARY = (PIPE_TRANSFER_DRV_PRV << 0),
 };
 
 #define RADEON_SPARSE_PAGE_SIZE (64 * 1024)
@@ -112,7 +133,6 @@ enum radeon_value_id {
     RADEON_GPU_TEMPERATURE, /* DRM 2.42.0 */
     RADEON_CURRENT_SCLK,
     RADEON_CURRENT_MCLK,
-    RADEON_GPU_RESET_COUNTER, /* DRM 2.43.0 */
     RADEON_CS_THREAD_TIME,
 };
 
@@ -182,6 +202,7 @@ struct radeon_cmdbuf {
     /* Memory usage of the buffer list. These are always 0 for preamble IBs. */
     uint64_t                      used_vram;
     uint64_t                      used_gart;
+    uint64_t                      gpu_address;
 };
 
 /* Tiling info for display code, DRI sharing, and other data. */
@@ -206,6 +227,12 @@ struct radeon_bo_metadata {
         struct {
             /* surface flags */
             unsigned swizzle_mode:5;
+
+            /* DCC flags */
+            /* [31:8]: max offset = 4GB - 256; 0 = DCC disabled */
+            unsigned dcc_offset_256B:24;
+            unsigned dcc_pitch_max:14;   /* (mip chain pitch - 1) for DCN */
+            unsigned dcc_independent_64B:1;
         } gfx9;
     } u;
 
@@ -294,9 +321,12 @@ struct radeon_winsys {
      * Map the entire data store of a buffer object into the client's address
      * space.
      *
+     * Callers are expected to unmap buffers again if and only if the
+     * RADEON_TRANSFER_TEMPORARY flag is set in \p usage.
+     *
      * \param buf       A winsys buffer object to map.
      * \param cs        A command stream to flush if the buffer is referenced by it.
-     * \param usage     A bitmask of the PIPE_TRANSFER_* flags.
+     * \param usage     A bitmask of the PIPE_TRANSFER_* and RADEON_TRANSFER_* flags.
      * \return          The pointer at the beginning of the buffer.
      */
     void *(*buffer_map)(struct pb_buffer *buf,
@@ -348,11 +378,10 @@ struct radeon_winsys {
      * \param ws        The winsys this function is called from.
      * \param whandle   A winsys handle pointer as was received from a state
      *                  tracker.
-     * \param stride    The returned buffer stride in bytes.
      */
     struct pb_buffer *(*buffer_from_handle)(struct radeon_winsys *ws,
                                             struct winsys_handle *whandle,
-                                            unsigned *stride, unsigned *offset);
+                                            unsigned vm_alignment);
 
     /**
      * Get a winsys buffer from a user pointer. The resulting buffer can't
@@ -380,14 +409,13 @@ struct radeon_winsys {
      * Get a winsys handle from a winsys buffer. The internal structure
      * of the handle is platform-specific and only a winsys should access it.
      *
+     * \param ws        The winsys instance for which the handle is to be valid
      * \param buf       A winsys buffer object to get the handle from.
      * \param whandle   A winsys handle pointer.
-     * \param stride    A stride of the buffer in bytes, for texturing.
      * \return          true on success.
      */
-    bool (*buffer_get_handle)(struct pb_buffer *buf,
-                              unsigned stride, unsigned offset,
-                              unsigned slice_size,
+    bool (*buffer_get_handle)(struct radeon_winsys *ws,
+                              struct pb_buffer *buf,
                               struct winsys_handle *whandle);
 
     /**
@@ -464,10 +492,28 @@ struct radeon_winsys {
      * \param user      User pointer that will be passed to the flush callback.
      */
     struct radeon_cmdbuf *(*cs_create)(struct radeon_winsys_ctx *ctx,
-                                          enum ring_type ring_type,
-                                          void (*flush)(void *ctx, unsigned flags,
-							struct pipe_fence_handle **fence),
-                                          void *flush_ctx);
+                                       enum ring_type ring_type,
+                                       void (*flush)(void *ctx, unsigned flags,
+                                                     struct pipe_fence_handle **fence),
+                                       void *flush_ctx,
+                                       bool stop_exec_on_failure);
+
+    /**
+     * Add a parallel compute IB to a gfx IB. It will share the buffer list
+     * and fence dependencies with the gfx IB. The gfx flush call will submit
+     * both IBs at the same time.
+     *
+     * The compute IB doesn't have an output fence, so the primary IB has
+     * to use a wait packet for synchronization.
+     *
+     * The returned IB is only a stream for writing packets to the new
+     * IB. Calling other winsys functions with it is not allowed, not even
+     * "cs_destroy". Use the gfx IB instead.
+     *
+     * \param cs              Gfx IB
+     */
+    struct radeon_cmdbuf *(*cs_add_parallel_compute_ib)(struct radeon_cmdbuf *cs,
+                                                        bool uses_gds_ordered_append);
 
     /**
      * Destroy a command stream.
@@ -522,8 +568,12 @@ struct radeon_winsys {
      *
      * \param cs        A command stream.
      * \param dw        Number of CS dwords requested by the caller.
+     * \param force_chaining  Chain the IB into a new buffer now to discard
+     *                        the CP prefetch cache (to emulate PKT3_REWIND)
+     * \return true if there is enough space
      */
-    bool (*cs_check_space)(struct radeon_cmdbuf *cs, unsigned dw);
+    bool (*cs_check_space)(struct radeon_cmdbuf *cs, unsigned dw,
+                           bool force_chaining);
 
     /**
      * Return the buffer list.
@@ -591,9 +641,12 @@ struct radeon_winsys {
     /**
      * Add a fence dependency to the CS, so that the CS will wait for
      * the fence before execution.
+     *
+     * \param dependency_flags  Bitmask of RADEON_DEPENDENCY_*
      */
     void (*cs_add_fence_dependency)(struct radeon_cmdbuf *cs,
-                                    struct pipe_fence_handle *fence);
+                                    struct pipe_fence_handle *fence,
+                                    unsigned dependency_flags);
 
     /**
      * Signal a syncobj when the CS finishes execution.
@@ -661,8 +714,6 @@ struct radeon_winsys {
 
     bool (*read_registers)(struct radeon_winsys *ws, unsigned reg_offset,
                            unsigned num_registers, uint32_t *out);
-
-    const char* (*get_chip_name)(struct radeon_winsys *ws);
 };
 
 static inline bool radeon_emitted(struct radeon_cmdbuf *cs, unsigned num_dw)

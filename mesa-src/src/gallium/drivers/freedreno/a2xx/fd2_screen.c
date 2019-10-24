@@ -29,9 +29,11 @@
 
 #include "fd2_screen.h"
 #include "fd2_context.h"
+#include "fd2_emit.h"
 #include "fd2_util.h"
+#include "fd2_resource.h"
 
-static boolean
+static bool
 fd2_screen_is_format_supported(struct pipe_screen *pscreen,
 		enum pipe_format format,
 		enum pipe_texture_target target,
@@ -45,33 +47,26 @@ fd2_screen_is_format_supported(struct pipe_screen *pscreen,
 			(sample_count > 1)) { /* TODO add MSAA */
 		DBG("not supported: format=%s, target=%d, sample_count=%d, usage=%x",
 				util_format_name(format), target, sample_count, usage);
-		return FALSE;
+		return false;
 	}
 
 	if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
 		return false;
 
-	/* TODO figure out how to render to other formats.. */
 	if ((usage & PIPE_BIND_RENDER_TARGET) &&
-			((format != PIPE_FORMAT_B5G6R5_UNORM) &&
-			 (format != PIPE_FORMAT_B5G5R5A1_UNORM) &&
-			 (format != PIPE_FORMAT_B5G5R5X1_UNORM) &&
-			 (format != PIPE_FORMAT_B4G4R4A4_UNORM) &&
-			 (format != PIPE_FORMAT_B4G4R4X4_UNORM) &&
-			 (format != PIPE_FORMAT_B8G8R8A8_UNORM) &&
-			 (format != PIPE_FORMAT_B8G8R8X8_UNORM) &&
-			 (format != PIPE_FORMAT_R8G8B8A8_UNORM) &&
-			 (format != PIPE_FORMAT_R8G8B8X8_UNORM))) {
-		DBG("not supported render target: format=%s, target=%d, sample_count=%d, usage=%x",
-				util_format_name(format), target, sample_count, usage);
-		return FALSE;
+	    fd2_pipe2color(format) != (enum a2xx_colorformatx)~0) {
+		retval |= PIPE_BIND_RENDER_TARGET;
 	}
 
-	if ((usage & (PIPE_BIND_SAMPLER_VIEW |
-				PIPE_BIND_VERTEX_BUFFER)) &&
-			(fd2_pipe2surface(format) != (enum a2xx_sq_surfaceformat)~0)) {
-		retval |= usage & (PIPE_BIND_SAMPLER_VIEW |
-				PIPE_BIND_VERTEX_BUFFER);
+	if ((usage & (PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_VERTEX_BUFFER)) &&
+	    !util_format_is_srgb(format)) {
+		enum a2xx_sq_surfaceformat fmt = fd2_pipe2surface(format);
+		unsigned block_size = util_format_get_blocksize(format);
+		if (fmt != ~0)
+			retval |= usage & PIPE_BIND_VERTEX_BUFFER;
+		if (fmt != ~0 && block_size != 3 && block_size != 6 &&
+		    (block_size != 12 || format == PIPE_FORMAT_R32G32B32_FLOAT))
+			retval |= usage & PIPE_BIND_SAMPLER_VIEW;
 	}
 
 	if ((usage & (PIPE_BIND_RENDER_TARGET |
@@ -104,10 +99,26 @@ fd2_screen_is_format_supported(struct pipe_screen *pscreen,
 	return retval == usage;
 }
 
+extern const struct fd_perfcntr_group a2xx_perfcntr_groups[];
+extern const unsigned a2xx_num_perfcntr_groups;
+
 void
 fd2_screen_init(struct pipe_screen *pscreen)
 {
-	fd_screen(pscreen)->max_rts = 1;
+	struct fd_screen *screen = fd_screen(pscreen);
+
+	screen->max_rts = 1;
 	pscreen->context_create = fd2_context_create;
 	pscreen->is_format_supported = fd2_screen_is_format_supported;
+
+	screen->setup_slices = fd2_setup_slices;
+	if (fd_mesa_debug & FD_DBG_TTILE)
+		screen->tile_mode = fd2_tile_mode;
+
+	if (fd_mesa_debug & FD_DBG_PERFC) {
+		screen->perfcntr_groups = a2xx_perfcntr_groups;
+		screen->num_perfcntr_groups = a2xx_num_perfcntr_groups;
+	}
+
+	fd2_emit_init_screen(pscreen);
 }

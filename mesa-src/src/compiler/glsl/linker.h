@@ -65,7 +65,8 @@ link_uniform_blocks(void *mem_ctx,
 bool
 validate_intrastage_arrays(struct gl_shader_program *prog,
                            ir_variable *const var,
-                           ir_variable *const existing);
+                           ir_variable *const existing,
+                           bool match_precision = true);
 
 void
 validate_intrastage_interface_blocks(struct gl_shader_program *prog,
@@ -133,6 +134,26 @@ public:
     * not for determining the offsets of members.
     */
    void process(ir_variable *var, bool use_std430_as_default);
+
+   /**
+    * Begin processing a variable
+    *
+    * Classes that overload this function should call \c ::process from the
+    * base class to start the recursive processing of the variable.
+    *
+    * \param var  The variable that is to be processed
+    * \param var_type The glsl_type reference of the variable
+    *
+    * Calls \c ::visit_field for each leaf of the variable.
+    *
+    * \warning
+    * When processing a uniform block, this entry should only be used in cases
+    * where the row / column ordering of matrices in the block does not
+    * matter.  For example, enumerating the names of members of the block, but
+    * not for determining the offsets of members.
+    */
+   void process(ir_variable *var, const glsl_type *var_type,
+                bool use_std430_as_default);
 
    /**
     * Begin processing a variable of a structured type.

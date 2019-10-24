@@ -45,7 +45,8 @@ brw_vec4_generate_assembly(const struct brw_compiler *compiler,
                            void *mem_ctx,
                            const nir_shader *nir,
                            struct brw_vue_prog_data *prog_data,
-                           const struct cfg_t *cfg);
+                           const struct cfg_t *cfg,
+                           struct brw_compile_stats *stats);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -109,7 +110,6 @@ public:
    int *virtual_grf_start;
    int *virtual_grf_end;
    brw::vec4_live_variables *live_intervals;
-   dst_reg userplane[MAX_CLIP_PLANES];
 
    bool need_all_constants_in_pull_buffer;
 
@@ -132,7 +132,7 @@ public:
    bool reg_allocate();
    void evaluate_spill_costs(float *spill_costs, bool *no_spill);
    int choose_spill_reg(struct ra_graph *g);
-   void spill_reg(int spill_reg);
+   void spill_reg(unsigned spill_reg);
    void move_grf_array_access_to_scratch();
    void move_uniform_array_access_to_pull_constants();
    void move_push_constants_to_pull_constants();
@@ -236,14 +236,14 @@ public:
    vec4_instruction *emit_minmax(enum brw_conditional_mod conditionalmod, dst_reg dst,
                                  src_reg src0, src_reg src1);
 
-   vec4_instruction *emit_lrp(const dst_reg &dst, const src_reg &x,
-                              const src_reg &y, const src_reg &a);
-
    /**
     * Copy any live channel from \p src to the first channel of the
     * result.
     */
    src_reg emit_uniformize(const src_reg &src);
+
+   /** Fix all float operands of a 3-source instruction. */
+   void fix_float_operands(src_reg op[3], nir_alu_instr *instr);
 
    src_reg fix_3src_operand(const src_reg &src);
    src_reg resolve_source_modifiers(const src_reg &src);
@@ -338,6 +338,7 @@ public:
    virtual void nir_emit_block(nir_block *block);
    virtual void nir_emit_instr(nir_instr *instr);
    virtual void nir_emit_load_const(nir_load_const_instr *instr);
+   src_reg get_nir_ssbo_intrinsic_index(nir_intrinsic_instr *instr);
    virtual void nir_emit_intrinsic(nir_intrinsic_instr *instr);
    virtual void nir_emit_alu(nir_alu_instr *instr);
    virtual void nir_emit_jump(nir_jump_instr *instr);
@@ -354,6 +355,7 @@ public:
                        unsigned num_components = 4);
    src_reg get_nir_src(const nir_src &src,
                        unsigned num_components = 4);
+   src_reg get_nir_src_imm(const nir_src &src);
    src_reg get_indirect_offset(nir_intrinsic_instr *instr);
 
    dst_reg *nir_locals;

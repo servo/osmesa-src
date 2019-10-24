@@ -74,6 +74,7 @@ enum ir_node_type {
    ir_type_loop_jump,
    ir_type_return,
    ir_type_discard,
+   ir_type_demote,
    ir_type_emit_vertex,
    ir_type_end_primitive,
    ir_type_barrier,
@@ -233,7 +234,7 @@ public:
 
    ir_rvalue *as_rvalue_to_saturate();
 
-   virtual bool is_lvalue(const struct _mesa_glsl_parse_state *state = NULL) const
+   virtual bool is_lvalue(const struct _mesa_glsl_parse_state * = NULL) const
    {
       return false;
    }
@@ -657,6 +658,19 @@ public:
       unsigned centroid:1;
       unsigned sample:1;
       unsigned patch:1;
+      /**
+       * Was an 'invariant' qualifier explicitly set in the shader?
+       *
+       * This is used to cross validate qualifiers.
+       */
+      unsigned explicit_invariant:1;
+      /**
+       * Is the variable invariant?
+       *
+       * It can happen either by having the 'invariant' qualifier
+       * explicitly set in the shader or by being used in calculations
+       * of other invariant variables.
+       */
       unsigned invariant:1;
       unsigned precise:1;
 
@@ -712,14 +726,6 @@ public:
       unsigned interpolation:2;
 
       /**
-       * \name ARB_fragment_coord_conventions
-       * @{
-       */
-      unsigned origin_upper_left:1;
-      unsigned pixel_center_integer:1;
-      /*@}*/
-
-      /**
        * Was the location explicitly set in the shader?
        *
        * If the location is explicitly set in the shader, it \b cannot be changed
@@ -767,17 +773,17 @@ public:
       unsigned is_xfb_only:1;
 
       /**
-       * Was a transfor feedback buffer set in the shader?
+       * Was a transform feedback buffer set in the shader?
        */
       unsigned explicit_xfb_buffer:1;
 
       /**
-       * Was a transfor feedback offset set in the shader?
+       * Was a transform feedback offset set in the shader?
        */
       unsigned explicit_xfb_offset:1;
 
       /**
-       * Was a transfor feedback stride set in the shader?
+       * Was a transform feedback stride set in the shader?
        */
       unsigned explicit_xfb_stride:1;
 
@@ -1101,6 +1107,8 @@ enum ir_intrinsic_id {
    ir_intrinsic_image_atomic_comp_swap,
    ir_intrinsic_image_size,
    ir_intrinsic_image_samples,
+   ir_intrinsic_image_atomic_inc_wrap,
+   ir_intrinsic_image_atomic_dec_wrap,
 
    ir_intrinsic_ssbo_load,
    ir_intrinsic_ssbo_store = MAKE_INTRINSIC_FOR_TYPE(store, ssbo),
@@ -1122,7 +1130,6 @@ enum ir_intrinsic_id {
    ir_intrinsic_memory_barrier_shared,
    ir_intrinsic_begin_invocation_interlock,
    ir_intrinsic_end_invocation_interlock,
-   ir_intrinsic_begin_fragment_shader_ordering,
 
    ir_intrinsic_vote_all,
    ir_intrinsic_vote_any,
@@ -1130,6 +1137,8 @@ enum ir_intrinsic_id {
    ir_intrinsic_ballot,
    ir_intrinsic_read_invocation,
    ir_intrinsic_read_first_invocation,
+
+   ir_intrinsic_helper_invocation,
 
    ir_intrinsic_shared_load,
    ir_intrinsic_shared_store = MAKE_INTRINSIC_FOR_TYPE(store, shared),
@@ -1216,7 +1225,7 @@ public:
    /**
     * Function return type.
     *
-    * \note This discards the optional precision qualifier.
+    * \note The precision qualifier is stored separately in return_precision.
     */
    const struct glsl_type *return_type;
 
@@ -1230,6 +1239,13 @@ public:
 
    /** Whether or not this function has a body (which may be empty). */
    unsigned is_defined:1;
+
+   /*
+    * Precision qualifier for the return type.
+    *
+    * See the comment for ir_variable_data::precision for more details.
+    */
+   unsigned return_precision:2;
 
    /** Whether or not this function signature is a built-in. */
    bool is_builtin() const;
@@ -1789,6 +1805,28 @@ public:
    ir_rvalue *condition;
 };
 /*@}*/
+
+
+/**
+ * IR instruction representing demote statements from
+ * GL_EXT_demote_to_helper_invocation.
+ */
+class ir_demote : public ir_instruction {
+public:
+   ir_demote()
+      : ir_instruction(ir_type_demote)
+   {
+   }
+
+   virtual ir_demote *clone(void *mem_ctx, struct hash_table *ht) const;
+
+   virtual void accept(ir_visitor *v)
+   {
+      v->visit(this);
+   }
+
+   virtual ir_visitor_status accept(ir_hierarchical_visitor *);
+};
 
 
 /**

@@ -149,6 +149,10 @@ lower_instr(nir_intrinsic_instr *instr, unsigned ssbo_offset, nir_builder *b)
       break;
    }
 
+   if (new_instr->intrinsic == nir_intrinsic_load_ssbo ||
+       new_instr->intrinsic == nir_intrinsic_store_ssbo)
+      nir_intrinsic_set_align(new_instr, 4, 0);
+
    nir_ssa_dest_init(&new_instr->instr, &new_instr->dest,
                      instr->dest.ssa.num_components,
                      instr->dest.ssa.bit_size, NULL);
@@ -215,12 +219,11 @@ nir_lower_atomics_to_ssbo(nir_shader *shader, unsigned ssbo_offset)
             char name[16];
 
             /* A length of 0 is used to denote unsized arrays */
-            const struct glsl_type *type = glsl_array_type(glsl_uint_type(), 0);
+            const struct glsl_type *type = glsl_array_type(glsl_uint_type(), 0, 0);
 
             snprintf(name, sizeof(name), "counter%d", var->data.binding);
 
-            ssbo = nir_variable_create(shader, nir_var_shader_storage,
-                                       type, name);
+            ssbo = nir_variable_create(shader, nir_var_mem_ssbo, type, name);
             ssbo->data.binding = var->data.binding;
 
             struct glsl_struct_field field = {
@@ -236,6 +239,27 @@ nir_lower_atomics_to_ssbo(nir_shader *shader, unsigned ssbo_offset)
             replaced |= (1 << var->data.binding);
          }
       }
+
+      /* Make sure that shader->info.num_ssbos still reflects the maximum SSBO
+       * index that can be used in the shader.
+       */
+      if (shader->info.num_ssbos > 0) {
+         shader->info.num_ssbos += ssbo_offset;
+      } else {
+         /* We can't use num_abos, because it only represents the number of
+          * active atomic counters, and currently unlike SSBO's they aren't
+          * compacted so num_abos actually isn't a bound on the index passed
+          * to nir_intrinsic_atomic_counter_*. e.g. if we have a single atomic
+          * counter declared like:
+          *
+          * layout(binding=1) atomic_uint counter0;
+          *
+          * then when we lower accesses to it the atomic_counter_* intrinsics
+          * will have 1 as the index but num_abos will still be 1.
+          * */
+         shader->info.num_ssbos = util_last_bit(replaced);
+      }
+      shader->info.num_abos = 0;
    }
 
    return progress;

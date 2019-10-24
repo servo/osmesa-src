@@ -50,16 +50,38 @@ enum nir_spirv_debug_level {
    NIR_SPIRV_DEBUG_LEVEL_ERROR,
 };
 
+enum nir_spirv_execution_environment {
+   NIR_SPIRV_VULKAN = 0,
+   NIR_SPIRV_OPENCL,
+   NIR_SPIRV_OPENGL,
+};
+
 struct spirv_to_nir_options {
-   /* Whether or not to lower all workgroup variable access to offsets
-    * up-front.  This means you will _shared intrinsics instead of _var
-    * for workgroup data access.
-    *
-    * This is currently required for full variable pointers support.
+   enum nir_spirv_execution_environment environment;
+
+   /* Whether or not to lower all UBO/SSBO access to offsets up-front. */
+   bool lower_ubo_ssbo_access_to_offsets;
+
+   /* Whether to make FragCoord to a system value, the same as
+    * GLSLFragCoordIsSysVal in GLSL.
     */
-   bool lower_workgroup_access_to_offsets;
+   bool frag_coord_is_sysval;
+
+   /* Whether to generate only scoped_memory_barrier intrinsics instead of the
+    * set of memory barrier intrinsics based on GLSL.
+    */
+   bool use_scoped_memory_barrier;
 
    struct spirv_supported_capabilities caps;
+
+   /* Address format for various kinds of pointers. */
+   nir_address_format ubo_addr_format;
+   nir_address_format ssbo_addr_format;
+   nir_address_format phys_ssbo_addr_format;
+   nir_address_format push_const_addr_format;
+   nir_address_format shared_addr_format;
+   nir_address_format global_addr_format;
+   nir_address_format temp_addr_format;
 
    struct {
       void (*func)(void *private_data,
@@ -74,12 +96,12 @@ bool gl_spirv_validation(const uint32_t *words, size_t word_count,
                          struct nir_spirv_specialization *spec, unsigned num_spec,
                          gl_shader_stage stage, const char *entry_point_name);
 
-nir_function *spirv_to_nir(const uint32_t *words, size_t word_count,
-                           struct nir_spirv_specialization *specializations,
-                           unsigned num_specializations,
-                           gl_shader_stage stage, const char *entry_point_name,
-                           const struct spirv_to_nir_options *options,
-                           const nir_shader_compiler_options *nir_options);
+nir_shader *spirv_to_nir(const uint32_t *words, size_t word_count,
+                         struct nir_spirv_specialization *specializations,
+                         unsigned num_specializations,
+                         gl_shader_stage stage, const char *entry_point_name,
+                         const struct spirv_to_nir_options *options,
+                         const nir_shader_compiler_options *nir_options);
 
 #ifdef __cplusplus
 }

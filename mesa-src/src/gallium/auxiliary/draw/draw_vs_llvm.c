@@ -53,7 +53,8 @@ vs_llvm_run_linear( struct draw_vertex_shader *shader,
                     const unsigned constants_size[PIPE_MAX_CONSTANT_BUFFERS],
 		    unsigned count,
 		    unsigned input_stride,
-		    unsigned output_stride )
+		    unsigned output_stride,
+		    const unsigned *elts)
 {
    /* we should never get here since the entire pipeline is
     * generated in draw_pt_fetch_shade_pipeline_llvm.c */
@@ -102,7 +103,8 @@ draw_create_vs_llvm(struct draw_context *draw,
       draw_llvm_variant_key_size(
          vs->base.info.file_max[TGSI_FILE_INPUT]+1,
          MAX2(vs->base.info.file_max[TGSI_FILE_SAMPLER]+1,
-              vs->base.info.file_max[TGSI_FILE_SAMPLER_VIEW]+1));
+              vs->base.info.file_max[TGSI_FILE_SAMPLER_VIEW]+1),
+         vs->base.info.file_max[TGSI_FILE_IMAGE]+1);
 
    vs->base.state.stream_output = state->stream_output;
    vs->base.draw = draw;

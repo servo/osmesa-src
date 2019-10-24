@@ -165,10 +165,10 @@ util_format_r8g8_b8g8_unorm_pack_rgba_float(uint8_t *dst_row, unsigned dst_strid
          g1 = src[5];
          b  = 0.5f*(src[2] + src[6]);
 
-         value  = float_to_ubyte(r);
-         value |= float_to_ubyte(g0) <<  8;
-         value |= float_to_ubyte(b)  << 16;
-         value |= float_to_ubyte(g1) << 24;
+         value  = (uint32_t)float_to_ubyte(r);
+         value |= (uint32_t)float_to_ubyte(g0) <<  8;
+         value |= (uint32_t)float_to_ubyte(b)  << 16;
+         value |= (uint32_t)float_to_ubyte(g1) << 24;
 
          *dst++ = util_le32_to_cpu(value);
 
@@ -181,10 +181,10 @@ util_format_r8g8_b8g8_unorm_pack_rgba_float(uint8_t *dst_row, unsigned dst_strid
          g1 = 0;
          b  = src[2];
 
-         value  = float_to_ubyte(r);
-         value |= float_to_ubyte(g0) <<  8;
-         value |= float_to_ubyte(b)  << 16;
-         value |= float_to_ubyte(g1) << 24;
+         value  = (uint32_t)float_to_ubyte(r);
+         value |= (uint32_t)float_to_ubyte(g0) <<  8;
+         value |= (uint32_t)float_to_ubyte(b)  << 16;
+         value |= (uint32_t)float_to_ubyte(g1) << 24;
 
          *dst = util_le32_to_cpu(value);
       }
@@ -215,9 +215,9 @@ util_format_r8g8_b8g8_unorm_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stri
          b  = (src[2] + src[6] + 1) >> 1;
 
          value  = r;
-         value |= g0 <<  8;
-         value |= b  << 16;
-         value |= g1 << 24;
+         value |= (uint32_t)g0 <<  8;
+         value |= (uint32_t)b  << 16;
+         value |= (uint32_t)g1 << 24;
 
          *dst++ = util_le32_to_cpu(value);
 
@@ -231,9 +231,9 @@ util_format_r8g8_b8g8_unorm_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stri
          b  = src[2];
 
          value  = r;
-         value |= g0 <<  8;
-         value |= b  << 16;
-         value |= g1 << 24;
+         value |= (uint32_t)g0 <<  8;
+         value |= (uint32_t)b  << 16;
+         value |= (uint32_t)g1 << 24;
 
          *dst = util_le32_to_cpu(value);
       }
@@ -246,7 +246,7 @@ util_format_r8g8_b8g8_unorm_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stri
 
 void
 util_format_r8g8_b8g8_unorm_fetch_rgba_float(float *dst, const uint8_t *src,
-                                        unsigned i, MAYBE_UNUSED unsigned j)
+                                        unsigned i, ASSERTED unsigned j)
 {
    assert(i < 2);
    assert(j < 1);
@@ -385,10 +385,10 @@ util_format_g8r8_g8b8_unorm_pack_rgba_float(uint8_t *dst_row, unsigned dst_strid
          g1 = src[5];
          b  = 0.5f*(src[2] + src[6]);
 
-         value  = float_to_ubyte(g0);
-         value |= float_to_ubyte(r)  <<  8;
-         value |= float_to_ubyte(g1) << 16;
-         value |= float_to_ubyte(b)  << 24;
+         value  = (uint32_t)float_to_ubyte(g0);
+         value |= (uint32_t)float_to_ubyte(r)  <<  8;
+         value |= (uint32_t)float_to_ubyte(g1) << 16;
+         value |= (uint32_t)float_to_ubyte(b)  << 24;
 
          *dst++ = util_le32_to_cpu(value);
 
@@ -401,10 +401,10 @@ util_format_g8r8_g8b8_unorm_pack_rgba_float(uint8_t *dst_row, unsigned dst_strid
          g1 = 0;
          b  = src[2];
 
-         value  = float_to_ubyte(g0);
-         value |= float_to_ubyte(r)  <<  8;
-         value |= float_to_ubyte(g1) << 16;
-         value |= float_to_ubyte(b)  << 24;
+         value  = (uint32_t)float_to_ubyte(g0);
+         value |= (uint32_t)float_to_ubyte(r)  <<  8;
+         value |= (uint32_t)float_to_ubyte(g1) << 16;
+         value |= (uint32_t)float_to_ubyte(b)  << 24;
 
          *dst = util_le32_to_cpu(value);
       }
@@ -435,9 +435,9 @@ util_format_g8r8_g8b8_unorm_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stri
          b  = (src[2] + src[6] + 1) >> 1;
 
          value  = g0;
-         value |= r  <<  8;
-         value |= g1 << 16;
-         value |= b  << 24;
+         value |= (uint32_t)r  <<  8;
+         value |= (uint32_t)g1 << 16;
+         value |= (uint32_t)b  << 24;
 
          *dst++ = util_le32_to_cpu(value);
 
@@ -451,9 +451,9 @@ util_format_g8r8_g8b8_unorm_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stri
          b  = src[2];
 
          value  = g0;
-         value |= r  <<  8;
-         value |= g1 << 16;
-         value |= b  << 24;
+         value |= (uint32_t)r  <<  8;
+         value |= (uint32_t)g1 << 16;
+         value |= (uint32_t)b  << 24;
 
          *dst = util_le32_to_cpu(value);
       }
@@ -466,7 +466,7 @@ util_format_g8r8_g8b8_unorm_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stri
 
 void
 util_format_g8r8_g8b8_unorm_fetch_rgba_float(float *dst, const uint8_t *src,
-                                        unsigned i, MAYBE_UNUSED unsigned j)
+                                        unsigned i, ASSERTED unsigned j)
 {
    assert(i < 2);
    assert(j < 1);
@@ -599,9 +599,9 @@ util_format_uyvy_pack_rgba_float(uint8_t *dst_row, unsigned dst_stride,
          v = (v0 + v1 + 1) >> 1;
 
          value  = u;
-         value |= y0 <<  8;
-         value |= v  << 16;
-         value |= y1 << 24;
+         value |= (uint32_t)y0 <<  8;
+         value |= (uint32_t)v  << 16;
+         value |= (uint32_t)y1 << 24;
 
          *dst++ = util_le32_to_cpu(value);
 
@@ -614,9 +614,9 @@ util_format_uyvy_pack_rgba_float(uint8_t *dst_row, unsigned dst_stride,
          y1 = 0;
 
          value  = u;
-         value |= y0 <<  8;
-         value |= v  << 16;
-         value |= y1 << 24;
+         value |= (uint32_t)y0 <<  8;
+         value |= (uint32_t)v  << 16;
+         value |= (uint32_t)y1 << 24;
 
          *dst = util_le32_to_cpu(value);
       }
@@ -652,9 +652,9 @@ util_format_uyvy_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stride,
          v = (v0 + v1 + 1) >> 1;
 
          value  = u;
-         value |= y0 <<  8;
-         value |= v  << 16;
-         value |= y1 << 24;
+         value |= (uint32_t)y0 <<  8;
+         value |= (uint32_t)v  << 16;
+         value |= (uint32_t)y1 << 24;
 
          *dst++ = util_le32_to_cpu(value);
 
@@ -667,9 +667,9 @@ util_format_uyvy_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stride,
          y1 = 0;
 
          value  = u;
-         value |= y0 <<  8;
-         value |= v  << 16;
-         value |= y1 << 24;
+         value |= (uint32_t)y0 <<  8;
+         value |= (uint32_t)v  << 16;
+         value |= (uint32_t)y1 << 24;
 
          *dst = util_le32_to_cpu(value);
       }
@@ -682,7 +682,7 @@ util_format_uyvy_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stride,
 
 void
 util_format_uyvy_fetch_rgba_float(float *dst, const uint8_t *src,
-                             unsigned i, MAYBE_UNUSED unsigned j)
+                             unsigned i, ASSERTED unsigned j)
 {
    uint8_t y, u, v;
 
@@ -820,9 +820,9 @@ util_format_yuyv_pack_rgba_float(uint8_t *dst_row, unsigned dst_stride,
          v = (v0 + v1 + 1) >> 1;
 
          value  = y0;
-         value |= u  <<  8;
-         value |= y1 << 16;
-         value |= v  << 24;
+         value |= (uint32_t)u  <<  8;
+         value |= (uint32_t)y1 << 16;
+         value |= (uint32_t)v  << 24;
 
          *dst++ = util_le32_to_cpu(value);
 
@@ -835,9 +835,9 @@ util_format_yuyv_pack_rgba_float(uint8_t *dst_row, unsigned dst_stride,
          y1 = 0;
 
          value  = y0;
-         value |= u  <<  8;
-         value |= y1 << 16;
-         value |= v  << 24;
+         value |= (uint32_t)u  <<  8;
+         value |= (uint32_t)y1 << 16;
+         value |= (uint32_t)v  << 24;
 
          *dst = util_le32_to_cpu(value);
       }
@@ -873,9 +873,9 @@ util_format_yuyv_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stride,
          v = (v0 + v1 + 1) >> 1;
 
          value  = y0;
-         value |= u  <<  8;
-         value |= y1 << 16;
-         value |= v  << 24;
+         value |= (uint32_t)u  <<  8;
+         value |= (uint32_t)y1 << 16;
+         value |= (uint32_t)v  << 24;
 
          *dst++ = util_le32_to_cpu(value);
 
@@ -888,9 +888,9 @@ util_format_yuyv_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stride,
          y1 = 0;
 
          value  = y0;
-         value |= u  <<  8;
-         value |= y1 << 16;
-         value |= v  << 24;
+         value |= (uint32_t)u  <<  8;
+         value |= (uint32_t)y1 << 16;
+         value |= (uint32_t)v  << 24;
 
          *dst = util_le32_to_cpu(value);
       }
@@ -903,7 +903,7 @@ util_format_yuyv_pack_rgba_8unorm(uint8_t *dst_row, unsigned dst_stride,
 
 void
 util_format_yuyv_fetch_rgba_float(float *dst, const uint8_t *src,
-                             unsigned i, MAYBE_UNUSED unsigned j)
+                             unsigned i, ASSERTED unsigned j)
 {
    uint8_t y, u, v;
 
@@ -1035,6 +1035,52 @@ void
 util_format_p016_fetch_rgba_float(UNUSED float *dst, UNUSED const uint8_t *src,
                              UNUSED unsigned i, UNUSED unsigned j) {}
 
+void
+util_format_xyuv_unpack_rgba_float(UNUSED float *dst_row, UNUSED unsigned dst_stride,
+                                         UNUSED const uint8_t *src_row, UNUSED unsigned src_stride,
+                                         UNUSED unsigned width, UNUSED unsigned height) {}
+
+void
+util_format_xyuv_unpack_rgba_8unorm(UNUSED uint8_t *dst_row, UNUSED unsigned dst_stride,
+                                          UNUSED const uint8_t *src_row, UNUSED unsigned src_stride,
+                                          UNUSED unsigned width, UNUSED unsigned height) {}
+
+void
+util_format_xyuv_pack_rgba_float(UNUSED uint8_t *dst_row, UNUSED unsigned dst_stride,
+                                       UNUSED const float *src_row, UNUSED unsigned src_stride,
+                                       UNUSED unsigned width, UNUSED unsigned height) {}
+
+void
+util_format_xyuv_pack_rgba_8unorm(UNUSED uint8_t *dst_row, UNUSED unsigned dst_stride,
+                                        UNUSED const uint8_t *src_row, UNUSED unsigned src_stride,
+                                        UNUSED unsigned width, UNUSED unsigned height) {}
+
+void
+util_format_xyuv_fetch_rgba_float(UNUSED float *dst, UNUSED const uint8_t *src,
+                                        UNUSED unsigned i, UNUSED unsigned j) {}
+void
+util_format_ayuv_unpack_rgba_float(UNUSED float *dst_row, UNUSED unsigned dst_stride,
+                                         UNUSED const uint8_t *src_row, UNUSED unsigned src_stride,
+                                         UNUSED unsigned width, UNUSED unsigned height) {}
+
+void
+util_format_ayuv_unpack_rgba_8unorm(UNUSED uint8_t *dst_row, UNUSED unsigned dst_stride,
+                                          UNUSED const uint8_t *src_row, UNUSED unsigned src_stride,
+                                          UNUSED unsigned width, UNUSED unsigned height) {}
+
+void
+util_format_ayuv_pack_rgba_float(UNUSED uint8_t *dst_row, UNUSED unsigned dst_stride,
+                                       UNUSED const float *src_row, UNUSED unsigned src_stride,
+                                       UNUSED unsigned width, UNUSED unsigned height) {}
+
+void
+util_format_ayuv_pack_rgba_8unorm(UNUSED uint8_t *dst_row, UNUSED unsigned dst_stride,
+                                        UNUSED const uint8_t *src_row, UNUSED unsigned src_stride,
+                                        UNUSED unsigned width, UNUSED unsigned height) {}
+
+void
+util_format_ayuv_fetch_rgba_float(UNUSED float *dst, UNUSED const uint8_t *src,
+                                        UNUSED unsigned i, UNUSED unsigned j) {}
 void
 util_format_r8g8_r8b8_unorm_unpack_rgba_float(UNUSED float *dst_row, UNUSED unsigned dst_stride,
                                          UNUSED const uint8_t *src_row, UNUSED unsigned src_stride,

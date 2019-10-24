@@ -29,7 +29,14 @@
 #include "v3d/v3d_screen.h"
 
 struct pipe_screen *
-v3d_drm_screen_create(int fd)
+v3d_drm_screen_create(int fd, const struct pipe_screen_config *config)
 {
-	return v3d_screen_create(fcntl(fd, F_DUPFD_CLOEXEC, 3));
+   return v3d_screen_create(fcntl(fd, F_DUPFD_CLOEXEC, 3), config, NULL);
+}
+
+struct pipe_screen *
+v3d_drm_screen_create_renderonly(struct renderonly *ro,
+                                 const struct pipe_screen_config *config)
+{
+   return v3d_screen_create(ro->gpu_fd, config, ro);
 }

@@ -54,10 +54,9 @@ vbo_exec_debug_verts(struct vbo_exec_context *exec)
 
    for (i = 0 ; i < exec->vtx.prim_count ; i++) {
       struct _mesa_prim *prim = &exec->vtx.prim[i];
-      printf("   prim %d: %s%s %d..%d %s %s\n",
+      printf("   prim %d: %s %d..%d %s %s\n",
              i,
              _mesa_lookup_prim_by_nr(prim->mode),
-             prim->weak ? " (weak)" : "",
              prim->start,
              prim->start + prim->count,
              prim->begin ? "BEGIN" : "(wrap)",
@@ -192,12 +191,8 @@ vbo_exec_bind_arrays(struct gl_context *ctx)
    GLbitfield vao_enabled = _vbo_get_vao_enabled_from_vbo(mode, exec->vtx.enabled);
 
    /* At first disable arrays no longer needed */
-   GLbitfield mask = vao->_Enabled & ~vao_enabled;
-   while (mask) {
-      const int vao_attr = u_bit_scan(&mask);
-      _mesa_disable_vertex_array_attrib(ctx, vao, vao_attr);
-   }
-   assert((~vao_enabled & vao->_Enabled) == 0);
+   _mesa_disable_vertex_array_attribs(ctx, vao, VERT_BIT_ALL & ~vao_enabled);
+   assert((~vao_enabled & vao->Enabled) == 0);
 
    /* Bind the buffer object */
    const GLuint stride = exec->vtx.vertex_size*sizeof(GLfloat);
@@ -209,7 +204,7 @@ vbo_exec_bind_arrays(struct gl_context *ctx)
     */
    const GLubyte *const vao_to_vbo_map = _vbo_attribute_alias_map[mode];
    /* Now set the enabled arrays */
-   mask = vao_enabled;
+   GLbitfield mask = vao_enabled;
    while (mask) {
       const int vao_attr = u_bit_scan(&mask);
       const GLubyte vbo_attr = vao_to_vbo_map[vao_attr];
@@ -223,13 +218,12 @@ vbo_exec_bind_arrays(struct gl_context *ctx)
       /* Set and enable */
       _vbo_set_attrib_format(ctx, vao, vao_attr, buffer_offset,
                              size, type, offset);
-      if ((vao->_Enabled & VERT_BIT(vao_attr)) == 0)
-         _mesa_enable_vertex_array_attrib(ctx, vao, vao_attr);
 
       /* The vao is initially created with all bindings set to 0. */
       assert(vao->VertexAttrib[vao_attr].BufferBindingIndex == 0);
    }
-   assert(vao_enabled == vao->_Enabled);
+   _mesa_enable_vertex_array_attribs(ctx, vao, vao_enabled);
+   assert(vao_enabled == vao->Enabled);
    assert(!_mesa_is_bufferobj(exec->vtx.bufferobj) ||
           (vao_enabled & ~vao->VertexAttribBufferMask) == 0);
 
@@ -375,9 +369,7 @@ vbo_exec_vtx_flush(struct vbo_exec_context *exec, GLboolean keepUnmapped)
       if (exec->vtx.copied.nr != exec->vtx.vert_count) {
          struct gl_context *ctx = exec->ctx;
 
-         /* Before the update_state() as this may raise _NEW_VARYING_VP_INPUTS
-          * from _mesa_set_varying_vp_inputs().
-          */
+         /* Prepare and set the exec draws internal VAO for drawing. */
          vbo_exec_bind_arrays(ctx);
 
          if (ctx->NewState)

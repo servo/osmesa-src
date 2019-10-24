@@ -32,13 +32,11 @@ args_gbm = []
 deps_gbm = []
 incs_gbm = [
   include_directories('main'), inc_include, inc_src, inc_loader,
-  inc_wayland_drm,
 ]
 
 if with_dri2
   files_gbm += files('backends/dri/gbm_dri.c', 'backends/dri/gbm_driint.h')
   deps_gbm += dep_libdrm # TODO: pthread-stubs
-  args_gbm += '-DDEFAULT_DRIVER_DIR="@0@"'.format(dri_search_path)
 endif
 if with_platform_wayland
   deps_gbm += dep_wayland_server
@@ -51,8 +49,8 @@ libgbm = shared_library(
   include_directories : incs_gbm,
   c_args : [c_vis_args, args_gbm],
   link_args : [ld_args_gc_sections],
-  link_with : [libloader, libmesa_util, libxmlconfig],
-  dependencies : [deps_gbm, dep_dl, dep_thread],
+  link_with : libloader,
+  dependencies : [deps_gbm, dep_dl, dep_thread, idep_mesautil, idep_xmlconfig],
   version : '1.0.0',
   install : true,
 )
@@ -68,11 +66,15 @@ pkg.generate(
   libraries_private : '-ldl',  # FIXME: autotools lists this a incomplete
 )
 
-if with_tests
+if with_tests and prog_nm.found()
   test(
     'gbm-symbols-check',
-    find_program('gbm-symbols-check'),
-    env : env_test,
-    args : libgbm
+    symbols_check,
+    args : [
+      '--lib', libgbm,
+      '--symbols-file', files('gbm-symbols.txt'),
+      '--nm', prog_nm.path(),
+    ],
+    suite : ['gbm'],
   )
 endif

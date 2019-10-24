@@ -34,12 +34,10 @@
 
 #define V3D_MAX_SAMPLES 4
 
-static void
-vc4_nir_lower_txf_ms_instr(struct v3d_compile *c, nir_builder *b,
-                           nir_tex_instr *instr)
+static nir_ssa_def *
+v3d_nir_lower_txf_ms_instr(nir_builder *b, nir_instr *in_instr, void *data)
 {
-        if (instr->op != nir_texop_txf_ms)
-                return;
+        nir_tex_instr *instr = nir_instr_as_tex(in_instr);
 
         b->cursor = nir_before_instr(&instr->instr);
 
@@ -49,14 +47,16 @@ vc4_nir_lower_txf_ms_instr(struct v3d_compile *c, nir_builder *b,
         nir_ssa_def *sample = instr->src[sample_index].src.ssa;
 
         nir_ssa_def *one = nir_imm_int(b, 1);
-        coord = nir_ishl(b, coord, nir_imm_int(b, 1));
-        coord = nir_vec2(b,
-                         nir_iadd(b,
-                                  nir_channel(b, coord, 0),
-                                  nir_iand(b, sample, one)),
-                         nir_iadd(b,
-                                  nir_channel(b, coord, 1),
-                                  nir_iand(b, nir_ushr(b, sample, one), one)));
+        nir_ssa_def *x = nir_iadd(b,
+                                  nir_ishl(b, nir_channel(b, coord, 0), one),
+                                  nir_iand(b, sample, one));
+        nir_ssa_def *y = nir_iadd(b,
+                                  nir_ishl(b, nir_channel(b, coord, 1), one),
+                                  nir_iand(b, nir_ushr(b, sample, one), one));
+        if (instr->is_array)
+                coord = nir_vec3(b, x, y, nir_channel(b, coord, 2));
+        else
+                coord = nir_vec2(b, x, y);
 
         nir_instr_rewrite_src(&instr->instr,
                               &instr->src[nir_tex_src_coord].src,
@@ -64,30 +64,22 @@ vc4_nir_lower_txf_ms_instr(struct v3d_compile *c, nir_builder *b,
         nir_tex_instr_remove_src(instr, sample_index);
         instr->op = nir_texop_txf;
         instr->sampler_dim = GLSL_SAMPLER_DIM_2D;
+
+        return NIR_LOWER_INSTR_PROGRESS;
+}
+
+static bool
+v3d_nir_lower_txf_ms_filter(const nir_instr *instr, const void *data)
+{
+        return (instr->type == nir_instr_type_tex &&
+                nir_instr_as_tex(instr)->op == nir_texop_txf_ms);
 }
 
 void
 v3d_nir_lower_txf_ms(nir_shader *s, struct v3d_compile *c)
 {
-        nir_foreach_function(function, s) {
-                if (!function->impl)
-                        continue;
-
-                nir_builder b;
-                nir_builder_init(&b, function->impl);
-
-                nir_foreach_block(block, function->impl) {
-                        nir_foreach_instr_safe(instr, block) {
-                                if (instr->type != nir_instr_type_tex)
-                                        continue;
-
-                                vc4_nir_lower_txf_ms_instr(c, &b,
-                                                           nir_instr_as_tex(instr));
-                        }
-                }
-
-                nir_metadata_preserve(function->impl,
-                                      nir_metadata_block_index |
-                                      nir_metadata_dominance);
-        }
+        nir_shader_lower_instructions(s,
+                                      v3d_nir_lower_txf_ms_filter,
+                                      v3d_nir_lower_txf_ms_instr,
+                                      NULL);
 }

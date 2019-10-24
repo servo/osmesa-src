@@ -77,6 +77,7 @@ extern "C" {
 #define PIPE_MAX_SAMPLE_LOCATION_GRID_SIZE 4
 
 #define PIPE_MAX_HW_ATOMIC_BUFFERS 32
+#define PIPE_MAX_VERTEX_STREAMS   4
 
 struct pipe_reference
 {
@@ -443,6 +444,13 @@ struct pipe_surface
    uint16_t width;               /**< logical width in pixels */
    uint16_t height;              /**< logical height in pixels */
 
+   /**
+    * Number of samples for the surface.  This will be 0 if rendering
+    * should use the resource's nr_samples, or another value if the resource
+    * is bound using FramebufferTexture2DMultisampleEXT.
+    */
+   unsigned nr_samples:8;
+
    union pipe_surface_desc u;
 };
 
@@ -788,17 +796,17 @@ struct pipe_blit_info
    unsigned mask; /**< bitmask of PIPE_MASK_R/G/B/A/Z/S */
    unsigned filter; /**< PIPE_TEX_FILTER_* */
 
-   boolean scissor_enable;
+   bool scissor_enable;
    struct pipe_scissor_state scissor;
 
    /* Window rectangles can either be inclusive or exclusive. */
-   boolean window_rectangle_include;
+   bool window_rectangle_include;
    unsigned num_window_rectangles;
    struct pipe_scissor_state window_rectangles[PIPE_MAX_WINDOW_RECTANGLES];
 
-   boolean render_condition_enable; /**< whether the blit should honor the
-                                    current render condition */
-   boolean alpha_blend; /* dst.rgb = src.rgb * src.a + dst.rgb * (1 - src.a) */
+   bool render_condition_enable; /**< whether the blit should honor the
+                                 current render condition */
+   bool alpha_blend; /* dst.rgb = src.rgb * src.a + dst.rgb * (1 - src.a) */
 };
 
 /**
@@ -832,6 +840,27 @@ struct pipe_grid_info
    uint block[3];
 
    /**
+    * last_block allows disabling threads at the farthermost grid boundary.
+    * Full blocks as specified by "block" are launched, but the threads
+    * outside of "last_block" dimensions are disabled.
+    *
+    * If a block touches the grid boundary in the i-th axis, threads with
+    * THREAD_ID[i] >= last_block[i] are disabled.
+    *
+    * If last_block[i] is 0, it has the same behavior as last_block[i] = block[i],
+    * meaning no effect.
+    *
+    * It's equivalent to doing this at the beginning of the compute shader:
+    *
+    *   for (i = 0; i < 3; i++) {
+    *      if (block_id[i] == grid[i] - 1 &&
+    *          last_block[i] && thread_id[i] >= last_block[i])
+    *         return;
+    *   }
+    */
+   uint last_block[3];
+
+   /**
     * Determine the layout of the grid (in block units) to be used.
     */
    uint grid[3];
@@ -850,11 +879,12 @@ struct pipe_grid_info
 };
 
 /**
- * Structure used as a header for serialized LLVM programs.
+ * Structure used as a header for serialized compute programs.
  */
-struct pipe_llvm_program_header
+struct pipe_binary_program_header
 {
    uint32_t num_bytes; /**< Number of bytes in the LLVM bytecode program. */
+   char blob[];
 };
 
 struct pipe_compute_state

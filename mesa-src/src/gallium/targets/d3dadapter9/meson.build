@@ -36,7 +36,7 @@ endif
 
 libgallium_nine = shared_library(
   'd3dadapter9',
-  [files('description.c', 'getproc.c', 'drm.c'), xmlpool_options_h],
+  files('description.c', 'getproc.c', 'drm.c'),
   include_directories : [
     inc_include, inc_src, inc_loader, inc_mapi, inc_mesa, inc_util,
     inc_dri_common, inc_gallium, inc_gallium_aux, inc_gallium_winsys,
@@ -48,14 +48,15 @@ libgallium_nine = shared_library(
   link_args : [ld_args_gc_sections, gallium_nine_ld_args],
   link_depends : gallium_nine_link_depends,
   link_with : [
-    libgalliumvl_stub, libgallium, libnine_st, libmesa_util,
+    libgalliumvl_stub, libgallium, libnine_st,
     libpipe_loader_static, libws_null, libwsw, libswdri,
     libswkmsdri,
   ],
   dependencies : [
-    dep_selinux, dep_expat, dep_libdrm, dep_llvm,
+    dep_selinux, dep_libdrm, dep_llvm, dep_thread,
+    idep_xmlconfig, idep_mesautil, idep_nir,
     driver_swrast, driver_r300, driver_r600, driver_radeonsi, driver_nouveau,
-    driver_i915, driver_svga,
+    driver_i915, driver_svga, driver_iris
   ],
   name_prefix : '',
   version : '.'.join(nine_version),
@@ -68,5 +69,5 @@ pkg.generate(
   description : 'Native D3D driver modules',
   version : '.'.join(nine_version),
   requires_private : 'libdrm >= ' + dep_libdrm.version(),
-  variables : ['moduledir=${prefix}/@0@'.format(d3d_drivers_path)],
+  variables : ['moduledir=@0@'.format(d3d_drivers_path)],
 )

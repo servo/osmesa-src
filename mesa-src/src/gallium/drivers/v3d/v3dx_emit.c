@@ -291,7 +291,7 @@ emit_rt_blend(struct v3d_context *v3d, struct v3d_job *job,
                 if (blend->independent_blend_enable)
                         config.render_target_mask = 1 << rt;
                 else
-                        config.render_target_mask = (1 << VC5_MAX_DRAW_BUFFERS) - 1;
+                        config.render_target_mask = (1 << V3D_MAX_DRAW_BUFFERS) - 1;
 #else
                 assert(rt == 0);
 #endif
@@ -588,7 +588,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
 #endif
 
                         if (blend->base.independent_blend_enable) {
-                                for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++)
+                                for (int i = 0; i < V3D_MAX_DRAW_BUFFERS; i++)
                                         emit_rt_blend(v3d, job, &blend->base, i);
                         } else {
                                 emit_rt_blend(v3d, job, &blend->base, 0);
@@ -653,10 +653,10 @@ v3dX(emit_state)(struct pipe_context *pctx)
          * the view, so we merge them together at draw time.
          */
         if (v3d->dirty & VC5_DIRTY_FRAGTEX)
-                emit_textures(v3d, &v3d->fragtex);
+                emit_textures(v3d, &v3d->tex[PIPE_SHADER_FRAGMENT]);
 
         if (v3d->dirty & VC5_DIRTY_VERTTEX)
-                emit_textures(v3d, &v3d->verttex);
+                emit_textures(v3d, &v3d->tex[PIPE_SHADER_VERTEX]);
 #endif
 
         if (v3d->dirty & VC5_DIRTY_FLAT_SHADE_FLAGS) {
@@ -701,8 +701,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                                               v3d->prog.bind_vs->tf_specs);
 
 #if V3D_VERSION >= 40
-                        bool tf_enabled = (v3d->prog.bind_vs->num_tf_specs != 0 &&
-                                           v3d->active_queries);
+                        bool tf_enabled = v3d_transform_feedback_enabled(v3d);
                         job->tf_enabled |= tf_enabled;
 
                         cl_emit(&job->bcl, TRANSFORM_FEEDBACK_SPECS, tfe) {
@@ -767,8 +766,8 @@ v3dX(emit_state)(struct pipe_context *pctx)
                         };
 #endif /* V3D_VERSION < 40 */
                         if (target) {
-                                v3d_job_add_write_resource(v3d->job,
-                                                           target->buffer);
+                                v3d_job_add_tf_write_resource(v3d->job,
+                                                              target->buffer);
                         }
                         /* XXX: buffer_size? */
                 }

@@ -183,7 +183,7 @@ emit_gmem2mem_surf(struct fd_batch *batch, bool stencil,
 			A4XX_RB_COPY_DEST_INFO_SWAP(fd4_pipe2swap(pformat)));
 
 	fd4_draw(batch, ring, DI_PT_RECTLIST, IGNORE_VISIBILITY,
-			DI_SRC_SEL_AUTO_INDEX, 2, 1, INDEX_SIZE_IGN, 0, 0, NULL);
+			DI_SRC_SEL_AUTO_INDEX, 2, 1, INDEX4_SIZE_8_BIT, 0, 0, NULL);
 }
 
 static void
@@ -321,7 +321,7 @@ emit_mem2gmem_surf(struct fd_batch *batch, uint32_t *bases,
 	fd4_emit_gmem_restore_tex(ring, nr_bufs, bufs);
 
 	fd4_draw(batch, ring, DI_PT_RECTLIST, IGNORE_VISIBILITY,
-			DI_SRC_SEL_AUTO_INDEX, 2, 1, INDEX_SIZE_IGN, 0, 0, NULL);
+			DI_SRC_SEL_AUTO_INDEX, 2, 1, INDEX4_SIZE_8_BIT, 0, 0, NULL);
 }
 
 static void
@@ -459,7 +459,7 @@ fd4_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 
 	if (fd_gmem_needs_restore(batch, tile, FD_BUFFER_COLOR)) {
 		emit.prog = &ctx->blit_prog[pfb->nr_cbufs - 1];
-		emit.fp = NULL;      /* frag shader changed so clear cache */
+		emit.fs = NULL;      /* frag shader changed so clear cache */
 		fd4_program_emit(ring, &emit, pfb->nr_cbufs, pfb->cbufs);
 		emit_mem2gmem_surf(batch, gmem->cbuf_base, pfb->cbufs, pfb->nr_cbufs, bin_w);
 	}
@@ -493,7 +493,7 @@ fd4_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 			emit.key.half_precision = true;
 			break;
 		}
-		emit.fp = NULL;      /* frag shader changed so clear cache */
+		emit.fs = NULL;      /* frag shader changed so clear cache */
 		fd4_program_emit(ring, &emit, 1, &pfb->zsbuf);
 		emit_mem2gmem_surf(batch, gmem->zsbuf_base, &pfb->zsbuf, 1, bin_w);
 	}
@@ -517,7 +517,7 @@ patch_draws(struct fd_batch *batch, enum pc_di_vis_cull_mode vismode)
 		struct fd_cs_patch *patch = fd_patch_element(&batch->draw_patches, i);
 		*patch->cs = patch->val | DRAW4(0, 0, 0, vismode);
 	}
-	util_dynarray_resize(&batch->draw_patches, 0);
+	util_dynarray_clear(&batch->draw_patches);
 }
 
 /* for rendering directly to system memory: */
@@ -582,7 +582,7 @@ update_vsc_pipe(struct fd_batch *batch)
 		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[i];
 		if (!pipe->bo) {
 			pipe->bo = fd_bo_new(ctx->dev, 0x40000,
-					DRM_FREEDRENO_GEM_TYPE_KMEM);
+					DRM_FREEDRENO_GEM_TYPE_KMEM, "vsc_pipe[%u]", i);
 		}
 		OUT_RELOCW(ring, pipe->bo, 0, 0, 0);       /* VSC_PIPE_DATA_ADDRESS[i] */
 	}
@@ -639,7 +639,7 @@ emit_binning_pass(struct fd_batch *batch)
 	}
 
 	/* emit IB to binning drawcmds: */
-	ctx->emit_ib(ring, batch->binning);
+	fd4_emit_ib(ring, batch->binning);
 
 	fd_reset_wfi(batch);
 	fd_wfi(batch, ring);
@@ -770,7 +770,7 @@ fd4_emit_tile_renderprep(struct fd_batch *batch, struct fd_tile *tile)
 	if (use_hw_binning(batch)) {
 		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[tile->p];
 
-		assert(pipe->w * pipe->h);
+		assert(pipe->w && pipe->h);
 
 		fd_event_write(batch, ring, HLSQ_FLUSH);
 		fd_wfi(batch, ring);

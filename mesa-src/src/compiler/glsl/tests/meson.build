@@ -18,29 +18,20 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-test(
-  'blob_test',
-  executable(
-    'blob_test',
-    'blob_test.c',
-    c_args : [c_vis_args, c_msvc_compat_args, no_override_init_args],
-    include_directories : [inc_common, inc_compiler],
-    link_with : [libglsl],
-  )
-)
-
-test(
-  'cache_test',
-  executable(
+if with_shader_cache
+  test(
     'cache_test',
-    'cache_test.c',
-    c_args : [c_vis_args, c_msvc_compat_args, no_override_init_args],
-    include_directories : [inc_common, inc_glsl],
-    link_with : [libglsl],
-    dependencies : [dep_clock, dep_thread],
+    executable(
+      'cache_test',
+      'cache_test.c',
+      c_args : [c_vis_args, c_msvc_compat_args, no_override_init_args],
+      include_directories : [inc_common, inc_glsl],
+      link_with : [libglsl],
+      dependencies : [dep_clock, dep_thread],
+    ),
+    suite : ['compiler', 'glsl'],
   )
-)
-
+endif
 
 test(
   'general_ir_test',
@@ -54,7 +45,8 @@ test(
     include_directories : [inc_common, inc_glsl],
     link_with : [libglsl, libglsl_standalone, libglsl_util],
     dependencies : [dep_clock, dep_thread, idep_gtest],
-  )
+  ),
+  suite : ['compiler', 'glsl'],
 )
 
 test(
@@ -68,7 +60,8 @@ test(
     include_directories : [inc_common, inc_glsl],
     link_with : [libglsl, libglsl_util],
     dependencies : [dep_thread, idep_gtest],
-  )
+  ),
+  suite : ['compiler', 'glsl'],
 )
 
 test(
@@ -80,7 +73,8 @@ test(
     include_directories : [inc_common, inc_glsl],
     link_with : [libglsl, libglsl_util],
     dependencies : [dep_thread, idep_gtest],
-  )
+  ),
+  suite : ['compiler', 'glsl'],
 )
 
 test(
@@ -93,7 +87,9 @@ test(
       meson.source_root(), 'src', 'compiler', 'glsl', 'tests', 'warnings'
     ),
   ],
+  suite : ['compiler', 'glsl'],
 )
+
 test(
   'glsl optimization',
   prog_python,
@@ -101,4 +97,16 @@ test(
     join_paths(meson.current_source_dir(), 'optimization_test.py'),
     '--test-runner', glsl_test
   ],
+  suite : ['compiler', 'glsl'],
 )
+
+if with_tools.contains('glsl')
+  test(
+    'glsl dump-builder test',
+    glsl_compiler,
+    args : ['--version', '110', '--dump-builder',
+            join_paths(meson.current_source_dir(), 'standalone_dump-builder.frag'),
+           ],
+    suite : ['compiler', 'glsl'],
+  )
+endif

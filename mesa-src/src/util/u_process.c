@@ -32,17 +32,43 @@
 
 #undef GET_PROGRAM_NAME
 
-#if (defined(__GNU_LIBRARY__) || defined(__GLIBC__)) && !defined(__UCLIBC__)
-#    if !defined(__GLIBC__) || (__GLIBC__ < 2)
-/* These aren't declared in any libc5 header */
-extern char *program_invocation_name, *program_invocation_short_name;
-#    endif
+#if defined(__linux__) && defined(HAVE_PROGRAM_INVOCATION_NAME)
+
+static char *path = NULL;
+
+static void __freeProgramPath()
+{
+   free(path);
+   path = NULL;
+}
+
 static const char *
 __getProgramName()
 {
    char * arg = strrchr(program_invocation_name, '/');
-   if (arg)
+   if (arg) {
+      /* If the / character was found this is likely a linux path or
+       * an invocation path for a 64-bit wine program.
+       *
+       * However, some programs pass command line arguments into argv[0].
+       * Strip these arguments out by using the realpath only if it was
+       * a prefix of the invocation name.
+       */
+      if (!path) {
+         path = realpath("/proc/self/exe", NULL);
+         atexit(__freeProgramPath);
+      }
+
+      if (path && strncmp(path, program_invocation_name, strlen(path)) == 0) {
+         /* This shouldn't be null because path is a a prefix,
+          * but check it anyway since path is static. */
+         char * name = strrchr(path, '/');
+         if (name)
+            return name + 1;
+      }
+
       return arg+1;
+   }
 
    /* If there was no '/' at all we likely have a windows like path from
     * a wine application.
@@ -54,15 +80,18 @@ __getProgramName()
    return program_invocation_name;
 }
 #    define GET_PROGRAM_NAME() __getProgramName()
-#elif defined(__CYGWIN__)
+#elif defined(HAVE_PROGRAM_INVOCATION_NAME)
 #    define GET_PROGRAM_NAME() program_invocation_short_name
 #elif defined(__FreeBSD__) && (__FreeBSD__ >= 2)
 #    include <osreldate.h>
 #    if (__FreeBSD_version >= 440000)
 #        define GET_PROGRAM_NAME() getprogname()
 #    endif
-#elif defined(__NetBSD__) && defined(__NetBSD_Version__) && (__NetBSD_Version__ >= 106000100)
-#    define GET_PROGRAM_NAME() getprogname()
+#elif defined(__NetBSD__)
+#    include <sys/param.h>
+#    if defined(__NetBSD_Version__) && (__NetBSD_Version__ >= 106000100)
+#        define GET_PROGRAM_NAME() getprogname()
+#    endif
 #elif defined(__DragonFly__)
 #    define GET_PROGRAM_NAME() getprogname()
 #elif defined(__APPLE__)
@@ -97,7 +126,7 @@ __getProgramName()
 #endif
 
 #if !defined(GET_PROGRAM_NAME)
-#    if defined(__OpenBSD__) || defined(NetBSD) || defined(__UCLIBC__) || defined(ANDROID)
+#    if defined(__OpenBSD__) || defined(__NetBSD__) || defined(__UCLIBC__) || defined(ANDROID)
 /* This is a hack. It's said to work on OpenBSD, NetBSD and GNU.
  * Rogelio M.Serrano Jr. reported it's also working with UCLIBC. It's
  * used as a last resort, if there is no documented facility available. */

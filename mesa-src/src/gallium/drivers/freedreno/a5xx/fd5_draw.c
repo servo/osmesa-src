@@ -142,7 +142,7 @@ fd5_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 	/* figure out whether we need to disable LRZ write for binning
 	 * pass using draw pass's fp:
 	 */
-	emit.no_lrz_write = fp->writes_pos || fp->has_kill;
+	emit.no_lrz_write = fp->writes_pos || fp->no_earlyz;
 
 	emit.binning_pass = false;
 	emit.dirty = dirty;
@@ -152,8 +152,8 @@ fd5_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 	/* and now binning pass: */
 	emit.binning_pass = true;
 	emit.dirty = dirty & ~(FD_DIRTY_BLEND);
-	emit.vp = NULL;   /* we changed key so need to refetch vp */
-	emit.fp = NULL;
+	emit.vs = NULL;   /* we changed key so need to refetch vp */
+	emit.fs = NULL;
 	draw_impl(ctx, ctx->batch->binning, &emit, index_offset);
 
 	if (emit.streamout_mask) {

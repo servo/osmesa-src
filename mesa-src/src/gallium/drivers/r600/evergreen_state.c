@@ -239,19 +239,19 @@ static bool r600_is_zs_format_supported(enum pipe_format format)
 	return r600_translate_dbformat(format) != ~0U;
 }
 
-boolean evergreen_is_format_supported(struct pipe_screen *screen,
-				      enum pipe_format format,
-				      enum pipe_texture_target target,
-				      unsigned sample_count,
-				      unsigned storage_sample_count,
-				      unsigned usage)
+bool evergreen_is_format_supported(struct pipe_screen *screen,
+				   enum pipe_format format,
+				   enum pipe_texture_target target,
+				   unsigned sample_count,
+				   unsigned storage_sample_count,
+				   unsigned usage)
 {
 	struct r600_screen *rscreen = (struct r600_screen*)screen;
 	unsigned retval = 0;
 
 	if (target >= PIPE_MAX_TEXTURE_TYPES) {
 		R600_ERR("r600: unsupported texture type %d\n", target);
-		return FALSE;
+		return false;
 	}
 
 	if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
@@ -259,7 +259,7 @@ boolean evergreen_is_format_supported(struct pipe_screen *screen,
 
 	if (sample_count > 1) {
 		if (!rscreen->has_msaa)
-			return FALSE;
+			return false;
 
 		switch (sample_count) {
 		case 2:
@@ -267,7 +267,7 @@ boolean evergreen_is_format_supported(struct pipe_screen *screen,
 		case 8:
 			break;
 		default:
-			return FALSE;
+			return false;
 		}
 	}
 
@@ -1308,7 +1308,7 @@ void evergreen_init_color_surface_rat(struct r600_context *rctx,
 	surf->cb_color_view = 0;
 
 	/* Set the buffer range the GPU will have access to: */
-	util_range_add(&r600_resource(pipe_buffer)->valid_buffer_range,
+	util_range_add(pipe_buffer, &r600_resource(pipe_buffer)->valid_buffer_range,
 		       0, pipe_buffer->width0);
 }
 
@@ -3364,6 +3364,12 @@ void evergreen_update_ps_state(struct pipe_context *ctx, struct r600_pipe_shader
 				spi_baryc_cntl |= spi_baryc_enable_bit[k];
 				have_perspective |= k < 3;
 				have_linear |= !(k < 3);
+				if (rshader->input[i].uses_interpolate_at_centroid) {
+					k = eg_get_interpolator_index(
+						rshader->input[i].interpolate,
+						TGSI_INTERPOLATE_LOC_CENTROID);
+					spi_baryc_cntl |= spi_baryc_enable_bit[k];
+				}
 			}
 		}
 
@@ -4043,7 +4049,8 @@ static void evergreen_set_hw_atomic_buffers(struct pipe_context *ctx,
 static void evergreen_set_shader_buffers(struct pipe_context *ctx,
 					 enum pipe_shader_type shader, unsigned start_slot,
 					 unsigned count,
-					 const struct pipe_shader_buffer *buffers)
+					 const struct pipe_shader_buffer *buffers,
+					 unsigned writable_bitmask)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_image_state *istate = NULL;

@@ -66,6 +66,8 @@
  * resolve.
  */
 
+#define BIN_DEBUG 0
+
 static uint32_t bin_width(struct fd_screen *screen)
 {
 	if (is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen))
@@ -77,24 +79,25 @@ static uint32_t bin_width(struct fd_screen *screen)
 
 static uint32_t
 total_size(uint8_t cbuf_cpp[], uint8_t zsbuf_cpp[2],
-		   uint32_t bin_w, uint32_t bin_h, struct fd_gmem_stateobj *gmem)
+		   uint32_t bin_w, uint32_t bin_h, uint32_t gmem_align,
+		   struct fd_gmem_stateobj *gmem)
 {
 	uint32_t total = 0, i;
 
 	for (i = 0; i < MAX_RENDER_TARGETS; i++) {
 		if (cbuf_cpp[i]) {
-			gmem->cbuf_base[i] = align(total, 0x4000);
+			gmem->cbuf_base[i] = align(total, gmem_align);
 			total = gmem->cbuf_base[i] + cbuf_cpp[i] * bin_w * bin_h;
 		}
 	}
 
 	if (zsbuf_cpp[0]) {
-		gmem->zsbuf_base[0] = align(total, 0x4000);
+		gmem->zsbuf_base[0] = align(total, gmem_align);
 		total = gmem->zsbuf_base[0] + zsbuf_cpp[0] * bin_w * bin_h;
 	}
 
 	if (zsbuf_cpp[1]) {
-		gmem->zsbuf_base[1] = align(total, 0x4000);
+		gmem->zsbuf_base[1] = align(total, gmem_align);
 		total = gmem->zsbuf_base[1] + zsbuf_cpp[1] * bin_w * bin_h;
 	}
 
@@ -116,11 +119,13 @@ calculate_tiles(struct fd_batch *batch)
 	uint32_t minx, miny, width, height;
 	uint32_t nbins_x = 1, nbins_y = 1;
 	uint32_t bin_w, bin_h;
+	uint32_t gmem_align = 0x4000;
 	uint32_t max_width = bin_width(screen);
 	uint8_t cbuf_cpp[MAX_RENDER_TARGETS] = {0}, zsbuf_cpp[2] = {0};
 	uint32_t i, j, t, xoff, yoff;
 	uint32_t tpp_x, tpp_y;
-	bool has_zs = !!(batch->resolve & (FD_BUFFER_DEPTH | FD_BUFFER_STENCIL));
+	bool has_zs = !!(batch->gmem_reason & (FD_GMEM_DEPTH_ENABLED |
+		FD_GMEM_STENCIL_ENABLED | FD_GMEM_CLEARS_DEPTH_STENCIL));
 	int tile_n[npipes];
 
 	if (has_zs) {
@@ -128,6 +133,10 @@ calculate_tiles(struct fd_batch *batch)
 		zsbuf_cpp[0] = rsc->cpp;
 		if (rsc->stencil)
 			zsbuf_cpp[1] = rsc->stencil->cpp;
+	} else {
+		/* we might have a zsbuf, but it isn't used */
+		batch->restore &= ~(FD_BUFFER_DEPTH | FD_BUFFER_STENCIL);
+		batch->resolve &= ~(FD_BUFFER_DEPTH | FD_BUFFER_STENCIL);
 	}
 	for (i = 0; i < pfb->nr_cbufs; i++) {
 		if (pfb->cbufs[i])
@@ -177,10 +186,18 @@ calculate_tiles(struct fd_batch *batch)
 				zsbuf_cpp[0], width, height);
 	}
 
+	if (is_a20x(screen) && batch->cleared) {
+		/* under normal circumstances the requirement would be 4K
+		 * but the fast clear path requires an alignment of 32K
+		 */
+		gmem_align = 0x8000;
+	}
+
 	/* then find a bin width/height that satisfies the memory
 	 * constraints:
 	 */
-	while (total_size(cbuf_cpp, zsbuf_cpp, bin_w, bin_h, gmem) > gmem_size) {
+	while (total_size(cbuf_cpp, zsbuf_cpp, bin_w, bin_h, gmem_align, gmem) >
+		   gmem_size) {
 		if (bin_w > bin_h) {
 			nbins_x++;
 			bin_w = align(width / nbins_x, gmem_alignw);
@@ -214,12 +231,21 @@ calculate_tiles(struct fd_batch *batch)
 
 #define div_round_up(v, a)  (((v) + (a) - 1) / (a))
 	/* figure out number of tiles per pipe: */
-	tpp_x = tpp_y = 1;
-	while (div_round_up(nbins_y, tpp_y) > screen->num_vsc_pipes)
-		tpp_y += 2;
-	while ((div_round_up(nbins_y, tpp_y) *
-			div_round_up(nbins_x, tpp_x)) > screen->num_vsc_pipes)
-		tpp_x += 1;
+	if (is_a20x(ctx->screen)) {
+		/* for a20x we want to minimize the number of "pipes"
+		 * binning data has 3 bits for x/y (8x8) but the edges are used to
+		 * cull off-screen vertices with hw binning, so we have 6x6 pipes
+		 */
+		tpp_x = 6;
+		tpp_y = 6;
+	} else {
+		tpp_x = tpp_y = 1;
+		while (div_round_up(nbins_y, tpp_y) > npipes)
+			tpp_y += 2;
+		while ((div_round_up(nbins_y, tpp_y) *
+				div_round_up(nbins_x, tpp_x)) > npipes)
+			tpp_x += 1;
+	}
 
 	gmem->maxpw = tpp_x;
 	gmem->maxph = tpp_y;
@@ -246,19 +272,22 @@ calculate_tiles(struct fd_batch *batch)
 		xoff += tpp_x;
 	}
 
+	/* number of pipes to use for a20x */
+	gmem->num_vsc_pipes = MAX2(1, i);
+
 	for (; i < npipes; i++) {
 		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[i];
 		pipe->x = pipe->y = pipe->w = pipe->h = 0;
 	}
 
-#if 0 /* debug */
-	printf("%dx%d ... tpp=%dx%d\n", nbins_x, nbins_y, tpp_x, tpp_y);
-	for (i = 0; i < 8; i++) {
-		struct fd_vsc_pipe *pipe = &ctx->pipe[i];
-		printf("pipe[%d]: %ux%u @ %u,%u\n", i,
-				pipe->w, pipe->h, pipe->x, pipe->y);
+	if (BIN_DEBUG) {
+		printf("%dx%d ... tpp=%dx%d\n", nbins_x, nbins_y, tpp_x, tpp_y);
+		for (i = 0; i < ARRAY_SIZE(ctx->vsc_pipe); i++) {
+			struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[i];
+			printf("pipe[%d]: %ux%u @ %u,%u\n", i,
+					pipe->w, pipe->h, pipe->x, pipe->y);
+		}
 	}
-#endif
 
 	/* configure tiles: */
 	t = 0;
@@ -280,16 +309,22 @@ calculate_tiles(struct fd_batch *batch)
 
 			/* pipe number: */
 			p = ((i / tpp_y) * div_round_up(nbins_x, tpp_x)) + (j / tpp_x);
+			assert(p < gmem->num_vsc_pipes);
 
 			/* clip bin width: */
 			bw = MIN2(bin_w, minx + width - xoff);
-
-			tile->n = tile_n[p]++;
+			tile->n = !is_a20x(ctx->screen) ? tile_n[p]++ :
+				((i % tpp_y + 1) << 3 | (j % tpp_x + 1));
 			tile->p = p;
 			tile->bin_w = bw;
 			tile->bin_h = bh;
 			tile->xoff = xoff;
 			tile->yoff = yoff;
+
+			if (BIN_DEBUG) {
+				printf("tile[%d]: p=%u, bin=%ux%u+%u+%u\n", t,
+						p, bw, bh, xoff, yoff);
+			}
 
 			t++;
 
@@ -299,16 +334,16 @@ calculate_tiles(struct fd_batch *batch)
 		yoff += bh;
 	}
 
-#if 0 /* debug */
-	t = 0;
-	for (i = 0; i < nbins_y; i++) {
-		for (j = 0; j < nbins_x; j++) {
-			struct fd_tile *tile = &ctx->tile[t++];
-			printf("|p:%u n:%u|", tile->p, tile->n);
+	if (BIN_DEBUG) {
+		t = 0;
+		for (i = 0; i < nbins_y; i++) {
+			for (j = 0; j < nbins_x; j++) {
+				struct fd_tile *tile = &ctx->tile[t++];
+				printf("|p:%u n:%u|", tile->p, tile->n);
+			}
+			printf("\n");
 		}
-		printf("\n");
 	}
-#endif
 }
 
 static void
@@ -341,7 +376,11 @@ render_tiles(struct fd_batch *batch)
 			ctx->query_prepare_tile(batch, i, batch->gmem);
 
 		/* emit IB to drawcmds: */
-		ctx->emit_ib(batch->gmem, batch->draw);
+		if (ctx->emit_tile) {
+			ctx->emit_tile(batch, tile);
+		} else {
+			ctx->screen->emit_ib(batch->gmem, batch->draw);
+		}
 		fd_reset_wfi(batch);
 
 		/* emit gmem2mem to transfer tile back to system memory: */
@@ -363,7 +402,7 @@ render_sysmem(struct fd_batch *batch)
 		ctx->query_prepare_tile(batch, 0, batch->gmem);
 
 	/* emit IB to drawcmds: */
-	ctx->emit_ib(batch->gmem, batch->draw);
+	ctx->screen->emit_ib(batch->gmem, batch->draw);
 	fd_reset_wfi(batch);
 
 	if (ctx->emit_sysmem_fini)
@@ -407,6 +446,15 @@ fd_gmem_render_tiles(struct fd_batch *batch)
 		}
 	}
 
+	/* Layered rendering always needs bypass. */
+	for (unsigned i = 0; i < pfb->nr_cbufs; i++) {
+		struct pipe_surface *psurf = pfb->cbufs[i];
+		if (!psurf)
+			continue;
+		if (psurf->u.tex.first_layer < psurf->u.tex.last_layer)
+			sysmem = true;
+	}
+
 	fd_reset_wfi(batch);
 
 	ctx->stats.batch_total++;
@@ -415,10 +463,11 @@ fd_gmem_render_tiles(struct fd_batch *batch)
 		DBG("%p: rendering non-draw", batch);
 		ctx->stats.batch_nondraw++;
 	} else if (sysmem) {
-		DBG("%p: rendering sysmem %ux%u (%s/%s)",
+		DBG("%p: rendering sysmem %ux%u (%s/%s), num_draws=%u",
 			batch, pfb->width, pfb->height,
 			util_format_short_name(pipe_surface_format(pfb->cbufs[0])),
-			util_format_short_name(pipe_surface_format(pfb->zsbuf)));
+			util_format_short_name(pipe_surface_format(pfb->zsbuf)),
+			batch->num_draws);
 		if (ctx->query_prepare)
 			ctx->query_prepare(batch, 1);
 		render_sysmem(batch);

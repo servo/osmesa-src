@@ -854,7 +854,7 @@ OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
       osmesa->gl_buffer = _mesa_create_framebuffer(osmesa->gl_visual);
       if (!osmesa->gl_buffer) {
          _mesa_destroy_visual( osmesa->gl_visual );
-         _mesa_free_context_data( &osmesa->mesa );
+         _mesa_free_context_data(&osmesa->mesa, true);
          free(osmesa);
          return NULL;
       }
@@ -864,9 +864,9 @@ OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
        */
       _swrast_add_soft_renderbuffers(osmesa->gl_buffer,
                                      GL_FALSE, /* color */
-                                     osmesa->gl_visual->haveDepthBuffer,
-                                     osmesa->gl_visual->haveStencilBuffer,
-                                     osmesa->gl_visual->haveAccumBuffer,
+                                     osmesa->gl_visual->depthBits > 0,
+                                     osmesa->gl_visual->stencilBits > 0,
+                                     osmesa->gl_visual->accumRedBits > 0,
                                      GL_FALSE, /* alpha */
                                      GL_FALSE /* aux */ );
 
@@ -891,7 +891,7 @@ OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
              !_tnl_CreateContext( ctx ) ||
              !_swsetup_CreateContext( ctx )) {
             _mesa_destroy_visual(osmesa->gl_visual);
-            _mesa_free_context_data(ctx);
+            _mesa_free_context_data(ctx, true);
             free(osmesa);
             return NULL;
          }
@@ -919,7 +919,7 @@ OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
 
          if (ctx->Version < version_major * 10 + version_minor) {
             _mesa_destroy_visual(osmesa->gl_visual);
-            _mesa_free_context_data(ctx);
+            _mesa_free_context_data(ctx, true);
             free(osmesa);
             return NULL;
          }
@@ -955,7 +955,7 @@ OSMesaDestroyContext( OSMesaContext osmesa )
       _mesa_destroy_visual( osmesa->gl_visual );
       _mesa_reference_framebuffer( &osmesa->gl_buffer, NULL );
 
-      _mesa_free_context_data( &osmesa->mesa );
+      _mesa_free_context_data(&osmesa->mesa, true);
       free( osmesa );
    }
 }
@@ -1289,11 +1289,7 @@ OSMesaPostprocess(OSMesaContext osmesa, const char *filter,
 #include "glapi/glapi.h"
 #include "glapitable.h"
 
-#if defined(USE_MGL_NAMESPACE)
-#define NAME(func)  mgl##func
-#else
 #define NAME(func)  gl##func
-#endif
 
 #define DISPATCH(FUNC, ARGS, MESSAGE)		\
    GET_DISPATCH()->FUNC ARGS

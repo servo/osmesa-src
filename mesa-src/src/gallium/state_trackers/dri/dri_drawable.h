@@ -36,10 +36,6 @@ struct pipe_surface;
 struct st_framebuffer;
 struct dri_context;
 
-#define DRI_SWAP_FENCES_MAX 4
-#define DRI_SWAP_FENCES_MASK 3
-#define DRI_SWAP_FENCES_DEFAULT 1
-
 struct dri_drawable
 {
    struct st_framebuffer_iface base;
@@ -60,12 +56,8 @@ struct dri_drawable
    struct pipe_resource *msaa_textures[ST_ATTACHMENT_COUNT];
    unsigned int texture_mask, texture_stamp;
 
-   struct pipe_fence_handle *swap_fences[DRI_SWAP_FENCES_MAX];
-   unsigned int cur_fences;
-   unsigned int head;
-   unsigned int tail;
-   unsigned int desired_fences;
-   boolean flushing; /* prevents recursion in dri_flush */
+   struct pipe_fence_handle *throttle_fence;
+   bool flushing; /* prevents recursion in dri_flush */
 
    /* used only by DRISW */
    struct pipe_surface *drisw_surface;
@@ -99,10 +91,10 @@ dri_drawable(__DRIdrawable * driDrawPriv)
 /***********************************************************************
  * dri_drawable.c
  */
-boolean
+bool
 dri_create_buffer(__DRIscreen * sPriv,
 		  __DRIdrawable * dPriv,
-		  const struct gl_config * visual, boolean isPixmap);
+		  const struct gl_config * visual, bool isPixmap);
 
 void dri_destroy_buffer(__DRIdrawable * dPriv);
 

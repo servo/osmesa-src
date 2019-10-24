@@ -44,8 +44,8 @@
 #include "fd3_zsa.h"
 
 static const enum adreno_state_block sb[] = {
-	[SHADER_VERTEX]   = SB_VERT_SHADER,
-	[SHADER_FRAGMENT] = SB_FRAG_SHADER,
+	[MESA_SHADER_VERTEX]   = SB_VERT_SHADER,
+	[MESA_SHADER_FRAGMENT] = SB_FRAG_SHADER,
 };
 
 /* regid:          base const register
@@ -53,7 +53,7 @@ static const enum adreno_state_block sb[] = {
  * sizedwords:     size of const value buffer
  */
 static void
-fd3_emit_const(struct fd_ringbuffer *ring, enum shader_t type,
+fd3_emit_const(struct fd_ringbuffer *ring, gl_shader_stage type,
 		uint32_t regid, uint32_t offset, uint32_t sizedwords,
 		const uint32_t *dwords, struct pipe_resource *prsc)
 {
@@ -91,7 +91,7 @@ fd3_emit_const(struct fd_ringbuffer *ring, enum shader_t type,
 }
 
 static void
-fd3_emit_const_bo(struct fd_ringbuffer *ring, enum shader_t type, boolean write,
+fd3_emit_const_bo(struct fd_ringbuffer *ring, gl_shader_stage type, boolean write,
 		uint32_t regid, uint32_t num, struct pipe_resource **prscs, uint32_t *offsets)
 {
 	uint32_t anum = align(num, 4);
@@ -315,7 +315,8 @@ fd3_emit_gmem_restore_tex(struct fd_ringbuffer *ring,
 
 		debug_assert(psurf[i]->u.tex.first_layer == psurf[i]->u.tex.last_layer);
 
-		OUT_RING(ring, A3XX_TEX_CONST_0_FMT(fd3_pipe2tex(format)) |
+		OUT_RING(ring, A3XX_TEX_CONST_0_TILE_MODE(rsc->tile_mode) |
+				 A3XX_TEX_CONST_0_FMT(fd3_pipe2tex(format)) |
 				 A3XX_TEX_CONST_0_TYPE(A3XX_TEX_2D) |
 				 fd3_tex_swiz(format,  PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y,
 							  PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W));
@@ -440,7 +441,7 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd3_emit *emit)
 					COND(isint, A3XX_VFD_DECODE_INSTR_INT) |
 					COND(switchnext, A3XX_VFD_DECODE_INSTR_SWITCHNEXT));
 
-			total_in += vp->inputs[i].ncomp;
+			total_in += util_bitcount(vp->inputs[i].compmask);
 			j++;
 		}
 	}
@@ -552,7 +553,7 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			val |= A3XX_RB_DEPTH_CONTROL_FRAG_WRITES_Z;
 			val |= A3XX_RB_DEPTH_CONTROL_EARLY_Z_DISABLE;
 		}
-		if (fp->has_kill) {
+		if (fp->no_earlyz) {
 			val |= A3XX_RB_DEPTH_CONTROL_EARLY_Z_DISABLE;
 		}
 		if (!ctx->rasterizer->depth_clip_near) {
@@ -945,17 +946,16 @@ fd3_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
 	fd_hw_query_enable(batch, ring);
 }
 
-static void
-fd3_emit_ib(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
+void
+fd3_emit_init_screen(struct pipe_screen *pscreen)
 {
-	__OUT_IB(ring, true, target);
+	struct fd_screen *screen = fd_screen(pscreen);
+	screen->emit_const = fd3_emit_const;
+	screen->emit_const_bo = fd3_emit_const_bo;
+	screen->emit_ib = fd3_emit_ib;
 }
 
 void
 fd3_emit_init(struct pipe_context *pctx)
 {
-	struct fd_context *ctx = fd_context(pctx);
-	ctx->emit_const = fd3_emit_const;
-	ctx->emit_const_bo = fd3_emit_const_bo;
-	ctx->emit_ib = fd3_emit_ib;
 }

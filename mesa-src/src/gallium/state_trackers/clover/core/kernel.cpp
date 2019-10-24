@@ -161,8 +161,9 @@ kernel::exec_context::bind(intrusive_ptr<command_queue> _q,
 
    // Bind kernel arguments.
    auto &m = kern.program().build(q->device()).binary;
-   auto margs = find(name_equals(kern.name()), m.syms).args;
-   auto msec = find(type_equals(module::section::text_executable), m.secs);
+   auto msym = find(name_equals(kern.name()), m.syms);
+   auto margs = msym.args;
+   auto msec = find(id_equals(msym.section), m.secs);
    auto explicit_arg = kern._args.begin();
 
    for (auto &marg : margs) {
@@ -232,8 +233,8 @@ kernel::exec_context::bind(intrusive_ptr<command_queue> _q,
       cs.req_input_mem = input.size();
       st = q->pipe->create_compute_state(q->pipe, &cs);
       if (!st) {
-	 unbind(); // Cleanup
-	 throw error(CL_OUT_OF_RESOURCES);
+         unbind(); // Cleanup
+         throw error(CL_OUT_OF_RESOURCES);
       }
    }
 

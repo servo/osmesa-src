@@ -261,13 +261,19 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
                                  compiler->scalar_stage[stage]);
    }
 
+   /* TODO: Verify if its feasible to split up the NIR linking work into a
+    * per-stage part (that fill out information we need for the passes) and a
+    * actual linking part, so that we could fold back brw_nir_lower_resources
+    * back into brw_create_nir.
+    */
+
    /* SPIR-V programs use a NIR linker */
    if (shProg->data->spirv) {
-      if (!gl_nir_link_uniforms(ctx, shProg))
-         return false;
-
-      gl_nir_link_assign_atomic_counter_resources(ctx, shProg);
-      gl_nir_link_assign_xfb_resources(ctx, shProg);
+      static const gl_nir_linker_options opts = {
+         .fill_parameters = false,
+      };
+      if (!gl_nir_link(ctx, shProg, &opts))
+         return GL_FALSE;
    }
 
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
@@ -276,6 +282,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
          continue;
 
       struct gl_program *prog = shader->Program;
+
+      brw_nir_lower_resources(prog->nir, shProg, prog, &brw->screen->devinfo);
 
       NIR_PASS_V(prog->nir, brw_nir_lower_gl_images, prog);
    }
@@ -306,8 +314,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
              continue;
 
           brw_nir_link_shaders(compiler,
-                               &shProg->_LinkedShaders[i]->Program->nir,
-                               &shProg->_LinkedShaders[next]->Program->nir);
+                               shProg->_LinkedShaders[i]->Program->nir,
+                               shProg->_LinkedShaders[next]->Program->nir);
           next = i;
        }
     }
@@ -323,7 +331,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       brw_shader_gather_info(prog->nir, prog);
 
-      NIR_PASS_V(prog->nir, gl_nir_lower_samplers, shProg);
       NIR_PASS_V(prog->nir, gl_nir_lower_atomics, shProg, false);
       NIR_PASS_V(prog->nir, nir_lower_atomics_to_ssbo,
                  prog->nir->info.num_abos);
@@ -373,7 +380,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
    }
 
    if (brw->precompile && !brw_shader_precompile(ctx, shProg))
-      return false;
+      return GL_FALSE;
 
    /* SPIR-V programs build its resource list from linked NIR shaders. */
    if (!shProg->data->spirv)
@@ -391,5 +398,5 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       shader->ir = NULL;
    }
 
-   return true;
+   return GL_TRUE;
 }

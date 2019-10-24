@@ -36,6 +36,7 @@
 #include "util/u_memory.h"
 
 #include "pipe/p_screen.h"
+#include "state_tracker/winsys_handle.h"
 
 /* These formats are supported by swapping their bytes.
  * The swizzles must be set exactly like their non-swapped counterparts,
@@ -1035,21 +1036,23 @@ static void r300_texture_destroy(struct pipe_screen *screen,
     FREE(tex);
 }
 
-boolean r300_resource_get_handle(struct pipe_screen* screen,
-                                 struct pipe_context *ctx,
-                                 struct pipe_resource *texture,
-                                 struct winsys_handle *whandle,
-                                 unsigned usage)
+bool r300_resource_get_handle(struct pipe_screen* screen,
+                              struct pipe_context *ctx,
+                              struct pipe_resource *texture,
+                              struct winsys_handle *whandle,
+                              unsigned usage)
 {
     struct radeon_winsys *rws = r300_screen(screen)->rws;
     struct r300_resource* tex = (struct r300_resource*)texture;
 
     if (!tex) {
-        return FALSE;
+        return false;
     }
 
-    return rws->buffer_get_handle(tex->buf, tex->tex.stride_in_bytes[0],
-                                  0, 0, whandle);
+    whandle->stride = tex->tex.stride_in_bytes[0];
+    whandle->offset = 0;
+
+    return rws->buffer_get_handle(rws, tex->buf, whandle);
 }
 
 static const struct u_resource_vtbl r300_texture_vtbl =
@@ -1113,8 +1116,16 @@ r300_texture_create_object(struct r300_screen *rscreen,
 
     /* Create the backing buffer if needed. */
     if (!tex->buf) {
+        /* Only use the first domain for allocation. Multiple domains are not allowed. */
+        unsigned alloc_domain =
+            tex->domain & RADEON_DOMAIN_VRAM ? RADEON_DOMAIN_VRAM :
+                                               RADEON_DOMAIN_GTT;
+
         tex->buf = rws->buffer_create(rws, tex->tex.size_in_bytes, 2048,
-                                      tex->domain, RADEON_FLAG_NO_SUBALLOC);
+                                      alloc_domain,
+                                      RADEON_FLAG_NO_SUBALLOC |
+                                      /* Use the reusable pool: */
+                                      RADEON_FLAG_NO_INTERPROCESS_SHARING);
 
         if (!tex->buf) {
             goto fail;
@@ -1171,7 +1182,6 @@ struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
     struct r300_screen *rscreen = r300_screen(screen);
     struct radeon_winsys *rws = rscreen->rws;
     struct pb_buffer *buffer;
-    unsigned stride;
     struct radeon_bo_metadata tiling = {};
 
     /* Support only 2D textures without mipmaps */
@@ -1182,7 +1192,7 @@ struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
         return NULL;
     }
 
-    buffer = rws->buffer_from_handle(rws, whandle, &stride, NULL);
+    buffer = rws->buffer_from_handle(rws, whandle, 0);
     if (!buffer)
         return NULL;
 
@@ -1204,7 +1214,7 @@ struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
 
     return (struct pipe_resource*)
            r300_texture_create_object(rscreen, base, tiling.u.legacy.microtile, tiling.u.legacy.macrotile,
-                                      stride, buffer);
+                                      whandle->stride, buffer);
 }
 
 /* Not required to implement u_resource_vtbl, consider moving to another file:

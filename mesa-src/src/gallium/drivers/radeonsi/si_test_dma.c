@@ -192,11 +192,10 @@ void si_test_dma(struct si_screen *sscreen)
 	struct pipe_context *ctx = screen->context_create(screen, NULL, 0);
 	struct si_context *sctx = (struct si_context*)ctx;
 	uint64_t max_alloc_size;
-	unsigned i, iterations, num_partial_copies, max_levels, max_tex_side;
+	unsigned i, iterations, num_partial_copies, max_tex_side;
 	unsigned num_pass = 0, num_fail = 0;
 
-	max_levels = screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_2D_LEVELS);
-	max_tex_side = 1 << (max_levels - 1);
+	max_tex_side = screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_2D_SIZE);
 
 	/* Max 128 MB allowed for both textures. */
 	max_alloc_size = 128 * 1024 * 1024;
@@ -309,7 +308,7 @@ void si_test_dma(struct si_screen *sscreen)
 		/* clear dst pixels */
 		uint32_t zero = 0;
 		si_clear_buffer(sctx, dst, 0, sdst->surface.surf_size, &zero, 4,
-		                SI_COHERENCY_SHADER);
+		                SI_COHERENCY_SHADER, false);
 		memset(dst_cpu.ptr, 0, dst_cpu.layer_stride * tdst.array_size);
 
 		/* preparation */

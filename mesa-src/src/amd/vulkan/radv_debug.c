@@ -31,7 +31,6 @@
 
 #include "util/mesa-sha1.h"
 #include "sid.h"
-#include "gfx9d.h"
 #include "ac_debug.h"
 #include "radv_debug.h"
 #include "radv_shader.h"
@@ -63,7 +62,8 @@ radv_init_trace(struct radv_device *device)
 	device->trace_bo = ws->buffer_create(ws, TRACE_BO_SIZE, 8,
 					     RADEON_DOMAIN_VRAM,
 					     RADEON_FLAG_CPU_ACCESS|
-					     RADEON_FLAG_NO_INTERPROCESS_SHARING);
+					     RADEON_FLAG_NO_INTERPROCESS_SHARING,
+					     RADV_BO_PRIORITY_UPLOAD_BUFFER);
 	if (!device->trace_bo)
 		return false;
 
@@ -111,14 +111,11 @@ radv_dump_debug_registers(struct radv_device *device, FILE *f)
 {
 	struct radeon_info *info = &device->physical_device->rad_info;
 
-	if (info->drm_major == 2 && info->drm_minor < 42)
-		return; /* no radeon support */
-
 	fprintf(f, "Memory-mapped registers:\n");
 	radv_dump_mmapped_reg(device, f, R_008010_GRBM_STATUS);
 
 	/* No other registers can be read on DRM < 3.1.0. */
-	if (info->drm_major < 3 || info->drm_minor < 1) {
+	if (info->drm_minor < 1) {
 		fprintf(f, "\n");
 		return;
 	}
@@ -130,7 +127,7 @@ radv_dump_debug_registers(struct radv_device *device, FILE *f)
 	radv_dump_mmapped_reg(device, f, R_00803C_GRBM_STATUS_SE3);
 	radv_dump_mmapped_reg(device, f, R_00D034_SDMA0_STATUS_REG);
 	radv_dump_mmapped_reg(device, f, R_00D834_SDMA1_STATUS_REG);
-	if (info->chip_class <= VI) {
+	if (info->chip_class <= GFX8) {
 		radv_dump_mmapped_reg(device, f, R_000E50_SRBM_STATUS);
 		radv_dump_mmapped_reg(device, f, R_000E4C_SRBM_STATUS2);
 		radv_dump_mmapped_reg(device, f, R_000E54_SRBM_STATUS3);
@@ -148,37 +145,6 @@ radv_dump_debug_registers(struct radv_device *device, FILE *f)
 	fprintf(f, "\n");
 }
 
-static const char *
-radv_get_descriptor_name(enum VkDescriptorType type)
-{
-	switch (type) {
-	case VK_DESCRIPTOR_TYPE_SAMPLER:
-		return "SAMPLER";
-	case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-		return "COMBINED_IMAGE_SAMPLER";
-	case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-		return "SAMPLED_IMAGE";
-	case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-		return "STORAGE_IMAGE";
-	case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-		return "UNIFORM_TEXEL_BUFFER";
-	case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-		return "STORAGE_TEXEL_BUFFER";
-	case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-		return "UNIFORM_BUFFER";
-	case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-		return "STORAGE_BUFFER";
-	case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-		return "UNIFORM_BUFFER_DYNAMIC";
-	case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-		return "STORAGE_BUFFER_DYNAMIC";
-	case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-		return "INPUT_ATTACHMENT";
-	default:
-		return "UNKNOWN";
-	}
-}
-
 static void
 radv_dump_buffer_descriptor(enum chip_class chip_class, const uint32_t *desc,
 			    FILE *f)
@@ -193,14 +159,17 @@ static void
 radv_dump_image_descriptor(enum chip_class chip_class, const uint32_t *desc,
 			   FILE *f)
 {
+	unsigned sq_img_rsrc_word0 = chip_class >= GFX10 ? R_00A000_SQ_IMG_RSRC_WORD0
+							 : R_008F10_SQ_IMG_RSRC_WORD0;
+
 	fprintf(f, COLOR_CYAN "    Image:" COLOR_RESET "\n");
 	for (unsigned j = 0; j < 8; j++)
-		ac_dump_reg(f, chip_class, R_008F10_SQ_IMG_RSRC_WORD0 + j * 4,
+		ac_dump_reg(f, chip_class, sq_img_rsrc_word0 + j * 4,
 			    desc[j], 0xffffffff);
 
 	fprintf(f, COLOR_CYAN "    FMASK:" COLOR_RESET "\n");
 	for (unsigned j = 0; j < 8; j++)
-		ac_dump_reg(f, chip_class, R_008F10_SQ_IMG_RSRC_WORD0 + j * 4,
+		ac_dump_reg(f, chip_class, sq_img_rsrc_word0 + j * 4,
 			    desc[8 + j], 0xffffffff);
 }
 
@@ -224,9 +193,10 @@ radv_dump_combined_image_sampler_descriptor(enum chip_class chip_class,
 }
 
 static void
-radv_dump_descriptor_set(enum chip_class chip_class,
+radv_dump_descriptor_set(struct radv_device *device,
 			 struct radv_descriptor_set *set, unsigned id, FILE *f)
 {
+	enum chip_class chip_class = device->physical_device->rad_info.chip_class;
 	const struct radv_descriptor_set_layout *layout;
 	int i;
 
@@ -234,51 +204,9 @@ radv_dump_descriptor_set(enum chip_class chip_class,
 		return;
 	layout = set->layout;
 
-	fprintf(f, "** descriptor set (%d) **\n", id);
-	fprintf(f, "va: 0x%"PRIx64"\n", set->va);
-	fprintf(f, "size: %d\n", set->size);
-	fprintf(f, "mapped_ptr:\n");
-
-	for (i = 0; i < set->size / 4; i++) {
-		fprintf(f, "\t[0x%x] = 0x%08x\n", i, set->mapped_ptr[i]);
-	}
-	fprintf(f, "\n");
-
-	fprintf(f, "\t*** layout ***\n");
-	fprintf(f, "\tbinding_count: %d\n", layout->binding_count);
-	fprintf(f, "\tsize: %d\n", layout->size);
-	fprintf(f, "\tshader_stages: %x\n", layout->shader_stages);
-	fprintf(f, "\tdynamic_shader_stages: %x\n",
-		layout->dynamic_shader_stages);
-	fprintf(f, "\tbuffer_count: %d\n", layout->buffer_count);
-	fprintf(f, "\tdynamic_offset_count: %d\n",
-		layout->dynamic_offset_count);
-	fprintf(f, "\n");
-
 	for (i = 0; i < set->layout->binding_count; i++) {
 		uint32_t *desc =
 			set->mapped_ptr + layout->binding[i].offset / 4;
-
-		fprintf(f, "\t\t**** binding layout (%d) ****\n", i);
-		fprintf(f, "\t\ttype: %s\n",
-			radv_get_descriptor_name(layout->binding[i].type));
-		fprintf(f, "\t\tarray_size: %d\n",
-			layout->binding[i].array_size);
-		fprintf(f, "\t\toffset: %d\n",
-			layout->binding[i].offset);
-		fprintf(f, "\t\tbuffer_offset: %d\n",
-			layout->binding[i].buffer_offset);
-		fprintf(f, "\t\tdynamic_offset_offset: %d\n",
-			layout->binding[i].dynamic_offset_offset);
-		fprintf(f, "\t\tdynamic_offset_count: %d\n",
-			layout->binding[i].dynamic_offset_count);
-		fprintf(f, "\t\tsize: %d\n",
-			layout->binding[i].size);
-		fprintf(f, "\t\timmutable_samplers_offset: %d\n",
-			layout->binding[i].immutable_samplers_offset);
-		fprintf(f, "\t\timmutable_samplers_equal: %d\n",
-			layout->binding[i].immutable_samplers_equal);
-		fprintf(f, "\n");
 
 		switch (layout->binding[i].type) {
 		case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
@@ -312,19 +240,17 @@ radv_dump_descriptor_set(enum chip_class chip_class,
 }
 
 static void
-radv_dump_descriptors(struct radv_pipeline *pipeline, FILE *f)
+radv_dump_descriptors(struct radv_device *device, FILE *f)
 {
-	struct radv_device *device = pipeline->device;
-	enum chip_class chip_class = device->physical_device->rad_info.chip_class;
 	uint64_t *ptr = (uint64_t *)device->trace_id_ptr;
 	int i;
 
-	fprintf(f, "List of descriptors:\n");
+	fprintf(f, "Descriptors:\n");
 	for (i = 0; i < MAX_SETS; i++) {
 		struct radv_descriptor_set *set =
 			(struct radv_descriptor_set *)ptr[i + 3];
 
-		radv_dump_descriptor_set(chip_class, set, i, f);
+		radv_dump_descriptor_set(device, set, i, f);
 	}
 }
 
@@ -406,7 +332,7 @@ radv_dump_annotated_shader(struct radv_shader_variant *shader,
 			    start_addr, &num_inst, instructions);
 
 	fprintf(f, COLOR_YELLOW "%s - annotated disassembly:" COLOR_RESET "\n",
-		radv_get_shader_name(shader, stage));
+		radv_get_shader_name(&shader->info, stage));
 
 	/* Print instructions with annotations. */
 	for (i = 0; i < num_inst; i++) {
@@ -445,7 +371,8 @@ radv_dump_annotated_shaders(struct radv_pipeline *pipeline,
 			    VkShaderStageFlagBits active_stages, FILE *f)
 {
 	struct ac_wave_info waves[AC_MAX_WAVES_PER_CHIP];
-	unsigned num_waves = ac_get_wave_info(waves);
+	enum chip_class chip_class = pipeline->device->physical_device->rad_info.chip_class;
+	unsigned num_waves = ac_get_wave_info(chip_class, waves);
 
 	fprintf(f, COLOR_CYAN "The number of active waves = %u" COLOR_RESET
 		"\n\n", num_waves);
@@ -489,7 +416,7 @@ radv_dump_shader(struct radv_pipeline *pipeline,
 	if (!shader)
 		return;
 
-	fprintf(f, "%s:\n\n", radv_get_shader_name(shader, stage));
+	fprintf(f, "%s:\n\n", radv_get_shader_name(&shader->info, stage));
 
 	if (shader->spirv) {
 		unsigned char sha1[21];
@@ -502,12 +429,11 @@ radv_dump_shader(struct radv_pipeline *pipeline,
 		radv_print_spirv(shader->spirv, shader->spirv_size, f);
 	}
 
-	if (shader->nir) {
-		fprintf(f, "NIR:\n");
-		nir_print_shader(shader->nir, f);
+	if (shader->nir_string) {
+		fprintf(f, "NIR:\n%s\n", shader->nir_string);
 	}
 
-	fprintf(f, "LLVM IR:\n%s\n", shader->llvm_ir_string);
+	fprintf(f, "LLVM IR:\n%s\n", shader->ir_string);
 	fprintf(f, "DISASM:\n%s\n", shader->disasm_string);
 
 	radv_shader_dump_stats(pipeline->device, shader, stage, f);
@@ -531,11 +457,11 @@ radv_dump_pipeline_state(struct radv_pipeline *pipeline,
 {
 	radv_dump_shaders(pipeline, active_stages, f);
 	radv_dump_annotated_shaders(pipeline, active_stages, f);
-	radv_dump_descriptors(pipeline, f);
 }
 
 static void
-radv_dump_graphics_state(struct radv_pipeline *graphics_pipeline,
+radv_dump_graphics_state(struct radv_device *device,
+			 struct radv_pipeline *graphics_pipeline,
 			 struct radv_pipeline *compute_pipeline, FILE *f)
 {
 	VkShaderStageFlagBits active_stages;
@@ -549,10 +475,13 @@ radv_dump_graphics_state(struct radv_pipeline *graphics_pipeline,
 		active_stages = VK_SHADER_STAGE_COMPUTE_BIT;
 		radv_dump_pipeline_state(compute_pipeline, active_stages, f);
 	}
+
+	radv_dump_descriptors(device, f);
 }
 
 static void
-radv_dump_compute_state(struct radv_pipeline *compute_pipeline, FILE *f)
+radv_dump_compute_state(struct radv_device *device,
+			struct radv_pipeline *compute_pipeline, FILE *f)
 {
 	VkShaderStageFlagBits active_stages = VK_SHADER_STAGE_COMPUTE_BIT;
 
@@ -560,6 +489,7 @@ radv_dump_compute_state(struct radv_pipeline *compute_pipeline, FILE *f)
 		return;
 
 	radv_dump_pipeline_state(compute_pipeline, active_stages, f);
+	radv_dump_descriptors(device, f);
 }
 
 static struct radv_pipeline *
@@ -628,7 +558,7 @@ static void
 radv_dump_device_name(struct radv_device *device, FILE *f)
 {
 	struct radeon_info *info = &device->physical_device->rad_info;
-	char llvm_string[32] = {}, kernel_version[128] = {};
+	char kernel_version[128] = {};
 	struct utsname uname_data;
 	const char *chip_name;
 
@@ -638,14 +568,11 @@ radv_dump_device_name(struct radv_device *device, FILE *f)
 		snprintf(kernel_version, sizeof(kernel_version),
 			 " / %s", uname_data.release);
 
-	snprintf(llvm_string, sizeof(llvm_string),
-		 ", LLVM %i.%i.%i", (HAVE_LLVM >> 8) & 0xff,
-		 HAVE_LLVM & 0xff, MESA_LLVM_VERSION_PATCH);
-
-	fprintf(f, "Device name: %s (%s DRM %i.%i.%i%s%s)\n\n",
+	fprintf(f, "Device name: %s (%s DRM %i.%i.%i%s, LLVM "
+		MESA_LLVM_VERSION_STRING ")\n\n",
 		chip_name, device->physical_device->name,
 		info->drm_major, info->drm_minor, info->drm_patchlevel,
-		kernel_version, llvm_string);
+		kernel_version);
 }
 
 static bool
@@ -680,6 +607,8 @@ radv_check_gpu_hangs(struct radv_queue *queue, struct radeon_cmdbuf *cs)
 	graphics_pipeline = radv_get_saved_graphics_pipeline(device);
 	compute_pipeline = radv_get_saved_compute_pipeline(device);
 
+	radv_dump_trace(queue->device, cs);
+
 	fprintf(stderr, "GPU hang report:\n\n");
 	radv_dump_device_name(device, stderr);
 
@@ -695,18 +624,21 @@ radv_check_gpu_hangs(struct radv_queue *queue, struct radeon_cmdbuf *cs)
 
 	switch (ring) {
 	case RING_GFX:
-		radv_dump_graphics_state(graphics_pipeline, compute_pipeline,
+		fprintf(stderr, "RING_GFX:\n");
+		radv_dump_graphics_state(queue->device,
+					 graphics_pipeline, compute_pipeline,
 					 stderr);
 		break;
 	case RING_COMPUTE:
-		radv_dump_compute_state(compute_pipeline, stderr);
+		fprintf(stderr, "RING_COMPUTE:\n");
+		radv_dump_compute_state(queue->device,
+					compute_pipeline, stderr);
 		break;
 	default:
 		assert(0);
 		break;
 	}
 
-	radv_dump_trace(queue->device, cs);
 	abort();
 }
 

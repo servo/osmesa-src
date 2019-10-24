@@ -30,11 +30,16 @@
 #include "nir_builder.h"
 #include "util/half_float.h"
 
+/* This should be the same as nir_search_max_comm_ops in nir_algebraic.py. */
+#define NIR_SEARCH_MAX_COMM_OPS 8
+
 struct match_state {
    bool inexact_match;
    bool has_exact_alu;
+   uint8_t comm_op_direction;
    unsigned variables_seen;
    nir_alu_src variables[NIR_SEARCH_MAX_VARIABLES];
+   struct hash_table *range_ht;
 };
 
 static bool
@@ -90,6 +95,148 @@ src_is_type(nir_src src, nir_alu_type type)
 }
 
 static bool
+nir_op_matches_search_op(nir_op nop, uint16_t sop)
+{
+   if (sop <= nir_last_opcode)
+      return nop == sop;
+
+#define MATCH_FCONV_CASE(op) \
+   case nir_search_op_##op: \
+      return nop == nir_op_##op##16 || \
+             nop == nir_op_##op##32 || \
+             nop == nir_op_##op##64;
+
+#define MATCH_ICONV_CASE(op) \
+   case nir_search_op_##op: \
+      return nop == nir_op_##op##8 || \
+             nop == nir_op_##op##16 || \
+             nop == nir_op_##op##32 || \
+             nop == nir_op_##op##64;
+
+#define MATCH_BCONV_CASE(op) \
+   case nir_search_op_##op: \
+      return nop == nir_op_##op##1 || \
+             nop == nir_op_##op##32;
+
+   switch (sop) {
+   MATCH_FCONV_CASE(i2f)
+   MATCH_FCONV_CASE(u2f)
+   MATCH_FCONV_CASE(f2f)
+   MATCH_ICONV_CASE(f2u)
+   MATCH_ICONV_CASE(f2i)
+   MATCH_ICONV_CASE(u2u)
+   MATCH_ICONV_CASE(i2i)
+   MATCH_FCONV_CASE(b2f)
+   MATCH_ICONV_CASE(b2i)
+   MATCH_BCONV_CASE(i2b)
+   MATCH_BCONV_CASE(f2b)
+   default:
+      unreachable("Invalid nir_search_op");
+   }
+
+#undef MATCH_FCONV_CASE
+#undef MATCH_ICONV_CASE
+#undef MATCH_BCONV_CASE
+}
+
+uint16_t
+nir_search_op_for_nir_op(nir_op nop)
+{
+#define MATCH_FCONV_CASE(op) \
+   case nir_op_##op##16: \
+   case nir_op_##op##32: \
+   case nir_op_##op##64: \
+      return nir_search_op_##op;
+
+#define MATCH_ICONV_CASE(op) \
+   case nir_op_##op##8: \
+   case nir_op_##op##16: \
+   case nir_op_##op##32: \
+   case nir_op_##op##64: \
+      return nir_search_op_##op;
+
+#define MATCH_BCONV_CASE(op) \
+   case nir_op_##op##1: \
+   case nir_op_##op##32: \
+      return nir_search_op_##op;
+
+
+   switch (nop) {
+   MATCH_FCONV_CASE(i2f)
+   MATCH_FCONV_CASE(u2f)
+   MATCH_FCONV_CASE(f2f)
+   MATCH_ICONV_CASE(f2u)
+   MATCH_ICONV_CASE(f2i)
+   MATCH_ICONV_CASE(u2u)
+   MATCH_ICONV_CASE(i2i)
+   MATCH_FCONV_CASE(b2f)
+   MATCH_ICONV_CASE(b2i)
+   MATCH_BCONV_CASE(i2b)
+   MATCH_BCONV_CASE(f2b)
+   default:
+      return nop;
+   }
+
+#undef MATCH_FCONV_CASE
+#undef MATCH_ICONV_CASE
+#undef MATCH_BCONV_CASE
+}
+
+static nir_op
+nir_op_for_search_op(uint16_t sop, unsigned bit_size)
+{
+   if (sop <= nir_last_opcode)
+      return sop;
+
+#define RET_FCONV_CASE(op) \
+   case nir_search_op_##op: \
+      switch (bit_size) { \
+      case 16: return nir_op_##op##16; \
+      case 32: return nir_op_##op##32; \
+      case 64: return nir_op_##op##64; \
+      default: unreachable("Invalid bit size"); \
+      }
+
+#define RET_ICONV_CASE(op) \
+   case nir_search_op_##op: \
+      switch (bit_size) { \
+      case 8:  return nir_op_##op##8; \
+      case 16: return nir_op_##op##16; \
+      case 32: return nir_op_##op##32; \
+      case 64: return nir_op_##op##64; \
+      default: unreachable("Invalid bit size"); \
+      }
+
+#define RET_BCONV_CASE(op) \
+   case nir_search_op_##op: \
+      switch (bit_size) { \
+      case 1: return nir_op_##op##1; \
+      case 32: return nir_op_##op##32; \
+      default: unreachable("Invalid bit size"); \
+      }
+
+   switch (sop) {
+   RET_FCONV_CASE(i2f)
+   RET_FCONV_CASE(u2f)
+   RET_FCONV_CASE(f2f)
+   RET_ICONV_CASE(f2u)
+   RET_ICONV_CASE(f2i)
+   RET_ICONV_CASE(u2u)
+   RET_ICONV_CASE(i2i)
+   RET_FCONV_CASE(b2f)
+   RET_ICONV_CASE(b2i)
+   RET_BCONV_CASE(i2b)
+   RET_BCONV_CASE(f2b)
+   default:
+      unreachable("Invalid nir_search_op");
+   }
+
+#undef RET_FCONV_CASE
+#undef RET_ICONV_CASE
+#undef RET_BCONV_CASE
+}
+
+static bool
 match_value(const nir_search_value *value, nir_alu_instr *instr, unsigned src,
             unsigned num_components, const uint8_t *swizzle,
             struct match_state *state)
@@ -103,8 +250,7 @@ match_value(const nir_search_value *value, nir_alu_instr *instr, unsigned src,
     * replacing so those reads will happen after the original reads and may
     * not be valid if they're register reads.
     */
-   if (!instr->src[src].src.is_ssa)
-      return false;
+   assert(instr->src[src].src.is_ssa);
 
    /* If the source is an explicitly sized source, then we need to reset
     * both the number of components and the swizzle.
@@ -118,7 +264,7 @@ match_value(const nir_search_value *value, nir_alu_instr *instr, unsigned src,
       new_swizzle[i] = instr->src[src].swizzle[swizzle[i]];
 
    /* If the value has a specific bit size and it doesn't match, bail */
-   if (value->bit_size &&
+   if (value->bit_size > 0 &&
        nir_src_bit_size(instr->src[src].src) != value->bit_size)
       return false;
 
@@ -152,7 +298,8 @@ match_value(const nir_search_value *value, nir_alu_instr *instr, unsigned src,
              instr->src[src].src.ssa->parent_instr->type != nir_instr_type_load_const)
             return false;
 
-         if (var->cond && !var->cond(instr, src, num_components, new_swizzle))
+         if (var->cond && !var->cond(state->range_ht, instr,
+                                     src, num_components, new_swizzle))
             return false;
 
          if (var->type != nir_type_invalid &&
@@ -182,7 +329,17 @@ match_value(const nir_search_value *value, nir_alu_instr *instr, unsigned src,
          return false;
 
       switch (const_val->type) {
-      case nir_type_float:
+      case nir_type_float: {
+         nir_load_const_instr *const load =
+            nir_instr_as_load_const(instr->src[src].src.ssa->parent_instr);
+
+         /* There are 8-bit and 1-bit integer types, but there are no 8-bit or
+          * 1-bit float types.  This prevents potential assertion failures in
+          * nir_src_comp_as_float.
+          */
+         if (load->def.bit_size < 16)
+            return false;
+
          for (unsigned i = 0; i < num_components; ++i) {
             double val = nir_src_comp_as_float(instr->src[src].src,
                                                new_swizzle[i]);
@@ -190,6 +347,7 @@ match_value(const nir_search_value *value, nir_alu_instr *instr, unsigned src,
                return false;
          }
          return true;
+      }
 
       case nir_type_int:
       case nir_type_uint:
@@ -223,12 +381,12 @@ match_expression(const nir_search_expression *expr, nir_alu_instr *instr,
    if (expr->cond && !expr->cond(instr))
       return false;
 
-   if (instr->op != expr->opcode)
+   if (!nir_op_matches_search_op(instr->op, expr->opcode))
       return false;
 
    assert(instr->dest.dest.is_ssa);
 
-   if (expr->value.bit_size &&
+   if (expr->value.bit_size > 0 &&
        instr->dest.dest.ssa.bit_size != expr->value.bit_size)
       return false;
 
@@ -253,178 +411,61 @@ match_expression(const nir_search_expression *expr, nir_alu_instr *instr,
       }
    }
 
-   /* Stash off the current variables_seen bitmask.  This way we can
-    * restore it prior to matching in the commutative case below.
+   /* If this is a commutative expression and it's one of the first few, look
+    * up its direction for the current search operation.  We'll use that value
+    * to possibly flip the sources for the match.
     */
-   unsigned variables_seen_stash = state->variables_seen;
+   unsigned comm_op_flip =
+      (expr->comm_expr_idx >= 0 &&
+       expr->comm_expr_idx < NIR_SEARCH_MAX_COMM_OPS) ?
+      ((state->comm_op_direction >> expr->comm_expr_idx) & 1) : 0;
 
    bool matched = true;
    for (unsigned i = 0; i < nir_op_infos[instr->op].num_inputs; i++) {
-      if (!match_value(expr->srcs[i], instr, i, num_components,
-                       swizzle, state)) {
+      /* 2src_commutative instructions that have 3 sources are only commutative
+       * in the first two sources.  Source 2 is always source 2.
+       */
+      if (!match_value(expr->srcs[i], instr,
+                       i < 2 ? i ^ comm_op_flip : i,
+                       num_components, swizzle, state)) {
          matched = false;
          break;
       }
    }
 
-   if (matched)
-      return true;
-
-   if (nir_op_infos[instr->op].algebraic_properties & NIR_OP_IS_COMMUTATIVE) {
-      assert(nir_op_infos[instr->op].num_inputs == 2);
-
-      /* Restore the variables_seen bitmask.  If we don't do this, then we
-       * could end up with an erroneous failure due to variables found in the
-       * first match attempt above not matching those in the second.
-       */
-      state->variables_seen = variables_seen_stash;
-
-      if (!match_value(expr->srcs[0], instr, 1, num_components,
-                       swizzle, state))
-         return false;
-
-      return match_value(expr->srcs[1], instr, 0, num_components,
-                         swizzle, state);
-   } else {
-      return false;
-   }
-}
-
-typedef struct bitsize_tree {
-   unsigned num_srcs;
-   struct bitsize_tree *srcs[4];
-
-   unsigned common_size;
-   bool is_src_sized[4];
-   bool is_dest_sized;
-
-   unsigned dest_size;
-   unsigned src_size[4];
-} bitsize_tree;
-
-static bitsize_tree *
-build_bitsize_tree(void *mem_ctx, struct match_state *state,
-                   const nir_search_value *value)
-{
-   bitsize_tree *tree = rzalloc(mem_ctx, bitsize_tree);
-
-   switch (value->type) {
-   case nir_search_value_expression: {
-      nir_search_expression *expr = nir_search_value_as_expression(value);
-      nir_op_info info = nir_op_infos[expr->opcode];
-      tree->num_srcs = info.num_inputs;
-      tree->common_size = 0;
-      for (unsigned i = 0; i < info.num_inputs; i++) {
-         tree->is_src_sized[i] = !!nir_alu_type_get_type_size(info.input_types[i]);
-         if (tree->is_src_sized[i])
-            tree->src_size[i] = nir_alu_type_get_type_size(info.input_types[i]);
-         tree->srcs[i] = build_bitsize_tree(mem_ctx, state, expr->srcs[i]);
-      }
-      tree->is_dest_sized = !!nir_alu_type_get_type_size(info.output_type);
-      if (tree->is_dest_sized)
-         tree->dest_size = nir_alu_type_get_type_size(info.output_type);
-      break;
-   }
-
-   case nir_search_value_variable: {
-      nir_search_variable *var = nir_search_value_as_variable(value);
-      tree->num_srcs = 0;
-      tree->is_dest_sized = true;
-      tree->dest_size = nir_src_bit_size(state->variables[var->variable].src);
-      break;
-   }
-
-   case nir_search_value_constant: {
-      tree->num_srcs = 0;
-      tree->is_dest_sized = false;
-      tree->common_size = 0;
-      break;
-   }
-   }
-
-   if (value->bit_size) {
-      assert(!tree->is_dest_sized || tree->dest_size == value->bit_size);
-      tree->common_size = value->bit_size;
-   }
-
-   return tree;
+   return matched;
 }
 
 static unsigned
-bitsize_tree_filter_up(bitsize_tree *tree)
+replace_bitsize(const nir_search_value *value, unsigned search_bitsize,
+                struct match_state *state)
 {
-   for (unsigned i = 0; i < tree->num_srcs; i++) {
-      unsigned src_size = bitsize_tree_filter_up(tree->srcs[i]);
-      if (src_size == 0)
-         continue;
-
-      if (tree->is_src_sized[i]) {
-         assert(src_size == tree->src_size[i]);
-      } else if (tree->common_size != 0) {
-         assert(src_size == tree->common_size);
-         tree->src_size[i] = src_size;
-      } else {
-         tree->common_size = src_size;
-         tree->src_size[i] = src_size;
-      }
-   }
-
-   if (tree->num_srcs && tree->common_size) {
-      if (tree->dest_size == 0)
-         tree->dest_size = tree->common_size;
-      else if (!tree->is_dest_sized)
-         assert(tree->dest_size == tree->common_size);
-
-      for (unsigned i = 0; i < tree->num_srcs; i++) {
-         if (!tree->src_size[i])
-            tree->src_size[i] = tree->common_size;
-      }
-   }
-
-   return tree->dest_size;
-}
-
-static void
-bitsize_tree_filter_down(bitsize_tree *tree, unsigned size)
-{
-   if (tree->dest_size)
-      assert(tree->dest_size == size);
-   else
-      tree->dest_size = size;
-
-   if (!tree->is_dest_sized) {
-      if (tree->common_size)
-         assert(tree->common_size == size);
-      else
-         tree->common_size = size;
-   }
-
-   for (unsigned i = 0; i < tree->num_srcs; i++) {
-      if (!tree->src_size[i]) {
-         assert(tree->common_size);
-         tree->src_size[i] = tree->common_size;
-      }
-      bitsize_tree_filter_down(tree->srcs[i], tree->src_size[i]);
-   }
+   if (value->bit_size > 0)
+      return value->bit_size;
+   if (value->bit_size < 0)
+      return nir_src_bit_size(state->variables[-value->bit_size - 1].src);
+   return search_bitsize;
 }
 
 static nir_alu_src
 construct_value(nir_builder *build,
                 const nir_search_value *value,
-                unsigned num_components, bitsize_tree *bitsize,
+                unsigned num_components, unsigned search_bitsize,
                 struct match_state *state,
                 nir_instr *instr)
 {
    switch (value->type) {
    case nir_search_value_expression: {
       const nir_search_expression *expr = nir_search_value_as_expression(value);
+      unsigned dst_bit_size = replace_bitsize(value, search_bitsize, state);
+      nir_op op = nir_op_for_search_op(expr->opcode, dst_bit_size);
 
-      if (nir_op_infos[expr->opcode].output_size != 0)
-         num_components = nir_op_infos[expr->opcode].output_size;
+      if (nir_op_infos[op].output_size != 0)
+         num_components = nir_op_infos[op].output_size;
 
-      nir_alu_instr *alu = nir_alu_instr_create(build->shader, expr->opcode);
+      nir_alu_instr *alu = nir_alu_instr_create(build->shader, op);
       nir_ssa_dest_init(&alu->instr, &alu->dest.dest, num_components,
-                        bitsize->dest_size, NULL);
+                        dst_bit_size, NULL);
       alu->dest.write_mask = (1 << num_components) - 1;
       alu->dest.saturate = false;
 
@@ -435,7 +476,7 @@ construct_value(nir_builder *build,
        */
       alu->exact = state->has_exact_alu;
 
-      for (unsigned i = 0; i < nir_op_infos[expr->opcode].num_inputs; i++) {
+      for (unsigned i = 0; i < nir_op_infos[op].num_inputs; i++) {
          /* If the source is an explicitly sized source, then we need to reset
           * the number of components to match.
           */
@@ -443,7 +484,7 @@ construct_value(nir_builder *build,
             num_components = nir_op_infos[alu->op].input_sizes[i];
 
          alu->src[i] = construct_value(build, expr->srcs[i],
-                                       num_components, bitsize->srcs[i],
+                                       num_components, search_bitsize,
                                        state, instr);
       }
 
@@ -467,26 +508,31 @@ construct_value(nir_builder *build,
                        (void *)build->shader);
       assert(!var->is_constant);
 
+      for (unsigned i = 0; i < NIR_MAX_VEC_COMPONENTS; i++)
+         val.swizzle[i] = state->variables[var->variable].swizzle[var->swizzle[i]];
+
       return val;
    }
 
    case nir_search_value_constant: {
       const nir_search_constant *c = nir_search_value_as_constant(value);
+      unsigned bit_size = replace_bitsize(value, search_bitsize, state);
 
       nir_ssa_def *cval;
       switch (c->type) {
       case nir_type_float:
-         cval = nir_imm_floatN_t(build, c->data.d, bitsize->dest_size);
+         cval = nir_imm_floatN_t(build, c->data.d, bit_size);
          break;
 
       case nir_type_int:
       case nir_type_uint:
-         cval = nir_imm_intN_t(build, c->data.i, bitsize->dest_size);
+         cval = nir_imm_intN_t(build, c->data.i, bit_size);
          break;
 
       case nir_type_bool:
-         cval = nir_imm_bool(build, c->data.u);
+         cval = nir_imm_boolN_t(build, c->data.u, bit_size);
          break;
+
       default:
          unreachable("Invalid alu source type");
       }
@@ -505,8 +551,79 @@ construct_value(nir_builder *build,
    }
 }
 
+UNUSED static void dump_value(const nir_search_value *val)
+{
+   switch (val->type) {
+   case nir_search_value_constant: {
+      const nir_search_constant *sconst = nir_search_value_as_constant(val);
+      switch (sconst->type) {
+      case nir_type_float:
+         fprintf(stderr, "%f", sconst->data.d);
+         break;
+      case nir_type_int:
+         fprintf(stderr, "%"PRId64, sconst->data.i);
+         break;
+      case nir_type_uint:
+         fprintf(stderr, "0x%"PRIx64, sconst->data.u);
+         break;
+      case nir_type_bool:
+         fprintf(stderr, "%s", sconst->data.u != 0 ? "True" : "False");
+         break;
+      default:
+         unreachable("bad const type");
+      }
+      break;
+   }
+
+   case nir_search_value_variable: {
+      const nir_search_variable *var = nir_search_value_as_variable(val);
+      if (var->is_constant)
+         fprintf(stderr, "#");
+      fprintf(stderr, "%c", var->variable + 'a');
+      break;
+   }
+
+   case nir_search_value_expression: {
+      const nir_search_expression *expr = nir_search_value_as_expression(val);
+      fprintf(stderr, "(");
+      if (expr->inexact)
+         fprintf(stderr, "~");
+      switch (expr->opcode) {
+#define CASE(n) \
+      case nir_search_op_##n: fprintf(stderr, #n); break;
+      CASE(f2b)
+      CASE(b2f)
+      CASE(b2i)
+      CASE(i2b)
+      CASE(i2i)
+      CASE(f2i)
+      CASE(i2f)
+#undef CASE
+      default:
+         fprintf(stderr, "%s", nir_op_infos[expr->opcode].name);
+      }
+
+      unsigned num_srcs = 1;
+      if (expr->opcode <= nir_last_opcode)
+         num_srcs = nir_op_infos[expr->opcode].num_inputs;
+
+      for (unsigned i = 0; i < num_srcs; i++) {
+         fprintf(stderr, " ");
+         dump_value(expr->srcs[i]);
+      }
+
+      fprintf(stderr, ")");
+      break;
+   }
+   }
+
+   if (val->bit_size > 0)
+      fprintf(stderr, "@%d", val->bit_size);
+}
+
 nir_ssa_def *
 nir_replace_instr(nir_builder *build, nir_alu_instr *instr,
+                  struct hash_table *range_ht,
                   const nir_search_expression *search,
                   const nir_search_value *replace)
 {
@@ -520,29 +637,51 @@ nir_replace_instr(nir_builder *build, nir_alu_instr *instr,
    struct match_state state;
    state.inexact_match = false;
    state.has_exact_alu = false;
-   state.variables_seen = 0;
+   state.range_ht = range_ht;
 
-   if (!match_expression(search, instr, instr->dest.dest.ssa.num_components,
-                         swizzle, &state))
+   STATIC_ASSERT(sizeof(state.comm_op_direction) * 8 >= NIR_SEARCH_MAX_COMM_OPS);
+
+   unsigned comm_expr_combinations =
+      1 << MIN2(search->comm_exprs, NIR_SEARCH_MAX_COMM_OPS);
+
+   bool found = false;
+   for (unsigned comb = 0; comb < comm_expr_combinations; comb++) {
+      /* The bitfield of directions is just the current iteration.  Hooray for
+       * binary.
+       */
+      state.comm_op_direction = comb;
+      state.variables_seen = 0;
+
+      if (match_expression(search, instr,
+                           instr->dest.dest.ssa.num_components,
+                           swizzle, &state)) {
+         found = true;
+         break;
+      }
+   }
+   if (!found)
       return NULL;
 
-   void *bitsize_ctx = ralloc_context(NULL);
-   bitsize_tree *tree = build_bitsize_tree(bitsize_ctx, &state, replace);
-   bitsize_tree_filter_up(tree);
-   bitsize_tree_filter_down(tree, instr->dest.dest.ssa.bit_size);
+#if 0
+   fprintf(stderr, "matched: ");
+   dump_value(&search->value);
+   fprintf(stderr, " -> ");
+   dump_value(replace);
+   fprintf(stderr, " ssa_%d\n", instr->dest.dest.ssa.index);
+#endif
 
    build->cursor = nir_before_instr(&instr->instr);
 
    nir_alu_src val = construct_value(build, replace,
                                      instr->dest.dest.ssa.num_components,
-                                     tree, &state, &instr->instr);
+                                     instr->dest.dest.ssa.bit_size,
+                                     &state, &instr->instr);
 
-   /* Inserting a mov may be unnecessary.  However, it's much easier to
-    * simply let copy propagation clean this up than to try to go through
-    * and rewrite swizzles ourselves.
+   /* Note that NIR builder will elide the MOV if it's a no-op, which may
+    * allow more work to be done in a single pass through algebraic.
     */
    nir_ssa_def *ssa_val =
-      nir_imov_alu(build, val, instr->dest.dest.ssa.num_components);
+      nir_mov_alu(build, val, instr->dest.dest.ssa.num_components);
    nir_ssa_def_rewrite_uses(&instr->dest.dest.ssa, nir_src_for_ssa(ssa_val));
 
    /* We know this one has no more uses because we just rewrote them all,
@@ -551,7 +690,131 @@ nir_replace_instr(nir_builder *build, nir_alu_instr *instr,
     */
    nir_instr_remove(&instr->instr);
 
-   ralloc_free(bitsize_ctx);
-
    return ssa_val;
+}
+
+static void
+nir_algebraic_automaton(nir_block *block, uint16_t *states,
+                        const struct per_op_table *pass_op_table)
+{
+   nir_foreach_instr(instr, block) {
+      switch (instr->type) {
+      case nir_instr_type_alu: {
+         nir_alu_instr *alu = nir_instr_as_alu(instr);
+         nir_op op = alu->op;
+         uint16_t search_op = nir_search_op_for_nir_op(op);
+         const struct per_op_table *tbl = &pass_op_table[search_op];
+         if (tbl->num_filtered_states == 0)
+            continue;
+
+         /* Calculate the index into the transition table. Note the index
+          * calculated must match the iteration order of Python's
+          * itertools.product(), which was used to emit the transition
+          * table.
+          */
+         uint16_t index = 0;
+         for (unsigned i = 0; i < nir_op_infos[op].num_inputs; i++) {
+            index *= tbl->num_filtered_states;
+            index += tbl->filter[states[alu->src[i].src.ssa->index]];
+         }
+         states[alu->dest.dest.ssa.index] = tbl->table[index];
+         break;
+      }
+
+      case nir_instr_type_load_const: {
+         nir_load_const_instr *load_const = nir_instr_as_load_const(instr);
+         states[load_const->def.index] = CONST_STATE;
+         break;
+      }
+
+      default:
+         break;
+      }
+   }
+}
+
+static bool
+nir_algebraic_block(nir_builder *build, nir_block *block,
+                    struct hash_table *range_ht,
+                    const bool *condition_flags,
+                    const struct transform **transforms,
+                    const uint16_t *transform_counts,
+                    const uint16_t *states)
+{
+   bool progress = false;
+   const unsigned execution_mode = build->shader->info.float_controls_execution_mode;
+
+   nir_foreach_instr_reverse_safe(instr, block) {
+      if (instr->type != nir_instr_type_alu)
+         continue;
+
+      nir_alu_instr *alu = nir_instr_as_alu(instr);
+      if (!alu->dest.dest.is_ssa)
+         continue;
+
+      unsigned bit_size = alu->dest.dest.ssa.bit_size;
+      const bool ignore_inexact =
+         nir_is_float_control_signed_zero_inf_nan_preserve(execution_mode, bit_size) ||
+         nir_is_denorm_flush_to_zero(execution_mode, bit_size);
+
+      int xform_idx = states[alu->dest.dest.ssa.index];
+      for (uint16_t i = 0; i < transform_counts[xform_idx]; i++) {
+         const struct transform *xform = &transforms[xform_idx][i];
+         if (condition_flags[xform->condition_offset] &&
+             !(xform->search->inexact && ignore_inexact) &&
+             nir_replace_instr(build, alu, range_ht,
+                               xform->search, xform->replace)) {
+            _mesa_hash_table_clear(range_ht, NULL);
+            progress = true;
+            break;
+         }
+      }
+   }
+
+   return progress;
+}
+
+bool
+nir_algebraic_impl(nir_function_impl *impl,
+                   const bool *condition_flags,
+                   const struct transform **transforms,
+                   const uint16_t *transform_counts,
+                   const struct per_op_table *pass_op_table)
+{
+   bool progress = false;
+
+   nir_builder build;
+   nir_builder_init(&build, impl);
+
+   /* Note: it's important here that we're allocating a zeroed array, since
+    * state 0 is the default state, which means we don't have to visit
+    * anything other than constants and ALU instructions.
+    */
+   uint16_t *states = calloc(impl->ssa_alloc, sizeof(*states));
+
+   struct hash_table *range_ht = _mesa_pointer_hash_table_create(NULL);
+
+   nir_foreach_block(block, impl) {
+      nir_algebraic_automaton(block, states, pass_op_table);
+   }
+
+   nir_foreach_block_reverse(block, impl) {
+      progress |= nir_algebraic_block(&build, block, range_ht, condition_flags,
+                                      transforms, transform_counts,
+                                      states);
+   }
+
+   ralloc_free(range_ht);
+   free(states);
+
+   if (progress) {
+      nir_metadata_preserve(impl, nir_metadata_block_index |
+                                  nir_metadata_dominance);
+    } else {
+#ifndef NDEBUG
+      impl->valid_metadata &= ~nir_metadata_not_properly_reset;
+#endif
+    }
+
+   return progress;
 }

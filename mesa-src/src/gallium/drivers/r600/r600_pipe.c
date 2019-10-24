@@ -105,6 +105,12 @@ static void r600_destroy_context(struct pipe_context *context)
 	}
 	util_unreference_framebuffer_state(&rctx->framebuffer.state);
 
+	if (rctx->gs_rings.gsvs_ring.buffer)
+		pipe_resource_reference(&rctx->gs_rings.gsvs_ring.buffer, NULL);
+
+	if (rctx->gs_rings.esgs_ring.buffer)
+		pipe_resource_reference(&rctx->gs_rings.esgs_ring.buffer, NULL);
+
 	for (sh = 0; sh < PIPE_SHADER_TYPES; ++sh)
 		for (i = 0; i < PIPE_MAX_CONSTANT_BUFFERS; ++i)
 			rctx->b.b.set_constant_buffer(context, sh, i, NULL);
@@ -206,7 +212,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 	}
 
 	rctx->b.gfx.cs = ws->cs_create(rctx->b.ctx, RING_GFX,
-				       r600_context_gfx_flush, rctx);
+				       r600_context_gfx_flush, rctx, false);
 	rctx->b.gfx.flush = r600_context_gfx_flush;
 
 	rctx->allocator_fetch_shader =
@@ -271,7 +277,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
-	case PIPE_CAP_SM3:
+	case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
+	case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
+	case PIPE_CAP_VERTEX_SHADER_SATURATE:
 	case PIPE_CAP_SEAMLESS_CUBE_MAP:
 	case PIPE_CAP_PRIMITIVE_RESTART:
 	case PIPE_CAP_CONDITIONAL_RENDER:
@@ -316,7 +324,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 64 * 1024 * 1024;
 
 	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
-		return rscreen->b.info.drm_major == 2 && rscreen->b.info.drm_minor >= 43;
+		return rscreen->b.info.drm_minor >= 43;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
 		return !R600_BIG_ENDIAN && rscreen->b.info.has_userptr;
@@ -417,7 +425,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
 	case PIPE_CAP_NATIVE_FENCE_FD:
 	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
-	case PIPE_CAP_TGSI_FS_FBFETCH:
+	case PIPE_CAP_FBFETCH:
 	case PIPE_CAP_INT64:
 	case PIPE_CAP_INT64_DIVMOD:
 	case PIPE_CAP_TGSI_TEX_TXF_LZ:
@@ -491,7 +499,11 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 2048;
 
 	/* Texturing. */
-	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
+	case PIPE_CAP_MAX_TEXTURE_2D_SIZE:
+		if (family >= CHIP_CEDAR)
+			return 16384;
+		else
+			return 8192;
 	case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
 		if (family >= CHIP_CEDAR)
 			return 15;
@@ -529,6 +541,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET:
 	case PIPE_CAP_MAX_TEXEL_OFFSET:
 		return 7;
+
+	case PIPE_CAP_MAX_VARYINGS:
+		return 32;
 
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
 		return PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600;
@@ -682,8 +697,6 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 		if (rscreen->b.family >= CHIP_CEDAR && rscreen->has_atomics) {
 			return EG_MAX_ATOMIC_BUFFERS;
 		}
-		return 0;
-	case PIPE_SHADER_CAP_SCALAR_ISA:
 		return 0;
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
 		/* due to a bug in the shader compiler, some loops hang

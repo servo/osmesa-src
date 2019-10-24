@@ -99,7 +99,7 @@ _mesa_glthread_init(struct gl_context *ctx)
    struct util_queue_fence fence;
    util_queue_fence_init(&fence);
    util_queue_add_job(&glthread->queue, ctx, &fence,
-                      glthread_thread_initialization, NULL);
+                      glthread_thread_initialization, NULL, 0);
    util_queue_fence_wait(&fence);
    util_queue_fence_destroy(&fence);
 }
@@ -121,11 +121,11 @@ _mesa_glthread_destroy(struct gl_context *ctx)
    free(glthread);
    ctx->GLThread = NULL;
 
-   _mesa_glthread_restore_dispatch(ctx);
+   _mesa_glthread_restore_dispatch(ctx, "destroy");
 }
 
 void
-_mesa_glthread_restore_dispatch(struct gl_context *ctx)
+_mesa_glthread_restore_dispatch(struct gl_context *ctx, const char *func)
 {
    /* Remove ourselves from the dispatch table except if another ctx/thread
     * already installed a new dispatch table.
@@ -136,6 +136,9 @@ _mesa_glthread_restore_dispatch(struct gl_context *ctx)
    if (_glapi_get_dispatch() == ctx->MarshalExec) {
        ctx->CurrentClientDispatch = ctx->CurrentServerDispatch;
        _glapi_set_dispatch(ctx->CurrentClientDispatch);
+#if 0
+       printf("glthread disabled: %s\n", func);
+#endif
    }
 }
 
@@ -164,7 +167,7 @@ _mesa_glthread_flush_batch(struct gl_context *ctx)
    p_atomic_add(&glthread->stats.num_offloaded_items, next->used);
 
    util_queue_add_job(&glthread->queue, next, &next->fence,
-                      glthread_unmarshal_batch, NULL);
+                      glthread_unmarshal_batch, NULL, 0);
    glthread->last = glthread->next;
    glthread->next = (glthread->next + 1) % MARSHAL_MAX_BATCHES;
 }

@@ -43,39 +43,34 @@ struct brw_blorp_const_color_prog_key
 };
 
 static bool
-blorp_params_get_clear_kernel(struct blorp_context *blorp,
+blorp_params_get_clear_kernel(struct blorp_batch *batch,
                               struct blorp_params *params,
                               bool use_replicated_data,
                               bool clear_rgb_as_red)
 {
+   struct blorp_context *blorp = batch->blorp;
+
    const struct brw_blorp_const_color_prog_key blorp_key = {
       .shader_type = BLORP_SHADER_TYPE_CLEAR,
       .use_simd16_replicated_data = use_replicated_data,
       .clear_rgb_as_red = clear_rgb_as_red,
    };
 
-   if (blorp->lookup_shader(blorp, &blorp_key, sizeof(blorp_key),
+   if (blorp->lookup_shader(batch, &blorp_key, sizeof(blorp_key),
                             &params->wm_prog_kernel, &params->wm_prog_data))
       return true;
 
    void *mem_ctx = ralloc_context(NULL);
 
    nir_builder b;
-   nir_builder_init_simple_shader(&b, mem_ctx, MESA_SHADER_FRAGMENT, NULL);
-   b.shader->info.name = ralloc_strdup(b.shader, "BLORP-clear");
+   blorp_nir_init_shader(&b, mem_ctx, MESA_SHADER_FRAGMENT, "BLORP-clear");
 
    nir_variable *v_color =
       BLORP_CREATE_NIR_INPUT(b.shader, clear_color, glsl_vec4_type());
    nir_ssa_def *color = nir_load_var(&b, v_color);
 
    if (clear_rgb_as_red) {
-      nir_variable *frag_coord =
-         nir_variable_create(b.shader, nir_var_shader_in,
-                             glsl_vec4_type(), "gl_FragCoord");
-      frag_coord->data.location = VARYING_SLOT_POS;
-      frag_coord->data.origin_upper_left = true;
-
-      nir_ssa_def *pos = nir_f2i32(&b, nir_load_var(&b, frag_coord));
+      nir_ssa_def *pos = nir_f2i32(&b, nir_load_frag_coord(&b));
       nir_ssa_def *comp = nir_umod(&b, nir_channel(&b, pos, 0),
                                        nir_imm_int(&b, 3));
       nir_ssa_def *color_component =
@@ -104,7 +99,7 @@ blorp_params_get_clear_kernel(struct blorp_context *blorp,
                        &prog_data);
 
    bool result =
-      blorp->upload_shader(blorp, &blorp_key, sizeof(blorp_key),
+      blorp->upload_shader(batch, &blorp_key, sizeof(blorp_key),
                            program, prog_data.base.program_size,
                            &prog_data.base, sizeof(prog_data),
                            &params->wm_prog_kernel, &params->wm_prog_data);
@@ -126,9 +121,10 @@ struct layer_offset_vs_key {
  * vertex shader.
  */
 static bool
-blorp_params_get_layer_offset_vs(struct blorp_context *blorp,
+blorp_params_get_layer_offset_vs(struct blorp_batch *batch,
                                  struct blorp_params *params)
 {
+   struct blorp_context *blorp = batch->blorp;
    struct layer_offset_vs_key blorp_key = {
       .shader_type = BLORP_SHADER_TYPE_LAYER_OFFSET_VS,
    };
@@ -136,15 +132,14 @@ blorp_params_get_layer_offset_vs(struct blorp_context *blorp,
    if (params->wm_prog_data)
       blorp_key.num_inputs = params->wm_prog_data->num_varying_inputs;
 
-   if (blorp->lookup_shader(blorp, &blorp_key, sizeof(blorp_key),
+   if (blorp->lookup_shader(batch, &blorp_key, sizeof(blorp_key),
                             &params->vs_prog_kernel, &params->vs_prog_data))
       return true;
 
    void *mem_ctx = ralloc_context(NULL);
 
    nir_builder b;
-   nir_builder_init_simple_shader(&b, mem_ctx, MESA_SHADER_VERTEX, NULL);
-   b.shader->info.name = ralloc_strdup(b.shader, "BLORP-layer-offset-vs");
+   blorp_nir_init_shader(&b, mem_ctx, MESA_SHADER_VERTEX, "BLORP-layer-offset-vs");
 
    const struct glsl_type *uvec4_type = glsl_vector_type(GLSL_TYPE_UINT, 4);
 
@@ -194,7 +189,7 @@ blorp_params_get_layer_offset_vs(struct blorp_context *blorp,
       blorp_compile_vs(blorp, mem_ctx, b.shader, &vs_prog_data);
 
    bool result =
-      blorp->upload_shader(blorp, &blorp_key, sizeof(blorp_key),
+      blorp->upload_shader(batch, &blorp_key, sizeof(blorp_key),
                            program, vs_prog_data.base.base.program_size,
                            &vs_prog_data.base.base, sizeof(vs_prog_data),
                            &params->vs_prog_kernel, &params->vs_prog_data);
@@ -259,16 +254,21 @@ get_fast_clear_rect(const struct isl_device *dev,
       x_scaledown = x_align / 2;
       y_scaledown = y_align / 2;
 
-      /* From BSpec: 3D-Media-GPGPU Engine > 3D Pipeline > Pixel > Pixel
-       * Backend > MCS Buffer for Render Target(s) [DevIVB+] > Table "Color
-       * Clear of Non-MultiSampled Render Target Restrictions":
-       *
-       *   Clear rectangle must be aligned to two times the number of
-       *   pixels in the table shown below due to 16x16 hashing across the
-       *   slice.
-       */
-      x_align *= 2;
-      y_align *= 2;
+      if (ISL_DEV_IS_HASWELL(dev)) {
+         /* From BSpec: 3D-Media-GPGPU Engine > 3D Pipeline > Pixel > Pixel
+          * Backend > MCS Buffer for Render Target(s) [DevIVB+] > Table "Color
+          * Clear of Non-MultiSampled Render Target Restrictions":
+          *
+          *   Clear rectangle must be aligned to two times the number of
+          *   pixels in the table shown below due to 16x16 hashing across the
+          *   slice.
+          *
+          * This restriction is only documented to exist on HSW GT3 but
+          * empirical evidence suggests that it's also needed GT2.
+          */
+         x_align *= 2;
+         y_align *= 2;
+      }
    } else {
       assert(aux_surf->usage == ISL_SURF_USAGE_MCS_BIT);
 
@@ -351,7 +351,7 @@ blorp_fast_clear(struct blorp_batch *batch,
    get_fast_clear_rect(batch->blorp->isl_dev, surf->aux_surf,
                        &params.x0, &params.y0, &params.x1, &params.y1);
 
-   if (!blorp_params_get_clear_kernel(batch->blorp, &params, true, false))
+   if (!blorp_params_get_clear_kernel(batch, &params, true, false))
       return;
 
    brw_blorp_surface_info_init(batch->blorp, &params.dst, surf, level,
@@ -361,7 +361,7 @@ blorp_fast_clear(struct blorp_batch *batch,
    batch->blorp->exec(batch, &params);
 }
 
-static union isl_color_value
+union isl_color_value
 swizzle_color_value(union isl_color_value src, struct isl_swizzle swizzle)
 {
    union isl_color_value dst = { .u32 = { 0, } };
@@ -453,12 +453,12 @@ blorp_clear(struct blorp_batch *batch,
       }
    }
 
-   if (!blorp_params_get_clear_kernel(batch->blorp, &params,
+   if (!blorp_params_get_clear_kernel(batch, &params,
                                       use_simd16_replicated_data,
                                       clear_rgb_as_red))
       return;
 
-   if (!blorp_ensure_sf_program(batch->blorp, &params))
+   if (!blorp_ensure_sf_program(batch, &params))
       return;
 
    while (num_layers > 0) {
@@ -565,6 +565,107 @@ blorp_clear(struct blorp_batch *batch,
    }
 }
 
+static bool
+blorp_clear_stencil_as_rgba(struct blorp_batch *batch,
+                            const struct blorp_surf *surf,
+                            uint32_t level, uint32_t start_layer,
+                            uint32_t num_layers,
+                            uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1,
+                            uint8_t stencil_mask, uint8_t stencil_value)
+{
+   /* We only support separate W-tiled stencil for now */
+   if (surf->surf->format != ISL_FORMAT_R8_UINT ||
+       surf->surf->tiling != ISL_TILING_W)
+      return false;
+
+   /* Stencil mask support would require piles of shader magic */
+   if (stencil_mask != 0xff)
+      return false;
+
+   if (surf->surf->samples > 1) {
+      /* Adjust x0, y0, x1, and y1 to be in units of samples */
+      assert(surf->surf->msaa_layout == ISL_MSAA_LAYOUT_INTERLEAVED);
+      struct isl_extent2d msaa_px_size_sa =
+         isl_get_interleaved_msaa_px_size_sa(surf->surf->samples);
+
+      x0 *= msaa_px_size_sa.w;
+      y0 *= msaa_px_size_sa.h;
+      x1 *= msaa_px_size_sa.w;
+      y1 *= msaa_px_size_sa.h;
+   }
+
+   /* W-tiles and Y-tiles have the same layout as far as cache lines are
+    * concerned: both are 8x8 cache lines laid out Y-major.  The difference is
+    * entirely in how the data is arranged withing the cache line.  W-tiling
+    * is 8x8 pixels in a swizzled pattern while Y-tiling is 16B by 4 rows
+    * regardless of image format size.  As long as everything is aligned to 8,
+    * we can just treat the W-tiled image as Y-tiled, ignore the layout
+    * difference within a cache line, and blast out data.
+    */
+   if (x0 % 8 != 0 || y0 % 8 != 0 || x1 % 8 != 0 || y1 % 8 != 0)
+      return false;
+
+   struct blorp_params params;
+   blorp_params_init(&params);
+
+   if (!blorp_params_get_clear_kernel(batch, &params, true, false))
+      return false;
+
+   memset(&params.wm_inputs.clear_color, stencil_value,
+          sizeof(params.wm_inputs.clear_color));
+
+   /* The Sandy Bridge PRM Vol. 4 Pt. 2, section 2.11.2.1.1 has the
+    * following footnote to the format table:
+    *
+    *    128 BPE Formats cannot be Tiled Y when used as render targets
+    *
+    * We have to use RGBA16_UINT on SNB.
+    */
+   enum isl_format wide_format;
+   if (ISL_DEV_GEN(batch->blorp->isl_dev) <= 6) {
+      wide_format = ISL_FORMAT_R16G16B16A16_UINT;
+
+      /* For RGBA16_UINT, we need to mask the stencil value otherwise, we risk
+       * clamping giving us the wrong values
+       */
+      for (unsigned i = 0; i < 4; i++)
+         params.wm_inputs.clear_color[i] &= 0xffff;
+   } else {
+      wide_format = ISL_FORMAT_R32G32B32A32_UINT;
+   }
+
+   for (uint32_t a = 0; a < num_layers; a++) {
+      uint32_t layer = start_layer + a;
+
+      brw_blorp_surface_info_init(batch->blorp, &params.dst, surf, level,
+                                  layer, ISL_FORMAT_UNSUPPORTED, true);
+
+      if (surf->surf->samples > 1)
+         blorp_surf_fake_interleaved_msaa(batch->blorp->isl_dev, &params.dst);
+
+      /* Make it Y-tiled */
+      blorp_surf_retile_w_to_y(batch->blorp->isl_dev, &params.dst);
+
+      unsigned wide_Bpp =
+         isl_format_get_layout(wide_format)->bpb / 8;
+
+      params.dst.view.format = params.dst.surf.format = wide_format;
+      assert(params.dst.surf.logical_level0_px.width % wide_Bpp == 0);
+      params.dst.surf.logical_level0_px.width /= wide_Bpp;
+      assert(params.dst.tile_x_sa % wide_Bpp == 0);
+      params.dst.tile_x_sa /= wide_Bpp;
+
+      params.x0 = params.dst.tile_x_sa + x0 / (wide_Bpp / 2);
+      params.y0 = params.dst.tile_y_sa + y0 / 2;
+      params.x1 = params.dst.tile_x_sa + x1 / (wide_Bpp / 2);
+      params.y1 = params.dst.tile_y_sa + y1 / 2;
+
+      batch->blorp->exec(batch, &params);
+   }
+
+   return true;
+}
+
 void
 blorp_clear_depth_stencil(struct blorp_batch *batch,
                           const struct blorp_surf *depth,
@@ -575,6 +676,13 @@ blorp_clear_depth_stencil(struct blorp_batch *batch,
                           bool clear_depth, float depth_value,
                           uint8_t stencil_mask, uint8_t stencil_value)
 {
+   if (!clear_depth && blorp_clear_stencil_as_rgba(batch, stencil, level,
+                                                   start_layer, num_layers,
+                                                   x0, y0, x1, y1,
+                                                   stencil_mask,
+                                                   stencil_value))
+      return;
+
    struct blorp_params params;
    blorp_params_init(&params);
 
@@ -589,7 +697,7 @@ blorp_clear_depth_stencil(struct blorp_batch *batch,
        * we disable statistics in 3DSTATE_WM.  Give it the usual clear shader
        * to work around the issue.
        */
-      if (!blorp_params_get_clear_kernel(batch->blorp, &params, false, false))
+      if (!blorp_params_get_clear_kernel(batch, &params, false, false))
          return;
    }
 
@@ -829,7 +937,7 @@ blorp_clear_attachments(struct blorp_batch *batch,
        * is tiled or not, we have to assume it may be linear.  This means no
        * SIMD16_REPDATA for us. :-(
        */
-      if (!blorp_params_get_clear_kernel(batch->blorp, &params, false, false))
+      if (!blorp_params_get_clear_kernel(batch, &params, false, false))
          return;
    }
 
@@ -847,7 +955,7 @@ blorp_clear_attachments(struct blorp_batch *batch,
       params.stencil_ref = stencil_value;
    }
 
-   if (!blorp_params_get_layer_offset_vs(batch->blorp, &params))
+   if (!blorp_params_get_layer_offset_vs(batch, &params))
       return;
 
    params.vs_inputs.base_layer = start_layer;
@@ -898,7 +1006,11 @@ blorp_ccs_resolve(struct blorp_batch *batch,
    params.x1 = ALIGN(params.x1, x_scaledown) / x_scaledown;
    params.y1 = ALIGN(params.y1, y_scaledown) / y_scaledown;
 
-   if (batch->blorp->isl_dev->info->gen >= 9) {
+   if (batch->blorp->isl_dev->info->gen >= 10) {
+      assert(resolve_op == ISL_AUX_OP_FULL_RESOLVE ||
+             resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE ||
+             resolve_op == ISL_AUX_OP_AMBIGUATE);
+   } else if (batch->blorp->isl_dev->info->gen >= 9) {
       assert(resolve_op == ISL_AUX_OP_FULL_RESOLVE ||
              resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE);
    } else {
@@ -914,7 +1026,7 @@ blorp_ccs_resolve(struct blorp_batch *batch,
     * color" message.
     */
 
-   if (!blorp_params_get_clear_kernel(batch->blorp, &params, true, false))
+   if (!blorp_params_get_clear_kernel(batch, &params, true, false))
       return;
 
    batch->blorp->exec(batch, &params);
@@ -936,9 +1048,10 @@ struct blorp_mcs_partial_resolve_key
 };
 
 static bool
-blorp_params_get_mcs_partial_resolve_kernel(struct blorp_context *blorp,
+blorp_params_get_mcs_partial_resolve_kernel(struct blorp_batch *batch,
                                             struct blorp_params *params)
 {
+   struct blorp_context *blorp = batch->blorp;
    const struct blorp_mcs_partial_resolve_key blorp_key = {
       .shader_type = BLORP_SHADER_TYPE_MCS_PARTIAL_RESOLVE,
       .indirect_clear_color = params->dst.clear_color_addr.buffer != NULL,
@@ -946,15 +1059,15 @@ blorp_params_get_mcs_partial_resolve_kernel(struct blorp_context *blorp,
       .num_samples = params->num_samples,
    };
 
-   if (blorp->lookup_shader(blorp, &blorp_key, sizeof(blorp_key),
+   if (blorp->lookup_shader(batch, &blorp_key, sizeof(blorp_key),
                             &params->wm_prog_kernel, &params->wm_prog_data))
       return true;
 
    void *mem_ctx = ralloc_context(NULL);
 
    nir_builder b;
-   nir_builder_init_simple_shader(&b, mem_ctx, MESA_SHADER_FRAGMENT, NULL);
-   b.shader->info.name = ralloc_strdup(b.shader, "BLORP-mcs-partial-resolve");
+   blorp_nir_init_shader(&b, mem_ctx, MESA_SHADER_FRAGMENT,
+                         "BLORP-mcs-partial-resolve");
 
    nir_variable *v_color =
       BLORP_CREATE_NIR_INPUT(b.shader, clear_color, glsl_vec4_type());
@@ -966,7 +1079,7 @@ blorp_params_get_mcs_partial_resolve_kernel(struct blorp_context *blorp,
 
    /* Do an MCS fetch and check if it is equal to the magic clear value */
    nir_ssa_def *mcs =
-      blorp_nir_txf_ms_mcs(&b, nir_f2i32(&b, blorp_nir_frag_coord(&b)),
+      blorp_nir_txf_ms_mcs(&b, nir_f2i32(&b, nir_load_frag_coord(&b)),
                                nir_load_layer_id(&b));
    nir_ssa_def *is_clear =
       blorp_nir_mcs_is_clear_color(&b, mcs, blorp_key.num_samples);
@@ -992,8 +1105,8 @@ blorp_params_get_mcs_partial_resolve_kernel(struct blorp_context *blorp,
 
    struct brw_wm_prog_key wm_key;
    brw_blorp_init_wm_prog_key(&wm_key);
-   wm_key.tex.compressed_multisample_layout_mask = 1;
-   wm_key.tex.msaa_16 = blorp_key.num_samples == 16;
+   wm_key.base.tex.compressed_multisample_layout_mask = 1;
+   wm_key.base.tex.msaa_16 = blorp_key.num_samples == 16;
    wm_key.multisample_fbo = true;
 
    struct brw_wm_prog_data prog_data;
@@ -1002,7 +1115,7 @@ blorp_params_get_mcs_partial_resolve_kernel(struct blorp_context *blorp,
                        &prog_data);
 
    bool result =
-      blorp->upload_shader(blorp, &blorp_key, sizeof(blorp_key),
+      blorp->upload_shader(batch, &blorp_key, sizeof(blorp_key),
                            program, prog_data.base.program_size,
                            &prog_data.base, sizeof(prog_data),
                            &params->wm_prog_kernel, &params->wm_prog_data);
@@ -1039,7 +1152,7 @@ blorp_mcs_partial_resolve(struct blorp_batch *batch,
    memcpy(&params.wm_inputs.clear_color,
           surf->clear_color.f32, sizeof(float) * 4);
 
-   if (!blorp_params_get_mcs_partial_resolve_kernel(batch->blorp, &params))
+   if (!blorp_params_get_mcs_partial_resolve_kernel(batch, &params))
       return;
 
    batch->blorp->exec(batch, &params);
@@ -1056,6 +1169,12 @@ blorp_ccs_ambiguate(struct blorp_batch *batch,
                     struct blorp_surf *surf,
                     uint32_t level, uint32_t layer)
 {
+   if (ISL_DEV_GEN(batch->blorp->isl_dev) >= 10) {
+      /* On gen10 and above, we have a hardware resolve op for this */
+      return blorp_ccs_resolve(batch, surf, level, layer, 1,
+                               surf->surf->format, ISL_AUX_OP_AMBIGUATE);
+   }
+
    struct blorp_params params;
    blorp_params_init(&params);
 
@@ -1168,7 +1287,7 @@ blorp_ccs_ambiguate(struct blorp_batch *batch,
    const uint32_t width_rgba_px = width_cl;
    const uint32_t height_rgba_px = height_cl * 4;
 
-   MAYBE_UNUSED bool ok =
+   ASSERTED bool ok =
       isl_surf_init(batch->blorp->isl_dev, &params.dst.surf,
                     .dim = ISL_SURF_DIM_2D,
                     .format = ISL_FORMAT_R32G32B32A32_UINT,
@@ -1192,7 +1311,7 @@ blorp_ccs_ambiguate(struct blorp_batch *batch,
    memset(&params.wm_inputs.clear_color, 0,
           sizeof(params.wm_inputs.clear_color));
 
-   if (!blorp_params_get_clear_kernel(batch->blorp, &params, true, false))
+   if (!blorp_params_get_clear_kernel(batch, &params, true, false))
       return;
 
    batch->blorp->exec(batch, &params);

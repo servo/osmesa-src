@@ -6,16 +6,21 @@
 
 #include "nvc0_query.h"
 
+#define NVC0_HW_QUERY_STATE_READY   0
+#define NVC0_HW_QUERY_STATE_ACTIVE  1
+#define NVC0_HW_QUERY_STATE_ENDED   2
+#define NVC0_HW_QUERY_STATE_FLUSHED 3
+
 #define NVC0_HW_QUERY_TFB_BUFFER_OFFSET (PIPE_QUERY_TYPES + 0)
 
 struct nvc0_hw_query;
 
 struct nvc0_hw_query_funcs {
    void (*destroy_query)(struct nvc0_context *, struct nvc0_hw_query *);
-   boolean (*begin_query)(struct nvc0_context *, struct nvc0_hw_query *);
+   bool (*begin_query)(struct nvc0_context *, struct nvc0_hw_query *);
    void (*end_query)(struct nvc0_context *, struct nvc0_hw_query *);
-   boolean (*get_query_result)(struct nvc0_context *, struct nvc0_hw_query *,
-                               boolean, union pipe_query_result *);
+   bool (*get_query_result)(struct nvc0_context *, struct nvc0_hw_query *,
+                            bool, union pipe_query_result *);
 };
 
 struct nvc0_hw_query {
@@ -27,9 +32,8 @@ struct nvc0_hw_query {
    uint32_t base_offset;
    uint32_t offset; /* base_offset + i * rotate */
    uint8_t state;
-   boolean is64bit;
+   bool is64bit;
    uint8_t rotate;
-   int nesting; /* only used for occlusion queries */
    struct nouveau_mm_allocation *mm;
    struct nouveau_fence *fence;
 };

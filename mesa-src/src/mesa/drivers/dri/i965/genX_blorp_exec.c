@@ -94,6 +94,14 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
 #endif
 }
 
+static uint64_t
+blorp_get_surface_address(struct blorp_batch *blorp_batch,
+                          struct blorp_address address)
+{
+   /* We'll let blorp_surface_reloc write the address. */
+   return 0ull;
+}
+
 #if GEN_GEN >= 7 && GEN_GEN < 10
 static struct blorp_address
 blorp_get_surface_base_address(struct blorp_batch *batch)
@@ -175,7 +183,9 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
        */
       .reloc_flags = RELOC_32BIT,
 
-#if GEN_GEN == 10
+#if GEN_GEN == 11
+      .mocs = ICL_MOCS_WB,
+#elif GEN_GEN == 10
       .mocs = CNL_MOCS_WB,
 #elif GEN_GEN == 9
       .mocs = SKL_MOCS_WB,
@@ -183,6 +193,8 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
       .mocs = BDW_MOCS_WB,
 #elif GEN_GEN == 7
       .mocs = GEN7_MOCS_L3,
+#elif GEN_GEN > 6
+#error "Missing MOCS setting!"
 #endif
    };
 
@@ -197,7 +209,7 @@ blorp_vf_invalidate_for_vb_48b_transitions(struct blorp_batch *batch,
                                            const struct blorp_address *addrs,
                                            unsigned num_vbs)
 {
-#if GEN_GEN >= 8
+#if GEN_GEN >= 8 && GEN_GEN < 11
    struct brw_context *brw = batch->driver_batch;
    bool need_invalidate = false;
 
@@ -213,7 +225,7 @@ blorp_vf_invalidate_for_vb_48b_transitions(struct blorp_batch *batch,
    }
 
    if (need_invalidate) {
-      brw_emit_pipe_control_flush(brw, PIPE_CONTROL_VF_CACHE_INVALIDATE);
+      brw_emit_pipe_control_flush(brw, PIPE_CONTROL_VF_CACHE_INVALIDATE | PIPE_CONTROL_CS_STALL);
    }
 #endif
 }
@@ -243,7 +255,7 @@ blorp_flush_range(UNUSED struct blorp_batch *batch, UNUSED void *start,
 static void
 blorp_emit_urb_config(struct blorp_batch *batch,
                       unsigned vs_entry_size,
-                      MAYBE_UNUSED unsigned sf_entry_size)
+                      UNUSED unsigned sf_entry_size)
 {
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
@@ -268,7 +280,7 @@ genX(blorp_exec)(struct blorp_batch *batch,
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
    struct gl_context *ctx = &brw->ctx;
-   bool check_aperture_failed_once;
+   bool check_aperture_failed_once = false;
 
 #if GEN_GEN >= 11
    /* The PIPE_CONTROL command description says:
@@ -309,7 +321,7 @@ retry:
    intel_batchbuffer_require_space(brw, 1400);
    brw_require_statebuffer_space(brw, 600);
    intel_batchbuffer_save_state(brw);
-   check_aperture_failed_once = intel_batchbuffer_saved_state_is_empty(brw);
+   check_aperture_failed_once |= intel_batchbuffer_saved_state_is_empty(brw);
    brw->batch.no_wrap = true;
 
 #if GEN_GEN == 6
@@ -330,6 +342,12 @@ retry:
 #if GEN_GEN == 8
    gen8_write_pma_stall_bits(brw, 0);
 #endif
+
+   const unsigned scale = params->fast_clear_op ? UINT_MAX : 1;
+   if (brw->current_hash_scale != scale) {
+      brw_emit_hashing_mode(brw, params->x1 - params->x0,
+                            params->y1 - params->y0, scale);
+   }
 
    blorp_emit(batch, GENX(3DSTATE_DRAWING_RECTANGLE), rect) {
       rect.ClippedDrawingRectangleXMax = MAX2(params->x1, params->x0) - 1;

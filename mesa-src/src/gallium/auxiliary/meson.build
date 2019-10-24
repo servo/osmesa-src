@@ -122,10 +122,6 @@ files_libgallium = files(
   'indices/u_indices_priv.h',
   'indices/u_primconvert.c',
   'indices/u_primconvert.h',
-  'os/os_memory_aligned.h',
-  'os/os_memory_debug.h',
-  'os/os_memory_stdc.h',
-  'os/os_memory.h',
   'os/os_mman.h',
   'os/os_process.c',
   'os/os_process.h',
@@ -133,14 +129,10 @@ files_libgallium = files(
   'pipebuffer/pb_buffer_fenced.c',
   'pipebuffer/pb_buffer_fenced.h',
   'pipebuffer/pb_buffer.h',
-  'pipebuffer/pb_buffer_malloc.c',
-  'pipebuffer/pb_bufmgr_alt.c',
   'pipebuffer/pb_bufmgr_cache.c',
   'pipebuffer/pb_bufmgr_debug.c',
   'pipebuffer/pb_bufmgr.h',
   'pipebuffer/pb_bufmgr_mm.c',
-  'pipebuffer/pb_bufmgr_ondemand.c',
-  'pipebuffer/pb_bufmgr_pool.c',
   'pipebuffer/pb_bufmgr_slab.c',
   'pipebuffer/pb_cache.c',
   'pipebuffer/pb_cache.h',
@@ -242,6 +234,8 @@ files_libgallium = files(
   'util/u_box.h',
   'util/u_cache.c',
   'util/u_cache.h',
+  'util/u_compute.c',
+  'util/u_compute.h',
   'util/u_debug_gallium.h',
   'util/u_debug_gallium.c',
   'util/u_debug_describe.c',
@@ -310,7 +304,6 @@ files_libgallium = files(
   'util/u_linear.h',
   'util/u_log.c',
   'util/u_log.h',
-  'util/u_memory.h',
   'util/u_mm.c',
   'util/u_mm.h',
   'util/u_network.c',
@@ -328,8 +321,6 @@ files_libgallium = files(
   'util/u_rect.h',
   'util/u_resource.c',
   'util/u_resource.h',
-  'util/u_ringbuffer.c',
-  'util/u_ringbuffer.h',
   'util/u_sampler.c',
   'util/u_sampler.h',
   'util/u_screen.c',
@@ -388,14 +379,16 @@ if with_llvm
     'gallivm/lp_bld_const.h',
     'gallivm/lp_bld_conv.c',
     'gallivm/lp_bld_conv.h',
+    'gallivm/lp_bld_coro.c',
+    'gallivm/lp_bld_coro.h',
     'gallivm/lp_bld_debug.cpp',
     'gallivm/lp_bld_debug.h',
     'gallivm/lp_bld_flow.c',
     'gallivm/lp_bld_flow.h',
     'gallivm/lp_bld_format_aos_array.c',
     'gallivm/lp_bld_format_aos.c',
-    'gallivm/lp_bld_format_cached.c',
     'gallivm/lp_bld_format_float.c',
+    'gallivm/lp_bld_format_s3tc.c',
     'gallivm/lp_bld_format.c',
     'gallivm/lp_bld_format.h',
     'gallivm/lp_bld_format_soa.c',
@@ -450,6 +443,10 @@ files_libgalliumvl = files(
   'vl/vl_bicubic_filter.h',
   'vl/vl_compositor.c',
   'vl/vl_compositor.h',
+  'vl/vl_compositor_gfx.c',
+  'vl/vl_compositor_gfx.h',
+  'vl/vl_compositor_cs.c',
+  'vl/vl_compositor_cs.h',
   'vl/vl_csc.c',
   'vl/vl_csc.h',
   'vl/vl_decoder.c',
@@ -482,7 +479,8 @@ files_libgalliumvl = files(
 )
 
 vlwinsys_deps = []
-files_libgalliumvlwinsys = files('vl/vl_winsys.h')
+files_libgalliumvlwinsys = files('vl/vl_winsys.h',
+                                 'vl/vl_winsys_drm.c')
 if with_dri2 and with_platform_x11
   files_libgalliumvlwinsys += files('vl/vl_winsys_dri.c')
   if with_dri3
@@ -492,9 +490,6 @@ if with_dri2 and with_platform_x11
     ]
     files_libgalliumvlwinsys += files('vl/vl_winsys_dri3.c')
   endif
-endif
-if with_platform_drm
-  files_libgalliumvlwinsys += files('vl/vl_winsys_drm.c')
 endif
 
 u_indices_gen_c = custom_target(
@@ -532,9 +527,9 @@ libgallium = static_library(
   cpp_args : [cpp_vis_args, cpp_msvc_compat_args],
   dependencies : [
     dep_libdrm, dep_llvm, dep_unwind, dep_dl, dep_m, dep_thread, dep_lmsensors,
-    idep_nir_headers,
+    idep_nir, idep_nir_headers, idep_mesautil,
   ],
-  build_by_default : false,
+  build_by_default : false
 )
 
 libgalliumvl_stub = static_library(

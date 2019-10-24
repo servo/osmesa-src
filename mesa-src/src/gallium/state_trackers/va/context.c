@@ -151,8 +151,7 @@ VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
    if (!drv->vscreen)
       goto error_screen;
 
-   drv->pipe = drv->vscreen->pscreen->context_create(drv->vscreen->pscreen,
-                                                     NULL, 0);
+   drv->pipe = pipe_create_multimedia_context(drv->vscreen->pscreen);
    if (!drv->pipe)
       goto error_pipe;
 
@@ -175,7 +174,7 @@ VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
    ctx->version_minor = 1;
    *ctx->vtable = vtable;
    *ctx->vtable_vpp = vtable_vpp;
-   ctx->max_profiles = PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH - PIPE_VIDEO_PROFILE_UNKNOWN;
+   ctx->max_profiles = PIPE_VIDEO_PROFILE_MAX - PIPE_VIDEO_PROFILE_UNKNOWN - 1;
    ctx->max_entrypoints = 2;
    ctx->max_attributes = 1;
    ctx->max_image_formats = VL_VA_MAX_IMAGE_FORMATS;
@@ -364,6 +363,8 @@ vlVaDestroyContext(VADriverContextP ctx, VAContextID context_id)
       }
       context->decoder->destroy(context->decoder);
    }
+   if (context->blit_cs)
+      drv->pipe->delete_compute_state(drv->pipe, context->blit_cs);
    if (context->deint) {
       vl_deint_filter_cleanup(context->deint);
       FREE(context->deint);

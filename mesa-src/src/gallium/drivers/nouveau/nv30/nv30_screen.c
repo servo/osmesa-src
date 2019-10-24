@@ -58,8 +58,8 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    /* non-boolean capabilities */
    case PIPE_CAP_MAX_RENDER_TARGETS:
       return (eng3d->oclass >= NV40_3D_CLASS) ? 4 : 1;
-   case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
-      return 13;
+   case PIPE_CAP_MAX_TEXTURE_2D_SIZE:
+      return 4096;
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
       return 10;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
@@ -77,6 +77,11 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
       return 2048;
+   case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
+      return 8 * 1024 * 1024;
+   case PIPE_CAP_MAX_VARYINGS:
+      return 8;
+
    /* supported capabilities */
    case PIPE_CAP_ANISOTROPIC_FILTER:
    case PIPE_CAP_POINT_SPRITE:
@@ -111,7 +116,9 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    /* unsupported */
    case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
    case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
-   case PIPE_CAP_SM3:
+   case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
+   case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
+   case PIPE_CAP_VERTEX_SHADER_SATURATE:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
@@ -207,7 +214,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
    case PIPE_CAP_NATIVE_FENCE_FD:
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
-   case PIPE_CAP_TGSI_FS_FBFETCH:
+   case PIPE_CAP_FBFETCH:
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
    case PIPE_CAP_DOUBLES:
    case PIPE_CAP_INT64:
@@ -241,7 +248,9 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
    case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
    case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
-   case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
+   case PIPE_CAP_IMAGE_LOAD_FORMATTED:
+   case PIPE_CAP_TGSI_DIV:
+   case PIPE_CAP_TGSI_ATOMINC_WRAP:
       return 0;
 
    case PIPE_CAP_MAX_GS_INVOCATIONS:
@@ -352,7 +361,6 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
-      case PIPE_SHADER_CAP_SCALAR_ISA:
          return 0;
       default:
          debug_printf("unknown vertex shader param %d\n", param);
@@ -405,7 +413,6 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
-      case PIPE_SHADER_CAP_SCALAR_ISA:
          return 0;
       default:
          debug_printf("unknown fragment shader param %d\n", param);
@@ -417,7 +424,7 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen,
    }
 }
 
-static boolean
+static bool
 nv30_screen_is_format_supported(struct pipe_screen *pscreen,
                                 enum pipe_format format,
                                 enum pipe_texture_target target,
@@ -432,6 +439,12 @@ nv30_screen_is_format_supported(struct pipe_screen *pscreen,
       return false;
 
    if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
+      return false;
+
+   /* No way to render to a swizzled 3d texture. We don't necessarily know if
+    * it's swizzled or not here, but we have to assume anyways.
+    */
+   if (target == PIPE_TEXTURE_3D && (bindings & PIPE_BIND_RENDER_TARGET))
       return false;
 
    /* shared is always supported */

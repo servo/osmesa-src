@@ -97,11 +97,13 @@ bool rvid_resize_buffer(struct pipe_screen *screen, struct radeon_cmdbuf *cs,
 	if (!rvid_create_buffer(screen, new_buf, new_size, new_buf->usage))
 		goto error;
 
-	src = ws->buffer_map(old_buf.res->buf, cs, PIPE_TRANSFER_READ);
+	src = ws->buffer_map(old_buf.res->buf, cs,
+			     PIPE_TRANSFER_READ | RADEON_TRANSFER_TEMPORARY);
 	if (!src)
 		goto error;
 
-	dst = ws->buffer_map(new_buf->res->buf, cs, PIPE_TRANSFER_WRITE);
+	dst = ws->buffer_map(new_buf->res->buf, cs,
+			     PIPE_TRANSFER_WRITE | RADEON_TRANSFER_TEMPORARY);
 	if (!dst)
 		goto error;
 
@@ -331,10 +333,10 @@ int rvid_get_video_param(struct pipe_screen *screen,
 	}
 }
 
-boolean rvid_is_format_supported(struct pipe_screen *screen,
-				 enum pipe_format format,
-				 enum pipe_video_profile profile,
-				 enum pipe_video_entrypoint entrypoint)
+bool rvid_is_format_supported(struct pipe_screen *screen,
+			      enum pipe_format format,
+			      enum pipe_video_profile profile,
+			      enum pipe_video_entrypoint entrypoint)
 {
 	/* HEVC 10 bit decoding should use P016 instead of NV12 if possible */
 	if (profile == PIPE_VIDEO_PROFILE_HEVC_MAIN_10)

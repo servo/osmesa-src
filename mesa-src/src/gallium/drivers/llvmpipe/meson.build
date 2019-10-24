@@ -33,6 +33,8 @@ files_llvmpipe = files(
   'lp_clear.h',
   'lp_context.c',
   'lp_context.h',
+  'lp_cs_tpool.h',
+  'lp_cs_tpool.c',
   'lp_debug.h',
   'lp_draw_arrays.c',
   'lp_fence.c',
@@ -71,6 +73,8 @@ files_llvmpipe = files(
   'lp_state_blend.c',
   'lp_state_clip.c',
   'lp_state_derived.c',
+  'lp_state_cs.c',
+  'lp_state_cs.h',
   'lp_state_fs.c',
   'lp_state_fs.h',
   'lp_state_gs.c',
@@ -105,7 +109,7 @@ libllvmpipe = static_library(
 driver_swrast = declare_dependency(
   compile_args : '-DGALLIUM_LLVMPIPE',
   link_with : libllvmpipe,
-  dependencies : driver_swrast,
+  dependencies : [driver_swrast, dep_llvm],
 )
 
 if with_tests and with_gallium_softpipe and with_llvm
@@ -116,10 +120,11 @@ if with_tests and with_gallium_softpipe and with_llvm
       executable(
         t,
         ['@0@.c'.format(t), 'lp_test_main.c'],
-        dependencies : [dep_llvm, dep_dl, dep_thread, dep_clock],
+        dependencies : [dep_llvm, dep_dl, dep_clock, idep_mesautil],
         include_directories : [inc_gallium, inc_gallium_aux, inc_include, inc_src],
-        link_with : [libllvmpipe, libgallium, libmesa_util],
-      )
+        link_with : [libllvmpipe, libgallium],
+      ),
+      suite : ['llvmpipe'],
     )
   endforeach
 endif

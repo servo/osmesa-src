@@ -23,6 +23,8 @@
 #include "nouveau_mm.h"
 #include "nouveau_buffer.h"
 
+#include <compiler/glsl_types.h>
+
 /* XXX this should go away */
 #include "state_tracker/drm_driver.h"
 
@@ -34,7 +36,7 @@ nouveau_screen_get_name(struct pipe_screen *pscreen)
    struct nouveau_device *dev = nouveau_screen(pscreen)->device;
    static char buffer[128];
 
-   util_snprintf(buffer, sizeof(buffer), "NV%02X", dev->chipset);
+   snprintf(buffer, sizeof(buffer), "NV%02X", dev->chipset);
    return buffer;
 }
 
@@ -74,7 +76,7 @@ nouveau_screen_fence_ref(struct pipe_screen *pscreen,
    nouveau_fence_ref(nouveau_fence(pfence), (struct nouveau_fence **)ptr);
 }
 
-static boolean
+static bool
 nouveau_screen_fence_finish(struct pipe_screen *screen,
                             struct pipe_context *ctx,
                             struct pipe_fence_handle *pfence,
@@ -151,6 +153,7 @@ nouveau_disk_cache_create(struct nouveau_screen *screen)
    struct mesa_sha1 ctx;
    unsigned char sha1[20];
    char cache_id[20 * 2 + 1];
+   uint64_t driver_flags = 0;
 
    _mesa_sha1_init(&ctx);
    if (!disk_cache_get_function_identifier(nouveau_disk_cache_create,
@@ -160,9 +163,14 @@ nouveau_disk_cache_create(struct nouveau_screen *screen)
    _mesa_sha1_final(&ctx, sha1);
    disk_cache_format_hex_id(cache_id, sha1, 20 * 2);
 
+   if (screen->prefer_nir)
+      driver_flags |= NOUVEAU_SHADER_CACHE_FLAGS_IR_NIR;
+   else
+      driver_flags |= NOUVEAU_SHADER_CACHE_FLAGS_IR_TGSI;
+
    screen->disk_shader_cache =
       disk_cache_create(nouveau_screen_get_name(&screen->base),
-                        cache_id, 0);
+                        cache_id, driver_flags);
 }
 
 int
@@ -179,6 +187,11 @@ nouveau_screen_init(struct nouveau_screen *screen, struct nouveau_device *dev)
    char *nv_dbg = getenv("NOUVEAU_MESA_DEBUG");
    if (nv_dbg)
       nouveau_mesa_debug = atoi(nv_dbg);
+
+   screen->prefer_nir = debug_get_bool_option("NV50_PROG_USE_NIR", false);
+   screen->force_enable_cl = debug_get_bool_option("NOUVEAU_ENABLE_CL", false);
+   if (screen->force_enable_cl)
+      glsl_type_singleton_init_or_ref();
 
    /* These must be set before any failure is possible, as the cleanup
     * paths assume they're responsible for deleting them.
@@ -270,6 +283,9 @@ void
 nouveau_screen_fini(struct nouveau_screen *screen)
 {
    int fd = screen->drm->fd;
+
+   if (screen->force_enable_cl)
+      glsl_type_singleton_decref();
 
    nouveau_mm_destroy(screen->mm_GART);
    nouveau_mm_destroy(screen->mm_VRAM);

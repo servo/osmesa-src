@@ -92,13 +92,10 @@ sp_create_tile_cache( struct pipe_context *pipe )
 {
    struct softpipe_tile_cache *tc;
    uint pos;
-   MAYBE_UNUSED int maxTexSize;
-   int maxLevels;
 
    /* sanity checking: max sure MAX_WIDTH/HEIGHT >= largest texture image */
-   maxLevels = pipe->screen->get_param(pipe->screen, PIPE_CAP_MAX_TEXTURE_2D_LEVELS);
-   maxTexSize = 1 << (maxLevels - 1);
-   assert(MAX_WIDTH >= maxTexSize);
+   assert(MAX_WIDTH >= pipe->screen->get_param(pipe->screen,
+                                               PIPE_CAP_MAX_TEXTURE_2D_SIZE));
 
    STATIC_ASSERT(sizeof(union tile_address) == 4);
 
@@ -373,17 +370,18 @@ sp_tile_cache_flush_clear(struct softpipe_tile_cache *tc, int layer)
                if (util_format_is_pure_uint(tc->surface->format)) {
                   pipe_put_tile_ui_format(pt, tc->transfer_map[layer],
                                           x, y, TILE_SIZE, TILE_SIZE,
-                                          pt->resource->format,
+                                          tc->surface->format,
                                           (unsigned *) tc->tile->data.colorui128);
                } else if (util_format_is_pure_sint(tc->surface->format)) {
                   pipe_put_tile_i_format(pt, tc->transfer_map[layer],
                                          x, y, TILE_SIZE, TILE_SIZE,
-                                         pt->resource->format,
+                                         tc->surface->format,
                                          (int *) tc->tile->data.colori128);
                } else {
-                  pipe_put_tile_rgba(pt, tc->transfer_map[layer],
-                                     x, y, TILE_SIZE, TILE_SIZE,
-                                     (float *) tc->tile->data.color);
+                  pipe_put_tile_rgba_format(pt, tc->transfer_map[layer],
+                                            x, y, TILE_SIZE, TILE_SIZE,
+                                            tc->surface->format,
+                                            (float *) tc->tile->data.color);
                }
             }
             numCleared++;

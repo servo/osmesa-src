@@ -48,7 +48,7 @@
 #include "lp_setup.h"
 
 /* This is only safe if there's just one concurrent context */
-#ifdef PIPE_SUBSYSTEM_EMBEDDED
+#ifdef EMBEDDED_DEVICE
 #define USE_GLOBAL_LLVM_CONTEXT
 #endif
 
@@ -59,6 +59,9 @@ static void llvmpipe_destroy( struct pipe_context *pipe )
 
    lp_print_counters();
 
+   if (llvmpipe->csctx) {
+      lp_csctx_destroy(llvmpipe->csctx);
+   }
    if (llvmpipe->blitter) {
       util_blitter_destroy(llvmpipe->blitter);
    }
@@ -121,7 +124,7 @@ do_flush( struct pipe_context *pipe,
 static void
 llvmpipe_render_condition(struct pipe_context *pipe,
                           struct pipe_query *query,
-                          boolean condition,
+                          bool condition,
                           enum pipe_render_cond_flag mode)
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context( pipe );
@@ -149,6 +152,7 @@ llvmpipe_create_context(struct pipe_screen *screen, void *priv,
 
    make_empty_list(&llvmpipe->setup_variants_list);
 
+   make_empty_list(&llvmpipe->cs_variants_list);
 
    llvmpipe->pipe.screen = screen;
    llvmpipe->pipe.priv = priv;
@@ -164,6 +168,7 @@ llvmpipe_create_context(struct pipe_screen *screen, void *priv,
    llvmpipe_init_blend_funcs(llvmpipe);
    llvmpipe_init_clip_funcs(llvmpipe);
    llvmpipe_init_draw_funcs(llvmpipe);
+   llvmpipe_init_compute_funcs(llvmpipe);
    llvmpipe_init_sampler_funcs(llvmpipe);
    llvmpipe_init_query_funcs( llvmpipe );
    llvmpipe_init_vertex_funcs(llvmpipe);
@@ -199,6 +204,9 @@ llvmpipe_create_context(struct pipe_screen *screen, void *priv,
    if (!llvmpipe->setup)
       goto fail;
 
+   llvmpipe->csctx = lp_csctx_create( &llvmpipe->pipe );
+   if (!llvmpipe->csctx)
+      goto fail;
    llvmpipe->pipe.stream_uploader = u_upload_create_default(&llvmpipe->pipe);
    if (!llvmpipe->pipe.stream_uploader)
       goto fail;

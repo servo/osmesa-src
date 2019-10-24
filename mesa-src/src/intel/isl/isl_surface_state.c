@@ -72,7 +72,9 @@ static const uint8_t isl_to_gen_tiling[] = {
    [ISL_TILING_Y0]      = YMAJOR,
    [ISL_TILING_Yf]      = YMAJOR,
    [ISL_TILING_Ys]      = YMAJOR,
+#if GEN_GEN <= 11
    [ISL_TILING_W]       = WMAJOR,
+#endif
 };
 #endif
 
@@ -84,7 +86,13 @@ static const uint32_t isl_to_gen_multisample_layout[] = {
 };
 #endif
 
-#if GEN_GEN >= 9
+#if GEN_GEN >= 12
+static const uint32_t isl_to_gen_aux_mode[] = {
+   [ISL_AUX_USAGE_NONE] = AUX_NONE,
+   [ISL_AUX_USAGE_MCS] = AUX_CCS_E,
+   [ISL_AUX_USAGE_CCS_E] = AUX_CCS_E,
+};
+#elif GEN_GEN >= 9
 static const uint32_t isl_to_gen_aux_mode[] = {
    [ISL_AUX_USAGE_NONE] = AUX_NONE,
    [ISL_AUX_USAGE_HIZ] = AUX_HIZ,
@@ -261,9 +269,9 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
        * S3TC workaround that requires us to do reinterpretation.  So assert
        * that they're at least the same bpb and block size.
        */
-      MAYBE_UNUSED const struct isl_format_layout *surf_fmtl =
+      ASSERTED const struct isl_format_layout *surf_fmtl =
          isl_format_get_layout(info->surf->format);
-      MAYBE_UNUSED const struct isl_format_layout *view_fmtl =
+      ASSERTED const struct isl_format_layout *view_fmtl =
          isl_format_get_layout(info->surf->format);
       assert(surf_fmtl->bpb == view_fmtl->bpb);
       assert(surf_fmtl->bw == view_fmtl->bw);
@@ -441,6 +449,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
 #endif
 
 #if GEN_GEN >= 8
+   assert(GEN_GEN < 12 || info->surf->tiling != ISL_TILING_W);
    s.TileMode = isl_to_gen_tiling[info->surf->tiling];
 #else
    s.TiledSurface = info->surf->tiling != ISL_TILING_LINEAR,
@@ -452,6 +461,15 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    s.RenderCacheReadWriteMode = WriteOnlyCache;
 #else
    s.RenderCacheReadWriteMode = 0;
+#endif
+
+#if GEN_GEN >= 11
+   /* We've seen dEQP failures when enabling this bit with UINT formats,
+    * which particularly affects blorp_copy() operations.  It shouldn't
+    * have any effect on UINT textures anyway, so disable it for them.
+    */
+   s.EnableUnormPathInColorPipe =
+      !isl_format_has_int_channel(info->view->format);
 #endif
 
    s.CubeFaceEnablePositiveZ = 1;
@@ -578,7 +596,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    }
 #endif
 
-#if GEN_GEN >= 8
+#if GEN_GEN >= 8 && GEN_GEN < 11
    /* From the CHV PRM, Volume 2d, page 321 (RENDER_SURFACE_STATE dword 0
     * bit 9 "Sampler L2 Bypass Mode Disable" Programming Notes):
     *
@@ -618,7 +636,30 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
          unreachable("Gen9 and earlier do not support indirect clear colors");
 #endif
       }
-#if GEN_GEN >= 9
+
+#if GEN_GEN == 11
+      /*
+       * From BXML > GT > Shared Functions > vol5c Shared Functions >
+       * [Structure] RENDER_SURFACE_STATE [BDW+] > ClearColorConversionEnable:
+       *
+       *   Project: Gen11
+       *
+       *   "Enables Pixel backend hw to convert clear values into native format
+       *    and write back to clear address, so that display and sampler can use
+       *    the converted value for resolving fast cleared RTs."
+       *
+       * Summary:
+       *   Clear color conversion must be enabled if the clear color is stored
+       *   indirectly and fast color clears are enabled.
+       */
+      if (info->use_clear_address) {
+         s.ClearColorConversionEnable = true;
+      }
+#endif
+
+#if GEN_GEN >= 12
+      assert(info->use_clear_address);
+#elif GEN_GEN >= 9
       if (!info->use_clear_address) {
          s.RedClearColor = info->clear_color.u32[0];
          s.GreenClearColor = info->clear_color.u32[1];
@@ -745,10 +786,10 @@ isl_genX(buffer_fill_state_s)(void *state,
 #endif
 
 #if (GEN_GEN >= 8 || GEN_IS_HASWELL)
-   s.ShaderChannelSelectRed = SCS_RED;
-   s.ShaderChannelSelectGreen = SCS_GREEN;
-   s.ShaderChannelSelectBlue = SCS_BLUE;
-   s.ShaderChannelSelectAlpha = SCS_ALPHA;
+   s.ShaderChannelSelectRed = (enum GENX(ShaderChannelSelect)) info->swizzle.r;
+   s.ShaderChannelSelectGreen = (enum GENX(ShaderChannelSelect)) info->swizzle.g;
+   s.ShaderChannelSelectBlue = (enum GENX(ShaderChannelSelect)) info->swizzle.b;
+   s.ShaderChannelSelectAlpha = (enum GENX(ShaderChannelSelect)) info->swizzle.a;
 #endif
 
    GENX(RENDER_SURFACE_STATE_pack)(NULL, state, &s);
@@ -759,15 +800,33 @@ isl_genX(null_fill_state)(void *state, struct isl_extent3d size)
 {
    struct GENX(RENDER_SURFACE_STATE) s = {
       .SurfaceType = SURFTYPE_NULL,
-      .SurfaceFormat = ISL_FORMAT_B8G8R8A8_UNORM,
+      /* We previously had this format set to B8G8R8A8_UNORM but ran into
+       * hangs on IVB. R32_UINT seems to work for everybody.
+       *
+       * https://gitlab.freedesktop.org/mesa/mesa/issues/1872
+       */
+      .SurfaceFormat = ISL_FORMAT_R32_UINT,
 #if GEN_GEN >= 7
-      .SurfaceArray = size.depth > 0,
+      .SurfaceArray = size.depth > 1,
 #endif
 #if GEN_GEN >= 8
       .TileMode = YMAJOR,
 #else
       .TiledSurface = true,
       .TileWalk = TILEWALK_YMAJOR,
+#endif
+#if GEN_GEN == 7
+      /* According to PRMs: "Volume 4 Part 1: Subsystem and Cores – Shared
+       * Functions"
+       *
+       * RENDER_SURFACE_STATE::Surface Vertical Alignment
+       *
+       *    "This field must be set to VALIGN_4 for all tiled Y Render Target
+       *     surfaces."
+       *
+       * Affect IVB, HSW.
+       */
+      .SurfaceVerticalAlignment = VALIGN_4,
 #endif
       .Width = size.width - 1,
       .Height = size.height - 1,

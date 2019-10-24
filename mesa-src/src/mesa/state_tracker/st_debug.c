@@ -42,7 +42,6 @@
 
 
 
-#ifdef DEBUG
 int ST_DEBUG = 0;
 
 static const struct debug_named_value st_debug_flags[] = {
@@ -64,15 +63,12 @@ static const struct debug_named_value st_debug_flags[] = {
 };
 
 DEBUG_GET_ONCE_FLAGS_OPTION(st_debug, "ST_DEBUG", st_debug_flags, 0)
-#endif
 
 
 void
 st_debug_init(void)
 {
-#ifdef DEBUG
    ST_DEBUG = debug_get_option_st_debug();
-#endif
 }
 
 
@@ -97,11 +93,11 @@ st_print_current(void)
 #endif
 
    if (st->vp->variants)
-      tgsi_dump( st->vp->variants[0].tgsi.tokens, 0 );
+      tgsi_dump(st->vp->variants[0].tokens, 0);
    if (st->vp->Base.Parameters)
       _mesa_print_parameter_list(st->vp->Base.Parameters);
 
-   tgsi_dump(st->fp->tgsi.tokens, 0);
+   tgsi_dump(st->fp->state.tokens, 0);
    if (st->fp->Base.Parameters)
       _mesa_print_parameter_list(st->fp->Base.Parameters);
 }
@@ -161,7 +157,7 @@ st_debug_message(void *data,
    default:
       unreachable("invalid debug type");
    }
-   _mesa_gl_vdebug(st->ctx, id, source, type, severity, fmt, args);
+   _mesa_gl_vdebugf(st->ctx, id, source, type, severity, fmt, args);
 }
 
 void

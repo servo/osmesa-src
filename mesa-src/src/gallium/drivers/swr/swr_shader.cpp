@@ -21,14 +21,22 @@
  * IN THE SOFTWARE.
  ***************************************************************************/
 
+#include <llvm/Config/llvm-config.h>
+
+#if LLVM_VERSION_MAJOR < 7
 // llvm redefines DEBUG
 #pragma push_macro("DEBUG")
 #undef DEBUG
+#endif
+
 #include "JitManager.h"
 #include "llvm-c/Core.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/IR/LegacyPassManager.h"
+
+#if LLVM_VERSION_MAJOR < 7
 #pragma pop_macro("DEBUG")
+#endif
 
 #include "state.h"
 #include "gen_state_llvm.h"
@@ -44,6 +52,7 @@
 #include "gallivm/lp_bld_tgsi.h"
 
 #include "swr_context.h"
+#include "gen_surf_state_llvm.h"
 #include "gen_swr_context_llvm.h"
 #include "swr_resource.h"
 #include "swr_state.h"
@@ -231,35 +240,36 @@ struct BuilderSWR : public Builder {
    PFN_GS_FUNC CompileGS(struct swr_context *ctx, swr_jit_gs_key &key);
 
    LLVMValueRef
-   swr_gs_llvm_fetch_input(const struct lp_build_tgsi_gs_iface *gs_iface,
-                           struct lp_build_tgsi_context * bld_base,
+   swr_gs_llvm_fetch_input(const struct lp_build_gs_iface *gs_iface,
+                           struct lp_build_context * bld,
                            boolean is_vindex_indirect,
                            LLVMValueRef vertex_index,
                            boolean is_aindex_indirect,
                            LLVMValueRef attrib_index,
                            LLVMValueRef swizzle_index);
    void
-   swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base,
-                           struct lp_build_tgsi_context * bld_base,
+   swr_gs_llvm_emit_vertex(const struct lp_build_gs_iface *gs_base,
+                           struct lp_build_context * bld,
                            LLVMValueRef (*outputs)[4],
                            LLVMValueRef emitted_vertices_vec);
 
    void
-   swr_gs_llvm_end_primitive(const struct lp_build_tgsi_gs_iface *gs_base,
-                             struct lp_build_tgsi_context * bld_base,
+   swr_gs_llvm_end_primitive(const struct lp_build_gs_iface *gs_base,
+                             struct lp_build_context * bld,
+                             LLVMValueRef total_emitted_vertices_vec_ptr,
                              LLVMValueRef verts_per_prim_vec,
-                             LLVMValueRef emitted_prims_vec);
+                             LLVMValueRef emitted_prims_vec,
+                             LLVMValueRef mask_vec);
 
    void
-   swr_gs_llvm_epilogue(const struct lp_build_tgsi_gs_iface *gs_base,
-                        struct lp_build_tgsi_context * bld_base,
+   swr_gs_llvm_epilogue(const struct lp_build_gs_iface *gs_base,
                         LLVMValueRef total_emitted_vertices_vec,
                         LLVMValueRef emitted_prims_vec);
 
 };
 
 struct swr_gs_llvm_iface {
-   struct lp_build_tgsi_gs_iface base;
+   struct lp_build_gs_iface base;
    struct tgsi_shader_info *info;
 
    BuilderSWR *pBuilder;
@@ -274,8 +284,8 @@ struct swr_gs_llvm_iface {
 
 // trampoline functions so we can use the builder llvm construction methods
 static LLVMValueRef
-swr_gs_llvm_fetch_input(const struct lp_build_tgsi_gs_iface *gs_iface,
-                           struct lp_build_tgsi_context * bld_base,
+swr_gs_llvm_fetch_input(const struct lp_build_gs_iface *gs_iface,
+                           struct lp_build_context * bld,
                            boolean is_vindex_indirect,
                            LLVMValueRef vertex_index,
                            boolean is_aindex_indirect,
@@ -284,7 +294,7 @@ swr_gs_llvm_fetch_input(const struct lp_build_tgsi_gs_iface *gs_iface,
 {
     swr_gs_llvm_iface *iface = (swr_gs_llvm_iface*)gs_iface;
 
-    return iface->pBuilder->swr_gs_llvm_fetch_input(gs_iface, bld_base,
+    return iface->pBuilder->swr_gs_llvm_fetch_input(gs_iface, bld,
                                                    is_vindex_indirect,
                                                    vertex_index,
                                                    is_aindex_indirect,
@@ -293,47 +303,50 @@ swr_gs_llvm_fetch_input(const struct lp_build_tgsi_gs_iface *gs_iface,
 }
 
 static void
-swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base,
-                           struct lp_build_tgsi_context * bld_base,
+swr_gs_llvm_emit_vertex(const struct lp_build_gs_iface *gs_base,
+                           struct lp_build_context * bld,
                            LLVMValueRef (*outputs)[4],
                            LLVMValueRef emitted_vertices_vec)
 {
     swr_gs_llvm_iface *iface = (swr_gs_llvm_iface*)gs_base;
 
-    iface->pBuilder->swr_gs_llvm_emit_vertex(gs_base, bld_base,
+    iface->pBuilder->swr_gs_llvm_emit_vertex(gs_base, bld,
                                             outputs,
                                             emitted_vertices_vec);
 }
 
 static void
-swr_gs_llvm_end_primitive(const struct lp_build_tgsi_gs_iface *gs_base,
-                             struct lp_build_tgsi_context * bld_base,
+swr_gs_llvm_end_primitive(const struct lp_build_gs_iface *gs_base,
+                             struct lp_build_context * bld,
+                             LLVMValueRef total_emitted_vertices_vec_ptr,
                              LLVMValueRef verts_per_prim_vec,
-                             LLVMValueRef emitted_prims_vec)
+                             LLVMValueRef emitted_prims_vec,
+                             LLVMValueRef mask_vec)
 {
     swr_gs_llvm_iface *iface = (swr_gs_llvm_iface*)gs_base;
 
-    iface->pBuilder->swr_gs_llvm_end_primitive(gs_base, bld_base,
+    iface->pBuilder->swr_gs_llvm_end_primitive(gs_base, bld,
+                                              total_emitted_vertices_vec_ptr,
                                               verts_per_prim_vec,
-                                              emitted_prims_vec);
+                                              emitted_prims_vec,
+                                              mask_vec);
 }
 
 static void
-swr_gs_llvm_epilogue(const struct lp_build_tgsi_gs_iface *gs_base,
-                        struct lp_build_tgsi_context * bld_base,
+swr_gs_llvm_epilogue(const struct lp_build_gs_iface *gs_base,
                         LLVMValueRef total_emitted_vertices_vec,
                         LLVMValueRef emitted_prims_vec)
 {
     swr_gs_llvm_iface *iface = (swr_gs_llvm_iface*)gs_base;
 
-    iface->pBuilder->swr_gs_llvm_epilogue(gs_base, bld_base,
+    iface->pBuilder->swr_gs_llvm_epilogue(gs_base,
                                          total_emitted_vertices_vec,
                                          emitted_prims_vec);
 }
 
 LLVMValueRef
-BuilderSWR::swr_gs_llvm_fetch_input(const struct lp_build_tgsi_gs_iface *gs_iface,
-                           struct lp_build_tgsi_context * bld_base,
+BuilderSWR::swr_gs_llvm_fetch_input(const struct lp_build_gs_iface *gs_iface,
+                           struct lp_build_context * bld,
                            boolean is_vindex_indirect,
                            LLVMValueRef vertex_index,
                            boolean is_aindex_indirect,
@@ -348,8 +361,8 @@ BuilderSWR::swr_gs_llvm_fetch_input(const struct lp_build_tgsi_gs_iface *gs_ifac
 
     if (is_vindex_indirect || is_aindex_indirect) {
        int i;
-       Value *res = unwrap(bld_base->base.zero);
-       struct lp_type type = bld_base->base.type;
+       Value *res = unwrap(bld->zero);
+       struct lp_type type = bld->type;
 
        for (i = 0; i < type.length; i++) {
           Value *vert_chan_index = vert_index;
@@ -395,8 +408,8 @@ BuilderSWR::swr_gs_llvm_fetch_input(const struct lp_build_tgsi_gs_iface *gs_ifac
 #define CONTROL_HEADER_SIZE (8*32)
 
 void
-BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base,
-                           struct lp_build_tgsi_context * bld_base,
+BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_gs_iface *gs_base,
+                           struct lp_build_context * bld,
                            LLVMValueRef (*outputs)[4],
                            LLVMValueRef emitted_vertices_vec)
 {
@@ -424,6 +437,9 @@ BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base
        } else if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_LAYER) {
           attribSlot = VERTEX_SGV_SLOT;
           sgvChannel = VERTEX_SGV_RTAI_COMP;
+       } else if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_VIEWPORT_INDEX) {
+          attribSlot = VERTEX_SGV_SLOT;
+          sgvChannel = VERTEX_SGV_VAI_COMP;
        } else if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_POSITION) {
           attribSlot = VERTEX_POSITION_SLOT;
        } else {
@@ -466,10 +482,12 @@ BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base
 }
 
 void
-BuilderSWR::swr_gs_llvm_end_primitive(const struct lp_build_tgsi_gs_iface *gs_base,
-                             struct lp_build_tgsi_context * bld_base,
+BuilderSWR::swr_gs_llvm_end_primitive(const struct lp_build_gs_iface *gs_base,
+                             struct lp_build_context * bld,
+                             LLVMValueRef total_emitted_vertices_vec,
                              LLVMValueRef verts_per_prim_vec,
-                             LLVMValueRef emitted_prims_vec)
+                             LLVMValueRef emitted_prims_vec,
+                             LLVMValueRef mask_vec)
 {
     swr_gs_llvm_iface *iface = (swr_gs_llvm_iface*)gs_base;
 
@@ -484,14 +502,9 @@ BuilderSWR::swr_gs_llvm_end_primitive(const struct lp_build_tgsi_gs_iface *gs_ba
        ADD(MUL(unwrap(emitted_prims_vec), VIMMED1(vertsPerPrim)),
            unwrap(verts_per_prim_vec));
 
-    struct lp_build_tgsi_soa_context *bld = lp_soa_context(bld_base);
-    vCount = LOAD(unwrap(bld->total_emitted_vertices_vec_ptr));
+    vCount = unwrap(total_emitted_vertices_vec);
 
-    struct lp_exec_mask *exec_mask = &bld->exec_mask;
-    Value *mask = unwrap(lp_build_mask_value(bld->mask));
-    if (exec_mask->has_mask)
-       mask = AND(mask, unwrap(exec_mask->exec_mask));
-
+    Value *mask = unwrap(mask_vec);
     Value *cmpMask = VMASK(ICMP_NE(unwrap(verts_per_prim_vec), VIMMED1(0)));
     mask = AND(mask, cmpMask);
     vMask1 = TRUNC(mask, VectorType::get(mInt1Ty, 8));
@@ -522,8 +535,7 @@ BuilderSWR::swr_gs_llvm_end_primitive(const struct lp_build_tgsi_gs_iface *gs_ba
 }
 
 void
-BuilderSWR::swr_gs_llvm_epilogue(const struct lp_build_tgsi_gs_iface *gs_base,
-                        struct lp_build_tgsi_context * bld_base,
+BuilderSWR::swr_gs_llvm_epilogue(const struct lp_build_gs_iface *gs_base,
                         LLVMValueRef total_emitted_vertices_vec,
                         LLVMValueRef emitted_prims_vec)
 {
@@ -551,7 +563,7 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
 
    pGS->gsEnable = true;
 
-   pGS->numInputAttribs = info->num_inputs;
+   pGS->numInputAttribs = (VERTEX_ATTRIB_START_SLOT - VERTEX_POSITION_SLOT) + info->num_inputs;
    pGS->outputTopology =
       swr_convert_prim_topology(info->properties[TGSI_PROPERTY_GS_OUTPUT_PRIM]);
    pGS->maxNumVerts = info->properties[TGSI_PROPERTY_GS_MAX_OUTPUT_VERTICES];
@@ -561,8 +573,7 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
    pGS->isSingleStream = true;
    pGS->singleStreamID = 0;
 
-   pGS->vertexAttribOffset = VERTEX_ATTRIB_START_SLOT; // TODO: optimize
-   pGS->srcVertexAttribOffset = VERTEX_ATTRIB_START_SLOT; // TODO: optimize
+   pGS->vertexAttribOffset = VERTEX_POSITION_SLOT;
    pGS->inputVertStride = pGS->numInputAttribs + pGS->vertexAttribOffset;
    pGS->outputVertexSize = SWR_VTX_NUM_SLOTS;
    pGS->controlDataSize = 8; // GS ouputs max of 8 32B units
@@ -596,7 +607,7 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "GS",
                                      JM()->mpCurrentModule);
-#if HAVE_LLVM < 0x0500
+#if LLVM_VERSION_MAJOR < 5
    AttributeSet attrSet = AttributeSet::get(
       JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
    pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
@@ -677,20 +688,23 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
    gs_iface.info = info;
    gs_iface.pVtxAttribMap = vtxAttribMap;
 
+   struct lp_build_tgsi_params params;
+   memset(&params, 0, sizeof(params));
+   params.type = lp_type_float_vec(32, 32 * 8);
+   params.mask = & mask;
+   params.consts_ptr = wrap(consts_ptr);
+   params.const_sizes_ptr = wrap(const_sizes_ptr);
+   params.system_values = &system_values;
+   params.inputs = inputs;
+   params.context_ptr = wrap(hPrivateData);
+   params.sampler = sampler;
+   params.info = &gs->info.base;
+   params.gs_iface = &gs_iface.base;
+
    lp_build_tgsi_soa(gallivm,
                      gs->pipe.tokens,
-                     lp_type_float_vec(32, 32 * 8),
-                     &mask,
-                     wrap(consts_ptr),
-                     wrap(const_sizes_ptr),
-                     &system_values,
-                     inputs,
-                     outputs,
-                     wrap(hPrivateData), // (sampler context)
-                     NULL, // thread data
-                     sampler,
-                     &gs->info.base,
-                     &gs_iface.base);
+                     &params,
+                     outputs);
 
    lp_build_mask_end(&mask);
 
@@ -722,7 +736,7 @@ swr_compile_gs(struct swr_context *ctx, swr_jit_gs_key &key)
       "GS");
    PFN_GS_FUNC func = builder.CompileGS(ctx, key);
 
-   ctx->gs->map.insert(std::make_pair(key, make_unique<VariantGS>(builder.gallivm, func)));
+   ctx->gs->map.insert(std::make_pair(key, std::make_unique<VariantGS>(builder.gallivm, func)));
    return func;
 }
 
@@ -767,7 +781,7 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "VS",
                                      JM()->mpCurrentModule);
-#if HAVE_LLVM < 0x0500
+#if LLVM_VERSION_MAJOR < 5
    AttributeSet attrSet = AttributeSet::get(
       JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
    pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
@@ -786,7 +800,7 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
    pWorkerData->setName("pWorkerData");
    Value *pVsCtx = &*argitr++;
    pVsCtx->setName("vsCtx");
-   
+
    Value *consts_ptr = GEP(hPrivateData, {C(0), C(swr_draw_context_constantVS)});
 
    consts_ptr->setName("vs_constants");
@@ -828,20 +842,21 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
    uint32_t vectorWidth = mVWidth;
 #endif
 
+   struct lp_build_tgsi_params params;
+   memset(&params, 0, sizeof(params));
+   params.type = lp_type_float_vec(32, 32 * vectorWidth);
+   params.consts_ptr = wrap(consts_ptr);
+   params.const_sizes_ptr = wrap(const_sizes_ptr);
+   params.system_values = &system_values;
+   params.inputs = inputs;
+   params.context_ptr = wrap(hPrivateData);
+   params.sampler = sampler;
+   params.info = &swr_vs->info.base;
+
    lp_build_tgsi_soa(gallivm,
                      swr_vs->pipe.tokens,
-                     lp_type_float_vec(32, 32 * vectorWidth),
-                     NULL, // mask
-                     wrap(consts_ptr),
-                     wrap(const_sizes_ptr),
-                     &system_values,
-                     inputs,
-                     outputs,
-                     wrap(hPrivateData), // (sampler context)
-                     NULL, // thread data
-                     sampler, // sampler
-                     &swr_vs->info.base,
-                     NULL); // geometry shader face
+                     &params,
+                     outputs);
 
    sampler->destroy(sampler);
 
@@ -976,7 +991,7 @@ swr_compile_vs(struct swr_context *ctx, swr_jit_vs_key &key)
       "VS");
    PFN_VERTEX_FUNC func = builder.CompileVS(ctx, key);
 
-   ctx->vs->map.insert(std::make_pair(key, make_unique<VariantVS>(builder.gallivm, func)));
+   ctx->vs->map.insert(std::make_pair(key, std::make_unique<VariantVS>(builder.gallivm, func)));
    return func;
 }
 
@@ -1052,7 +1067,7 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "FS",
                                      JM()->mpCurrentModule);
-#if HAVE_LLVM < 0x0500
+#if LLVM_VERSION_MAJOR < 5
    AttributeSet attrSet = AttributeSet::get(
       JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
    pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
@@ -1162,8 +1177,23 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
          inputs[attrib][3] =
             wrap(LOAD(pPS, {0, SWR_PS_CONTEXT_vOneOverW, PixelPositions_center}, "vOneOverW"));
          continue;
+      } else if (semantic_name == TGSI_SEMANTIC_LAYER) { // gl_Layer
+         Value *ff = LOAD(pPS, {0, SWR_PS_CONTEXT_renderTargetArrayIndex});
+         ff = VECTOR_SPLAT(JM()->mVWidth, ff, "vRenderTargetArrayIndex");
+         inputs[attrib][0] = wrap(ff);
+         inputs[attrib][1] = wrap(VIMMED1(0.0f));
+         inputs[attrib][2] = wrap(VIMMED1(0.0f));
+         inputs[attrib][3] = wrap(VIMMED1(0.0f));
+         continue;
+      } else if (semantic_name == TGSI_SEMANTIC_VIEWPORT_INDEX) { // gl_ViewportIndex
+         Value *ff = LOAD(pPS, {0, SWR_PS_CONTEXT_viewportIndex});
+         ff = VECTOR_SPLAT(JM()->mVWidth, ff, "vViewportIndex");
+         inputs[attrib][0] = wrap(ff);
+         inputs[attrib][1] = wrap(VIMMED1(0.0f));
+         inputs[attrib][2] = wrap(VIMMED1(0.0f));
+         inputs[attrib][3] = wrap(VIMMED1(0.0f));
+         continue;
       }
-
       unsigned linkedAttrib =
          locate_linkage(semantic_name, semantic_idx, pPrevShader) - 1;
 
@@ -1318,20 +1348,22 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
       uses_mask = true;
    }
 
+   struct lp_build_tgsi_params params;
+   memset(&params, 0, sizeof(params));
+   params.type = lp_type_float_vec(32, 32 * 8);
+   params.mask = uses_mask ? &mask : NULL;
+   params.consts_ptr = wrap(consts_ptr);
+   params.const_sizes_ptr = wrap(const_sizes_ptr);
+   params.system_values = &system_values;
+   params.inputs = inputs;
+   params.context_ptr = wrap(hPrivateData);
+   params.sampler = sampler;
+   params.info = &swr_fs->info.base;
+
    lp_build_tgsi_soa(gallivm,
                      swr_fs->pipe.tokens,
-                     lp_type_float_vec(32, 32 * 8),
-                     uses_mask ? &mask : NULL, // mask
-                     wrap(consts_ptr),
-                     wrap(const_sizes_ptr),
-                     &system_values,
-                     inputs,
-                     outputs,
-                     wrap(hPrivateData),
-                     NULL, // thread data
-                     sampler, // sampler
-                     &swr_fs->info.base,
-                     NULL); // geometry shader face
+                     &params,
+                     outputs);
 
    sampler->destroy(sampler);
 
@@ -1426,6 +1458,6 @@ swr_compile_fs(struct swr_context *ctx, swr_jit_fs_key &key)
       "FS");
    PFN_PIXEL_KERNEL func = builder.CompileFS(ctx, key);
 
-   ctx->fs->map.insert(std::make_pair(key, make_unique<VariantFS>(builder.gallivm, func)));
+   ctx->fs->map.insert(std::make_pair(key, std::make_unique<VariantFS>(builder.gallivm, func)));
    return func;
 }

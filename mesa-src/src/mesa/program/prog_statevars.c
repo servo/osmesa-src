@@ -576,11 +576,11 @@ _mesa_fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
             value[0] = 1.0F;
             value[1] = 0.0F;
             value[2] = -1.0F;
-            value[3] = (GLfloat) ctx->DrawBuffer->Height;
+            value[3] = _mesa_geometric_height(ctx->DrawBuffer);
          } else {
             /* Flipping Y upside down (XY) followed by identity (ZW). */
             value[0] = -1.0F;
-            value[1] = (GLfloat) ctx->DrawBuffer->Height;
+            value[1] = _mesa_geometric_height(ctx->DrawBuffer);
             value[2] = 1.0F;
             value[3] = 0.0F;
          }
@@ -600,6 +600,17 @@ _mesa_fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
       case STATE_ADVANCED_BLENDING_MODE:
          val[0].i = _mesa_get_advanced_blend_sh_constant(
                       ctx->Color.BlendEnabled, ctx->Color._AdvancedBlendMode);
+         return;
+
+      case STATE_ALPHA_REF:
+         value[0] = ctx->Color.AlphaRefUnclamped;
+         return;
+
+      case STATE_CLIP_INTERNAL:
+         {
+            const GLuint plane = (GLuint) state[2];
+            COPY_4V(value, ctx->Transform._ClipUserPlane[plane]);
+         }
          return;
 
       /* XXX: make sure new tokens added here are also handled in the 
@@ -712,6 +723,12 @@ _mesa_program_state_flags(const gl_state_index16 state[STATE_LENGTH])
 
       case STATE_ADVANCED_BLENDING_MODE:
          return _NEW_COLOR;
+
+      case STATE_ALPHA_REF:
+         return _NEW_COLOR;
+
+      case STATE_CLIP_INTERNAL:
+         return _NEW_TRANSFORM | _NEW_PROJECTION;
 
       default:
          /* unknown state indexes are silently ignored and
@@ -918,6 +935,12 @@ append_token(char *dst, gl_state_index k)
       break;
    case STATE_ADVANCED_BLENDING_MODE:
       append(dst, "AdvancedBlendingMode");
+      break;
+   case STATE_ALPHA_REF:
+      append(dst, "alphaRef");
+      break;
+   case STATE_CLIP_INTERNAL:
+      append(dst, "clipInternal");
       break;
    default:
       /* probably STATE_INTERNAL_DRIVER+i (driver private state) */

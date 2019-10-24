@@ -26,6 +26,7 @@
  *    Rob Clark <robclark@freedesktop.org>
  */
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -35,12 +36,16 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <sys/param.h>
 #ifdef MAJOR_IN_MKDEV
 #include <sys/mkdev.h>
 #endif
 #ifdef MAJOR_IN_SYSMACROS
 #include <sys/sysmacros.h>
 #endif
+#include <GL/gl.h>
+#include <GL/internal/dri_interface.h>
 #include "loader.h"
 
 #ifdef HAVE_LIBDRM
@@ -50,6 +55,8 @@
 #include "util/xmlpool.h"
 #endif
 #endif
+
+#include "util/macros.h"
 
 #define __IS_LOADER
 #include "pci_id_driver_map.h"
@@ -64,7 +71,7 @@ static void default_logger(int level, const char *fmt, ...)
    }
 }
 
-static void (*log_)(int level, const char *fmt, ...) = default_logger;
+static loader_logger *log_ = default_logger;
 
 int
 loader_open_device(const char *device_name)
@@ -133,7 +140,7 @@ loader_open_render_node(const char *name)
           (device->bustype == DRM_BUS_PLATFORM)) {
          drmVersionPtr version;
 
-         fd = open(device->nodes[DRM_NODE_RENDER], O_RDWR | O_CLOEXEC);
+         fd = loader_open_device(device->nodes[DRM_NODE_RENDER]);
          if (fd < 0)
             continue;
 
@@ -180,7 +187,7 @@ static char *loader_get_dri_config_driver(int fd)
 
    driParseOptionInfo(&defaultInitOptions, __driConfigOptionsLoader);
    driParseConfigFiles(&userInitOptions, &defaultInitOptions, 0,
-                       "loader", kernel_driver);
+                       "loader", kernel_driver, NULL, 0);
    if (driCheckOption(&userInitOptions, "dri_driver", DRI_STRING)) {
       char *opt = driQueryOptionstr(&userInitOptions, "dri_driver");
       /* not an empty string */
@@ -201,7 +208,8 @@ static char *loader_get_dri_config_device_id(void)
    char *prime = NULL;
 
    driParseOptionInfo(&defaultInitOptions, __driConfigOptionsLoader);
-   driParseConfigFiles(&userInitOptions, &defaultInitOptions, 0, "loader", NULL);
+   driParseConfigFiles(&userInitOptions, &defaultInitOptions, 0,
+                       "loader", NULL, NULL, 0);
    if (driCheckOption(&userInitOptions, "device_id", DRI_STRING))
       prime = strdup(driQueryOptionstr(&userInitOptions, "device_id"));
    driDestroyOptionCache(&userInitOptions);
@@ -380,27 +388,27 @@ int loader_get_user_preferred_fd(int default_fd, bool *different_device)
 
 #if defined(HAVE_LIBDRM)
 
-static int
+static bool
 drm_get_pci_id_for_fd(int fd, int *vendor_id, int *chip_id)
 {
    drmDevicePtr device;
-   int ret;
+   bool ret;
 
    if (drmGetDevice2(fd, 0, &device) == 0) {
       if (device->bustype == DRM_BUS_PCI) {
          *vendor_id = device->deviceinfo.pci->vendor_id;
          *chip_id = device->deviceinfo.pci->device_id;
-         ret = 1;
+         ret = true;
       }
       else {
          log_(_LOADER_DEBUG, "MESA-LOADER: device is not located on the PCI bus\n");
-         ret = 0;
+         ret = false;
       }
       drmFreeDevice(&device);
    }
    else {
       log_(_LOADER_WARNING, "MESA-LOADER: failed to retrieve device information\n");
-      ret = 0;
+      ret = false;
    }
 
    return ret;
@@ -408,14 +416,13 @@ drm_get_pci_id_for_fd(int fd, int *vendor_id, int *chip_id)
 #endif
 
 
-int
+bool
 loader_get_pci_id_for_fd(int fd, int *vendor_id, int *chip_id)
 {
 #if HAVE_LIBDRM
-   if (drm_get_pci_id_for_fd(fd, vendor_id, chip_id))
-      return 1;
+   return drm_get_pci_id_for_fd(fd, vendor_id, chip_id);
 #endif
-   return 0;
+   return false;
 }
 
 char *
@@ -460,7 +467,7 @@ loader_get_driver_for_fd(int fd)
       return driver;
    }
 
-   for (i = 0; driver_map[i].driver; i++) {
+   for (i = 0; i < ARRAY_SIZE(driver_map); i++) {
       if (vendor_id != driver_map[i].vendor_id)
          continue;
 
@@ -487,18 +494,10 @@ out:
 }
 
 void
-loader_set_logger(void (*logger)(int level, const char *fmt, ...))
+loader_set_logger(loader_logger *logger)
 {
    log_ = logger;
 }
-
-/* XXX: Local definition to avoid pulling the heavyweight GL/gl.h and
- * GL/internal/dri_interface.h
- */
-
-#ifndef __DRI_DRIVER_GET_EXTENSIONS
-#define __DRI_DRIVER_GET_EXTENSIONS "__driDriverGetExtensions"
-#endif
 
 char *
 loader_get_extensions_name(const char *driver_name)
@@ -515,4 +514,92 @@ loader_get_extensions_name(const char *driver_name)
    }
 
    return name;
+}
+
+/**
+ * Opens a DRI driver using its driver name, returning the __DRIextension
+ * entrypoints.
+ *
+ * \param driverName - a name like "i965", "radeon", "nouveau", etc.
+ * \param out_driver - Address where the dlopen() return value will be stored.
+ * \param search_path_vars - NULL-terminated list of env vars that can be used
+ * to override the DEFAULT_DRIVER_DIR search path.
+ */
+const struct __DRIextensionRec **
+loader_open_driver(const char *driver_name,
+                   void **out_driver_handle,
+                   const char **search_path_vars)
+{
+   char path[PATH_MAX], *search_paths, *next, *end;
+   char *get_extensions_name;
+   const struct __DRIextensionRec **extensions = NULL;
+   const struct __DRIextensionRec **(*get_extensions)(void);
+
+   search_paths = NULL;
+   if (geteuid() == getuid() && search_path_vars) {
+      for (int i = 0; search_path_vars[i] != NULL; i++) {
+         search_paths = getenv(search_path_vars[i]);
+         if (search_paths)
+            break;
+      }
+   }
+   if (search_paths == NULL)
+      search_paths = DEFAULT_DRIVER_DIR;
+
+   void *driver = NULL;
+   end = search_paths + strlen(search_paths);
+   for (char *p = search_paths; p < end; p = next + 1) {
+      int len;
+      next = strchr(p, ':');
+      if (next == NULL)
+         next = end;
+
+      len = next - p;
+#if USE_ELF_TLS
+      snprintf(path, sizeof(path), "%.*s/tls/%s_dri.so", len, p, driver_name);
+      driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+#endif
+      if (driver == NULL) {
+         snprintf(path, sizeof(path), "%.*s/%s_dri.so", len, p, driver_name);
+         driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+         if (driver == NULL)
+            log_(_LOADER_DEBUG, "MESA-LOADER: failed to open %s: %s\n",
+                 path, dlerror());
+      }
+      /* not need continue to loop all paths once the driver is found */
+      if (driver != NULL)
+         break;
+   }
+
+   if (driver == NULL) {
+      log_(_LOADER_WARNING, "MESA-LOADER: failed to open %s (search paths %s)\n",
+           driver_name, search_paths);
+      *out_driver_handle = NULL;
+      return NULL;
+   }
+
+   log_(_LOADER_DEBUG, "MESA-LOADER: dlopen(%s)\n", path);
+
+   get_extensions_name = loader_get_extensions_name(driver_name);
+   if (get_extensions_name) {
+      get_extensions = dlsym(driver, get_extensions_name);
+      if (get_extensions) {
+         extensions = get_extensions();
+      } else {
+         log_(_LOADER_DEBUG, "MESA-LOADER: driver does not expose %s(): %s\n",
+              get_extensions_name, dlerror());
+      }
+      free(get_extensions_name);
+   }
+
+   if (!extensions)
+      extensions = dlsym(driver, __DRI_DRIVER_EXTENSIONS);
+   if (extensions == NULL) {
+      log_(_LOADER_WARNING,
+           "MESA-LOADER: driver exports no extensions (%s)\n", dlerror());
+      dlclose(driver);
+   }
+
+   *out_driver_handle = driver;
+   return extensions;
 }

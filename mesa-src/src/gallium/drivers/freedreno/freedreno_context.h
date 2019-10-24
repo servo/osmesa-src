@@ -55,15 +55,7 @@ struct fd_texture_stateobj {
 };
 
 struct fd_program_stateobj {
-	void *vp, *fp;
-
-	/* rest only used by fd2.. split out: */
-	uint8_t num_exports;
-	/* Indexed by semantic name or TGSI_SEMANTIC_COUNT + semantic index
-	 * for TGSI_SEMANTIC_GENERIC.  Special vs exports (position and point-
-	 * size) are not included in this
-	 */
-	uint8_t export_linkage[63];
+	void *vs, *hs, *ds, *gs, *fs;
 };
 
 struct fd_constbuf_stateobj {
@@ -94,6 +86,9 @@ struct fd_vertex_stateobj {
 
 struct fd_streamout_stateobj {
 	struct pipe_stream_output_target *targets[PIPE_MAX_SO_BUFFERS];
+	/* Bitmask of stream that should be reset. */
+	unsigned reset;
+
 	unsigned num_targets;
 	/* Track offset from vtxcnt for streamout data.  This counter
 	 * is just incremented by # of vertices on each draw until
@@ -134,6 +129,7 @@ enum fd_dirty_3d_state {
 	FD_DIRTY_VIEWPORT    = BIT(8),
 	FD_DIRTY_VTXSTATE    = BIT(9),
 	FD_DIRTY_VTXBUF      = BIT(10),
+	FD_DIRTY_MIN_SAMPLES = BIT(11),
 
 	FD_DIRTY_SCISSOR     = BIT(12),
 	FD_DIRTY_STREAMOUT   = BIT(13),
@@ -219,7 +215,7 @@ struct fd_context {
 		uint64_t draw_calls;
 		uint64_t batch_total, batch_sysmem, batch_gmem, batch_nondraw, batch_restore;
 		uint64_t staging_uploads, shadow_uploads;
-		uint64_t vs_regs, fs_regs;
+		uint64_t vs_regs, hs_regs, ds_regs, gs_regs, fs_regs;
 	} stats;
 
 	/* Current batch.. the rule here is that you can deref ctx->batch
@@ -235,6 +231,14 @@ struct fd_context {
 	 * than having to flush no-op batch.
 	 */
 	struct pipe_fence_handle *last_fence;
+
+	/* track last known reset status globally and per-context to
+	 * determine if more resets occurred since then.  If global reset
+	 * count increases, it means some other context crashed.  If
+	 * per-context reset count increases, it means we crashed the
+	 * gpu.
+	 */
+	uint32_t context_reset_count, global_reset_count;
 
 	/* Are we in process of shadowing a resource? Used to detect recursion
 	 * in transfer_map, and skip unneeded synchronization.
@@ -285,10 +289,12 @@ struct fd_context {
 	struct pipe_blend_color blend_color;
 	struct pipe_stencil_ref stencil_ref;
 	unsigned sample_mask;
+	unsigned min_samples;
 	/* local context fb state, for when ctx->batch is null: */
 	struct pipe_framebuffer_state framebuffer;
 	struct pipe_poly_stipple stipple;
 	struct pipe_viewport_state viewport;
+	struct pipe_scissor_state viewport_scissor;
 	struct fd_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
 	struct fd_shaderbuf_stateobj shaderbuf[PIPE_SHADER_TYPES];
 	struct fd_shaderimg_stateobj shaderimg[PIPE_SHADER_TYPES];
@@ -307,6 +313,7 @@ struct fd_context {
 	void (*emit_tile_prep)(struct fd_batch *batch, struct fd_tile *tile);
 	void (*emit_tile_mem2gmem)(struct fd_batch *batch, struct fd_tile *tile);
 	void (*emit_tile_renderprep)(struct fd_batch *batch, struct fd_tile *tile);
+	void (*emit_tile)(struct fd_batch *batch, struct fd_tile *tile);
 	void (*emit_tile_gmem2mem)(struct fd_batch *batch, struct fd_tile *tile);
 	void (*emit_tile_fini)(struct fd_batch *batch);   /* optional */
 
@@ -323,31 +330,18 @@ struct fd_context {
 	/* compute: */
 	void (*launch_grid)(struct fd_context *ctx, const struct pipe_grid_info *info);
 
-	/* constant emit:  (note currently not used/needed for a2xx) */
-	void (*emit_const)(struct fd_ringbuffer *ring, enum shader_t type,
-			uint32_t regid, uint32_t offset, uint32_t sizedwords,
-			const uint32_t *dwords, struct pipe_resource *prsc);
-	/* emit bo addresses as constant: */
-	void (*emit_const_bo)(struct fd_ringbuffer *ring, enum shader_t type, boolean write,
-			uint32_t regid, uint32_t num, struct pipe_resource **prscs, uint32_t *offsets);
-
-	/* indirect-branch emit: */
-	void (*emit_ib)(struct fd_ringbuffer *ring, struct fd_ringbuffer *target);
-
 	/* query: */
-	struct fd_query * (*create_query)(struct fd_context *ctx, unsigned query_type);
+	struct fd_query * (*create_query)(struct fd_context *ctx, unsigned query_type, unsigned index);
 	void (*query_prepare)(struct fd_batch *batch, uint32_t num_tiles);
 	void (*query_prepare_tile)(struct fd_batch *batch, uint32_t n,
 			struct fd_ringbuffer *ring);
 	void (*query_set_stage)(struct fd_batch *batch, enum fd_render_stage stage);
 
 	/* blitter: */
-	void (*blit)(struct fd_context *ctx, const struct pipe_blit_info *info);
+	bool (*blit)(struct fd_context *ctx, const struct pipe_blit_info *info);
 
-	/* simple gpu "memcpy": */
-	void (*mem_to_mem)(struct fd_ringbuffer *ring, struct pipe_resource *dst,
-			unsigned dst_off, struct pipe_resource *src, unsigned src_off,
-			unsigned sizedwords);
+	/* handling for barriers: */
+	void (*framebuffer_barrier)(struct fd_context *ctx);
 
 	/*
 	 * Common pre-cooked VBO state (used for a3xx and later):

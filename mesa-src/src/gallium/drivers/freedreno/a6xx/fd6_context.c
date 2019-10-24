@@ -28,11 +28,13 @@
 #include "freedreno_query_acc.h"
 
 #include "fd6_context.h"
+#include "fd6_compute.h"
 #include "fd6_blend.h"
 #include "fd6_blitter.h"
 #include "fd6_draw.h"
 #include "fd6_emit.h"
 #include "fd6_gmem.h"
+#include "fd6_image.h"
 #include "fd6_program.h"
 #include "fd6_query.h"
 #include "fd6_rasterizer.h"
@@ -48,11 +50,11 @@ fd6_context_destroy(struct pipe_context *pctx)
 
 	fd_context_destroy(pctx);
 
-	fd_bo_del(fd6_ctx->vs_pvt_mem);
-	fd_bo_del(fd6_ctx->fs_pvt_mem);
-	fd_bo_del(fd6_ctx->vsc_data);
-	fd_bo_del(fd6_ctx->vsc_data2);
-	fd_bo_del(fd6_ctx->blit_mem);
+	if (fd6_ctx->vsc_data)
+		fd_bo_del(fd6_ctx->vsc_data);
+	if (fd6_ctx->vsc_data2)
+		fd_bo_del(fd6_ctx->vsc_data2);
+	fd_bo_del(fd6_ctx->control_mem);
 
 	fd_context_cleanup_common_vbos(&fd6_ctx->base);
 
@@ -64,14 +66,18 @@ fd6_context_destroy(struct pipe_context *pctx)
 }
 
 static const uint8_t primtypes[] = {
-		[PIPE_PRIM_POINTS]         = DI_PT_POINTLIST,
-		[PIPE_PRIM_LINES]          = DI_PT_LINELIST,
-		[PIPE_PRIM_LINE_STRIP]     = DI_PT_LINESTRIP,
-		[PIPE_PRIM_LINE_LOOP]      = DI_PT_LINELOOP,
-		[PIPE_PRIM_TRIANGLES]      = DI_PT_TRILIST,
-		[PIPE_PRIM_TRIANGLE_STRIP] = DI_PT_TRISTRIP,
-		[PIPE_PRIM_TRIANGLE_FAN]   = DI_PT_TRIFAN,
-		[PIPE_PRIM_MAX]            = DI_PT_RECTLIST,  /* internal clear blits */
+		[PIPE_PRIM_POINTS]                      = DI_PT_POINTLIST,
+		[PIPE_PRIM_LINES]                       = DI_PT_LINELIST,
+		[PIPE_PRIM_LINE_STRIP]                  = DI_PT_LINESTRIP,
+		[PIPE_PRIM_LINE_LOOP]                   = DI_PT_LINELOOP,
+		[PIPE_PRIM_TRIANGLES]                   = DI_PT_TRILIST,
+		[PIPE_PRIM_TRIANGLE_STRIP]              = DI_PT_TRISTRIP,
+		[PIPE_PRIM_TRIANGLE_FAN]                = DI_PT_TRIFAN,
+		[PIPE_PRIM_LINES_ADJACENCY]             = DI_PT_LINE_ADJ,
+		[PIPE_PRIM_LINE_STRIP_ADJACENCY]        = DI_PT_LINESTRIP_ADJ,
+		[PIPE_PRIM_TRIANGLES_ADJACENCY]         = DI_PT_TRI_ADJ,
+		[PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY]    = DI_PT_TRISTRIP_ADJ,
+		[PIPE_PRIM_MAX]                         = DI_PT_RECTLIST,  /* internal clear blits */
 };
 
 struct pipe_context *
@@ -85,6 +91,7 @@ fd6_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 		return NULL;
 
 	pctx = &fd6_ctx->base.base;
+	pctx->screen = pscreen;
 
 	fd6_ctx->base.dev = fd_device_ref(screen->dev);
 	fd6_ctx->base.screen = fd_screen(pscreen);
@@ -95,6 +102,7 @@ fd6_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 	pctx->create_depth_stencil_alpha_state = fd6_zsa_state_create;
 
 	fd6_draw_init(pctx);
+	fd6_compute_init(pctx);
 	fd6_gmem_init(pctx);
 	fd6_texture_init(pctx);
 	fd6_prog_init(pctx);
@@ -104,27 +112,24 @@ fd6_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 	if (!pctx)
 		return NULL;
 
+	/* after fd_context_init() to override set_shader_images() */
+	fd6_image_init(pctx);
+
+	util_blitter_set_texture_multisample(fd6_ctx->base.blitter, true);
+
 	/* fd_context_init overwrites delete_rasterizer_state, so set this
 	 * here. */
 	pctx->delete_rasterizer_state = fd6_rasterizer_state_delete;
 	pctx->delete_depth_stencil_alpha_state = fd6_depth_stencil_alpha_state_delete;
 
-	fd6_ctx->vs_pvt_mem = fd_bo_new(screen->dev, 0x2000,
-			DRM_FREEDRENO_GEM_TYPE_KMEM);
+	/* initial sizes for VSC buffers (or rather the per-pipe sizes
+	 * which is used to derive entire buffer size:
+	 */
+	fd6_ctx->vsc_data_pitch = 0x440;
+	fd6_ctx->vsc_data2_pitch = 0x1040;
 
-	fd6_ctx->fs_pvt_mem = fd_bo_new(screen->dev, 0x2000,
-			DRM_FREEDRENO_GEM_TYPE_KMEM);
-
-	fd6_ctx->vsc_data = fd_bo_new(screen->dev,
-			(A6XX_VSC_DATA_PITCH * 32) + 0x100,
-			DRM_FREEDRENO_GEM_TYPE_KMEM);
-
-	fd6_ctx->vsc_data2 = fd_bo_new(screen->dev,
-			A6XX_VSC_DATA2_PITCH * 32,
-			DRM_FREEDRENO_GEM_TYPE_KMEM);
-
-	fd6_ctx->blit_mem = fd_bo_new(screen->dev, 0x1000,
-			DRM_FREEDRENO_GEM_TYPE_KMEM);
+	fd6_ctx->control_mem = fd_bo_new(screen->dev, 0x1000,
+			DRM_FREEDRENO_GEM_TYPE_KMEM, "control");
 
 	fd_context_setup_common_vbos(&fd6_ctx->base);
 

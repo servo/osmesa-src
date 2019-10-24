@@ -23,18 +23,25 @@ inc_util = include_directories('.')
 subdir('xmlpool')
 
 files_mesa_util = files(
+  'anon_file.h',
+  'anon_file.c',
   'bigmath.h',
   'bitscan.c',
   'bitscan.h',
   'bitset.h',
+  'blob.c',
+  'blob.h',
   'build_id.c',
   'build_id.h',
   'crc32.c',
   'crc32.h',
+  'dag.c',
   'debug.c',
   'debug.h',
   'disk_cache.c',
   'disk_cache.h',
+  'double.c',
+  'double.h',
   'fast_idiv_by_const.c',
   'fast_idiv_by_const.h',
   'format_r11g11b10f.h',
@@ -51,6 +58,7 @@ files_mesa_util = files(
   'mesa-sha1.h',
   'os_time.c',
   'os_time.h',
+  'os_file.c',
   'os_misc.c',
   'os_misc.h',
   'u_process.c',
@@ -74,12 +82,15 @@ files_mesa_util = files(
   'simple_mtx.h',
   'slab.c',
   'slab.h',
+  'softfloat.c',
+  'softfloat.h',
   'string_buffer.c',
   'string_buffer.h',
   'strndup.h',
   'strtod.c',
   'strtod.h',
   'texcompress_rgtc_tmp.h',
+  'timespec.h',
   'u_atomic.c',
   'u_atomic.h',
   'u_dynarray.h',
@@ -100,7 +111,21 @@ files_mesa_util = files(
   'vma.h',
 )
 
-install_data('00-mesa-defaults.conf', install_dir : join_paths(get_option('datadir'), 'drirc.d'))
+files_drirc = files('00-mesa-defaults.conf')
+
+install_data(files_drirc, install_dir : join_paths(get_option('datadir'), 'drirc.d'))
+
+if with_tests
+  prog_xmllint = find_program('xmllint', required : false, native : true)
+  if prog_xmllint.found()
+    test(
+      'drirc xml validation',
+      prog_xmllint,
+      args : ['--noout', '--valid', files_drirc],
+      suite : ['util'],
+    )
+  endif
+endif
 
 files_xmlconfig = files(
   'xmlconfig.c',
@@ -115,21 +140,39 @@ format_srgb = custom_target(
   capture : true,
 )
 
-libmesa_util = static_library(
+deps_for_libmesa_util = [
+  dep_zlib,
+  dep_clock,
+  dep_thread,
+  dep_atomic,
+  dep_m,
+  dep_valgrind,
+]
+
+if with_platform_android
+  deps_for_libmesa_util += dep_android
+endif
+
+_libmesa_util = static_library(
   'mesa_util',
   [files_mesa_util, format_srgb],
   include_directories : inc_common,
-  dependencies : [dep_zlib, dep_clock, dep_thread, dep_atomic],
+  dependencies : deps_for_libmesa_util,
   c_args : [c_msvc_compat_args, c_vis_args],
   build_by_default : false
 )
 
-libxmlconfig = static_library(
+idep_mesautil = declare_dependency(
+  link_with : _libmesa_util,
+  include_directories : inc_util,
+  dependencies : [dep_zlib, dep_clock, dep_thread, dep_atomic, dep_m],
+)
+
+_libxmlconfig = static_library(
   'xmlconfig',
   files_xmlconfig,
   include_directories : inc_common,
-  link_with : libmesa_util,
-  dependencies : [dep_expat, dep_m],
+  dependencies : [idep_mesautil, dep_expat, dep_m],
   c_args : [
     c_msvc_compat_args, c_vis_args,
     '-DSYSCONFDIR="@0@"'.format(
@@ -142,6 +185,13 @@ libxmlconfig = static_library(
   build_by_default : false,
 )
 
+idep_xmlconfig = declare_dependency(
+  sources : xmlpool_options_h,
+  include_directories : inc_util,
+  link_with : _libxmlconfig,
+  dependencies : dep_expat,
+)
+
 if with_tests
   test(
     'u_atomic',
@@ -149,9 +199,34 @@ if with_tests
       'u_atomic_test',
       files('u_atomic_test.c'),
       include_directories : inc_common,
-      link_with : libmesa_util,
+      dependencies : idep_mesautil,
       c_args : [c_msvc_compat_args],
-    )
+    ),
+    suite : ['util'],
+  )
+
+  test(
+    'blob',
+    executable(
+      'blob_test',
+      files('blob_test.c'),
+      include_directories : inc_common,
+      dependencies : idep_mesautil,
+      c_args : [c_msvc_compat_args],
+    ),
+    suite : ['util'],
+  )
+
+  test(
+    'rb_tree',
+    executable(
+      'rb_tree_test',
+      files('rb_tree_test.c'),
+      include_directories : inc_common,
+      dependencies : idep_mesautil,
+      c_args : [c_msvc_compat_args],
+    ),
+    suite : ['util'],
   )
 
   test(
@@ -162,23 +237,46 @@ if with_tests
       include_directories : inc_common,
       c_args : [c_msvc_compat_args],
       dependencies : [dep_m],
-    )
+    ),
+    suite : ['util'],
   )
 
-  test(
-    'mesa-sha1',
-    executable(
-      'mesa-sha1_test',
-      files('mesa-sha1_test.c'),
-      include_directories : inc_common,
-      link_with : libmesa_util,
-      c_args : [c_msvc_compat_args],
+  # FIXME: this test crashes on windows
+  if host_machine.system() != 'windows'
+    test(
+      'mesa-sha1',
+      executable(
+        'mesa-sha1_test',
+        files('mesa-sha1_test.c'),
+        include_directories : inc_common,
+        link_with : _libmesa_util,
+        c_args : [c_msvc_compat_args],
+      ),
+      suite : ['util'],
     )
+  endif
+
+  test(
+    'bitset',
+    executable(
+       'bitset_test',
+       files('bitset_test.cpp'),
+       include_directories : inc_common,
+       dependencies : [idep_mesautil, idep_gtest],
+     ),
+     suite : ['util'],
   )
 
   subdir('tests/fast_idiv_by_const')
+  subdir('tests/fast_urem_by_const')
   subdir('tests/hash_table')
-  subdir('tests/string_buffer')
+  if not (host_machine.system() == 'windows' and cc.get_id() == 'gcc')
+    # FIXME: These tests fail with mingw, but not with msvc.
+    subdir('tests/string_buffer')
+  endif
+  if cc.has_header('sys/time.h')  # MinGW has this, but Vanilla windows doesn't
+    subdir('tests/timespec')
+  endif
   subdir('tests/vma')
   subdir('tests/set')
 endif

@@ -41,10 +41,16 @@ struct PACKED fd6_query_sample {
 	uint64_t stop;
 };
 
-#define query_sample(aq, field)                 \
+/* offset of a single field of an array of fd6_query_sample: */
+#define query_sample_idx(aq, idx, field)        \
 	fd_resource((aq)->prsc)->bo,                \
+	(idx * sizeof(struct fd6_query_sample)) +   \
 	offsetof(struct fd6_query_sample, field),   \
 	0, 0
+
+/* offset of a single field of fd6_query_sample: */
+#define query_sample(aq, field)                 \
+	query_sample_idx(aq, 0, field)
 
 /*
  * Occlusion Query:
@@ -246,6 +252,325 @@ static const struct fd_acc_sample_provider timestamp = {
 		.result = timestamp_accumulate_result,
 };
 
+struct PACKED fd6_primitives_sample {
+	struct {
+		uint64_t generated, emitted;
+	} start[4], stop[4], result;
+
+	uint64_t prim_start[16], prim_stop[16], prim_emitted;
+};
+
+
+#define primitives_relocw(ring, aq, field) \
+	OUT_RELOCW(ring, fd_resource((aq)->prsc)->bo, offsetof(struct fd6_primitives_sample, field), 0, 0);
+#define primitives_reloc(ring, aq, field) \
+	OUT_RELOC(ring, fd_resource((aq)->prsc)->bo, offsetof(struct fd6_primitives_sample, field), 0, 0);
+
+static void
+primitive_counts_resume(struct fd_acc_query *aq, struct fd_batch *batch)
+{
+	struct fd_ringbuffer *ring = batch->draw;
+	const unsigned count = 1;
+
+	fd_wfi(batch, ring);
+
+	OUT_PKT7(ring, CP_REG_TO_MEM, 3);
+	OUT_RING(ring, CP_REG_TO_MEM_0_64B |
+			CP_REG_TO_MEM_0_CNT(count - 1) |
+			CP_REG_TO_MEM_0_REG(REG_A6XX_RBBM_PRIMCTR_8_LO));
+	primitives_relocw(ring, aq, prim_start);
+
+	fd6_event_write(batch, ring, START_PRIMITIVE_CTRS, false);
+
+	OUT_PKT4(ring, REG_A6XX_VPC_SO_STREAM_COUNTS_LO, 2);
+	primitives_relocw(ring, aq, start[0]);
+
+	fd6_event_write(batch, ring, WRITE_PRIMITIVE_COUNTS, false);
+}
+
+static void
+primitive_counts_pause(struct fd_acc_query *aq, struct fd_batch *batch)
+{
+	struct fd_ringbuffer *ring = batch->draw;
+	const unsigned count = 1;
+
+	fd_wfi(batch, ring);
+
+	/* snapshot the end values: */
+	OUT_PKT7(ring, CP_REG_TO_MEM, 3);
+	OUT_RING(ring, CP_REG_TO_MEM_0_64B |
+			CP_REG_TO_MEM_0_CNT(count - 1) |
+			CP_REG_TO_MEM_0_REG(REG_A6XX_RBBM_PRIMCTR_8_LO));
+	primitives_relocw(ring, aq, prim_stop);
+
+	/* result += stop - start: */
+	OUT_PKT7(ring, CP_MEM_TO_MEM, 9);
+	OUT_RING(ring, CP_MEM_TO_MEM_0_DOUBLE |
+			CP_MEM_TO_MEM_0_NEG_C | 0x40000000);
+	primitives_relocw(ring, aq, result.generated);
+	primitives_reloc(ring, aq, prim_emitted);
+	primitives_reloc(ring, aq, prim_stop);
+	primitives_reloc(ring, aq, prim_start);
+
+	OUT_PKT4(ring, REG_A6XX_VPC_SO_STREAM_COUNTS_LO, 2);
+	primitives_relocw(ring, aq, stop[0]);
+
+	fd6_event_write(batch, ring, WRITE_PRIMITIVE_COUNTS, false);
+
+	fd6_event_write(batch, batch->draw, CACHE_FLUSH_TS, true);
+
+	/* result += stop - start: */
+	OUT_PKT7(ring, CP_MEM_TO_MEM, 9);
+	OUT_RING(ring, CP_MEM_TO_MEM_0_DOUBLE |
+			CP_MEM_TO_MEM_0_NEG_C | 0x80000000);
+	primitives_relocw(ring, aq, result.emitted);
+	primitives_reloc(ring, aq, result.emitted);
+	primitives_reloc(ring, aq, stop[aq->base.index].emitted);
+	primitives_reloc(ring, aq, start[aq->base.index].emitted);
+
+	/* result += stop - start: */
+	OUT_PKT7(ring, CP_MEM_TO_MEM, 9);
+	OUT_RING(ring, CP_MEM_TO_MEM_0_DOUBLE |
+			CP_MEM_TO_MEM_0_NEG_C | 0x80000000);
+	primitives_relocw(ring, aq, result.generated);
+	primitives_reloc(ring, aq, result.generated);
+	primitives_reloc(ring, aq, stop[aq->base.index].generated);
+	primitives_reloc(ring, aq, start[aq->base.index].generated);
+
+	fd6_event_write(batch, ring, STOP_PRIMITIVE_CTRS, false);
+}
+
+static void
+primitives_generated_result(struct fd_acc_query *aq, void *buf,
+		union pipe_query_result *result)
+{
+	struct fd6_primitives_sample *ps = buf;
+
+	result->u64 = ps->result.generated;
+}
+
+static const struct fd_acc_sample_provider primitives_generated = {
+	.query_type = PIPE_QUERY_PRIMITIVES_GENERATED,
+	.active = FD_STAGE_DRAW,
+	.size = sizeof(struct fd6_primitives_sample),
+	.resume = primitive_counts_resume,
+	.pause = primitive_counts_pause,
+	.result = primitives_generated_result,
+};
+
+static void
+primitives_emitted_result(struct fd_acc_query *aq, void *buf,
+		union pipe_query_result *result)
+{
+	struct fd6_primitives_sample *ps = buf;
+
+	result->u64 = ps->result.emitted;
+}
+
+static const struct fd_acc_sample_provider primitives_emitted = {
+	.query_type = PIPE_QUERY_PRIMITIVES_EMITTED,
+	.active = FD_STAGE_DRAW,
+	.size = sizeof(struct fd6_primitives_sample),
+	.resume = primitive_counts_resume,
+	.pause = primitive_counts_pause,
+	.result = primitives_emitted_result,
+};
+
+/*
+ * Performance Counter (batch) queries:
+ *
+ * Only one of these is active at a time, per design of the gallium
+ * batch_query API design.  On perfcntr query tracks N query_types,
+ * each of which has a 'fd_batch_query_entry' that maps it back to
+ * the associated group and counter.
+ */
+
+struct fd_batch_query_entry {
+	uint8_t gid;        /* group-id */
+	uint8_t cid;        /* countable-id within the group */
+};
+
+struct fd_batch_query_data {
+	struct fd_screen *screen;
+	unsigned num_query_entries;
+	struct fd_batch_query_entry query_entries[];
+};
+
+static void
+perfcntr_resume(struct fd_acc_query *aq, struct fd_batch *batch)
+{
+	struct fd_batch_query_data *data = aq->query_data;
+	struct fd_screen *screen = data->screen;
+	struct fd_ringbuffer *ring = batch->draw;
+
+	unsigned counters_per_group[screen->num_perfcntr_groups];
+	memset(counters_per_group, 0, sizeof(counters_per_group));
+
+	fd_wfi(batch, ring);
+
+	/* configure performance counters for the requested queries: */
+	for (unsigned i = 0; i < data->num_query_entries; i++) {
+		struct fd_batch_query_entry *entry = &data->query_entries[i];
+		const struct fd_perfcntr_group *g = &screen->perfcntr_groups[entry->gid];
+		unsigned counter_idx = counters_per_group[entry->gid]++;
+
+		debug_assert(counter_idx < g->num_counters);
+
+		OUT_PKT4(ring, g->counters[counter_idx].select_reg, 1);
+		OUT_RING(ring, g->countables[entry->cid].selector);
+	}
+
+	memset(counters_per_group, 0, sizeof(counters_per_group));
+
+	/* and snapshot the start values */
+	for (unsigned i = 0; i < data->num_query_entries; i++) {
+		struct fd_batch_query_entry *entry = &data->query_entries[i];
+		const struct fd_perfcntr_group *g = &screen->perfcntr_groups[entry->gid];
+		unsigned counter_idx = counters_per_group[entry->gid]++;
+		const struct fd_perfcntr_counter *counter = &g->counters[counter_idx];
+
+		OUT_PKT7(ring, CP_REG_TO_MEM, 3);
+		OUT_RING(ring, CP_REG_TO_MEM_0_64B |
+			CP_REG_TO_MEM_0_REG(counter->counter_reg_lo));
+		OUT_RELOCW(ring, query_sample_idx(aq, i, start));
+	}
+}
+
+static void
+perfcntr_pause(struct fd_acc_query *aq, struct fd_batch *batch)
+{
+	struct fd_batch_query_data *data = aq->query_data;
+	struct fd_screen *screen = data->screen;
+	struct fd_ringbuffer *ring = batch->draw;
+
+	unsigned counters_per_group[screen->num_perfcntr_groups];
+	memset(counters_per_group, 0, sizeof(counters_per_group));
+
+	fd_wfi(batch, ring);
+
+	/* TODO do we need to bother to turn anything off? */
+
+	/* snapshot the end values: */
+	for (unsigned i = 0; i < data->num_query_entries; i++) {
+		struct fd_batch_query_entry *entry = &data->query_entries[i];
+		const struct fd_perfcntr_group *g = &screen->perfcntr_groups[entry->gid];
+		unsigned counter_idx = counters_per_group[entry->gid]++;
+		const struct fd_perfcntr_counter *counter = &g->counters[counter_idx];
+
+		OUT_PKT7(ring, CP_REG_TO_MEM, 3);
+		OUT_RING(ring, CP_REG_TO_MEM_0_64B |
+			CP_REG_TO_MEM_0_REG(counter->counter_reg_lo));
+		OUT_RELOCW(ring, query_sample_idx(aq, i, stop));
+	}
+
+	/* and compute the result: */
+	for (unsigned i = 0; i < data->num_query_entries; i++) {
+		/* result += stop - start: */
+		OUT_PKT7(ring, CP_MEM_TO_MEM, 9);
+		OUT_RING(ring, CP_MEM_TO_MEM_0_DOUBLE |
+				CP_MEM_TO_MEM_0_NEG_C);
+		OUT_RELOCW(ring, query_sample_idx(aq, i, result));     /* dst */
+		OUT_RELOC(ring, query_sample_idx(aq, i, result));      /* srcA */
+		OUT_RELOC(ring, query_sample_idx(aq, i, stop));        /* srcB */
+		OUT_RELOC(ring, query_sample_idx(aq, i, start));       /* srcC */
+	}
+}
+
+static void
+perfcntr_accumulate_result(struct fd_acc_query *aq, void *buf,
+		union pipe_query_result *result)
+{
+	struct fd_batch_query_data *data = aq->query_data;
+	struct fd6_query_sample *sp = buf;
+
+	for (unsigned i = 0; i < data->num_query_entries; i++) {
+		result->batch[i].u64 = sp[i].result;
+	}
+}
+
+static const struct fd_acc_sample_provider perfcntr = {
+		.query_type = FD_QUERY_FIRST_PERFCNTR,
+		.active = FD_STAGE_DRAW | FD_STAGE_CLEAR,
+		.resume = perfcntr_resume,
+		.pause = perfcntr_pause,
+		.result = perfcntr_accumulate_result,
+};
+
+static struct pipe_query *
+fd6_create_batch_query(struct pipe_context *pctx,
+		unsigned num_queries, unsigned *query_types)
+{
+	struct fd_context *ctx = fd_context(pctx);
+	struct fd_screen *screen = ctx->screen;
+	struct fd_query *q;
+	struct fd_acc_query *aq;
+	struct fd_batch_query_data *data;
+
+	data = CALLOC_VARIANT_LENGTH_STRUCT(fd_batch_query_data,
+			num_queries * sizeof(data->query_entries[0]));
+
+	data->screen = screen;
+	data->num_query_entries = num_queries;
+
+	/* validate the requested query_types and ensure we don't try
+	 * to request more query_types of a given group than we have
+	 * counters:
+	 */
+	unsigned counters_per_group[screen->num_perfcntr_groups];
+	memset(counters_per_group, 0, sizeof(counters_per_group));
+
+	for (unsigned i = 0; i < num_queries; i++) {
+		unsigned idx = query_types[i] - FD_QUERY_FIRST_PERFCNTR;
+
+		/* verify valid query_type, ie. is it actually a perfcntr? */
+		if ((query_types[i] < FD_QUERY_FIRST_PERFCNTR) ||
+				(idx >= screen->num_perfcntr_queries)) {
+			debug_printf("invalid batch query query_type: %u\n", query_types[i]);
+			goto error;
+		}
+
+		struct fd_batch_query_entry *entry = &data->query_entries[i];
+		struct pipe_driver_query_info *pq = &screen->perfcntr_queries[idx];
+
+		entry->gid = pq->group_id;
+
+		/* the perfcntr_queries[] table flattens all the countables
+		 * for each group in series, ie:
+		 *
+		 *   (G0,C0), .., (G0,Cn), (G1,C0), .., (G1,Cm), ...
+		 *
+		 * So to find the countable index just step back through the
+		 * table to find the first entry with the same group-id.
+		 */
+		while (pq > screen->perfcntr_queries) {
+			pq--;
+			if (pq->group_id == entry->gid)
+				entry->cid++;
+		}
+
+		if (counters_per_group[entry->gid] >=
+				screen->perfcntr_groups[entry->gid].num_counters) {
+			debug_printf("too many counters for group %u\n", entry->gid);
+			goto error;
+		}
+
+		counters_per_group[entry->gid]++;
+	}
+
+	q = fd_acc_create_query2(ctx, 0, 0, &perfcntr);
+	aq = fd_acc_query(q);
+
+	/* sample buffer size is based on # of queries: */
+	aq->size = num_queries * sizeof(struct fd6_query_sample);
+	aq->query_data = data;
+
+	return (struct pipe_query *)q;
+
+error:
+	free(data);
+	return NULL;
+}
+
 void
 fd6_query_context_init(struct pipe_context *pctx)
 {
@@ -254,10 +579,15 @@ fd6_query_context_init(struct pipe_context *pctx)
 	ctx->create_query = fd_acc_create_query;
 	ctx->query_set_stage = fd_acc_query_set_stage;
 
+	pctx->create_batch_query = fd6_create_batch_query;
+
 	fd_acc_query_register_provider(pctx, &occlusion_counter);
 	fd_acc_query_register_provider(pctx, &occlusion_predicate);
 	fd_acc_query_register_provider(pctx, &occlusion_predicate_conservative);
 
 	fd_acc_query_register_provider(pctx, &time_elapsed);
 	fd_acc_query_register_provider(pctx, &timestamp);
+
+	fd_acc_query_register_provider(pctx, &primitives_generated);
+	fd_acc_query_register_provider(pctx, &primitives_emitted);
 }

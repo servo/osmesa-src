@@ -293,6 +293,15 @@ scan_src_operand(struct tgsi_shader_info *info,
        !is_mem_query_inst(fullinst->Instruction.Opcode)) {
       *is_mem_inst = true;
 
+      if (src->Register.File == TGSI_FILE_IMAGE &&
+          (fullinst->Memory.Texture == TGSI_TEXTURE_2D_MSAA ||
+           fullinst->Memory.Texture == TGSI_TEXTURE_2D_ARRAY_MSAA)) {
+         if (src->Register.Indirect)
+            info->msaa_images_declared = info->images_declared;
+         else
+            info->msaa_images_declared |= 1 << src->Register.Index;
+      }
+
       if (tgsi_get_opcode_info(fullinst->Instruction.Opcode)->is_store) {
          info->writes_memory = TRUE;
 
@@ -368,7 +377,19 @@ scan_instruction(struct tgsi_shader_info *info,
          info->uses_bindless_samplers = true;
       break;
    case TGSI_OPCODE_RESQ:
+      if (tgsi_is_bindless_image_file(fullinst->Src[0].Register.File))
+         info->uses_bindless_images = true;
+      break;
    case TGSI_OPCODE_LOAD:
+      if (tgsi_is_bindless_image_file(fullinst->Src[0].Register.File)) {
+         info->uses_bindless_images = true;
+
+         if (fullinst->Memory.Texture == TGSI_TEXTURE_BUFFER)
+            info->uses_bindless_buffer_load = true;
+         else
+            info->uses_bindless_image_load = true;
+      }
+      break;
    case TGSI_OPCODE_ATOMUADD:
    case TGSI_OPCODE_ATOMXCHG:
    case TGSI_OPCODE_ATOMCAS:
@@ -379,12 +400,30 @@ scan_instruction(struct tgsi_shader_info *info,
    case TGSI_OPCODE_ATOMUMAX:
    case TGSI_OPCODE_ATOMIMIN:
    case TGSI_OPCODE_ATOMIMAX:
-      if (tgsi_is_bindless_image_file(fullinst->Src[0].Register.File))
+   case TGSI_OPCODE_ATOMFADD:
+   case TGSI_OPCODE_ATOMINC_WRAP:
+   case TGSI_OPCODE_ATOMDEC_WRAP:
+      if (tgsi_is_bindless_image_file(fullinst->Src[0].Register.File)) {
          info->uses_bindless_images = true;
+
+         if (fullinst->Memory.Texture == TGSI_TEXTURE_BUFFER)
+            info->uses_bindless_buffer_atomic = true;
+         else
+            info->uses_bindless_image_atomic = true;
+      }
       break;
    case TGSI_OPCODE_STORE:
-      if (tgsi_is_bindless_image_file(fullinst->Dst[0].Register.File))
+      if (tgsi_is_bindless_image_file(fullinst->Dst[0].Register.File)) {
          info->uses_bindless_images = true;
+
+         if (fullinst->Memory.Texture == TGSI_TEXTURE_BUFFER)
+            info->uses_bindless_buffer_store = true;
+         else
+            info->uses_bindless_image_store = true;
+      }
+      break;
+   case TGSI_OPCODE_FBFETCH:
+      info->uses_fbfetch = true;
       break;
    default:
       break;
@@ -530,6 +569,14 @@ scan_instruction(struct tgsi_shader_info *info,
          info->writes_memory = TRUE;
 
          if (dst->Register.File == TGSI_FILE_IMAGE) {
+            if (fullinst->Memory.Texture == TGSI_TEXTURE_2D_MSAA ||
+                fullinst->Memory.Texture == TGSI_TEXTURE_2D_ARRAY_MSAA) {
+               if (dst->Register.Indirect)
+                  info->msaa_images_declared = info->images_declared;
+               else
+                  info->msaa_images_declared |= 1 << dst->Register.Index;
+            }
+
             if (dst->Register.Indirect)
                info->images_store = info->images_declared;
             else
@@ -657,6 +704,9 @@ scan_declaration(struct tgsi_shader_info *info,
             break;
          case TGSI_SEMANTIC_BASEVERTEX:
             info->uses_basevertex = TRUE;
+            break;
+         case TGSI_SEMANTIC_DRAWID:
+            info->uses_drawid = TRUE;
             break;
          case TGSI_SEMANTIC_PRIMID:
             info->uses_primid = TRUE;
@@ -818,7 +868,6 @@ tgsi_scan_shader(const struct tgsi_token *tokens,
       info->file_max[i] = -1;
    for (i = 0; i < ARRAY_SIZE(info->const_file_max); i++)
       info->const_file_max[i] = -1;
-   info->properties[TGSI_PROPERTY_GS_INVOCATIONS] = 1;
    for (i = 0; i < ARRAY_SIZE(info->sampler_targets); i++)
       info->sampler_targets[i] = TGSI_TEXTURE_UNKNOWN;
 
@@ -838,6 +887,9 @@ tgsi_scan_shader(const struct tgsi_token *tokens,
           procType == PIPE_SHADER_COMPUTE);
    info->processor = procType;
    info->num_tokens = tgsi_num_tokens(parse.Tokens);
+
+   if (procType == PIPE_SHADER_GEOMETRY)
+      info->properties[TGSI_PROPERTY_GS_INVOCATIONS] = 1;
 
    /**
     ** Loop over incoming program tokens/instructions
@@ -1004,11 +1056,12 @@ get_block_tessfactor_writemask(const struct tgsi_shader_info *info,
    struct tgsi_full_instruction *inst;
    unsigned writemask = 0;
 
-   do {
-      tgsi_parse_token(parse);
-      assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
-      inst = &parse->FullToken.FullInstruction;
-      check_no_subroutines(inst);
+   tgsi_parse_token(parse);
+   assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
+   inst = &parse->FullToken.FullInstruction;
+   check_no_subroutines(inst);
+
+   while (inst->Instruction.Opcode != end_opcode) {
 
       /* Recursively process nested blocks. */
       switch (inst->Instruction.Opcode) {
@@ -1016,20 +1069,26 @@ get_block_tessfactor_writemask(const struct tgsi_shader_info *info,
       case TGSI_OPCODE_UIF:
          writemask |=
             get_block_tessfactor_writemask(info, parse, TGSI_OPCODE_ENDIF);
-         continue;
+         break;
 
       case TGSI_OPCODE_BGNLOOP:
          writemask |=
             get_block_tessfactor_writemask(info, parse, TGSI_OPCODE_ENDLOOP);
-         continue;
+         break;
 
       case TGSI_OPCODE_BARRIER:
          unreachable("nested BARRIER is illegal");
-         continue;
+         break;
+
+      default:
+         writemask |= get_inst_tessfactor_writemask(info, inst);
       }
 
-      writemask |= get_inst_tessfactor_writemask(info, inst);
-   } while (inst->Instruction.Opcode != end_opcode);
+      tgsi_parse_token(parse);
+      assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
+      inst = &parse->FullToken.FullInstruction;
+      check_no_subroutines(inst);
+   }
 
    return writemask;
 }
@@ -1043,18 +1102,20 @@ get_if_block_tessfactor_writemask(const struct tgsi_shader_info *info,
    struct tgsi_full_instruction *inst;
    unsigned then_tessfactor_writemask = 0;
    unsigned else_tessfactor_writemask = 0;
+   unsigned writemask;
    bool is_then = true;
 
-   do {
-      tgsi_parse_token(parse);
-      assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
-      inst = &parse->FullToken.FullInstruction;
-      check_no_subroutines(inst);
+   tgsi_parse_token(parse);
+   assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
+   inst = &parse->FullToken.FullInstruction;
+   check_no_subroutines(inst);
+
+   while (inst->Instruction.Opcode != TGSI_OPCODE_ENDIF) {
 
       switch (inst->Instruction.Opcode) {
       case TGSI_OPCODE_ELSE:
          is_then = false;
-         continue;
+         break;
 
       /* Recursively process nested blocks. */
       case TGSI_OPCODE_IF:
@@ -1063,28 +1124,33 @@ get_if_block_tessfactor_writemask(const struct tgsi_shader_info *info,
                                            is_then ? &then_tessfactor_writemask :
                                                      &else_tessfactor_writemask,
                                            cond_block_tf_writemask);
-         continue;
+         break;
 
       case TGSI_OPCODE_BGNLOOP:
          *cond_block_tf_writemask |=
             get_block_tessfactor_writemask(info, parse, TGSI_OPCODE_ENDLOOP);
-         continue;
+         break;
 
       case TGSI_OPCODE_BARRIER:
          unreachable("nested BARRIER is illegal");
-         continue;
+         break;
+      default:
+         /* Process an instruction in the current block. */
+         writemask = get_inst_tessfactor_writemask(info, inst);
+
+         if (writemask) {
+            if (is_then)
+               then_tessfactor_writemask |= writemask;
+            else
+               else_tessfactor_writemask |= writemask;
+         }
       }
 
-      /* Process an instruction in the current block. */
-      unsigned writemask = get_inst_tessfactor_writemask(info, inst);
-
-      if (writemask) {
-         if (is_then)
-            then_tessfactor_writemask |= writemask;
-         else
-            else_tessfactor_writemask |= writemask;
-      }
-   } while (inst->Instruction.Opcode != TGSI_OPCODE_ENDIF);
+      tgsi_parse_token(parse);
+      assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
+      inst = &parse->FullToken.FullInstruction;
+      check_no_subroutines(inst);
+   }
 
    if (then_tessfactor_writemask || else_tessfactor_writemask) {
       /* If both statements write the same tess factor channels,
@@ -1147,7 +1213,7 @@ tgsi_scan_tess_ctrl(const struct tgsi_token *tokens,
 
       case TGSI_OPCODE_BGNLOOP:
          cond_block_tf_writemask |=
-            get_block_tessfactor_writemask(info, &parse, TGSI_OPCODE_ENDIF);
+            get_block_tessfactor_writemask(info, &parse, TGSI_OPCODE_ENDLOOP);
          continue;
 
       case TGSI_OPCODE_BARRIER:

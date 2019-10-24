@@ -217,7 +217,7 @@ nouveau_context_deinit(struct gl_context *ctx)
 	nouveau_object_del(&nctx->hw.chan);
 
 	nouveau_scratch_destroy(ctx);
-	_mesa_free_context_data(ctx);
+	_mesa_free_context_data(ctx, true);
 }
 
 void
@@ -250,11 +250,11 @@ nouveau_update_renderbuffers(__DRIcontext *dri_ctx, __DRIdrawable *draw)
 		attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
 	if (fb->Visual.doubleBufferMode)
 		attachments[i++] = __DRI_BUFFER_BACK_LEFT;
-	if (fb->Visual.haveDepthBuffer && fb->Visual.haveStencilBuffer)
+	if (fb->Visual.depthBits > 0 && fb->Visual.stencilBits > 0)
 		attachments[i++] = __DRI_BUFFER_DEPTH_STENCIL;
-	else if (fb->Visual.haveDepthBuffer)
+	else if (fb->Visual.depthBits > 0)
 		attachments[i++] = __DRI_BUFFER_DEPTH;
-	else if (fb->Visual.haveStencilBuffer)
+	else if (fb->Visual.stencilBits > 0)
 		attachments[i++] = __DRI_BUFFER_STENCIL;
 
 	buffers = screen->dri2.loader->getBuffers(draw, &draw->w, &draw->h,

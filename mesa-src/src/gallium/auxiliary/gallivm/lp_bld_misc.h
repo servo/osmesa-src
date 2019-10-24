@@ -31,6 +31,7 @@
 
 
 #include "lp_bld.h"
+#include <llvm/Config/llvm-config.h>
 #include <llvm-c/ExecutionEngine.h>
 #include <llvm-c/Target.h>
 
@@ -58,7 +59,6 @@ lp_build_create_jit_compiler_for_module(LLVMExecutionEngineRef *OutJIT,
                                         LLVMModuleRef M,
                                         LLVMMCJITMemoryManagerRef MM,
                                         unsigned OptLevel,
-                                        int useMCJIT,
                                         char **OutError);
 
 extern void

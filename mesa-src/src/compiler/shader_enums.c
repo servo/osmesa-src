@@ -43,8 +43,9 @@ gl_shader_stage_name(gl_shader_stage stage)
       ENUM(MESA_SHADER_GEOMETRY),
       ENUM(MESA_SHADER_FRAGMENT),
       ENUM(MESA_SHADER_COMPUTE),
+      ENUM(MESA_SHADER_KERNEL),
    };
-   STATIC_ASSERT(ARRAY_SIZE(names) == MESA_SHADER_STAGES);
+   STATIC_ASSERT(ARRAY_SIZE(names) == MESA_ALL_SHADER_STAGES);
    return NAME(stage);
 }
 
@@ -60,6 +61,7 @@ _mesa_shader_stage_to_string(unsigned stage)
    case MESA_SHADER_FRAGMENT: return "fragment";
    case MESA_SHADER_GEOMETRY: return "geometry";
    case MESA_SHADER_COMPUTE:  return "compute";
+   case MESA_SHADER_KERNEL:   return "kernel";
    case MESA_SHADER_TESS_CTRL: return "tessellation control";
    case MESA_SHADER_TESS_EVAL: return "tessellation evaluation";
    }
@@ -79,6 +81,7 @@ _mesa_shader_stage_to_abbrev(unsigned stage)
    case MESA_SHADER_FRAGMENT: return "FS";
    case MESA_SHADER_GEOMETRY: return "GS";
    case MESA_SHADER_COMPUTE:  return "CS";
+   case MESA_SHADER_KERNEL:   return "CL";
    case MESA_SHADER_TESS_CTRL: return "TCS";
    case MESA_SHADER_TESS_EVAL: return "TES";
    }
@@ -223,11 +226,14 @@ gl_system_value_name(gl_system_value sysval)
      ENUM(SYSTEM_VALUE_DRAW_ID),
      ENUM(SYSTEM_VALUE_INVOCATION_ID),
      ENUM(SYSTEM_VALUE_FRAG_COORD),
+     ENUM(SYSTEM_VALUE_POINT_COORD),
      ENUM(SYSTEM_VALUE_FRONT_FACE),
      ENUM(SYSTEM_VALUE_SAMPLE_ID),
      ENUM(SYSTEM_VALUE_SAMPLE_POS),
      ENUM(SYSTEM_VALUE_SAMPLE_MASK_IN),
      ENUM(SYSTEM_VALUE_HELPER_INVOCATION),
+     ENUM(SYSTEM_VALUE_COLOR0),
+     ENUM(SYSTEM_VALUE_COLOR1),
      ENUM(SYSTEM_VALUE_TESS_COORD),
      ENUM(SYSTEM_VALUE_VERTICES_IN),
      ENUM(SYSTEM_VALUE_PRIMITIVE_ID),
@@ -244,7 +250,11 @@ gl_system_value_name(gl_system_value sysval)
      ENUM(SYSTEM_VALUE_DEVICE_INDEX),
      ENUM(SYSTEM_VALUE_VIEW_INDEX),
      ENUM(SYSTEM_VALUE_VERTEX_CNT),
-     ENUM(SYSTEM_VALUE_VARYING_COORD),
+     ENUM(SYSTEM_VALUE_BARYCENTRIC_PIXEL),
+     ENUM(SYSTEM_VALUE_BARYCENTRIC_SAMPLE),
+     ENUM(SYSTEM_VALUE_BARYCENTRIC_CENTROID),
+     ENUM(SYSTEM_VALUE_BARYCENTRIC_SIZE),
+     ENUM(SYSTEM_VALUE_GS_HEADER_IR3),
    };
    STATIC_ASSERT(ARRAY_SIZE(names) == SYSTEM_VALUE_MAX);
    return NAME(sysval);

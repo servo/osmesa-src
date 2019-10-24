@@ -1134,20 +1134,13 @@ static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
 
 static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
                                                       struct winsys_handle *whandle,
-                                                      unsigned *stride,
-                                                      unsigned *offset)
+                                                      unsigned vm_alignment)
 {
     struct radeon_drm_winsys *ws = radeon_drm_winsys(rws);
     struct radeon_bo *bo;
     int r;
     unsigned handle;
     uint64_t size = 0;
-
-    if (!offset && whandle->offset != 0) {
-        fprintf(stderr, "attempt to import unsupported winsys offset %u\n",
-                whandle->offset);
-        return NULL;
-    }
 
     /* We must maintain a list of pairs <handle, bo>, so that we always return
      * the same BO for one particular handle. If we didn't do that and created
@@ -1231,15 +1224,10 @@ static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
 done:
     mtx_unlock(&ws->bo_handles_mutex);
 
-    if (stride)
-        *stride = whandle->stride;
-    if (offset)
-        *offset = whandle->offset;
-
     if (ws->info.r600_has_virtual_memory && !bo->va) {
         struct drm_radeon_gem_va va;
 
-        bo->va = radeon_bomgr_find_va64(ws, bo->base.size, 1 << 20);
+        bo->va = radeon_bomgr_find_va64(ws, bo->base.size, vm_alignment);
 
         va.handle = bo->handle;
         va.operation = RADEON_VA_MAP;
@@ -1284,9 +1272,8 @@ fail:
     return NULL;
 }
 
-static bool radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
-                                        unsigned stride, unsigned offset,
-                                        unsigned slice_size,
+static bool radeon_winsys_bo_get_handle(struct radeon_winsys *rws,
+                                        struct pb_buffer *buffer,
                                         struct winsys_handle *whandle)
 {
     struct drm_gem_flink flink;
@@ -1322,10 +1309,6 @@ static bool radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
         if (drmPrimeHandleToFD(ws->fd, bo->handle, DRM_CLOEXEC, (int*)&whandle->handle))
             return false;
     }
-
-    whandle->stride = stride;
-    whandle->offset = offset;
-    whandle->offset += slice_size * whandle->layer;
 
     return true;
 }

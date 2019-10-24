@@ -79,15 +79,21 @@ put_image2(__DRIdrawable *dPriv, void *data, int x, int y,
 
 static inline void
 put_image_shm(__DRIdrawable *dPriv, int shmid, char *shmaddr,
-              unsigned offset, int x, int y,
+              unsigned offset, unsigned offset_x, int x, int y,
               unsigned width, unsigned height, unsigned stride)
 {
    __DRIscreen *sPriv = dPriv->driScreenPriv;
    const __DRIswrastLoaderExtension *loader = sPriv->swrast_loader;
 
-   loader->putImageShm(dPriv, __DRI_SWRAST_IMAGE_OP_SWAP,
-                       x, y, width, height, stride,
-                       shmid, shmaddr, offset, dPriv->loaderPrivate);
+   /* if we have the newer interface, don't have to add the offset_x here. */
+   if (loader->base.version > 4 && loader->putImageShm2)
+     loader->putImageShm2(dPriv, __DRI_SWRAST_IMAGE_OP_SWAP,
+                          x, y, width, height, stride,
+                          shmid, shmaddr, offset, dPriv->loaderPrivate);
+   else
+     loader->putImageShm(dPriv, __DRI_SWRAST_IMAGE_OP_SWAP,
+                         x, y, width, height, stride,
+                         shmid, shmaddr, offset + offset_x, dPriv->loaderPrivate);
 }
 
 static inline void
@@ -179,12 +185,13 @@ drisw_put_image2(struct dri_drawable *drawable,
 static inline void
 drisw_put_image_shm(struct dri_drawable *drawable,
                     int shmid, char *shmaddr, unsigned offset,
+                    unsigned offset_x,
                     int x, int y, unsigned width, unsigned height,
                     unsigned stride)
 {
    __DRIdrawable *dPriv = drawable->dPriv;
 
-   put_image_shm(dPriv, shmid, shmaddr, offset, x, y, width, height, stride);
+   put_image_shm(dPriv, shmid, shmaddr, offset, offset_x, x, y, width, height, stride);
 }
 
 static inline void
@@ -238,6 +245,9 @@ drisw_swap_buffers(__DRIdrawable *dPriv)
    if (ptex) {
       if (ctx->pp)
          pp_run(ctx->pp, ptex, ptex, drawable->textures[ST_ATTACHMENT_DEPTH_STENCIL]);
+
+      if (ctx->hud)
+         hud_run(ctx->hud, ctx->st->cso_context, ptex);
 
       ctx->st->flush(ctx->st, ST_FLUSH_FRONT, NULL);
 
@@ -421,10 +431,17 @@ static const __DRIextension *drisw_screen_extensions[] = {
    NULL
 };
 
-static struct drisw_loader_funcs drisw_lf = {
+static const struct drisw_loader_funcs drisw_lf = {
    .get_image = drisw_get_image,
    .put_image = drisw_put_image,
    .put_image2 = drisw_put_image2
+};
+
+static const struct drisw_loader_funcs drisw_shm_lf = {
+   .get_image = drisw_get_image,
+   .put_image = drisw_put_image,
+   .put_image2 = drisw_put_image2,
+   .put_image_shm = drisw_put_image_shm
 };
 
 static const __DRIconfig **
@@ -434,6 +451,7 @@ drisw_init_screen(__DRIscreen * sPriv)
    const __DRIconfig **configs;
    struct dri_screen *screen;
    struct pipe_screen *pscreen = NULL;
+   const struct drisw_loader_funcs *lf = &drisw_lf;
 
    screen = CALLOC_STRUCT(dri_screen);
    if (!screen)
@@ -448,10 +466,10 @@ drisw_init_screen(__DRIscreen * sPriv)
    sPriv->extensions = drisw_screen_extensions;
    if (loader->base.version >= 4) {
       if (loader->putImageShm)
-         drisw_lf.put_image_shm = drisw_put_image_shm;
+         lf = &drisw_shm_lf;
    }
 
-   if (pipe_loader_sw_probe_dri(&screen->dev, &drisw_lf)) {
+   if (pipe_loader_sw_probe_dri(&screen->dev, lf)) {
       dri_init_options(screen);
 
       pscreen = pipe_loader_create_screen(screen->dev);

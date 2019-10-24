@@ -24,6 +24,7 @@
 #include "common/gen_decoder.h"
 #include "gen_disasm.h"
 #include "util/macros.h"
+#include "main/macros.h" /* Needed for ROUND_DOWN_TO */
 
 #include <string.h>
 
@@ -33,6 +34,7 @@ gen_batch_decode_ctx_init(struct gen_batch_decode_ctx *ctx,
                           FILE *fp, enum gen_batch_decode_flags flags,
                           const char *xml_path,
                           struct gen_batch_decode_bo (*get_bo)(void *,
+                                                               bool,
                                                                uint64_t),
                           unsigned (*get_state_size)(void *, uint32_t),
                           void *user_data)
@@ -45,6 +47,7 @@ gen_batch_decode_ctx_init(struct gen_batch_decode_ctx *ctx,
    ctx->fp = fp;
    ctx->flags = flags;
    ctx->max_vbo_decoded_lines = -1; /* No limit! */
+   ctx->engine = I915_ENGINE_CLASS_RENDER;
 
    if (xml_path == NULL)
       ctx->spec = gen_spec_load(devinfo);
@@ -76,7 +79,7 @@ ctx_print_group(struct gen_batch_decode_ctx *ctx,
 }
 
 static struct gen_batch_decode_bo
-ctx_get_bo(struct gen_batch_decode_ctx *ctx, uint64_t addr)
+ctx_get_bo(struct gen_batch_decode_ctx *ctx, bool ppgtt, uint64_t addr)
 {
    if (gen_spec_get_gen(ctx->spec) >= gen_make_gen(8,0)) {
       /* On Broadwell and above, we have 48-bit addresses which consume two
@@ -88,7 +91,7 @@ ctx_get_bo(struct gen_batch_decode_ctx *ctx, uint64_t addr)
       addr &= (~0ull >> 16);
    }
 
-   struct gen_batch_decode_bo bo = ctx->get_bo(ctx->user_data, addr);
+   struct gen_batch_decode_bo bo = ctx->get_bo(ctx->user_data, ppgtt, addr);
 
    if (gen_spec_get_gen(ctx->spec) >= gen_make_gen(8,0))
       bo.addr &= (~0ull >> 16);
@@ -128,7 +131,7 @@ ctx_disassemble_program(struct gen_batch_decode_ctx *ctx,
                         uint32_t ksp, const char *type)
 {
    uint64_t addr = ctx->instruction_base + ksp;
-   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, addr);
+   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, true, addr);
    if (!bo.map)
       return;
 
@@ -168,7 +171,8 @@ ctx_print_buffer(struct gen_batch_decode_ctx *ctx,
                  uint32_t pitch,
                  int max_lines)
 {
-   const uint32_t *dw_end = bo.map + MIN2(bo.size, read_length);
+   const uint32_t *dw_end =
+         bo.map + ROUND_DOWN_TO(MIN2(bo.size, read_length), 4);
 
    int column_count = 0, line_count = -1;
    for (const uint32_t *dw = bo.map; dw < dw_end; dw++) {
@@ -192,10 +196,16 @@ ctx_print_buffer(struct gen_batch_decode_ctx *ctx,
    fprintf(ctx->fp, "\n");
 }
 
+static struct gen_group *
+gen_ctx_find_instruction(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
+{
+   return gen_spec_find_instruction(ctx->spec, ctx->engine, p);
+}
+
 static void
 handle_state_base_address(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
 {
-   struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *inst = gen_ctx_find_instruction(ctx, p);
 
    struct gen_field_iterator iter;
    gen_field_iterator_init(&iter, inst, p, 0, false);
@@ -214,7 +224,7 @@ handle_state_base_address(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
          surface_modify = iter.raw_value;
       } else if (strcmp(iter.name, "Dynamic State Base Address Modify Enable") == 0) {
          dynamic_modify = iter.raw_value;
-      } else if (strcmp(iter.name, "Insntruction Base Address Modify Enable") == 0) {
+      } else if (strcmp(iter.name, "Instruction Base Address Modify Enable") == 0) {
          instruction_modify = iter.raw_value;
       }
    }
@@ -248,7 +258,7 @@ dump_binding_table(struct gen_batch_decode_ctx *ctx, uint32_t offset, int count)
    }
 
    struct gen_batch_decode_bo bind_bo =
-      ctx_get_bo(ctx, ctx->surface_base + offset);
+      ctx_get_bo(ctx, true, ctx->surface_base + offset);
 
    if (bind_bo.map == NULL) {
       fprintf(ctx->fp, "  binding table unavailable\n");
@@ -261,7 +271,7 @@ dump_binding_table(struct gen_batch_decode_ctx *ctx, uint32_t offset, int count)
          continue;
 
       uint64_t addr = ctx->surface_base + pointers[i];
-      struct gen_batch_decode_bo bo = ctx_get_bo(ctx, addr);
+      struct gen_batch_decode_bo bo = ctx_get_bo(ctx, true, addr);
       uint32_t size = strct->dw_length * 4;
 
       if (pointers[i] % 32 != 0 ||
@@ -284,7 +294,7 @@ dump_samplers(struct gen_batch_decode_ctx *ctx, uint32_t offset, int count)
       count = update_count(ctx, offset, strct->dw_length, 4);
 
    uint64_t state_addr = ctx->dynamic_base + offset;
-   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, state_addr);
+   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, true, state_addr);
    const void *state_map = bo.map;
 
    if (state_map == NULL) {
@@ -309,7 +319,7 @@ static void
 handle_media_interface_descriptor_load(struct gen_batch_decode_ctx *ctx,
                                        const uint32_t *p)
 {
-   struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *inst = gen_ctx_find_instruction(ctx, p);
    struct gen_group *desc =
       gen_spec_find_struct(ctx->spec, "INTERFACE_DESCRIPTOR_DATA");
 
@@ -327,7 +337,7 @@ handle_media_interface_descriptor_load(struct gen_batch_decode_ctx *ctx,
    }
 
    uint64_t desc_addr = ctx->dynamic_base + descriptor_offset;
-   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, desc_addr);
+   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, true, desc_addr);
    const void *desc_map = bo.map;
 
    if (desc_map == NULL) {
@@ -373,7 +383,7 @@ static void
 handle_3dstate_vertex_buffers(struct gen_batch_decode_ctx *ctx,
                               const uint32_t *p)
 {
-   struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *inst = gen_ctx_find_instruction(ctx, p);
    struct gen_group *vbs = gen_spec_find_struct(ctx->spec, "VERTEX_BUFFER_STATE");
 
    struct gen_batch_decode_bo vb = {};
@@ -396,13 +406,13 @@ handle_3dstate_vertex_buffers(struct gen_batch_decode_ctx *ctx,
          } else if (strcmp(vbs_iter.name, "Buffer Pitch") == 0) {
             pitch = vbs_iter.raw_value;
          } else if (strcmp(vbs_iter.name, "Buffer Starting Address") == 0) {
-            vb = ctx_get_bo(ctx, vbs_iter.raw_value);
+            vb = ctx_get_bo(ctx, true, vbs_iter.raw_value);
          } else if (strcmp(vbs_iter.name, "Buffer Size") == 0) {
             vb_size = vbs_iter.raw_value;
             ready = true;
          } else if (strcmp(vbs_iter.name, "End Address") == 0) {
             if (vb.map && vbs_iter.raw_value >= vb.addr)
-               vb_size = vbs_iter.raw_value - vb.addr;
+               vb_size = (vbs_iter.raw_value + 1) - vb.addr;
             else
                vb_size = 0;
             ready = true;
@@ -436,7 +446,7 @@ static void
 handle_3dstate_index_buffer(struct gen_batch_decode_ctx *ctx,
                             const uint32_t *p)
 {
-   struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *inst = gen_ctx_find_instruction(ctx, p);
 
    struct gen_batch_decode_bo ib = {};
    uint32_t ib_size = 0;
@@ -448,7 +458,7 @@ handle_3dstate_index_buffer(struct gen_batch_decode_ctx *ctx,
       if (strcmp(iter.name, "Index Format") == 0) {
          format = iter.raw_value;
       } else if (strcmp(iter.name, "Buffer Starting Address") == 0) {
-         ib = ctx_get_bo(ctx, iter.raw_value);
+         ib = ctx_get_bo(ctx, true, iter.raw_value);
       } else if (strcmp(iter.name, "Buffer Size") == 0) {
          ib_size = iter.raw_value;
       }
@@ -486,7 +496,7 @@ handle_3dstate_index_buffer(struct gen_batch_decode_ctx *ctx,
 static void
 decode_single_ksp(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
 {
-   struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *inst = gen_ctx_find_instruction(ctx, p);
 
    uint64_t ksp = 0;
    bool is_simd8 = false; /* vertex shaders on Gen8+ only */
@@ -528,7 +538,7 @@ decode_single_ksp(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
 static void
 decode_ps_kernels(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
 {
-   struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *inst = gen_ctx_find_instruction(ctx, p);
 
    uint64_t ksp[3] = {0, 0, 0};
    bool enabled[3] = {false, false, false};
@@ -570,13 +580,15 @@ decode_ps_kernels(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
       ctx_disassemble_program(ctx, ksp[1], "SIMD16 fragment shader");
    if (enabled[2])
       ctx_disassemble_program(ctx, ksp[2], "SIMD32 fragment shader");
-   fprintf(ctx->fp, "\n");
+
+   if (enabled[0] || enabled[1] || enabled[2])
+      fprintf(ctx->fp, "\n");
 }
 
 static void
 decode_3dstate_constant(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
 {
-   struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *inst = gen_ctx_find_instruction(ctx, p);
    struct gen_group *body =
       gen_spec_find_struct(ctx->spec, "3DSTATE_CONSTANT_BODY");
 
@@ -606,7 +618,7 @@ decode_3dstate_constant(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
          if (read_length[i] == 0)
             continue;
 
-         struct gen_batch_decode_bo buffer = ctx_get_bo(ctx, read_addr[i]);
+         struct gen_batch_decode_bo buffer = ctx_get_bo(ctx, true, read_addr[i]);
          if (!buffer.map) {
             fprintf(ctx->fp, "constant buffer %d unavailable\n", i);
             continue;
@@ -618,6 +630,20 @@ decode_3dstate_constant(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
          ctx_print_buffer(ctx, buffer, size, 0, -1);
       }
    }
+}
+
+static void
+decode_gen6_3dstate_binding_table_pointers(struct gen_batch_decode_ctx *ctx,
+                                           const uint32_t *p)
+{
+   fprintf(ctx->fp, "VS Binding Table:\n");
+   dump_binding_table(ctx, p[1], -1);
+
+   fprintf(ctx->fp, "GS Binding Table:\n");
+   dump_binding_table(ctx, p[2], -1);
+
+   fprintf(ctx->fp, "PS Binding Table:\n");
+   dump_binding_table(ctx, p[3], -1);
 }
 
 static void
@@ -658,7 +684,7 @@ decode_dynamic_state_pointers(struct gen_batch_decode_ctx *ctx,
                               const char *struct_type, const uint32_t *p,
                               int count)
 {
-   struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *inst = gen_ctx_find_instruction(ctx, p);
 
    uint32_t state_offset = 0;
 
@@ -672,7 +698,7 @@ decode_dynamic_state_pointers(struct gen_batch_decode_ctx *ctx,
    }
 
    uint64_t state_addr = ctx->dynamic_base + state_offset;
-   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, state_addr);
+   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, true, state_addr);
    const void *state_map = bo.map;
 
    if (state_map == NULL) {
@@ -695,6 +721,8 @@ decode_dynamic_state_pointers(struct gen_batch_decode_ctx *ctx,
       struct_type = "BLEND_STATE_ENTRY";
       state = gen_spec_find_struct(ctx->spec, struct_type);
    }
+
+   count = update_count(ctx, state_offset, state->dw_length, count);
 
    for (int i = 0; i < count; i++) {
       fprintf(ctx->fp, "%s %d\n", struct_type, i);
@@ -741,6 +769,13 @@ decode_3dstate_scissor_state_pointers(struct gen_batch_decode_ctx *ctx,
 }
 
 static void
+decode_3dstate_slice_table_state_pointers(struct gen_batch_decode_ctx *ctx,
+                                          const uint32_t *p)
+{
+   decode_dynamic_state_pointers(ctx, "SLICE_HASH_TABLE", p, 1);
+}
+
+static void
 decode_load_register_imm(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
 {
    struct gen_group *reg = gen_spec_find_register(ctx->spec, p[1]);
@@ -765,12 +800,14 @@ struct custom_decoder {
    { "3DSTATE_DS", decode_single_ksp },
    { "3DSTATE_HS", decode_single_ksp },
    { "3DSTATE_PS", decode_ps_kernels },
+   { "3DSTATE_WM", decode_ps_kernels },
    { "3DSTATE_CONSTANT_VS", decode_3dstate_constant },
    { "3DSTATE_CONSTANT_GS", decode_3dstate_constant },
    { "3DSTATE_CONSTANT_PS", decode_3dstate_constant },
    { "3DSTATE_CONSTANT_HS", decode_3dstate_constant },
    { "3DSTATE_CONSTANT_DS", decode_3dstate_constant },
 
+   { "3DSTATE_BINDING_TABLE_POINTERS", decode_gen6_3dstate_binding_table_pointers },
    { "3DSTATE_BINDING_TABLE_POINTERS_VS", decode_3dstate_binding_table_pointers },
    { "3DSTATE_BINDING_TABLE_POINTERS_HS", decode_3dstate_binding_table_pointers },
    { "3DSTATE_BINDING_TABLE_POINTERS_DS", decode_3dstate_binding_table_pointers },
@@ -789,25 +826,35 @@ struct custom_decoder {
    { "3DSTATE_BLEND_STATE_POINTERS", decode_3dstate_blend_state_pointers },
    { "3DSTATE_CC_STATE_POINTERS", decode_3dstate_cc_state_pointers },
    { "3DSTATE_SCISSOR_STATE_POINTERS", decode_3dstate_scissor_state_pointers },
+   { "3DSTATE_SLICE_TABLE_STATE_POINTERS", decode_3dstate_slice_table_state_pointers },
    { "MI_LOAD_REGISTER_IMM", decode_load_register_imm }
 };
 
 void
 gen_print_batch(struct gen_batch_decode_ctx *ctx,
                 const uint32_t *batch, uint32_t batch_size,
-                uint64_t batch_addr)
+                uint64_t batch_addr, bool from_ring)
 {
    const uint32_t *p, *end = batch + batch_size / sizeof(uint32_t);
    int length;
    struct gen_group *inst;
+   const char *reset_color = ctx->flags & GEN_BATCH_DECODE_IN_COLOR ? NORMAL : "";
+
+   if (ctx->n_batch_buffer_start >= 100) {
+      fprintf(ctx->fp, "%s0x%08"PRIx64": Max batch buffer jumps exceeded%s\n",
+              (ctx->flags & GEN_BATCH_DECODE_IN_COLOR) ? RED_COLOR : "",
+              (ctx->flags & GEN_BATCH_DECODE_OFFSETS) ? batch_addr : 0,
+              reset_color);
+      return;
+   }
+
+   ctx->n_batch_buffer_start++;
 
    for (p = batch; p < end; p += length) {
-      inst = gen_spec_find_instruction(ctx->spec, p);
+      inst = gen_ctx_find_instruction(ctx, p);
       length = gen_group_get_length(inst, p);
       assert(inst == NULL || length > 0);
       length = MAX2(1, length);
-
-      const char *reset_color = ctx->flags & GEN_BATCH_DECODE_IN_COLOR ? NORMAL : "";
 
       uint64_t offset;
       if (ctx->flags & GEN_BATCH_DECODE_OFFSETS)
@@ -855,24 +902,29 @@ gen_print_batch(struct gen_batch_decode_ctx *ctx,
       }
 
       if (strcmp(inst_name, "MI_BATCH_BUFFER_START") == 0) {
-         struct gen_batch_decode_bo next_batch = {};
-         bool second_level;
+         uint64_t next_batch_addr = 0;
+         bool ppgtt = false;
+         bool second_level = false;
          struct gen_field_iterator iter;
          gen_field_iterator_init(&iter, inst, p, 0, false);
          while (gen_field_iterator_next(&iter)) {
             if (strcmp(iter.name, "Batch Buffer Start Address") == 0) {
-               next_batch = ctx_get_bo(ctx, iter.raw_value);
+               next_batch_addr = iter.raw_value;
             } else if (strcmp(iter.name, "Second Level Batch Buffer") == 0) {
                second_level = iter.raw_value;
+            } else if (strcmp(iter.name, "Address Space Indicator") == 0) {
+               ppgtt = iter.raw_value;
             }
          }
 
+         struct gen_batch_decode_bo next_batch = ctx_get_bo(ctx, ppgtt, next_batch_addr);
+
          if (next_batch.map == NULL) {
             fprintf(ctx->fp, "Secondary batch at 0x%08"PRIx64" unavailable\n",
-                    next_batch.addr);
+                    next_batch_addr);
          } else {
             gen_print_batch(ctx, next_batch.map, next_batch.size,
-                            next_batch.addr);
+                            next_batch.addr, false);
          }
          if (second_level) {
             /* MI_BATCH_BUFFER_START with "2nd Level Batch Buffer" set acts
@@ -881,7 +933,7 @@ gen_print_batch(struct gen_batch_decode_ctx *ctx,
              * MI_BATCH_BUFFER_END.
              */
             continue;
-         } else {
+         } else if (!from_ring) {
             /* MI_BATCH_BUFFER_START with "2nd Level Batch Buffer" unset acts
              * like a goto.  Nothing after it will ever get processed.  In
              * order to prevent the recursion from growing, we just reset the
@@ -893,4 +945,6 @@ gen_print_batch(struct gen_batch_decode_ctx *ctx,
          break;
       }
    }
+
+   ctx->n_batch_buffer_start--;
 }

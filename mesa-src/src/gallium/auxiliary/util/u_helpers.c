@@ -52,6 +52,8 @@ void util_set_vertex_buffers_mask(struct pipe_vertex_buffer *dst,
 
    dst += start_slot;
 
+   *enabled_buffers &= ~u_bit_consecutive(start_slot, count);
+
    if (src) {
       for (i = 0; i < count; i++) {
          if (src[i].buffer.resource)
@@ -66,15 +68,12 @@ void util_set_vertex_buffers_mask(struct pipe_vertex_buffer *dst,
       /* Copy over the other members of pipe_vertex_buffer. */
       memcpy(dst, src, count * sizeof(struct pipe_vertex_buffer));
 
-      *enabled_buffers &= ~(((1ull << count) - 1) << start_slot);
       *enabled_buffers |= bitmask << start_slot;
    }
    else {
       /* Unreference the buffers. */
       for (i = 0; i < count; i++)
          pipe_vertex_buffer_unreference(&dst[i]);
-
-      *enabled_buffers &= ~(((1ull << count) - 1) << start_slot);
    }
 }
 
@@ -102,6 +101,43 @@ void util_set_vertex_buffers_count(struct pipe_vertex_buffer *dst,
 }
 
 /**
+ * This function is used to copy an array of pipe_shader_buffer structures,
+ * while properly referencing the pipe_shader_buffer::buffer member.
+ *
+ * \sa util_set_vertex_buffer_mask
+ */
+void util_set_shader_buffers_mask(struct pipe_shader_buffer *dst,
+                                  uint32_t *enabled_buffers,
+                                  const struct pipe_shader_buffer *src,
+                                  unsigned start_slot, unsigned count)
+{
+   unsigned i;
+
+   dst += start_slot;
+
+   if (src) {
+      for (i = 0; i < count; i++) {
+         pipe_resource_reference(&dst[i].buffer, src[i].buffer);
+
+         if (src[i].buffer)
+            *enabled_buffers |= (1ull << (start_slot + i));
+         else
+            *enabled_buffers &= ~(1ull << (start_slot + i));
+      }
+
+      /* Copy over the other members of pipe_shader_buffer. */
+      memcpy(dst, src, count * sizeof(struct pipe_shader_buffer));
+   }
+   else {
+      /* Unreference the buffers. */
+      for (i = 0; i < count; i++)
+         pipe_resource_reference(&dst[i].buffer, NULL);
+
+      *enabled_buffers &= ~(((1ull << count) - 1) << start_slot);
+   }
+}
+
+/**
  * Given a user index buffer, save the structure to "saved", and upload it.
  */
 bool
@@ -121,43 +157,6 @@ util_upload_index_buffer(struct pipe_context *pipe,
    return *out_buffer != NULL;
 }
 
-#ifdef HAVE_PTHREAD_SETAFFINITY
-
-static unsigned L3_cache_number;
-static once_flag thread_pinning_once_flag = ONCE_FLAG_INIT;
-
-static void
-util_set_full_cpu_affinity(void)
-{
-   cpu_set_t cpuset;
-
-   CPU_ZERO(&cpuset);
-   for (unsigned i = 0; i < CPU_SETSIZE; i++)
-      CPU_SET(i, &cpuset);
-
-   pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
-}
-
-static void
-util_init_thread_pinning(void)
-{
-   /* Get a semi-random number. */
-   int64_t t = os_time_get_nano();
-   L3_cache_number = (t ^ (t >> 8) ^ (t >> 16));
-
-   /* Reset thread affinity for all child processes to prevent them from
-    * inheriting the current thread's affinity.
-    *
-    * XXX: If the driver is unloaded after this, and the app later calls
-    * fork(), the child process will likely crash before fork() returns,
-    * because the address where util_set_full_cpu_affinity was located
-    * will either be unmapped or point to random other contents.
-    */
-   pthread_atfork(NULL, NULL, util_set_full_cpu_affinity);
-}
-
-#endif
-
 /**
  * Called by MakeCurrent. Used to notify the driver that the application
  * thread may have been changed.
@@ -170,30 +169,21 @@ util_init_thread_pinning(void)
  *                      pinned.
  */
 void
-util_context_thread_changed(struct pipe_context *ctx, thrd_t *upper_thread)
+util_pin_driver_threads_to_random_L3(struct pipe_context *ctx,
+                                     thrd_t *upper_thread)
 {
-#ifdef HAVE_PTHREAD_SETAFFINITY
    /* If pinning has no effect, don't do anything. */
    if (util_cpu_caps.nr_cpus == util_cpu_caps.cores_per_L3)
       return;
 
-   thrd_t current = thrd_current();
-   int cache = util_get_L3_for_pinned_thread(current,
-                                             util_cpu_caps.cores_per_L3);
+   unsigned num_L3_caches = util_cpu_caps.nr_cpus /
+                            util_cpu_caps.cores_per_L3;
 
-   call_once(&thread_pinning_once_flag, util_init_thread_pinning);
+   /* Get a semi-random number. */
+   int64_t t = os_time_get_nano();
+   unsigned cache = (t ^ (t >> 8) ^ (t >> 16)) % num_L3_caches;
 
-   /* If the main thread is not pinned, choose the L3 cache. */
-   if (cache == -1) {
-      unsigned num_L3_caches = util_cpu_caps.nr_cpus /
-                               util_cpu_caps.cores_per_L3;
-
-      /* Choose a different L3 cache for each subsequent MakeCurrent. */
-      cache = p_atomic_inc_return(&L3_cache_number) % num_L3_caches;
-      util_pin_thread_to_L3(current, cache, util_cpu_caps.cores_per_L3);
-   }
-
-   /* Tell the driver to pin its threads to the same L3 cache. */
+   /* Tell the driver to pin its threads to the selected L3 cache. */
    if (ctx->set_context_param) {
       ctx->set_context_param(ctx, PIPE_CONTEXT_PARAM_PIN_THREADS_TO_L3_CACHE,
                              cache);
@@ -202,7 +192,6 @@ util_context_thread_changed(struct pipe_context *ctx, thrd_t *upper_thread)
    /* Do the same for the upper level thread if there is any (e.g. glthread) */
    if (upper_thread)
       util_pin_thread_to_L3(*upper_thread, cache, util_cpu_caps.cores_per_L3);
-#endif
 }
 
 /* This is a helper for hardware bring-up. Don't remove. */
@@ -243,7 +232,7 @@ util_end_pipestat_query(struct pipe_context *ctx, struct pipe_query *q,
            "    hs_invocations = %"PRIu64"\n"
            "    ds_invocations = %"PRIu64"\n"
            "    cs_invocations = %"PRIu64"\n",
-           p_atomic_inc_return(&counter),
+           (unsigned)p_atomic_inc_return(&counter),
            stats.ia_vertices,
            stats.ia_primitives,
            stats.vs_invocations,

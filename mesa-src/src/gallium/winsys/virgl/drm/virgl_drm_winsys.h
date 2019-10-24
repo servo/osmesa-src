@@ -29,6 +29,7 @@
 #include "util/list.h"
 
 #include "virgl/virgl_winsys.h"
+#include "virgl_resource_cache.h"
 
 struct pipe_fence_handle;
 struct util_hash_table;
@@ -37,28 +38,26 @@ struct virgl_hw_res {
    struct pipe_reference reference;
    uint32_t res_handle;
    uint32_t bo_handle;
-   uint32_t name;
    int num_cs_references;
    uint32_t size;
    void *ptr;
-   uint32_t stride;
 
-   struct list_head head;
-   uint32_t format;
+   struct virgl_resource_cache_entry cache_entry;
    uint32_t bind;
-   boolean cacheable;
-   int64_t start, end;
-   boolean flinked;
-   uint32_t flink;
+   uint32_t flink_name;
+
+   /* true when the resource is imported or exported */
+   int external;
+
+   /* false when the resource is known to be idle */
+   int maybe_busy;
 };
 
 struct virgl_drm_winsys
 {
    struct virgl_winsys base;
    int fd;
-   struct list_head delayed;
-   int num_delayed;
-   unsigned usecs;
+   struct virgl_resource_cache cache;
    mtx_t mutex;
 
    struct util_hash_table *bo_handles;
@@ -67,10 +66,19 @@ struct virgl_drm_winsys
    bool has_capset_query_fix;
 };
 
+struct virgl_drm_fence {
+   struct pipe_reference reference;
+   bool external;
+   int fd;
+   struct virgl_hw_res *hw_res;
+};
+
 struct virgl_drm_cmd_buf {
    struct virgl_cmd_buf base;
 
-   uint32_t buf[VIRGL_MAX_CMDBUF_DWORDS];
+   uint32_t *buf;
+
+   int in_fence_fd;
 
    unsigned nres;
    unsigned cres;
@@ -83,16 +91,16 @@ struct virgl_drm_cmd_buf {
 
 };
 
-static inline struct virgl_hw_res *
-virgl_hw_res(struct pipe_fence_handle *f)
-{
-   return (struct virgl_hw_res *)f;
-}
-
 static inline struct virgl_drm_winsys *
 virgl_drm_winsys(struct virgl_winsys *iws)
 {
    return (struct virgl_drm_winsys *)iws;
+}
+
+static inline struct virgl_drm_fence *
+virgl_drm_fence(struct pipe_fence_handle *f)
+{
+   return (struct virgl_drm_fence *)f;
 }
 
 static inline struct virgl_drm_cmd_buf *

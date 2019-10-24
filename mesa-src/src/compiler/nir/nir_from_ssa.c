@@ -551,7 +551,7 @@ emit_copy(nir_builder *b, nir_src src, nir_src dest_src)
    else
       assert(src.reg.reg->num_components >= dest_src.reg.reg->num_components);
 
-   nir_alu_instr *mov = nir_alu_instr_create(b->shader, nir_op_imov);
+   nir_alu_instr *mov = nir_alu_instr_create(b->shader, nir_op_mov);
    nir_src_copy(&mov->src[0].src, &src, mov);
    mov->dest.dest = nir_dest_for_reg(dest_src.reg.reg);
    mov->dest.write_mask = (1 << dest_src.reg.reg->num_components) - 1;
@@ -707,10 +707,13 @@ resolve_parallel_copy(nir_parallel_copy_instr *pcopy,
       nir_register *reg = nir_local_reg_create(state->builder.impl);
       reg->name = "copy_temp";
       reg->num_array_elems = 0;
-      if (values[b].is_ssa)
+      if (values[b].is_ssa) {
          reg->num_components = values[b].ssa->num_components;
-      else
+         reg->bit_size = values[b].ssa->bit_size;
+      } else {
          reg->num_components = values[b].reg.reg->num_components;
+         reg->bit_size = values[b].reg.reg->bit_size;
+      }
       values[num_vals].is_ssa = false;
       values[num_vals].reg.reg = reg;
 
@@ -765,8 +768,7 @@ nir_convert_from_ssa_impl(nir_function_impl *impl, bool phi_webs_only)
    nir_builder_init(&state.builder, impl);
    state.dead_ctx = ralloc_context(NULL);
    state.phi_webs_only = phi_webs_only;
-   state.merge_node_table = _mesa_hash_table_create(NULL, _mesa_hash_pointer,
-                                                    _mesa_key_pointer_equal);
+   state.merge_node_table = _mesa_pointer_hash_table_create(NULL);
    state.progress = false;
 
    nir_foreach_block(block, impl) {
@@ -825,7 +827,7 @@ nir_convert_from_ssa(nir_shader *shader, bool phi_webs_only)
 
 static void
 place_phi_read(nir_shader *shader, nir_register *reg,
-               nir_ssa_def *def, nir_block *block)
+               nir_ssa_def *def, nir_block *block, unsigned depth)
 {
    if (block != def->parent_instr->block) {
       /* Try to go up the single-successor tree */
@@ -838,19 +840,29 @@ place_phi_read(nir_shader *shader, nir_register *reg,
          }
       }
 
-      if (all_single_successors) {
+      if (all_single_successors && depth < 32) {
          /* All predecessors of this block have exactly one successor and it
           * is this block so they must eventually lead here without
           * intersecting each other.  Place the reads in the predecessors
           * instead of this block.
+          *
+          * We only let this function recurse 32 times because it can recurse
+          * indefinitely in the presence of infinite loops.  Because we're
+          * crawling a single-successor chain, it doesn't matter where we
+          * place it so it's ok to stop at an arbitrary distance.
+          *
+          * TODO: One day, we could detect back edges and avoid the recursion
+          * that way.
           */
-         set_foreach(block->predecessors, entry)
-            place_phi_read(shader, reg, def, (nir_block *)entry->key);
+         set_foreach(block->predecessors, entry) {
+            place_phi_read(shader, reg, def, (nir_block *)entry->key,
+                           depth + 1);
+         }
          return;
       }
    }
 
-   nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_imov);
+   nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_mov);
    mov->src[0].src = nir_src_for_ssa(def);
    mov->dest.dest = nir_dest_for_reg(reg);
    mov->dest.write_mask = (1 << reg->num_components) - 1;
@@ -887,7 +899,7 @@ nir_lower_phis_to_regs_block(nir_block *block)
 
       nir_register *reg = create_reg_for_ssa_def(&phi->dest.ssa, impl);
 
-      nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_imov);
+      nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_mov);
       mov->src[0].src = nir_src_for_reg(reg);
       mov->dest.write_mask = (1 << phi->dest.ssa.num_components) - 1;
       nir_ssa_dest_init(&mov->instr, &mov->dest.dest,
@@ -900,9 +912,7 @@ nir_lower_phis_to_regs_block(nir_block *block)
 
       nir_foreach_phi_src(src, phi) {
          assert(src->src.is_ssa);
-         /* We don't want derefs ending up in phi sources */
-         assert(!nir_src_as_deref(src->src));
-         place_phi_read(shader, reg, src->src.ssa, src->pred);
+         place_phi_read(shader, reg, src->src.ssa, src->pred, 0);
       }
 
       nir_instr_remove(&phi->instr);
@@ -940,6 +950,23 @@ dest_replace_ssa_with_reg(nir_dest *dest, void *void_state)
    return true;
 }
 
+static bool
+ssa_def_is_local_to_block(nir_ssa_def *def, UNUSED void *state)
+{
+   nir_block *block = def->parent_instr->block;
+   nir_foreach_use(use_src, def) {
+      if (use_src->parent_instr->block != block ||
+          use_src->parent_instr->type == nir_instr_type_phi) {
+         return false;
+      }
+   }
+
+   if (!list_empty(&def->if_uses))
+      return false;
+
+   return true;
+}
+
 /** Lower all of the SSA defs in a block to registers
  *
  * This performs the very simple operation of blindly replacing all of the SSA
@@ -970,17 +997,16 @@ nir_lower_ssa_defs_to_regs_block(nir_block *block)
          nir_register *reg = create_reg_for_ssa_def(&load->def, state.impl);
          nir_ssa_def_rewrite_uses(&load->def, nir_src_for_reg(reg));
 
-         nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_imov);
+         nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_mov);
          mov->src[0].src = nir_src_for_ssa(&load->def);
          mov->dest.dest = nir_dest_for_reg(reg);
          mov->dest.write_mask = (1 << reg->num_components) - 1;
          nir_instr_insert(nir_after_instr(&load->instr), &mov->instr);
-      } else if (instr->type == nir_instr_type_deref) {
-         /* Derefs should always be SSA values, don't rewrite them. */
-         nir_deref_instr *deref = nir_instr_as_deref(instr);
-         nir_foreach_use_safe(use, &deref->dest.ssa)
-            assert(use->parent_instr->block == block);
-         assert(list_empty(&deref->dest.ssa.if_uses));
+      } else if (nir_foreach_ssa_def(instr, ssa_def_is_local_to_block, NULL)) {
+         /* If the SSA def produced by this instruction is only in the block
+          * in which it is defined and is not used by ifs or phis, then we
+          * don't have a reason to convert it to a register.
+          */
       } else {
          nir_foreach_dest(instr, dest_replace_ssa_with_reg, &state);
       }

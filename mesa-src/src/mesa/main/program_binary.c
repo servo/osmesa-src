@@ -29,12 +29,12 @@
  */
 
 
-#include "compiler/blob.h"
 #include "compiler/glsl/serialize.h"
 #include "main/errors.h"
 #include "main/mtypes.h"
 #include "main/shaderapi.h"
 #include "util/bitscan.h"
+#include "util/blob.h"
 #include "util/crc32.h"
 #include "program_binary.h"
 #include "program/prog_parameter.h"
@@ -178,6 +178,8 @@ write_program_payload(struct gl_context *ctx, struct blob *blob,
                                                       shader->Program);
    }
 
+   blob_write_uint32(blob, sh_prog->SeparateShader);
+
    serialize_glsl_program(blob, ctx, sh_prog);
 
    for (unsigned stage = 0; stage < MESA_SHADER_STAGES; stage++) {
@@ -195,6 +197,8 @@ static bool
 read_program_payload(struct gl_context *ctx, struct blob_reader *blob,
                      GLenum binary_format, struct gl_shader_program *sh_prog)
 {
+   sh_prog->SeparateShader = blob_read_uint32(blob);
+
    if (!deserialize_glsl_program(blob, ctx, sh_prog))
       return false;
 

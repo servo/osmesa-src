@@ -91,8 +91,16 @@ typedef union gl_constant_value
 struct gl_program_parameter
 {
    const char *Name;        /**< Null-terminated string */
-   gl_register_file Type:16;  /**< PROGRAM_CONSTANT or STATE_VAR */
+   gl_register_file Type:5;  /**< PROGRAM_CONSTANT or STATE_VAR */
+
+   /**
+    * We need to keep track of whether the param is padded for use in the
+    * shader cache.
+    */
+   bool Padded:1;
+
    GLenum16 DataType;         /**< GL_FLOAT, GL_FLOAT_VEC2, etc */
+
    /**
     * Number of components (1..4), or more.
     * If the number of components is greater than 4,
@@ -104,6 +112,17 @@ struct gl_program_parameter
     * A sequence of STATE_* tokens and integers to identify GL state.
     */
    gl_state_index16 StateIndexes[STATE_LENGTH];
+
+   /**
+    * Index of this parameter's uniform storage.
+    */
+   uint32_t UniformStorageIndex;
+
+   /**
+    * Index of the first uniform storage that is associated with the same
+    * variable as this parameter.
+    */
+   uint32_t MainUniformStorageIndex;
 };
 
 
@@ -183,6 +202,37 @@ _mesa_lookup_parameter_index(const struct gl_program_parameter_list *paramList,
    }
 
    return -1;
+}
+
+static inline bool
+_mesa_gl_datatype_is_64bit(GLenum datatype)
+{
+   switch (datatype) {
+   case GL_DOUBLE:
+   case GL_DOUBLE_VEC2:
+   case GL_DOUBLE_VEC3:
+   case GL_DOUBLE_VEC4:
+   case GL_DOUBLE_MAT2:
+   case GL_DOUBLE_MAT2x3:
+   case GL_DOUBLE_MAT2x4:
+   case GL_DOUBLE_MAT3:
+   case GL_DOUBLE_MAT3x2:
+   case GL_DOUBLE_MAT3x4:
+   case GL_DOUBLE_MAT4:
+   case GL_DOUBLE_MAT4x2:
+   case GL_DOUBLE_MAT4x3:
+   case GL_INT64_ARB:
+   case GL_INT64_VEC2_ARB:
+   case GL_INT64_VEC3_ARB:
+   case GL_INT64_VEC4_ARB:
+   case GL_UNSIGNED_INT64_ARB:
+   case GL_UNSIGNED_INT64_VEC2_ARB:
+   case GL_UNSIGNED_INT64_VEC3_ARB:
+   case GL_UNSIGNED_INT64_VEC4_ARB:
+      return true;
+   default:
+      return false;
+   }
 }
 
 #ifdef __cplusplus

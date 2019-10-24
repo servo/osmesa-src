@@ -85,6 +85,7 @@
       <entry name="uyvy" value="0x59565955"/>
       <entry name="vyuy" value="0x59555956"/>
       <entry name="ayuv" value="0x56555941"/>
+      <entry name="xyuv8888" value="0x56555958"/>
       <entry name="nv12" value="0x3231564e"/>
       <entry name="nv21" value="0x3132564e"/>
       <entry name="nv16" value="0x3631564e"/>
@@ -99,6 +100,8 @@
       <entry name="yvu422" value="0x36315659"/>
       <entry name="yuv444" value="0x34325559"/>
       <entry name="yvu444" value="0x34325659"/>
+      <entry name="abgr16f" value="0x48344241"/>
+      <entry name="xbgr16f" value="0x48344258"/>
     </enum>
 
     <!-- Call this request with the magic received from drmGetMagic().

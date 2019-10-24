@@ -30,8 +30,13 @@ xmlpool_options_h = custom_target(
   input : ['gen_xmlpool.py', 't_options.h'],
   output : 'options.h',
   command : [
-    prog_python, '@INPUT@', meson.current_source_dir(), _langs,
+    prog_python, '@INPUT0@', '--template', '@INPUT1@', '--output', '@OUTPUT@',
+    '--localedir', meson.current_build_dir(), '--languages',  _langs,
   ],
-  capture : true,
   depend_files : _langs_po_files,
 )
+
+if host_machine.system() != 'windows'
+  i18n = import('i18n')
+  i18n.gettext('xmlpool', install : false)
+endif

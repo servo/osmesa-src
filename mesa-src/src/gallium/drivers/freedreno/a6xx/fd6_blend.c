@@ -132,14 +132,24 @@ fd6_blend_state_create(struct pipe_context *pctx,
 //			so->rb_mrt[i].control |= A6XX_RB_MRT_CONTROL_READ_DEST_ENABLE;
 			mrt_blend |= (1 << i);
 		}
+	}
 
-//		if (cso->dither)
-//			so->rb_mrt[i].buf_info |= A6XX_RB_MRT_BUF_INFO_DITHER_MODE(DITHER_ALWAYS);
+	if (cso->dither) {
+		so->rb_dither_cntl = A6XX_RB_DITHER_CNTL_DITHER_MODE_MRT0(DITHER_ALWAYS) |
+				A6XX_RB_DITHER_CNTL_DITHER_MODE_MRT1(DITHER_ALWAYS) |
+				A6XX_RB_DITHER_CNTL_DITHER_MODE_MRT2(DITHER_ALWAYS) |
+				A6XX_RB_DITHER_CNTL_DITHER_MODE_MRT3(DITHER_ALWAYS) |
+				A6XX_RB_DITHER_CNTL_DITHER_MODE_MRT4(DITHER_ALWAYS) |
+				A6XX_RB_DITHER_CNTL_DITHER_MODE_MRT5(DITHER_ALWAYS) |
+				A6XX_RB_DITHER_CNTL_DITHER_MODE_MRT6(DITHER_ALWAYS) |
+				A6XX_RB_DITHER_CNTL_DITHER_MODE_MRT7(DITHER_ALWAYS);
 	}
 
 	so->rb_blend_cntl = A6XX_RB_BLEND_CNTL_ENABLE_BLEND(mrt_blend) |
+		COND(cso->alpha_to_coverage, A6XX_RB_BLEND_CNTL_ALPHA_TO_COVERAGE) |
 		COND(cso->independent_blend_enable, A6XX_RB_BLEND_CNTL_INDEPENDENT_BLEND);
 	so->sp_blend_cntl = A6XX_SP_BLEND_CNTL_UNK8 |
+		COND(cso->alpha_to_coverage, A6XX_SP_BLEND_CNTL_ALPHA_TO_COVERAGE) |
 		COND(mrt_blend, A6XX_SP_BLEND_CNTL_ENABLED);
 
 	return so;

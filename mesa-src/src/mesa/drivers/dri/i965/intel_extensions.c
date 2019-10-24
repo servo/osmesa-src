@@ -97,6 +97,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.EXT_blend_func_separate = true;
    ctx->Extensions.EXT_blend_minmax = true;
    ctx->Extensions.EXT_draw_buffers2 = true;
+   ctx->Extensions.EXT_float_blend = true;
    ctx->Extensions.EXT_framebuffer_sRGB = true;
    ctx->Extensions.EXT_gpu_program_parameters = true;
    ctx->Extensions.EXT_packed_float = true;
@@ -104,6 +105,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.EXT_point_parameters = true;
    ctx->Extensions.EXT_provoking_vertex = true;
    ctx->Extensions.EXT_render_snorm = true;
+   ctx->Extensions.EXT_sRGB = true;
    ctx->Extensions.EXT_stencil_two_side = true;
    ctx->Extensions.EXT_texture_array = true;
    ctx->Extensions.EXT_texture_env_dot3 = true;
@@ -113,6 +115,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.EXT_texture_snorm = true;
    ctx->Extensions.EXT_texture_sRGB = true;
    ctx->Extensions.EXT_texture_sRGB_decode = true;
+   ctx->Extensions.EXT_texture_sRGB_R8 = true;
    ctx->Extensions.EXT_texture_swizzle = true;
    ctx->Extensions.EXT_texture_type_2_10_10_10_REV = true;
    ctx->Extensions.EXT_vertex_array_bgra = true;
@@ -140,7 +143,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.OES_texture_half_float_linear = true;
 
    if (devinfo->gen >= 8)
-      ctx->Const.GLSLVersion = 450;
+      ctx->Const.GLSLVersion = 460;
    else if (devinfo->is_haswell && can_do_pipelined_register_writes(brw->screen))
       ctx->Const.GLSLVersion = 450;
    else if (devinfo->gen >= 7 && can_do_pipelined_register_writes(brw->screen))
@@ -180,14 +183,16 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_conditional_render_inverted = true;
       ctx->Extensions.ARB_cull_distance = true;
       ctx->Extensions.ARB_draw_buffers_blend = true;
-      if (ctx->API != API_OPENGL_COMPAT)
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion)
          ctx->Extensions.ARB_enhanced_layouts = true;
       ctx->Extensions.ARB_ES3_compatibility = true;
       ctx->Extensions.ARB_fragment_layer_viewport = true;
       ctx->Extensions.ARB_pipeline_statistics_query = true;
       ctx->Extensions.ARB_sample_shading = true;
       ctx->Extensions.ARB_shading_language_420pack = true;
-      if (ctx->API != API_OPENGL_COMPAT) {
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion) {
          ctx->Extensions.ARB_texture_buffer_object = true;
          ctx->Extensions.ARB_texture_buffer_object_rgb32 = true;
          ctx->Extensions.ARB_texture_buffer_range = true;
@@ -196,8 +201,10 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_texture_gather = true;
       ctx->Extensions.ARB_texture_multisample = true;
       ctx->Extensions.ARB_uniform_buffer_object = true;
+      ctx->Extensions.EXT_texture_shadow_lod = true;
 
-      if (ctx->API != API_OPENGL_COMPAT)
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion)
          ctx->Extensions.AMD_vertex_shader_layer = true;
       ctx->Extensions.EXT_framebuffer_multisample = true;
       ctx->Extensions.EXT_framebuffer_multisample_blit_scaled = true;
@@ -226,9 +233,10 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_conservative_depth = true;
       ctx->Extensions.ARB_derivative_control = true;
       ctx->Extensions.ARB_framebuffer_no_attachments = true;
-      if (ctx->API != API_OPENGL_COMPAT) {
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion) {
          ctx->Extensions.ARB_gpu_shader5 = true;
-         ctx->Extensions.ARB_gpu_shader_fp64 = devinfo->has_64bit_types;
+         ctx->Extensions.ARB_gpu_shader_fp64 = true;
       }
       ctx->Extensions.ARB_shader_atomic_counters = true;
       ctx->Extensions.ARB_shader_atomic_counter_ops = true;
@@ -237,17 +245,16 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_shader_image_size = true;
       ctx->Extensions.ARB_shader_precision = true;
       ctx->Extensions.ARB_shader_texture_image_samples = true;
-      if (ctx->API != API_OPENGL_COMPAT)
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion)
          ctx->Extensions.ARB_tessellation_shader = true;
       ctx->Extensions.ARB_texture_compression_bptc = true;
       ctx->Extensions.ARB_texture_view = true;
       ctx->Extensions.ARB_shader_storage_buffer_object = true;
-      ctx->Extensions.ARB_vertex_attrib_64bit = devinfo->has_64bit_types;
+      ctx->Extensions.ARB_vertex_attrib_64bit = true;
       ctx->Extensions.EXT_shader_samples_identical = true;
       ctx->Extensions.OES_primitive_bounding_box = true;
       ctx->Extensions.OES_texture_buffer = true;
-      ctx->Extensions.ARB_fragment_shader_interlock = true;
-      ctx->Extensions.INTEL_fragment_shader_ordering = true;
 
       if (can_do_pipelined_register_writes(brw->screen)) {
          ctx->Extensions.ARB_draw_indirect = true;
@@ -260,6 +267,7 @@ intelInitExtensions(struct gl_context *ctx)
             ctx->Extensions.ARB_compute_shader = true;
             ctx->Extensions.ARB_ES3_1_compatibility =
                devinfo->gen >= 8 || devinfo->is_haswell;
+            ctx->Extensions.NV_compute_shader_derivatives = true;
          }
 
          if (can_do_predicate_writes(brw->screen)) {
@@ -267,6 +275,9 @@ intelInitExtensions(struct gl_context *ctx)
             ctx->Extensions.ARB_indirect_parameters = true;
          }
       }
+
+      ctx->Extensions.ARB_gl_spirv = true;
+      ctx->Extensions.ARB_spirv_extensions = true;
    }
 
    if (devinfo->gen >= 8 || devinfo->is_haswell) {
@@ -286,18 +297,26 @@ intelInitExtensions(struct gl_context *ctx)
    }
 
    if (devinfo->gen >= 8 || devinfo->is_baytrail) {
-      /* For now, we only enable OES_copy_image on platforms that support
-       * ETC2 natively in hardware.  We would need more hacks to support it
-       * elsewhere. Same with OES_texture_view.
+      /* For now, we can't enable OES_texture_view on Gen 7 because of
+       * some piglit failures coming from
+       * piglit/tests/spec/arb_texture_view/rendering-formats.c that need
+       * investigation.
        */
-      ctx->Extensions.OES_copy_image = true;
       ctx->Extensions.OES_texture_view = true;
    }
 
+   if (devinfo->gen >= 7) {
+      /* We can safely enable OES_copy_image on Gen 7, since we emulate
+       * the ETC2 support using the shadow_miptree to store the
+       * compressed data.
+       */
+      ctx->Extensions.OES_copy_image = true;
+   }
+
    if (devinfo->gen >= 8) {
-      ctx->Extensions.ARB_gpu_shader_int64 = devinfo->has_64bit_types;
+      ctx->Extensions.ARB_gpu_shader_int64 = true;
       /* requires ARB_gpu_shader_int64 */
-      ctx->Extensions.ARB_shader_ballot = devinfo->has_64bit_types;
+      ctx->Extensions.ARB_shader_ballot = true;
       ctx->Extensions.ARB_ES3_2_compatibility = true;
    }
 
@@ -312,6 +331,30 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.KHR_blend_equation_advanced_coherent = true;
       ctx->Extensions.KHR_texture_compression_astc_ldr = true;
       ctx->Extensions.KHR_texture_compression_astc_sliced_3d = true;
+
+      /*
+       * From the Skylake PRM Vol. 7 (Memory Fence Message, page 221):
+       *  "A memory fence message issued by a thread causes further messages
+       *   issued by the thread to be blocked until all previous data port
+       *   messages have completed, or the results can be globally observed from
+       *   the point of view of other threads in the system."
+       *
+       * From the Haswell PRM Vol. 7 (Memory Fence, page 256):
+       *  "A memory fence message issued by a thread causes further messages
+       *   issued by the thread to be blocked until all previous messages issued
+       *   by the thread to that data port (data cache or render cache) have
+       *   been globally observed from the point of view of other threads in the
+       *   system."
+       *
+       * Summarized: For ARB_fragment_shader_interlock to work, we need to
+       * ensure memory access ordering for all messages to the dataport from
+       * all threads. Memory fence messages prior to SKL only provide memory
+       * access ordering for messages from the same thread, so we can only
+       * support the feature from Gen9 onwards.
+       *
+       */
+
+      ctx->Extensions.ARB_fragment_shader_interlock = true;
    }
 
    if (gen_device_info_is_9lp(devinfo))
@@ -320,11 +363,15 @@ intelInitExtensions(struct gl_context *ctx)
    if (devinfo->gen >= 6)
       ctx->Extensions.INTEL_performance_query = true;
 
-   if (ctx->API != API_OPENGL_COMPAT)
+   if (ctx->API != API_OPENGL_COMPAT ||
+       ctx->Const.AllowHigherCompatVersion)
       ctx->Extensions.ARB_base_instance = true;
    if (ctx->API != API_OPENGL_CORE)
       ctx->Extensions.ARB_color_buffer_float = true;
 
    ctx->Extensions.EXT_texture_compression_s3tc = true;
+   ctx->Extensions.EXT_texture_compression_s3tc_srgb = true;
    ctx->Extensions.ANGLE_texture_compression_dxt = true;
+
+   ctx->Extensions.EXT_demote_to_helper_invocation = true;
 }

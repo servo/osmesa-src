@@ -147,6 +147,7 @@ public:
    unsigned dead_mask:4; /**< Used in dead code elimination */
    unsigned buffer_access:3; /**< bitmask of TGSI_MEMORY_x bits */
    unsigned read_only:1;
+   unsigned gather_component:2; /* 0, 1, 2, 3 */
 
    const struct tgsi_opcode_info *info;
 
@@ -181,6 +182,9 @@ is_resource_instruction(unsigned opcode)
    case TGSI_OPCODE_ATOMUMAX:
    case TGSI_OPCODE_ATOMIMIN:
    case TGSI_OPCODE_ATOMIMAX:
+   case TGSI_OPCODE_ATOMFADD:
+   case TGSI_OPCODE_ATOMINC_WRAP:
+   case TGSI_OPCODE_ATOMDEC_WRAP:
    case TGSI_OPCODE_IMG2HND:
       return true;
    default:

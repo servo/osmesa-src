@@ -73,7 +73,7 @@ void
 _mesa_print_state( const char *msg, GLuint state )
 {
    _mesa_debug(NULL,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
 	   msg,
 	   state,
 	   (state & _NEW_MODELVIEW)       ? "ctx->ModelView, " : "",
@@ -96,7 +96,6 @@ _mesa_print_state( const char *msg, GLuint state )
 	   (state & _NEW_TRANSFORM)       ? "ctx->Transform, " : "",
 	   (state & _NEW_VIEWPORT)        ? "ctx->Viewport, " : "",
            (state & _NEW_TEXTURE_STATE)   ? "ctx->Texture(State), " : "",
-	   (state & _NEW_ARRAY)           ? "ctx->Array, " : "",
 	   (state & _NEW_RENDERMODE)      ? "ctx->RenderMode, " : "",
 	   (state & _NEW_BUFFERS)         ? "ctx->Visual, ctx->DrawBuffer,, " : "");
 }
@@ -141,7 +140,7 @@ void _mesa_print_info( struct gl_context *ctx )
 static void
 set_verbose_flags(const char *str)
 {
-#ifdef DEBUG
+#ifndef NDEBUG
    struct option {
       const char *name;
       GLbitfield flag;
@@ -182,7 +181,7 @@ set_verbose_flags(const char *str)
 static void
 set_debug_flags(const char *str)
 {
-#ifdef DEBUG
+#ifndef NDEBUG
    struct option {
       const char *name;
       GLbitfield flag;
@@ -626,8 +625,7 @@ _mesa_print_texture(struct gl_context *ctx, struct gl_texture_image *img)
          case MESA_FORMAT_I_UNORM8:
             c = 1;
             break;
-         case MESA_FORMAT_L8A8_UNORM:
-         case MESA_FORMAT_A8L8_UNORM:
+         case MESA_FORMAT_LA_UNORM8:
             c = 2;
             break;
          case MESA_FORMAT_BGR_UNORM8:

@@ -37,7 +37,7 @@
 #include "util/hash_table.h"
 
 #include <xf86drm.h>
-#include <i915_drm.h>
+#include "drm-uapi/i915_drm.h"
 
 #define FILE_DEBUG_FLAG DEBUG_BUFMGR
 
@@ -81,7 +81,7 @@ dump_validation_list(struct intel_batchbuffer *batch)
 }
 
 static struct gen_batch_decode_bo
-decode_get_bo(void *v_brw, uint64_t address)
+decode_get_bo(void *v_brw, bool ppgtt, uint64_t address)
 {
    struct brw_context *brw = v_brw;
    struct intel_batchbuffer *batch = &brw->batch;
@@ -108,22 +108,9 @@ decode_get_state_size(void *v_brw, uint32_t offset_from_dsba)
 {
    struct brw_context *brw = v_brw;
    struct intel_batchbuffer *batch = &brw->batch;
-   struct hash_entry *entry =
-      _mesa_hash_table_search(batch->state_batch_sizes,
-                              (void *) (uintptr_t) offset_from_dsba);
-   return entry ? (uintptr_t) entry->data : 0;
-}
-
-static bool
-uint_key_compare(const void *a, const void *b)
-{
-   return a == b;
-}
-
-static uint32_t
-uint_key_hash(const void *key)
-{
-   return (uintptr_t) key;
+   unsigned size = (uintptr_t) _mesa_hash_table_u64_search(
+      batch->state_batch_sizes, offset_from_dsba);
+   return size;
 }
 
 static void
@@ -158,7 +145,7 @@ intel_batchbuffer_init(struct brw_context *brw)
 
    if (INTEL_DEBUG & DEBUG_BATCH) {
       batch->state_batch_sizes =
-         _mesa_hash_table_create(NULL, uint_key_hash, uint_key_compare);
+         _mesa_hash_table_u64_create(NULL);
 
       const unsigned decode_flags =
          GEN_BATCH_DECODE_FULL |
@@ -188,6 +175,8 @@ intel_batchbuffer_init(struct brw_context *brw)
 static unsigned
 add_exec_bo(struct intel_batchbuffer *batch, struct brw_bo *bo)
 {
+   assert(bo->bufmgr == batch->batch.bo->bufmgr);
+
    unsigned index = READ_ONCE(bo->index);
 
    if (index < batch->exec_count && batch->exec_bos[index] == bo)
@@ -282,7 +271,7 @@ intel_batchbuffer_reset(struct brw_context *brw)
    batch->state_base_address_emitted = false;
 
    if (batch->state_batch_sizes)
-      _mesa_hash_table_clear(batch->state_batch_sizes, NULL);
+      _mesa_hash_table_u64_clear(batch->state_batch_sizes, NULL);
 }
 
 static void
@@ -344,7 +333,7 @@ intel_batchbuffer_free(struct intel_batchbuffer *batch)
    brw_bo_unreference(batch->batch.bo);
    brw_bo_unreference(batch->state.bo);
    if (batch->state_batch_sizes) {
-      _mesa_hash_table_destroy(batch->state_batch_sizes, NULL);
+      _mesa_hash_table_u64_destroy(batch->state_batch_sizes, NULL);
       gen_batch_decode_ctx_finish(&batch->decoder);
    }
 }
@@ -732,10 +721,10 @@ execbuffer(int fd,
 
       /* Update brw_bo::gtt_offset */
       if (batch->validation_list[i].offset != bo->gtt_offset) {
-         assert(!(bo->kflags & EXEC_OBJECT_PINNED));
          DBG("BO %d migrated: 0x%" PRIx64 " -> 0x%llx\n",
              bo->gem_handle, bo->gtt_offset,
              batch->validation_list[i].offset);
+         assert(!(bo->kflags & EXEC_OBJECT_PINNED));
          bo->gtt_offset = batch->validation_list[i].offset;
       }
    }
@@ -826,7 +815,7 @@ submit_batch(struct brw_context *brw, int in_fence_fd, int *out_fence_fd)
    if (unlikely(INTEL_DEBUG & DEBUG_BATCH)) {
       gen_print_batch(&batch->decoder, batch->batch.map,
                       4 * USED_BATCH(*batch),
-                      batch->batch.bo->gtt_offset);
+                      batch->batch.bo->gtt_offset, false);
    }
 
    if (brw->ctx.Const.ResetStrategy == GL_LOSE_CONTEXT_ON_RESET_ARB)
@@ -1050,9 +1039,8 @@ brw_state_batch(struct brw_context *brw,
    }
 
    if (unlikely(INTEL_DEBUG & DEBUG_BATCH)) {
-      _mesa_hash_table_insert(batch->state_batch_sizes,
-                              (void *) (uintptr_t) offset,
-                              (void *) (uintptr_t) size);
+      _mesa_hash_table_u64_insert(batch->state_batch_sizes,
+                                  offset, (void *) (uintptr_t) size);
    }
 
    batch->state_used = offset + size;
@@ -1218,7 +1206,7 @@ brw_load_register_imm64(struct brw_context *brw, uint32_t reg, uint64_t imm)
  * Copies a 32-bit register.
  */
 void
-brw_load_register_reg(struct brw_context *brw, uint32_t src, uint32_t dest)
+brw_load_register_reg(struct brw_context *brw, uint32_t dest, uint32_t src)
 {
    assert(brw->screen->devinfo.gen >= 8 || brw->screen->devinfo.is_haswell);
 
@@ -1233,7 +1221,7 @@ brw_load_register_reg(struct brw_context *brw, uint32_t src, uint32_t dest)
  * Copies a 64-bit register.
  */
 void
-brw_load_register_reg64(struct brw_context *brw, uint32_t src, uint32_t dest)
+brw_load_register_reg64(struct brw_context *brw, uint32_t dest, uint32_t src)
 {
    assert(brw->screen->devinfo.gen >= 8 || brw->screen->devinfo.is_haswell);
 

@@ -187,7 +187,7 @@ fail:
  * Check the size of the texture specified by 'res'.
  * \return TRUE if OK, FALSE if too large.
  */
-static boolean
+static bool
 llvmpipe_can_create_resource(struct pipe_screen *screen,
                              const struct pipe_resource *res)
 {
@@ -486,7 +486,7 @@ no_lpr:
 }
 
 
-static boolean
+static bool
 llvmpipe_resource_get_handle(struct pipe_screen *screen,
                              struct pipe_context *ctx,
                             struct pipe_resource *pt,
@@ -498,7 +498,7 @@ llvmpipe_resource_get_handle(struct pipe_screen *screen,
 
    assert(lpr->dt);
    if (!lpr->dt)
-      return FALSE;
+      return false;
 
    return winsys->displaytarget_get_handle(winsys, lpr->dt, whandle);
 }
@@ -646,7 +646,9 @@ llvmpipe_is_resource_referenced( struct pipe_context *pipe,
    struct llvmpipe_context *llvmpipe = llvmpipe_context( pipe );
    if (!(presource->bind & (PIPE_BIND_DEPTH_STENCIL |
                             PIPE_BIND_RENDER_TARGET |
-                            PIPE_BIND_SAMPLER_VIEW)))
+                            PIPE_BIND_SAMPLER_VIEW |
+                            PIPE_BIND_SHADER_BUFFER |
+                            PIPE_BIND_SHADER_IMAGE)))
       return LP_UNREFERENCED;
 
    return lp_setup_is_resource_referenced(llvmpipe->setup, presource);
@@ -766,6 +768,13 @@ llvmpipe_resource_size(const struct pipe_resource *resource)
    return size;
 }
 
+static void
+llvmpipe_memory_barrier(struct pipe_context *pipe,
+			unsigned flags)
+{
+   /* this may be an overly large hammer for this nut. */
+   llvmpipe_finish(pipe, "barrier");
+}
 
 #ifdef DEBUG
 void
@@ -822,4 +831,6 @@ llvmpipe_init_context_resource_funcs(struct pipe_context *pipe)
    pipe->transfer_flush_region = u_default_transfer_flush_region;
    pipe->buffer_subdata = u_default_buffer_subdata;
    pipe->texture_subdata = u_default_texture_subdata;
+
+   pipe->memory_barrier = llvmpipe_memory_barrier;
 }

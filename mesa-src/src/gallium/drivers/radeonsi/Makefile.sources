@@ -1,15 +1,19 @@
 GENERATED_SOURCES := \
+	gfx10_format_table.h \
 	si_driinfo.h
 
 C_SOURCES := \
 	$(GENERATED_SOURCES) \
 	cik_sdma.c \
 	driinfo_radeonsi.h \
+	gfx10_query.c \
+	gfx10_shader_ngg.c \
 	si_blit.c \
 	si_buffer.c \
 	si_build_pm4.h \
 	si_clear.c \
 	si_compute.c \
+	si_compute_prim_discard.c \
 	si_compute.h \
 	si_compute_blit.c \
 	si_cp_dma.c \
@@ -49,13 +53,13 @@ C_SOURCES := \
 	si_test_dma_perf.c \
 	si_texture.c \
 	si_uvd.c \
-	../radeon/r600_perfcounter.c \
 	../radeon/radeon_uvd.c \
 	../radeon/radeon_uvd.h \
 	../radeon/radeon_vcn_dec_jpeg.c \
 	../radeon/radeon_vcn_dec.c \
 	../radeon/radeon_vcn_dec.h \
 	../radeon/radeon_vcn_enc_1_2.c \
+	../radeon/radeon_vcn_enc_2_0.c \
 	../radeon/radeon_vcn_enc.c \
 	../radeon/radeon_vcn_enc.h \
 	../radeon/radeon_uvd_enc_1_1.c \

@@ -36,7 +36,8 @@
 
 #include "util/algorithm.hpp"
 
-#if HAVE_LLVM < 0x0400
+#include <llvm/Config/llvm-config.h>
+#if LLVM_VERSION_MAJOR < 4
 #include <llvm/Bitcode/ReaderWriter.h>
 #else
 #include <llvm/Bitcode/BitcodeReader.h>
@@ -48,7 +49,7 @@
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Target/TargetMachine.h>
-#if HAVE_LLVM >= 0x0400
+#if LLVM_VERSION_MAJOR >= 4
 #include <llvm/Support/Error.h>
 #else
 #include <llvm/Support/ErrorOr.h>
@@ -58,8 +59,13 @@
 #include <llvm/Analysis/TargetLibraryInfo.h>
 
 #include <clang/Basic/TargetInfo.h>
-#include <clang/Frontend/CodeGenOptions.h>
 #include <clang/Frontend/CompilerInstance.h>
+
+#if LLVM_VERSION_MAJOR >= 8
+#include <clang/Basic/CodeGenOptions.h>
+#else
+#include <clang/Frontend/CodeGenOptions.h>
+#endif
 
 namespace clover {
    namespace llvm {
@@ -67,25 +73,31 @@ namespace clover {
          template<typename T, typename AS>
          unsigned target_address_space(const T &target, const AS lang_as) {
             const auto &map = target.getAddressSpaceMap();
-#if HAVE_LLVM >= 0x0500
+#if LLVM_VERSION_MAJOR >= 5
             return map[static_cast<unsigned>(lang_as)];
 #else
             return map[lang_as - clang::LangAS::Offset];
 #endif
          }
 
-#if HAVE_LLVM >= 0x0500
+#if LLVM_VERSION_MAJOR >= 10
+         const clang::InputKind ik_opencl = clang::Language::OpenCL;
+#elif LLVM_VERSION_MAJOR >= 5
          const clang::InputKind ik_opencl = clang::InputKind::OpenCL;
-         const clang::LangStandard::Kind lang_opencl10 = clang::LangStandard::lang_opencl10;
 #else
          const clang::InputKind ik_opencl = clang::IK_OpenCL;
+#endif
+
+#if LLVM_VERSION_MAJOR >= 5
+         const clang::LangStandard::Kind lang_opencl10 = clang::LangStandard::lang_opencl10;
+#else
          const clang::LangStandard::Kind lang_opencl10 = clang::LangStandard::lang_opencl;
 #endif
 
          inline void
          add_link_bitcode_file(clang::CodeGenOptions &opts,
                                const std::string &path) {
-#if HAVE_LLVM >= 0x0500
+#if LLVM_VERSION_MAJOR >= 5
             clang::CodeGenOptions::BitcodeFileToLink F;
 
             F.Filename = path;
@@ -97,7 +109,7 @@ namespace clover {
 #endif
          }
 
-#if HAVE_LLVM >= 0x0600
+#if LLVM_VERSION_MAJOR >= 6
          const auto default_code_model = ::llvm::None;
 #else
          const auto default_code_model = ::llvm::CodeModel::Default;
@@ -105,7 +117,7 @@ namespace clover {
 
          template<typename M, typename F> void
          handle_module_error(M &mod, const F &f) {
-#if HAVE_LLVM >= 0x0400
+#if LLVM_VERSION_MAJOR >= 4
             if (::llvm::Error err = mod.takeError())
                ::llvm::handleAllErrors(std::move(err), [&](::llvm::ErrorInfoBase &eib) {
                      f(eib.message());
@@ -116,57 +128,71 @@ namespace clover {
 #endif
          }
 
-        template<typename T> void
-        set_diagnostic_handler(::llvm::LLVMContext &ctx,
-                               T *diagnostic_handler, void *data) {
-#if HAVE_LLVM >= 0x0600
-           ctx.setDiagnosticHandlerCallBack(diagnostic_handler, data);
+         template<typename T> void
+         set_diagnostic_handler(::llvm::LLVMContext &ctx,
+                                T *diagnostic_handler, void *data) {
+#if LLVM_VERSION_MAJOR >= 6
+            ctx.setDiagnosticHandlerCallBack(diagnostic_handler, data);
 #else
-           ctx.setDiagnosticHandler(diagnostic_handler, data);
+            ctx.setDiagnosticHandler(diagnostic_handler, data);
 #endif
-        }
+         }
 
-	inline std::unique_ptr< ::llvm::Module>
-	clone_module(const ::llvm::Module &mod)
-	{
-#if HAVE_LLVM >= 0x0700
-		return ::llvm::CloneModule(mod);
+         inline std::unique_ptr< ::llvm::Module>
+         clone_module(const ::llvm::Module &mod)
+         {
+#if LLVM_VERSION_MAJOR >= 7
+            return ::llvm::CloneModule(mod);
 #else
-		return ::llvm::CloneModule(&mod);
+            return ::llvm::CloneModule(&mod);
 #endif
-	}
+         }
 
-	template<typename T> void
-	write_bitcode_to_file(const ::llvm::Module &mod, T &os)
-	{
-#if HAVE_LLVM >= 0x0700
-		::llvm::WriteBitcodeToFile(mod, os);
+         template<typename T> void
+         write_bitcode_to_file(const ::llvm::Module &mod, T &os)
+         {
+#if LLVM_VERSION_MAJOR >= 7
+            ::llvm::WriteBitcodeToFile(mod, os);
 #else
-		::llvm::WriteBitcodeToFile(&mod, os);
+            ::llvm::WriteBitcodeToFile(&mod, os);
 #endif
-	}
+         }
 
-	template<typename TM, typename PM, typename OS, typename FT>
-	bool add_passes_to_emit_file(TM &tm, PM &pm, OS &os, FT &ft)
-	{
-#if HAVE_LLVM >= 0x0700
-		return tm.addPassesToEmitFile(pm, os, nullptr, ft);
+         template<typename TM, typename PM, typename OS, typename FT>
+         bool add_passes_to_emit_file(TM &tm, PM &pm, OS &os, FT &ft)
+         {
+#if LLVM_VERSION_MAJOR >= 7
+            return tm.addPassesToEmitFile(pm, os, nullptr, ft);
 #else
-		return tm.addPassesToEmitFile(pm, os, ft);
+            return tm.addPassesToEmitFile(pm, os, ft);
 #endif
-	}
+         }
 
-	template<typename T, typename M>
-	T get_abi_type(const T &arg_type, const M &mod) {
-#if HAVE_LLVM >= 0x0700
-          return arg_type;
+         template<typename T> inline bool
+         create_compiler_invocation_from_args(clang::CompilerInvocation &cinv,
+                                              T copts,
+                                              clang::DiagnosticsEngine &diag)
+         {
+#if LLVM_VERSION_MAJOR >= 10
+            return clang::CompilerInvocation::CreateFromArgs(
+               cinv, copts, diag);
 #else
-          ::llvm::DataLayout dl(&mod);
-          const unsigned arg_store_size = dl.getTypeStoreSize(arg_type);
-          return !arg_type->isIntegerTy() ? arg_type :
-            dl.getSmallestLegalIntType(mod.getContext(), arg_store_size * 8);
+            return clang::CompilerInvocation::CreateFromArgs(
+               cinv, copts.data(), copts.data() + copts.size(), diag);
 #endif
-	}
+         }
+
+         template<typename T, typename M>
+         T get_abi_type(const T &arg_type, const M &mod) {
+#if LLVM_VERSION_MAJOR >= 7
+            return arg_type;
+#else
+            ::llvm::DataLayout dl(&mod);
+            const unsigned arg_store_size = dl.getTypeStoreSize(arg_type);
+            return !arg_type->isIntegerTy() ? arg_type :
+               dl.getSmallestLegalIntType(mod.getContext(), arg_store_size * 8);
+#endif
+         }
       }
    }
 }

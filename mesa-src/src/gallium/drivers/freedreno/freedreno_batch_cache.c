@@ -81,7 +81,8 @@ struct key {
 	struct {
 		struct pipe_resource *texture;
 		union pipe_surface_desc u;
-		uint16_t pos, format;
+		uint8_t pos, samples;
+		uint16_t format;
 	} surf[0];
 };
 
@@ -158,7 +159,7 @@ bc_flush(struct fd_batch_cache *cache, struct fd_context *ctx, bool deferred)
 		fd_context_unlock(ctx);
 
 		for (unsigned i = 0; i < n; i++) {
-			fd_batch_flush(batches[i], false, false);
+			fd_batch_flush(batches[i], false);
 		}
 	}
 
@@ -306,7 +307,7 @@ fd_bc_alloc_batch(struct fd_batch_cache *cache, struct fd_context *ctx, bool non
 		 */
 		mtx_unlock(&ctx->screen->lock);
 		DBG("%p: too many batches!  flush forced!", flush_batch);
-		fd_batch_flush(flush_batch, true, false);
+		fd_batch_flush(flush_batch, true);
 		mtx_lock(&ctx->screen->lock);
 
 		/* While the resources get cleaned up automatically, the flush_batch
@@ -401,6 +402,7 @@ key_surf(struct key *key, unsigned idx, unsigned pos, struct pipe_surface *psurf
 	key->surf[idx].texture = psurf->texture;
 	key->surf[idx].u = psurf->u;
 	key->surf[idx].pos = pos;
+	key->surf[idx].samples = MAX2(1, psurf->nr_samples);
 	key->surf[idx].format = psurf->format;
 }
 

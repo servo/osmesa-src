@@ -32,7 +32,7 @@
 #include "brw_cfg.h"
 #include "brw_fs.h"
 #include "brw_nir.h"
-#include "common/gen_debug.h"
+#include "dev/gen_debug.h"
 
 namespace brw {
 
@@ -44,7 +44,7 @@ vec4_gs_visitor::vec4_gs_visitor(const struct brw_compiler *compiler,
                                  void *mem_ctx,
                                  bool no_spills,
                                  int shader_time_index)
-   : vec4_visitor(compiler, log_data, &c->key.tex,
+   : vec4_visitor(compiler, log_data, &c->key.base.tex,
                   &prog_data->base, shader,  mem_ctx,
                   no_spills, shader_time_index),
      c(c),
@@ -615,9 +615,10 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
                void *mem_ctx,
                const struct brw_gs_prog_key *key,
                struct brw_gs_prog_data *prog_data,
-               const nir_shader *src_shader,
+               nir_shader *shader,
                struct gl_program *prog,
                int shader_time_index,
+               struct brw_compile_stats *stats,
                char **error_str)
 {
    struct brw_gs_compile c;
@@ -625,7 +626,6 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
    c.key = *key;
 
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_GEOMETRY];
-   nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
 
    /* The GLSL linker will have already matched up GS inputs and the outputs
     * of prior stages.  The driver does extend VS outputs in some cases, but
@@ -640,10 +640,10 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
                        &c.input_vue_map, inputs_read,
                        shader->info.separate_shader);
 
-   shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, is_scalar);
+   brw_nir_apply_key(shader, compiler, &key->base, 8, is_scalar);
    brw_nir_lower_vue_inputs(shader, &c.input_vue_map);
    brw_nir_lower_vue_outputs(shader);
-   shader = brw_postprocess_nir(shader, compiler, is_scalar);
+   brw_postprocess_nir(shader, compiler, is_scalar);
 
    prog_data->base.clip_distance_mask =
       ((1 << shader->info.clip_distance_array_size) - 1);
@@ -668,7 +668,7 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
          prog_data->control_data_format = GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_SID;
 
          /* We only have to emit control bits if we are using streams */
-         if (prog && prog->info.gs.uses_streams)
+         if (shader->info.gs.uses_streams)
             c.control_data_bits_per_vertex = 2;
          else
             c.control_data_bits_per_vertex = 0;
@@ -857,7 +857,7 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
          prog_data->base.base.dispatch_grf_start_reg = v.payload.num_regs;
 
          fs_generator g(compiler, log_data, mem_ctx,
-                        &prog_data->base.base, v.promoted_constants,
+                        &prog_data->base.base, v.shader_stats,
                         false, MESA_SHADER_GEOMETRY);
          if (unlikely(INTEL_DEBUG & DEBUG_GS)) {
             const char *label =
@@ -866,7 +866,7 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
                                          label, shader->info.name);
             g.enable_debug(name);
          }
-         g.generate_code(v.cfg, 8);
+         g.generate_code(v.cfg, 8, stats);
          return g.get_assembly();
       }
    }
@@ -897,7 +897,8 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
             /* Success! Backup is not needed */
             ralloc_free(param);
             return brw_vec4_generate_assembly(compiler, log_data, mem_ctx,
-                                              shader, &prog_data->base, v.cfg);
+                                              shader, &prog_data->base,
+                                              v.cfg, stats);
          } else {
             /* These variables could be modified by the execution of the GS
              * visitor if it packed the uniforms in the push constant buffer.
@@ -960,7 +961,7 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
          *error_str = ralloc_strdup(mem_ctx, gs->fail_msg);
    } else {
       ret = brw_vec4_generate_assembly(compiler, log_data, mem_ctx, shader,
-                                       &prog_data->base, gs->cfg);
+                                       &prog_data->base, gs->cfg, stats);
    }
 
    delete gs;

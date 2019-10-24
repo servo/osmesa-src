@@ -38,43 +38,6 @@
 #include "fd3_texture.h"
 #include "fd3_format.h"
 
-static struct ir3_shader *
-create_shader_stateobj(struct pipe_context *pctx, const struct pipe_shader_state *cso,
-		enum shader_t type)
-{
-	struct fd_context *ctx = fd_context(pctx);
-	struct ir3_compiler *compiler = ctx->screen->compiler;
-	return ir3_shader_create(compiler, cso, type, &ctx->debug);
-}
-
-static void *
-fd3_fp_state_create(struct pipe_context *pctx,
-		const struct pipe_shader_state *cso)
-{
-	return create_shader_stateobj(pctx, cso, SHADER_FRAGMENT);
-}
-
-static void
-fd3_fp_state_delete(struct pipe_context *pctx, void *hwcso)
-{
-	struct ir3_shader *so = hwcso;
-	ir3_shader_destroy(so);
-}
-
-static void *
-fd3_vp_state_create(struct pipe_context *pctx,
-		const struct pipe_shader_state *cso)
-{
-	return create_shader_stateobj(pctx, cso, SHADER_VERTEX);
-}
-
-static void
-fd3_vp_state_delete(struct pipe_context *pctx, void *hwcso)
-{
-	struct ir3_shader *so = hwcso;
-	ir3_shader_destroy(so);
-}
-
 bool
 fd3_needs_manual_clipping(const struct ir3_shader *shader,
 						  const struct pipe_rasterizer_state *rast)
@@ -97,7 +60,7 @@ emit_shader(struct fd_ringbuffer *ring, const struct ir3_shader_variant *so)
 	enum adreno_state_src src;
 	uint32_t i, sz, *bin;
 
-	if (so->type == SHADER_VERTEX) {
+	if (so->type == MESA_SHADER_VERTEX) {
 		sb = SB_VERT_SHADER;
 	} else {
 		sb = SB_FRAG_SHADER;
@@ -122,7 +85,7 @@ emit_shader(struct fd_ringbuffer *ring, const struct ir3_shader_variant *so)
 		OUT_RING(ring, CP_LOAD_STATE_1_EXT_SRC_ADDR(0) |
 				CP_LOAD_STATE_1_STATE_TYPE(ST_SHADER));
 	} else {
-		OUT_RELOC(ring, so->bo, 0,
+		OUT_RELOCD(ring, so->bo, 0,
 				CP_LOAD_STATE_1_STATE_TYPE(ST_SHADER), 0);
 	}
 	for (i = 0; i < sz; i++) {
@@ -211,7 +174,7 @@ fd3_program_emit(struct fd_ringbuffer *ring, struct fd3_emit *emit,
 	face_regid      = ir3_find_sysval_regid(fp, SYSTEM_VALUE_FRONT_FACE);
 	coord_regid     = ir3_find_sysval_regid(fp, SYSTEM_VALUE_FRAG_COORD);
 	zwcoord_regid   = (coord_regid == regid(63,0)) ? regid(63,0) : (coord_regid + 2);
-	vcoord_regid    = ir3_find_sysval_regid(fp, SYSTEM_VALUE_VARYING_COORD);
+	vcoord_regid    = ir3_find_sysval_regid(fp, SYSTEM_VALUE_BARYCENTRIC_PIXEL);
 
 	/* adjust regids for alpha output formats. there is no alpha render
 	 * format, so it's just treated like red
@@ -226,6 +189,7 @@ fd3_program_emit(struct fd_ringbuffer *ring, struct fd3_emit *emit,
 
 	OUT_PKT0(ring, REG_A3XX_HLSQ_CONTROL_0_REG, 6);
 	OUT_RING(ring, A3XX_HLSQ_CONTROL_0_REG_FSTHREADSIZE(FOUR_QUADS) |
+			A3XX_HLSQ_CONTROL_0_REG_FSSUPERTHREADENABLE |
 			A3XX_HLSQ_CONTROL_0_REG_CONSTMODE(constmode) |
 			/* NOTE:  I guess SHADERRESTART and CONSTFULLUPDATE maybe
 			 * flush some caches? I think we only need to set those
@@ -484,11 +448,6 @@ fd3_program_emit(struct fd_ringbuffer *ring, struct fd3_emit *emit,
 void
 fd3_prog_init(struct pipe_context *pctx)
 {
-	pctx->create_fs_state = fd3_fp_state_create;
-	pctx->delete_fs_state = fd3_fp_state_delete;
-
-	pctx->create_vs_state = fd3_vp_state_create;
-	pctx->delete_vs_state = fd3_vp_state_delete;
-
+	ir3_prog_init(pctx);
 	fd_prog_init(pctx);
 }

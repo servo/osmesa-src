@@ -47,7 +47,7 @@ nv50_destroy_query(struct pipe_context *pipe, struct pipe_query *pq)
    q->funcs->destroy_query(nv50_context(pipe), q);
 }
 
-static boolean
+static bool
 nv50_begin_query(struct pipe_context *pipe, struct pipe_query *pq)
 {
    struct nv50_query *q = nv50_query(pq);
@@ -62,9 +62,9 @@ nv50_end_query(struct pipe_context *pipe, struct pipe_query *pq)
    return true;
 }
 
-static boolean
+static bool
 nv50_get_query_result(struct pipe_context *pipe, struct pipe_query *pq,
-                      boolean wait, union pipe_query_result *result)
+                      bool wait, union pipe_query_result *result)
 {
    struct nv50_query *q = nv50_query(pq);
    return q->funcs->get_query_result(nv50_context(pipe), q, wait, result);
@@ -73,7 +73,7 @@ nv50_get_query_result(struct pipe_context *pipe, struct pipe_query *pq,
 static void
 nv50_render_condition(struct pipe_context *pipe,
                       struct pipe_query *pq,
-                      boolean condition, enum pipe_render_cond_flag mode)
+                      bool condition, enum pipe_render_cond_flag mode)
 {
    struct nv50_context *nv50 = nv50_context(pipe);
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
@@ -98,12 +98,10 @@ nv50_render_condition(struct pipe_context *pipe,
       case PIPE_QUERY_OCCLUSION_COUNTER:
       case PIPE_QUERY_OCCLUSION_PREDICATE:
       case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
+         if (hq->state == NV50_HW_QUERY_STATE_READY)
+            wait = true;
          if (likely(!condition)) {
-            if (unlikely(hq->nesting))
-               cond = wait ? NV50_3D_COND_MODE_NOT_EQUAL :
-                             NV50_3D_COND_MODE_ALWAYS;
-            else
-               cond = NV50_3D_COND_MODE_RES_NON_ZERO;
+            cond = wait ? NV50_3D_COND_MODE_NOT_EQUAL : NV50_3D_COND_MODE_ALWAYS;
          } else {
             cond = wait ? NV50_3D_COND_MODE_EQUAL : NV50_3D_COND_MODE_ALWAYS;
          }
@@ -129,7 +127,7 @@ nv50_render_condition(struct pipe_context *pipe,
 
    PUSH_SPACE(push, 9);
 
-   if (wait) {
+   if (wait && hq->state != NV50_HW_QUERY_STATE_READY) {
       BEGIN_NV04(push, SUBC_3D(NV50_GRAPH_SERIALIZE), 1);
       PUSH_DATA (push, 0);
    }
@@ -146,7 +144,7 @@ nv50_render_condition(struct pipe_context *pipe,
 }
 
 static void
-nv50_set_active_query_state(struct pipe_context *pipe, boolean enable)
+nv50_set_active_query_state(struct pipe_context *pipe, bool enable)
 {
 }
 

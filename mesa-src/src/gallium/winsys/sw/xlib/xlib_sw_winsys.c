@@ -49,7 +49,7 @@
 #include <sys/shm.h>
 #include <X11/extensions/XShm.h>
 
-DEBUG_GET_ONCE_BOOL_OPTION(xlib_no_shm, "XLIB_NO_SHM", FALSE)
+DEBUG_GET_ONCE_BOOL_OPTION(xlib_no_shm, "XLIB_NO_SHM", false)
 
 /**
  * Display target for Xlib winsys.
@@ -219,13 +219,13 @@ alloc_ximage(struct xlib_displaytarget *xlib_dt,
                                    8, 0);
 }
 
-static boolean
+static bool
 xlib_is_displaytarget_format_supported(struct sw_winsys *ws,
                                        unsigned tex_usage,
                                        enum pipe_format format)
 {
    /* TODO: check visuals or other sensible thing here */
-   return TRUE;
+   return true;
 }
 
 
@@ -296,8 +296,8 @@ static void
 xlib_sw_display(struct xlib_drawable *xlib_drawable,
                 struct sw_displaytarget *dt)
 {
-   static boolean no_swap = 0;
-   static boolean firsttime = 1;
+   static bool no_swap = false;
+   static bool firsttime = true;
    struct xlib_displaytarget *xlib_dt = xlib_displaytarget(dt);
    Display *display = xlib_dt->display;
    XImage *ximage;
@@ -396,6 +396,7 @@ xlib_displaytarget_create(struct sw_winsys *winsys,
 {
    struct xlib_displaytarget *xlib_dt;
    unsigned nblocksy, size;
+   int ignore;
 
    xlib_dt = CALLOC_STRUCT(xlib_displaytarget);
    if (!xlib_dt)
@@ -410,7 +411,8 @@ xlib_displaytarget_create(struct sw_winsys *winsys,
    xlib_dt->stride = align(util_format_get_stride(format, width), alignment);
    size = xlib_dt->stride * nblocksy;
 
-   if (!debug_get_option_xlib_no_shm()) {
+   if (!debug_get_option_xlib_no_shm() &&
+       XQueryExtension(xlib_dt->display, "MIT-SHM", &ignore, &ignore, &ignore)) {
       xlib_dt->data = alloc_shm(xlib_dt, size);
       if (xlib_dt->data) {
          xlib_dt->shm = True;
@@ -444,13 +446,13 @@ xlib_displaytarget_from_handle(struct sw_winsys *winsys,
 }
 
 
-static boolean
+static bool
 xlib_displaytarget_get_handle(struct sw_winsys *winsys,
                               struct sw_displaytarget *dt,
                               struct winsys_handle *whandle)
 {
    assert(0);
-   return FALSE;
+   return false;
 }
 
 

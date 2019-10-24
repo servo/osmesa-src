@@ -1,4 +1,4 @@
-# Copyright © 2017 Intel Corproration
+# Copyright © 2017, 2019 Intel Corproration
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -18,15 +18,22 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+VDPAU_MAJOR = 1
+VDPAU_MINOR = 0
+
 libvdpau_st = static_library(
   'vdpau_st',
   files(
     'bitmap.c', 'decode.c', 'device.c', 'ftab.c', 'htab.c', 'mixer.c',
     'output.c', 'preemption.c', 'presentation.c', 'query.c', 'surface.c',
   ),
-  c_args : [c_vis_args, '-DVER_MAJOR=1', '-DVER_MINOR=0'],
+  c_args : [
+    c_vis_args,
+    '-DVER_MAJOR=@0@'.format(VDPAU_MAJOR),
+    '-DVER_MINOR=@0@'.format(VDPAU_MINOR),
+  ],
   include_directories : [
     inc_include, inc_src, inc_util, inc_gallium, inc_gallium_aux,
   ],
-  dependencies : [dep_vdpau, dep_xcb, dep_x11_xcb, dep_xcb_dri2],
+  dependencies : [dep_vdpau, dep_xcb, dep_x11_xcb, dep_xcb_dri2, dep_libdrm],
 )

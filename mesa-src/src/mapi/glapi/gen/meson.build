@@ -18,6 +18,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+glapi_gen_gl_xml = files('../registry/gl.xml')
+glapi_gen_mapi_deps = [
+  glapi_gen_gl_xml,
+  genCommon_py,
+  glapi_gen_gl_xml,
+]
+
 gl_and_es_api_files = files('gl_and_es_API.xml')
 
 api_xml_files = files(
@@ -75,6 +82,7 @@ api_xml_files = files(
   'ARB_shader_subroutine.xml',
   'ARB_shader_storage_buffer_object.xml',
   'ARB_sparse_buffer.xml',
+  'ARB_spirv_extensions.xml',
   'ARB_sync.xml',
   'ARB_tessellation_shader.xml',
   'ARB_texture_barrier.xml',
@@ -102,14 +110,17 @@ api_xml_files = files(
   'ARB_vertex_type_2_10_10_10_rev.xml',
   'APPLE_object_purgeable.xml',
   'APPLE_vertex_array_object.xml',
+  'EXT_direct_state_access.xml',
   'EXT_draw_buffers2.xml',
   'EXT_external_objects.xml',
   'EXT_external_objects_fd.xml',
   'EXT_framebuffer_object.xml',
   'EXT_gpu_shader4.xml',
+  'EXT_multisampled_render_to_texture.xml',
   'EXT_packed_depth_stencil.xml',
   'EXT_provoking_vertex.xml',
   'EXT_separate_shader_objects.xml',
+  'EXT_shader_image_load_store.xml',
   'EXT_texture_array.xml',
   'EXT_texture_integer.xml',
   'EXT_transform_feedback.xml',

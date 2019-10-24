@@ -54,17 +54,56 @@ is_format_supported(struct pipe_screen *screen, enum pipe_format format,
     * a shader variant that converts.
     */
    if ((usage == PIPE_BIND_SAMPLER_VIEW) && !supported) {
-      if (format == PIPE_FORMAT_IYUV) {
+      switch (format) {
+      case PIPE_FORMAT_IYUV:
          supported = screen->is_format_supported(screen, PIPE_FORMAT_R8_UNORM,
                                                  PIPE_TEXTURE_2D, nr_samples,
                                                  nr_storage_samples, usage);
-      } else if (format == PIPE_FORMAT_NV12) {
+         break;
+      case PIPE_FORMAT_NV12:
          supported = screen->is_format_supported(screen, PIPE_FORMAT_R8_UNORM,
                                                  PIPE_TEXTURE_2D, nr_samples,
                                                  nr_storage_samples, usage) &&
                      screen->is_format_supported(screen, PIPE_FORMAT_R8G8_UNORM,
                                                  PIPE_TEXTURE_2D, nr_samples,
                                                  nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_P016:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_R16_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage) &&
+                     screen->is_format_supported(screen, PIPE_FORMAT_R16G16_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_YUYV:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_RG88_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage) &&
+                     screen->is_format_supported(screen, PIPE_FORMAT_BGRA8888_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_UYVY:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_RG88_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage) &&
+                     screen->is_format_supported(screen, PIPE_FORMAT_RGBA8888_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_AYUV:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_RGBA8888_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_XYUV:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_RGBX8888_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+       default:
+         break;
       }
    }
 
@@ -159,20 +198,11 @@ st_egl_image_target_renderbuffer_storage(struct gl_context *ctx,
       if (!ps)
          return;
 
-      strb->Base.Width = ps->width;
-      strb->Base.Height = ps->height;
       strb->Base.Format = st_pipe_format_to_mesa_format(ps->format);
       strb->Base._BaseFormat = st_pipe_format_to_base_format(ps->format);
       strb->Base.InternalFormat = strb->Base._BaseFormat;
 
-      struct pipe_surface **psurf =
-         util_format_is_srgb(ps->format) ? &strb->surface_srgb :
-                                           &strb->surface_linear;
-
-      pipe_surface_reference(psurf, ps);
-      strb->surface = *psurf;
-      pipe_resource_reference(&strb->texture, ps->texture);
-
+      st_set_ws_renderbuffer_surface(strb, ps);
       pipe_surface_reference(&ps, NULL);
    }
 }
@@ -205,28 +235,47 @@ st_bind_egl_image(struct gl_context *ctx,
       stObj->surface_based = GL_TRUE;
    }
 
-   texFormat = st_pipe_format_to_mesa_format(stimg->format);
-
    /* TODO RequiredTextureImageUnits should probably be reset back
     * to 1 somewhere if different texture is bound??
     */
-   if (texFormat == MESA_FORMAT_NONE) {
-      switch (stimg->format) {
-      case PIPE_FORMAT_NV12:
-         texFormat = MESA_FORMAT_R_UNORM8;
-         texObj->RequiredTextureImageUnits = 2;
-         break;
-      case PIPE_FORMAT_IYUV:
-         texFormat = MESA_FORMAT_R_UNORM8;
-         texObj->RequiredTextureImageUnits = 3;
-         break;
-      default:
-         unreachable("bad YUV format!");
-      }
+   switch (stimg->format) {
+   case PIPE_FORMAT_NV12:
+      texFormat = MESA_FORMAT_R_UNORM8;
+      texObj->RequiredTextureImageUnits = 2;
+      break;
+   case PIPE_FORMAT_P016:
+      texFormat = MESA_FORMAT_R_UNORM16;
+      texObj->RequiredTextureImageUnits = 2;
+      break;
+   case PIPE_FORMAT_IYUV:
+      texFormat = MESA_FORMAT_R_UNORM8;
+      texObj->RequiredTextureImageUnits = 3;
+      break;
+   case PIPE_FORMAT_YUYV:
+   case PIPE_FORMAT_UYVY:
+      texFormat = MESA_FORMAT_RG_UNORM8;
+      texObj->RequiredTextureImageUnits = 2;
+      break;
+   case PIPE_FORMAT_AYUV:
+      texFormat = MESA_FORMAT_R8G8B8A8_UNORM;
+      internalFormat = GL_RGBA;
+      texObj->RequiredTextureImageUnits = 1;
+      break;
+   case PIPE_FORMAT_XYUV:
+      texFormat = MESA_FORMAT_R8G8B8X8_UNORM;
+      texObj->RequiredTextureImageUnits = 1;
+      break;
+   default:
+      texFormat = st_pipe_format_to_mesa_format(stimg->format);
+      break;
    }
+   assert(texFormat != MESA_FORMAT_NONE);
 
-   _mesa_init_teximage_fields(ctx, texImage,
-                              stimg->texture->width0, stimg->texture->height0,
+   /* Minify texture size based on level set on the EGLImage. */
+   uint32_t width = u_minify(stimg->texture->width0, stimg->level);
+   uint32_t height = u_minify(stimg->texture->height0, stimg->level);
+
+   _mesa_init_teximage_fields(ctx, texImage, width, height,
                               1, 0, internalFormat, texFormat);
 
    pipe_resource_reference(&stObj->pt, stimg->texture);

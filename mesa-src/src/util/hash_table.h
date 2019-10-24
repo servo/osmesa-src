@@ -51,6 +51,8 @@ struct hash_table {
    const void *deleted_key;
    uint32_t size;
    uint32_t rehash;
+   uint64_t size_magic;
+   uint64_t rehash_magic;
    uint32_t max_entries;
    uint32_t size_index;
    uint32_t entries;
@@ -62,6 +64,14 @@ _mesa_hash_table_create(void *mem_ctx,
                         uint32_t (*key_hash_function)(const void *key),
                         bool (*key_equals_function)(const void *a,
                                                     const void *b));
+
+bool
+_mesa_hash_table_init(struct hash_table *ht,
+                      void *mem_ctx,
+                      uint32_t (*key_hash_function)(const void *key),
+                      bool (*key_equals_function)(const void *a,
+                                                  const void *b));
+
 struct hash_table *
 _mesa_hash_table_clone(struct hash_table *src, void *dst_mem_ctx);
 void _mesa_hash_table_destroy(struct hash_table *ht,
@@ -113,6 +123,9 @@ static inline uint32_t _mesa_hash_pointer(const void *pointer)
    return (uint32_t) ((num >> 2) ^ (num >> 6) ^ (num >> 10) ^ (num >> 14));
 }
 
+struct hash_table *
+_mesa_pointer_hash_table_create(void *mem_ctx);
+
 enum {
    _mesa_fnv32_1a_offset_bias = 2166136261u,
 };
@@ -160,6 +173,7 @@ hash_table_call_foreach(struct hash_table *ht,
  */
 struct hash_table_u64 {
    struct hash_table *table;
+   void *freed_key_data;
    void *deleted_key_data;
 };
 
@@ -179,6 +193,10 @@ _mesa_hash_table_u64_search(struct hash_table_u64 *ht, uint64_t key);
 
 void
 _mesa_hash_table_u64_remove(struct hash_table_u64 *ht, uint64_t key);
+
+void
+_mesa_hash_table_u64_clear(struct hash_table_u64 *ht,
+                           void (*delete_function)(struct hash_entry *entry));
 
 #ifdef __cplusplus
 } /* extern C */

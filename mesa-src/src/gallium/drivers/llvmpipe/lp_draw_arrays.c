@@ -99,22 +99,19 @@ llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
                        info->index_size, available_space);
    }
 
-   for (i = 0; i < lp->num_so_targets; i++) {
-      void *buf = 0;
-      if (lp->so_targets[i]) {
-         buf = llvmpipe_resource(lp->so_targets[i]->target.buffer)->data;
-         lp->so_targets[i]->mapping = buf;
-      }
-   }
-   draw_set_mapped_so_targets(draw, lp->num_so_targets,
-                              lp->so_targets);
-
    llvmpipe_prepare_vertex_sampling(lp,
                                     lp->num_sampler_views[PIPE_SHADER_VERTEX],
                                     lp->sampler_views[PIPE_SHADER_VERTEX]);
    llvmpipe_prepare_geometry_sampling(lp,
                                       lp->num_sampler_views[PIPE_SHADER_GEOMETRY],
                                       lp->sampler_views[PIPE_SHADER_GEOMETRY]);
+
+   llvmpipe_prepare_vertex_images(lp,
+                                  lp->num_images[PIPE_SHADER_VERTEX],
+                                  lp->images[PIPE_SHADER_VERTEX]);
+   llvmpipe_prepare_geometry_images(lp,
+                                    lp->num_images[PIPE_SHADER_GEOMETRY],
+                                    lp->images[PIPE_SHADER_GEOMETRY]);
    if (lp->gs && lp->gs->no_tokens) {
       /* we have an empty geometry shader with stream output, so
          attach the stream output info to the current vertex shader */
@@ -137,7 +134,6 @@ llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
    if (mapped_indices) {
       draw_set_indexes(draw, NULL, 0, 0);
    }
-   draw_set_mapped_so_targets(draw, 0, NULL);
 
    if (lp->gs && lp->gs->no_tokens) {
       /* we have attached stream output to the vs for rendering,

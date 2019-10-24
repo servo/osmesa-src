@@ -256,6 +256,7 @@ extern void nv50_init_surface_functions(struct nv50_context *);
 void nv50_validate_textures(struct nv50_context *);
 void nv50_validate_samplers(struct nv50_context *);
 void nv50_upload_ms_info(struct nouveau_pushbuf *);
+void nv50_upload_tsc0(struct nv50_context *);
 
 struct pipe_sampler_view *
 nv50_create_texture_view(struct pipe_context *,
@@ -318,7 +319,7 @@ nv84_screen_get_video_param(struct pipe_screen *pscreen,
                             enum pipe_video_entrypoint entrypoint,
                             enum pipe_video_cap param);
 
-boolean
+bool
 nv84_screen_video_supported(struct pipe_screen *screen,
                             enum pipe_format format,
                             enum pipe_video_profile profile,

@@ -208,6 +208,9 @@ enum tgsi_semantic {
    TGSI_SEMANTIC_SUBGROUP_GT_MASK,
    TGSI_SEMANTIC_SUBGROUP_LE_MASK,
    TGSI_SEMANTIC_SUBGROUP_LT_MASK,
+   TGSI_SEMANTIC_CS_USER_DATA_AMD,
+   TGSI_SEMANTIC_TESS_DEFAULT_OUTER_LEVEL, /**< from set_tess_state */
+   TGSI_SEMANTIC_TESS_DEFAULT_INNER_LEVEL, /**< from set_tess_state */
    TGSI_SEMANTIC_COUNT,       /**< number of semantic values */
 };
 
@@ -301,6 +304,8 @@ enum tgsi_property_name {
    TGSI_PROPERTY_CS_FIXED_BLOCK_HEIGHT,
    TGSI_PROPERTY_CS_FIXED_BLOCK_DEPTH,
    TGSI_PROPERTY_MUL_ZERO_WINS,
+   TGSI_PROPERTY_VS_BLIT_SGPRS_AMD,
+   TGSI_PROPERTY_CS_USER_DATA_COMPONENTS_AMD,
    TGSI_PROPERTY_COUNT,
 };
 
@@ -371,11 +376,11 @@ enum tgsi_opcode {
    TGSI_OPCODE_EX2                = 28,
    TGSI_OPCODE_LG2                = 29,
    TGSI_OPCODE_POW                = 30,
-   /* gap */
+   TGSI_OPCODE_DEMOTE             = 31,
    TGSI_OPCODE_U2I64              = 32,
    TGSI_OPCODE_CLOCK              = 33,
    TGSI_OPCODE_I2I64              = 34,
-   /* gap */
+   TGSI_OPCODE_READ_HELPER        = 35,
    TGSI_OPCODE_COS                = 36,
    TGSI_OPCODE_DDX                = 37,
    TGSI_OPCODE_DDY                = 38,
@@ -442,7 +447,7 @@ enum tgsi_opcode {
    TGSI_OPCODE_BGNSUB             = 100,
    TGSI_OPCODE_ENDLOOP            = 101,
    TGSI_OPCODE_ENDSUB             = 102,
-   /* gap */
+   TGSI_OPCODE_ATOMFADD           = 103,
    TGSI_OPCODE_TXQS               = 104,
    TGSI_OPCODE_RESQ               = 105,
    TGSI_OPCODE_READ_FIRST         = 106,
@@ -612,7 +617,10 @@ enum tgsi_opcode {
 
    TGSI_OPCODE_LOD                = 249,
 
-   TGSI_OPCODE_LAST               = 250,
+   TGSI_OPCODE_ATOMINC_WRAP       = 250,
+   TGSI_OPCODE_ATOMDEC_WRAP       = 251,
+
+   TGSI_OPCODE_LAST               = 252,
 };
 
 

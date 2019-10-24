@@ -63,6 +63,6 @@ LLVM_SOURCES := \
 	llvm/metadata.hpp \
 	llvm/util.hpp
 
-TGSI_SOURCES := \
-	tgsi/compiler.cpp \
-	tgsi/invocation.hpp
+SPIRV_SOURCES := \
+	spirv/invocation.cpp \
+	spirv/invocation.hpp

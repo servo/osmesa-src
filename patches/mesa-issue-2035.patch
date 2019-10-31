@@ -1,0 +1,15 @@
+--- a/mesa-src/src/gallium/state_trackers/osmesa/osmesa.c
++++ b/mesa-src/src/gallium/state_trackers/osmesa/osmesa.c
+@@ -724,7 +730,11 @@ OSMesaDestroyContext(OSMesaContext osmesa)
+ {
+    if (osmesa) {
+       pp_free(osmesa->pp);
+-      osmesa->stctx->destroy(osmesa->stctx);
++      // We shoudn't destroy the stctx, because that
++      // frees the memory for the osbuffer,
++      // and the osbuffer is still in the BufferLizt so may be reused.
++      // TODO: does this cause a space leak?
++      // osmesa->stctx->destroy(osmesa->stctx);
+       FREE(osmesa);
+    }
+ }

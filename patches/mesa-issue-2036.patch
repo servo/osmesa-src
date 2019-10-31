@@ -1,0 +1,17 @@
+--- a/mesa-src/src/gallium/state_trackers/osmesa/osmesa.c
++++ b/mesa-src/src/gallium/state_trackers/osmesa/osmesa.c
+@@ -242,7 +242,13 @@ osmesa_choose_format(GLenum format, GLenum type)
+       break;
+    case OSMESA_RGB:
+       if (type == GL_UNSIGNED_BYTE) {
+-         return PIPE_FORMAT_R8G8B8_UNORM;
++         // This was
++         // return PIPE_FORMAT_R8G8B8_UNORM;
++         // but that format isn't supported by st_new_renderbuffer_fb,
++         // so causes errors.
++         // TODO: should we change this function, or add a case
++         // to st_new_renderbuffer_fb?
++         return PIPE_FORMAT_R8G8B8X8_UNORM;
+       }
+       else if (type == GL_UNSIGNED_SHORT) {
+          return PIPE_FORMAT_R16G16B16_UNORM;

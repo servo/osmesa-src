@@ -1,0 +1,10 @@
+--- a/mesa-src/src/gallium/state_trackers/osmesa/osmesa.c
++++ b/mesa-src/src/gallium/state_trackers/osmesa/osmesa.c
+@@ -915,6 +925,10 @@ OSMesaGetDepthBuffer(OSMesaContext c, GLint *width, GLint *height,
+    struct pipe_transfer *transfer = NULL;
+    struct pipe_box box;
+ 
++   if (!res) {
++      return GL_FALSE;
++   }
++

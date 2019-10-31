@@ -242,6 +242,12 @@ osmesa_choose_format(GLenum format, GLenum type)
       break;
    case OSMESA_RGB:
       if (type == GL_UNSIGNED_BYTE) {
+         // This was
+         // return PIPE_FORMAT_R8G8B8_UNORM;
+         // but that format isn't supported by st_new_renderbuffer_fb,
+         // so causes errors.
+         // TODO: should we change this function, or add a case
+         // to st_new_renderbuffer_fb?
          return PIPE_FORMAT_R8G8B8X8_UNORM;
       }
       else if (type == GL_UNSIGNED_SHORT) {

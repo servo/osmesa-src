@@ -242,7 +242,13 @@ osmesa_choose_format(GLenum format, GLenum type)
       break;
    case OSMESA_RGB:
       if (type == GL_UNSIGNED_BYTE) {
-         return PIPE_FORMAT_R8G8B8_UNORM;
+         // This was
+         // return PIPE_FORMAT_R8G8B8_UNORM;
+         // but that format isn't supported by st_new_renderbuffer_fb,
+         // so causes errors.
+         // TODO: should we change this function, or add a case
+         // to st_new_renderbuffer_fb?
+         return PIPE_FORMAT_R8G8B8X8_UNORM;
       }
       else if (type == GL_UNSIGNED_SHORT) {
          return PIPE_FORMAT_R16G16B16_UNORM;
@@ -724,7 +730,11 @@ OSMesaDestroyContext(OSMesaContext osmesa)
 {
    if (osmesa) {
       pp_free(osmesa->pp);
-      osmesa->stctx->destroy(osmesa->stctx);
+      // We shoudn't destroy the stctx, because that
+      // frees the memory for the osbuffer,
+      // and the osbuffer is still in the BufferLizt so may be reused.
+      // TODO: does this cause a space leak?
+      // osmesa->stctx->destroy(osmesa->stctx);
       FREE(osmesa);
    }
 }
@@ -914,6 +924,10 @@ OSMesaGetDepthBuffer(OSMesaContext c, GLint *width, GLint *height,
    struct pipe_resource *res = osbuffer->textures[ST_ATTACHMENT_DEPTH_STENCIL];
    struct pipe_transfer *transfer = NULL;
    struct pipe_box box;
+
+   if (!res) {
+      return GL_FALSE;
+   }
 
    /*
     * Note: we can't really implement this function with gallium as

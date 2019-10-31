@@ -31,5 +31,8 @@ tar -xvf mesa-tmp/mesa-${VERSION}.tar.gz
 mv mesa-${VERSION} mesa-src
 rm -rf mesa-tmp
 
-# apply local patches necessary for Servo's CI
+# apply local patches necessary for Servo
 patch -i patches/1.diff -p1
+patch -i patches/2-mesa-issue-2034.diff -p1
+patch -i patches/3-mesa-issue-2034.diff -p1
+patch -i patches/4-mesa-issue-2034.diff -p1

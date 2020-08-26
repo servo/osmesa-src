@@ -126,8 +126,7 @@ void r600_init_resource_fields(struct r600_common_screen *rscreen,
 		/* Older kernels didn't always flush the HDP cache before
 		 * CS execution
 		 */
-		if (rscreen->info.drm_major == 2 &&
-		    rscreen->info.drm_minor < 40) {
+		if (rscreen->info.drm_minor < 40) {
 			res->domains = RADEON_DOMAIN_GTT;
 			res->flags |= RADEON_FLAG_GTT_WC;
 			break;
@@ -154,8 +153,7 @@ void r600_init_resource_fields(struct r600_common_screen *rscreen,
 		 * ensures all CPU writes finish before the GPU
 		 * executes a command stream.
 		 */
-		if (rscreen->info.drm_major == 2 &&
-		    rscreen->info.drm_minor < 40)
+		if (rscreen->info.drm_minor < 40)
 			res->domains = RADEON_DOMAIN_GTT;
 	}
 
@@ -500,7 +498,7 @@ static void r600_buffer_do_flush_region(struct pipe_context *ctx,
 		ctx->resource_copy_region(ctx, dst, 0, box->x, 0, 0, src, 0, &dma_box);
 	}
 
-	util_range_add(&rbuffer->valid_buffer_range, box->x,
+	util_range_add(&rbuffer->b.b, &rbuffer->valid_buffer_range, box->x,
 		       box->x + box->width);
 }
 
@@ -547,12 +545,13 @@ void r600_buffer_subdata(struct pipe_context *ctx,
 	struct pipe_box box;
 	uint8_t *map = NULL;
 
+	usage |= PIPE_TRANSFER_WRITE;
+
+	if (!(usage & PIPE_TRANSFER_MAP_DIRECTLY))
+		usage |= PIPE_TRANSFER_DISCARD_RANGE;
+
 	u_box_1d(offset, size, &box);
-	map = r600_buffer_transfer_map(ctx, buffer, 0,
-				       PIPE_TRANSFER_WRITE |
-				       PIPE_TRANSFER_DISCARD_RANGE |
-				       usage,
-				       &box, &transfer);
+	map = r600_buffer_transfer_map(ctx, buffer, 0, usage, &box, &transfer);
 	if (!map)
 		return;
 
@@ -644,8 +643,8 @@ r600_buffer_from_user_memory(struct pipe_screen *screen,
 	rbuffer->domains = RADEON_DOMAIN_GTT;
 	rbuffer->flags = 0;
 	rbuffer->b.is_user_ptr = true;
-	util_range_add(&rbuffer->valid_buffer_range, 0, templ->width0);
-	util_range_add(&rbuffer->b.valid_buffer_range, 0, templ->width0);
+	util_range_add(&rbuffer->b.b, &rbuffer->valid_buffer_range, 0, templ->width0);
+	util_range_add(&rbuffer->b.b, &rbuffer->b.valid_buffer_range, 0, templ->width0);
 
 	/* Convert a user pointer to a buffer. */
 	rbuffer->buf = ws->buffer_from_ptr(ws, user_memory, templ->width0);

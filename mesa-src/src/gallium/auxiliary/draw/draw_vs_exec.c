@@ -93,7 +93,8 @@ vs_exec_run_linear(struct draw_vertex_shader *shader,
                     const unsigned const_size[PIPE_MAX_CONSTANT_BUFFERS],
                    unsigned count,
                    unsigned input_stride,
-                   unsigned output_stride)
+                   unsigned output_stride,
+                   const unsigned *fetch_elts)
 {
    struct exec_vertex_shader *evs = exec_vertex_shader(shader);
    struct tgsi_exec_machine *machine = evs->machine;
@@ -128,23 +129,22 @@ vs_exec_run_linear(struct draw_vertex_shader *shader,
                          input[slot][3]);
          }
 #endif
+	 int basevertex = shader->draw->pt.user.eltSize ? shader->draw->pt.user.eltBias : shader->draw->start_index;
 
          if (shader->info.uses_vertexid) {
             unsigned vid = machine->SysSemanticToIndex[TGSI_SEMANTIC_VERTEXID];
             assert(vid < ARRAY_SIZE(machine->SystemValue));
-            machine->SystemValue[vid].xyzw[0].i[j] = i + j;
-            /* XXX this should include base vertex. Where to get it??? */
+            machine->SystemValue[vid].xyzw[0].i[j] = fetch_elts ? fetch_elts[i + j] : (i + j + basevertex);
          }
          if (shader->info.uses_basevertex) {
             unsigned vid = machine->SysSemanticToIndex[TGSI_SEMANTIC_BASEVERTEX];
             assert(vid < ARRAY_SIZE(machine->SystemValue));
-            machine->SystemValue[vid].xyzw[0].i[j] = 0;
-            /* XXX Where to get it??? */
+            machine->SystemValue[vid].xyzw[0].i[j] = basevertex;
          }
          if (shader->info.uses_vertexid_nobase) {
             unsigned vid = machine->SysSemanticToIndex[TGSI_SEMANTIC_VERTEXID_NOBASE];
             assert(vid < ARRAY_SIZE(machine->SystemValue));
-            machine->SystemValue[vid].xyzw[0].i[j] = i + j;
+            machine->SystemValue[vid].xyzw[0].i[j] = fetch_elts ? (fetch_elts[i + j] - basevertex) : (i + j);
          }
 
          for (slot = 0; slot < shader->info.num_inputs; slot++) {
@@ -174,10 +174,10 @@ vs_exec_run_linear(struct draw_vertex_shader *shader,
             enum tgsi_semantic name = shader->info.output_semantic_name[slot];
             if (clamp_vertex_color &&
                 (name == TGSI_SEMANTIC_COLOR || name == TGSI_SEMANTIC_BCOLOR)) {
-               output[slot][0] = CLAMP(machine->Outputs[slot].xyzw[0].f[j], 0.0f, 1.0f);
-               output[slot][1] = CLAMP(machine->Outputs[slot].xyzw[1].f[j], 0.0f, 1.0f);
-               output[slot][2] = CLAMP(machine->Outputs[slot].xyzw[2].f[j], 0.0f, 1.0f);
-               output[slot][3] = CLAMP(machine->Outputs[slot].xyzw[3].f[j], 0.0f, 1.0f);
+               output[slot][0] = SATURATE(machine->Outputs[slot].xyzw[0].f[j]);
+               output[slot][1] = SATURATE(machine->Outputs[slot].xyzw[1].f[j]);
+               output[slot][2] = SATURATE(machine->Outputs[slot].xyzw[2].f[j]);
+               output[slot][3] = SATURATE(machine->Outputs[slot].xyzw[3].f[j]);
             } else {
                output[slot][0] = machine->Outputs[slot].xyzw[0].f[j];
                output[slot][1] = machine->Outputs[slot].xyzw[1].f[j];
@@ -230,6 +230,7 @@ draw_create_vs_exec(struct draw_context *draw,
 
    tgsi_scan_shader(state->tokens, &vs->base.info);
 
+   vs->base.state.type = state->type;
    vs->base.state.stream_output = state->stream_output;
    vs->base.draw = draw;
    vs->base.prepare = vs_exec_prepare;

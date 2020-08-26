@@ -6,16 +6,21 @@
 
 #include "nv50_query.h"
 
+#define NV50_HW_QUERY_STATE_READY   0
+#define NV50_HW_QUERY_STATE_ACTIVE  1
+#define NV50_HW_QUERY_STATE_ENDED   2
+#define NV50_HW_QUERY_STATE_FLUSHED 3
+
 #define NVA0_HW_QUERY_STREAM_OUTPUT_BUFFER_OFFSET (PIPE_QUERY_TYPES + 0)
 
 struct nv50_hw_query;
 
 struct nv50_hw_query_funcs {
    void (*destroy_query)(struct nv50_context *, struct nv50_hw_query *);
-   boolean (*begin_query)(struct nv50_context *, struct nv50_hw_query *);
+   bool (*begin_query)(struct nv50_context *, struct nv50_hw_query *);
    void (*end_query)(struct nv50_context *, struct nv50_hw_query *);
-   boolean (*get_query_result)(struct nv50_context *, struct nv50_hw_query *,
-                               boolean, union pipe_query_result *);
+   bool (*get_query_result)(struct nv50_context *, struct nv50_hw_query *,
+                            bool, union pipe_query_result *);
 };
 
 struct nv50_hw_query {
@@ -29,7 +34,6 @@ struct nv50_hw_query {
    uint8_t state;
    bool is64bit;
    uint8_t rotate;
-   int nesting; /* only used for occlusion queries */
    struct nouveau_mm_allocation *mm;
    struct nouveau_fence *fence;
 };

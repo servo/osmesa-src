@@ -52,7 +52,7 @@ having three separate program parameter arrays.
 
 
 #include "main/glheader.h"
-#include "main/imports.h"
+
 #include "main/context.h"
 #include "main/mtypes.h"
 #include "arbprogparse.h"
@@ -117,8 +117,8 @@ _mesa_parse_arb_fragment_program(struct gl_context* ctx, GLenum target,
          program->SamplersUsed |= (1 << i);
    }
    program->ShadowSamplers = prog.ShadowSamplers;
-   program->OriginUpperLeft = state.option.OriginUpperLeft;
-   program->PixelCenterInteger = state.option.PixelCenterInteger;
+   program->info.fs.origin_upper_left = state.option.OriginUpperLeft;
+   program->info.fs.pixel_center_integer = state.option.PixelCenterInteger;
 
    program->info.fs.uses_discard = state.fragment.UsesKill;
 
@@ -175,8 +175,6 @@ _mesa_parse_arb_vertex_program(struct gl_context *ctx, GLenum target,
 
    if (!_mesa_parse_arb_program(ctx, target, (const GLubyte*) str, len,
 				&state)) {
-      ralloc_free(prog.arb.Instructions);
-      ralloc_free(prog.String);
       _mesa_error(ctx, GL_INVALID_OPERATION, "glProgramString(bad program)");
       return;
    }
@@ -185,7 +183,7 @@ _mesa_parse_arb_vertex_program(struct gl_context *ctx, GLenum target,
 
    ralloc_free(program->String);
 
-   /* Copy the relevant contents of the arb_program struct into the 
+   /* Copy the relevant contents of the arb_program struct into the
     * vertex_program struct.
     */
    program->String          = prog.String;

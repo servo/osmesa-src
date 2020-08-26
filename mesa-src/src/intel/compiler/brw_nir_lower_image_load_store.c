@@ -27,60 +27,6 @@
 #include "compiler/nir/nir_builder.h"
 #include "compiler/nir/nir_format_convert.h"
 
-/* The higher compiler layers use the GL enums for image formats even if
- * they come in from SPIR-V or Vulkan.  We need to turn them into an ISL
- * enum before we can use them.
- */
-static enum isl_format
-isl_format_for_gl_format(uint32_t gl_format)
-{
-   switch (gl_format) {
-   case GL_R8:             return ISL_FORMAT_R8_UNORM;
-   case GL_R8_SNORM:       return ISL_FORMAT_R8_SNORM;
-   case GL_R8UI:           return ISL_FORMAT_R8_UINT;
-   case GL_R8I:            return ISL_FORMAT_R8_SINT;
-   case GL_RG8:            return ISL_FORMAT_R8G8_UNORM;
-   case GL_RG8_SNORM:      return ISL_FORMAT_R8G8_SNORM;
-   case GL_RG8UI:          return ISL_FORMAT_R8G8_UINT;
-   case GL_RG8I:           return ISL_FORMAT_R8G8_SINT;
-   case GL_RGBA8:          return ISL_FORMAT_R8G8B8A8_UNORM;
-   case GL_RGBA8_SNORM:    return ISL_FORMAT_R8G8B8A8_SNORM;
-   case GL_RGBA8UI:        return ISL_FORMAT_R8G8B8A8_UINT;
-   case GL_RGBA8I:         return ISL_FORMAT_R8G8B8A8_SINT;
-   case GL_R11F_G11F_B10F: return ISL_FORMAT_R11G11B10_FLOAT;
-   case GL_RGB10_A2:       return ISL_FORMAT_R10G10B10A2_UNORM;
-   case GL_RGB10_A2UI:     return ISL_FORMAT_R10G10B10A2_UINT;
-   case GL_R16:            return ISL_FORMAT_R16_UNORM;
-   case GL_R16_SNORM:      return ISL_FORMAT_R16_SNORM;
-   case GL_R16F:           return ISL_FORMAT_R16_FLOAT;
-   case GL_R16UI:          return ISL_FORMAT_R16_UINT;
-   case GL_R16I:           return ISL_FORMAT_R16_SINT;
-   case GL_RG16:           return ISL_FORMAT_R16G16_UNORM;
-   case GL_RG16_SNORM:     return ISL_FORMAT_R16G16_SNORM;
-   case GL_RG16F:          return ISL_FORMAT_R16G16_FLOAT;
-   case GL_RG16UI:         return ISL_FORMAT_R16G16_UINT;
-   case GL_RG16I:          return ISL_FORMAT_R16G16_SINT;
-   case GL_RGBA16:         return ISL_FORMAT_R16G16B16A16_UNORM;
-   case GL_RGBA16_SNORM:   return ISL_FORMAT_R16G16B16A16_SNORM;
-   case GL_RGBA16F:        return ISL_FORMAT_R16G16B16A16_FLOAT;
-   case GL_RGBA16UI:       return ISL_FORMAT_R16G16B16A16_UINT;
-   case GL_RGBA16I:        return ISL_FORMAT_R16G16B16A16_SINT;
-   case GL_R32F:           return ISL_FORMAT_R32_FLOAT;
-   case GL_R32UI:          return ISL_FORMAT_R32_UINT;
-   case GL_R32I:           return ISL_FORMAT_R32_SINT;
-   case GL_RG32F:          return ISL_FORMAT_R32G32_FLOAT;
-   case GL_RG32UI:         return ISL_FORMAT_R32G32_UINT;
-   case GL_RG32I:          return ISL_FORMAT_R32G32_SINT;
-   case GL_RGBA32F:        return ISL_FORMAT_R32G32B32A32_FLOAT;
-   case GL_RGBA32UI:       return ISL_FORMAT_R32G32B32A32_UINT;
-   case GL_RGBA32I:        return ISL_FORMAT_R32G32B32A32_SINT;
-   case GL_NONE:           return ISL_FORMAT_UNSUPPORTED;
-   default:
-      assert(!"Invalid image format");
-      return ISL_FORMAT_UNSUPPORTED;
-   }
-}
-
 static nir_ssa_def *
 _load_image_param(nir_builder *b, nir_deref_instr *deref, unsigned offset)
 {
@@ -313,15 +259,6 @@ get_format_info(enum isl_format fmt)
 }
 
 static nir_ssa_def *
-nir_zero_vec(nir_builder *b, unsigned num_components)
-{
-   nir_const_value v;
-   memset(&v, 0, sizeof(v));
-
-   return nir_build_imm(b, num_components, 32, v);
-}
-
-static nir_ssa_def *
 convert_color_for_load(nir_builder *b, const struct gen_device_info *devinfo,
                        nir_ssa_def *color,
                        enum isl_format image_fmt, enum isl_format lower_fmt,
@@ -431,7 +368,7 @@ lower_image_load_instr(nir_builder *b,
    nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
    nir_variable *var = nir_deref_instr_get_variable(deref);
    const enum isl_format image_fmt =
-      isl_format_for_gl_format(var->data.image.format);
+      isl_format_for_pipe_format(var->data.image.format);
 
    if (isl_has_matching_typed_storage_image_format(devinfo, image_fmt)) {
       const enum isl_format lower_fmt =
@@ -498,7 +435,7 @@ lower_image_load_instr(nir_builder *b,
 
       nir_push_else(b, NULL);
 
-      nir_ssa_def *zero = nir_zero_vec(b, load->num_components);
+      nir_ssa_def *zero = nir_imm_zero(b, load->num_components, 32);
 
       nir_pop_if(b, NULL);
 
@@ -544,38 +481,16 @@ convert_color_for_store(nir_builder *b, const struct gen_device_info *devinfo,
       break;
 
    case ISL_SFLOAT:
-      if (image.bits[0] == 16) {
-         nir_ssa_def *f16comps[4];
-         for (unsigned i = 0; i < image.chans; i++) {
-            f16comps[i] = nir_pack_half_2x16_split(b, nir_channel(b, color, i),
-                                                      nir_imm_float(b, 0));
-         }
-         color = nir_vec(b, f16comps, image.chans);
-      }
+      if (image.bits[0] == 16)
+         color = nir_format_float_to_half(b, color);
       break;
 
    case ISL_UINT:
-      if (image.bits[0] < 32) {
-         nir_const_value max;
-         for (unsigned i = 0; i < image.chans; i++) {
-            assert(image.bits[i] < 32);
-            max.u32[i] = (1u << image.bits[i]) - 1;
-         }
-         color = nir_umin(b, color, nir_build_imm(b, image.chans, 32, max));
-      }
+      color = nir_format_clamp_uint(b, color, image.bits);
       break;
 
    case ISL_SINT:
-      if (image.bits[0] < 32) {
-         nir_const_value min, max;
-         for (unsigned i = 0; i < image.chans; i++) {
-            assert(image.bits[i] < 32);
-            max.i32[i] = (1 << (image.bits[i] - 1)) - 1;
-            min.i32[i] = -(1 << (image.bits[i] - 1));
-         }
-         color = nir_imin(b, color, nir_build_imm(b, image.chans, 32, max));
-         color = nir_imax(b, color, nir_build_imm(b, image.chans, 32, min));
-      }
+      color = nir_format_clamp_sint(b, color, image.bits);
       break;
 
    default:
@@ -614,11 +529,11 @@ lower_image_store_instr(nir_builder *b,
    /* For write-only surfaces, we trust that the hardware can just do the
     * conversion for us.
     */
-   if (var->data.image.access & ACCESS_NON_READABLE)
+   if (var->data.access & ACCESS_NON_READABLE)
       return false;
 
    const enum isl_format image_fmt =
-      isl_format_for_gl_format(var->data.image.format);
+      isl_format_for_pipe_format(var->data.image.format);
 
    if (isl_has_matching_typed_storage_image_format(devinfo, image_fmt)) {
       const enum isl_format lower_fmt =
@@ -727,16 +642,18 @@ lower_image_size_instr(nir_builder *b,
    /* For write-only images, we have an actual image surface so we fall back
     * and let the back-end emit a TXS for this.
     */
-   if (var->data.image.access & ACCESS_NON_READABLE)
+   if (var->data.access & ACCESS_NON_READABLE)
       return false;
 
    /* If we have a matching typed format, then we have an actual image surface
     * so we fall back and let the back-end emit a TXS for this.
     */
    const enum isl_format image_fmt =
-      isl_format_for_gl_format(var->data.image.format);
+      isl_format_for_pipe_format(var->data.image.format);
    if (isl_has_matching_typed_storage_image_format(devinfo, image_fmt))
       return false;
+
+   assert(nir_src_as_uint(intrin->src[1]) == 0);
 
    b->cursor = nir_instr_remove(&intrin->instr);
 
@@ -765,7 +682,8 @@ lower_image_size_instr(nir_builder *b,
 
 bool
 brw_nir_lower_image_load_store(nir_shader *shader,
-                               const struct gen_device_info *devinfo)
+                               const struct gen_device_info *devinfo,
+                               bool *uses_atomic_load_store)
 {
    bool progress = false;
 
@@ -773,6 +691,7 @@ brw_nir_lower_image_load_store(nir_shader *shader,
       if (function->impl == NULL)
          continue;
 
+      bool impl_progress = false;
       nir_foreach_block_safe(block, function->impl) {
          nir_builder b;
          nir_builder_init(&b, function->impl);
@@ -785,29 +704,33 @@ brw_nir_lower_image_load_store(nir_shader *shader,
             switch (intrin->intrinsic) {
             case nir_intrinsic_image_deref_load:
                if (lower_image_load_instr(&b, devinfo, intrin))
-                  progress = true;
+                  impl_progress = true;
                break;
 
             case nir_intrinsic_image_deref_store:
                if (lower_image_store_instr(&b, devinfo, intrin))
-                  progress = true;
+                  impl_progress = true;
                break;
 
             case nir_intrinsic_image_deref_atomic_add:
-            case nir_intrinsic_image_deref_atomic_min:
-            case nir_intrinsic_image_deref_atomic_max:
+            case nir_intrinsic_image_deref_atomic_imin:
+            case nir_intrinsic_image_deref_atomic_umin:
+            case nir_intrinsic_image_deref_atomic_imax:
+            case nir_intrinsic_image_deref_atomic_umax:
             case nir_intrinsic_image_deref_atomic_and:
             case nir_intrinsic_image_deref_atomic_or:
             case nir_intrinsic_image_deref_atomic_xor:
             case nir_intrinsic_image_deref_atomic_exchange:
             case nir_intrinsic_image_deref_atomic_comp_swap:
+               if (uses_atomic_load_store)
+                  *uses_atomic_load_store = true;
                if (lower_image_atomic_instr(&b, devinfo, intrin))
-                  progress = true;
+                  impl_progress = true;
                break;
 
             case nir_intrinsic_image_deref_size:
                if (lower_image_size_instr(&b, devinfo, intrin))
-                  progress = true;
+                  impl_progress = true;
                break;
 
             default:
@@ -817,50 +740,13 @@ brw_nir_lower_image_load_store(nir_shader *shader,
          }
       }
 
-      if (progress)
+      if (impl_progress) {
+         progress = true;
          nir_metadata_preserve(function->impl, nir_metadata_none);
+      } else {
+         nir_metadata_preserve(function->impl, nir_metadata_all);
+      }
    }
 
    return progress;
-}
-
-void
-brw_nir_rewrite_image_intrinsic(nir_intrinsic_instr *intrin,
-                                nir_ssa_def *index)
-{
-   nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
-   nir_variable *var = nir_deref_instr_get_variable(deref);
-
-   switch (intrin->intrinsic) {
-#define CASE(op) \
-   case nir_intrinsic_image_deref_##op: \
-      intrin->intrinsic = nir_intrinsic_image_##op; \
-      break;
-   CASE(load)
-   CASE(store)
-   CASE(atomic_add)
-   CASE(atomic_min)
-   CASE(atomic_max)
-   CASE(atomic_and)
-   CASE(atomic_or)
-   CASE(atomic_xor)
-   CASE(atomic_exchange)
-   CASE(atomic_comp_swap)
-   CASE(atomic_fadd)
-   CASE(size)
-   CASE(samples)
-   CASE(load_raw_intel)
-   CASE(store_raw_intel)
-#undef CASE
-   default:
-      unreachable("Unhanded image intrinsic");
-   }
-
-   nir_intrinsic_set_image_dim(intrin, glsl_get_sampler_dim(deref->type));
-   nir_intrinsic_set_image_array(intrin, glsl_sampler_type_is_array(deref->type));
-   nir_intrinsic_set_access(intrin, var->data.image.access);
-   nir_intrinsic_set_format(intrin, var->data.image.format);
-
-   nir_instr_rewrite_src(&intrin->instr, &intrin->src[0],
-                         nir_src_for_ssa(index));
 }

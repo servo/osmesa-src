@@ -274,7 +274,8 @@ choose_best_inexact_overload(_mesa_glsl_parse_state *state,
     * assume everything supported in any GLSL version is available.
     */
    if (!state || state->is_version(400, 0) || state->ARB_gpu_shader5_enable ||
-       state->MESA_shader_integer_functions_enable) {
+       state->MESA_shader_integer_functions_enable ||
+       state->EXT_shader_implicit_conversions_enable) {
       for (ir_function_signature **sig = matches; sig < matches + num_matches; sig++) {
          if (is_best_inexact_overload(actual_parameters, matches, num_matches, *sig))
             return *sig;
@@ -328,6 +329,9 @@ ir_function::matching_signature(_mesa_glsl_parse_state *state,
          free(inexact_matches);
          return sig;
       case PARAMETER_LIST_INEXACT_MATCH:
+         /* Subroutine signatures must match exactly */
+         if (this->is_subroutine)
+            continue;
          inexact_matches_temp = (ir_function_signature **)
                realloc(inexact_matches,
                        sizeof(*inexact_matches) *

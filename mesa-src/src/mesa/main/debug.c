@@ -30,7 +30,7 @@
 #include "enums.h"
 #include "formats.h"
 #include "hash.h"
-#include "imports.h"
+
 #include "macros.h"
 #include "debug.h"
 #include "get.h"
@@ -73,7 +73,7 @@ void
 _mesa_print_state( const char *msg, GLuint state )
 {
    _mesa_debug(NULL,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
 	   msg,
 	   state,
 	   (state & _NEW_MODELVIEW)       ? "ctx->ModelView, " : "",
@@ -81,7 +81,6 @@ _mesa_print_state( const char *msg, GLuint state )
 	   (state & _NEW_TEXTURE_MATRIX)  ? "ctx->TextureMatrix, " : "",
 	   (state & _NEW_COLOR)           ? "ctx->Color, " : "",
 	   (state & _NEW_DEPTH)           ? "ctx->Depth, " : "",
-	   (state & _NEW_EVAL)            ? "ctx->Eval/EvalMap, " : "",
 	   (state & _NEW_FOG)             ? "ctx->Fog, " : "",
 	   (state & _NEW_HINT)            ? "ctx->Hint, " : "",
 	   (state & _NEW_LIGHT)           ? "ctx->Light, " : "",
@@ -96,7 +95,6 @@ _mesa_print_state( const char *msg, GLuint state )
 	   (state & _NEW_TRANSFORM)       ? "ctx->Transform, " : "",
 	   (state & _NEW_VIEWPORT)        ? "ctx->Viewport, " : "",
            (state & _NEW_TEXTURE_STATE)   ? "ctx->Texture(State), " : "",
-	   (state & _NEW_ARRAY)           ? "ctx->Array, " : "",
 	   (state & _NEW_RENDERMODE)      ? "ctx->RenderMode, " : "",
 	   (state & _NEW_BUFFERS)         ? "ctx->Visual, ctx->DrawBuffer,, " : "");
 }
@@ -141,7 +139,7 @@ void _mesa_print_info( struct gl_context *ctx )
 static void
 set_verbose_flags(const char *str)
 {
-#ifdef DEBUG
+#ifndef NDEBUG
    struct option {
       const char *name;
       GLbitfield flag;
@@ -182,7 +180,7 @@ set_verbose_flags(const char *str)
 static void
 set_debug_flags(const char *str)
 {
-#ifdef DEBUG
+#ifndef NDEBUG
    struct option {
       const char *name;
       GLbitfield flag;
@@ -211,7 +209,7 @@ set_debug_flags(const char *str)
 /**
  * Initialize debugging variables from env vars.
  */
-void 
+void
 _mesa_init_debug( struct gl_context *ctx )
 {
    set_debug_flags(getenv("MESA_DEBUG"));
@@ -285,7 +283,7 @@ write_texture_image(struct gl_texture_object *texObj,
                                  GL_RGBA, GL_UNSIGNED_BYTE, buffer, img);
 
       /* make filename */
-      _mesa_snprintf(s, sizeof(s), "/tmp/tex%u.l%u.f%u.ppm", texObj->Name, level, face);
+      snprintf(s, sizeof(s), "/tmp/tex%u.l%u.f%u.ppm", texObj->Name, level, face);
 
       printf("  Writing image level %u to %s\n", level, s);
       write_ppm(s, buffer, img->Width, img->Height, 4, 0, 1, 2, GL_FALSE);
@@ -308,7 +306,7 @@ _mesa_write_renderbuffer_image(const struct gl_renderbuffer *rb)
    char s[100];
    GLenum format, type;
 
-   if (rb->_BaseFormat == GL_RGB || 
+   if (rb->_BaseFormat == GL_RGB ||
        rb->_BaseFormat == GL_RGBA) {
       format = GL_RGBA;
       type = GL_UNSIGNED_BYTE;
@@ -331,8 +329,8 @@ _mesa_write_renderbuffer_image(const struct gl_renderbuffer *rb)
                           format, type, &ctx->DefaultPacking, buffer);
 
    /* make filename */
-   _mesa_snprintf(s, sizeof(s), "/tmp/renderbuffer%u.ppm", rb->Name);
-   _mesa_snprintf(s, sizeof(s), "C:\\renderbuffer%u.ppm", rb->Name);
+   snprintf(s, sizeof(s), "/tmp/renderbuffer%u.ppm", rb->Name);
+   snprintf(s, sizeof(s), "C:\\renderbuffer%u.ppm", rb->Name);
 
    printf("  Writing renderbuffer image to %s\n", s);
 
@@ -626,8 +624,7 @@ _mesa_print_texture(struct gl_context *ctx, struct gl_texture_image *img)
          case MESA_FORMAT_I_UNORM8:
             c = 1;
             break;
-         case MESA_FORMAT_L8A8_UNORM:
-         case MESA_FORMAT_A8L8_UNORM:
+         case MESA_FORMAT_LA_UNORM8:
             c = 2;
             break;
          case MESA_FORMAT_BGR_UNORM8:

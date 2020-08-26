@@ -29,6 +29,8 @@
 #define _NIR_SEARCH_
 
 #include "nir.h"
+#include "nir_worklist.h"
+#include "util/u_dynarray.h"
 
 #define NIR_SEARCH_MAX_VARIABLES 16
 
@@ -43,7 +45,22 @@ typedef enum {
 typedef struct {
    nir_search_value_type type;
 
-   unsigned bit_size;
+   /**
+    * Bit size of the value. It is interpreted as follows:
+    *
+    * For a search expression:
+    * - If bit_size > 0, then the value only matches an SSA value with the
+    *   given bit size.
+    * - If bit_size <= 0, then the value matches any size SSA value.
+    *
+    * For a replace expression:
+    * - If bit_size > 0, then the value is constructed with the given bit size.
+    * - If bit_size == 0, then the value is constructed with the same bit size
+    *   as the search value.
+    * - If bit_size < 0, then the value is constructed with the same bit size
+    *   as variable (-bit_size - 1).
+    */
+   int bit_size;
 } nir_search_value;
 
 typedef struct {
@@ -78,8 +95,11 @@ typedef struct {
     * variables to require, for example, power-of-two in order for the search
     * to match.
     */
-   bool (*cond)(nir_alu_instr *instr, unsigned src,
+   bool (*cond)(struct hash_table *range_ht, nir_alu_instr *instr, unsigned src,
                 unsigned num_components, const uint8_t *swizzle);
+
+   /** Swizzle (for replace only) */
+   uint8_t swizzle[NIR_MAX_VEC_COMPONENTS];
 } nir_search_variable;
 
 typedef struct {
@@ -94,6 +114,23 @@ typedef struct {
    } data;
 } nir_search_constant;
 
+enum nir_search_op {
+   nir_search_op_i2f = nir_last_opcode + 1,
+   nir_search_op_u2f,
+   nir_search_op_f2f,
+   nir_search_op_f2u,
+   nir_search_op_f2i,
+   nir_search_op_u2u,
+   nir_search_op_i2i,
+   nir_search_op_b2f,
+   nir_search_op_b2i,
+   nir_search_op_i2b,
+   nir_search_op_f2b,
+   nir_num_search_ops,
+};
+
+uint16_t nir_search_op_for_nir_op(nir_op op);
+
 typedef struct {
    nir_search_value value;
 
@@ -103,7 +140,23 @@ typedef struct {
     */
    bool inexact;
 
-   nir_op opcode;
+   /** In a replacement, requests that the instruction be marked exact. */
+   bool exact;
+
+   /* Commutative expression index.  This is assigned by opt_algebraic.py when
+    * search structures are constructed and is a unique (to this structure)
+    * index within the commutative operation bitfield used for searching for
+    * all combinations of expressions containing commutative operations.
+    */
+   int8_t comm_expr_idx;
+
+   /* Number of commutative expressions in this expression including this one
+    * (if it is commutative).
+    */
+   uint8_t comm_exprs;
+
+   /* One of nir_op or nir_search_op */
+   uint16_t opcode;
    const nir_search_value *srcs[4];
 
    /** Optional condition fxn ptr
@@ -114,6 +167,25 @@ typedef struct {
     */
    bool (*cond)(nir_alu_instr *instr);
 } nir_search_expression;
+
+struct per_op_table {
+   const uint16_t *filter;
+   unsigned num_filtered_states;
+   const uint16_t *table;
+};
+
+struct transform {
+   const nir_search_expression *search;
+   const nir_search_value *replace;
+   unsigned condition_offset;
+};
+
+/* Note: these must match the start states created in
+ * TreeAutomaton._build_table()
+ */
+
+/* WILDCARD_STATE = 0 is set by zeroing the state array */
+static const uint16_t CONST_STATE = 1;
 
 NIR_DEFINE_CAST(nir_search_value_as_variable, nir_search_value,
                 nir_search_variable, value,
@@ -127,7 +199,17 @@ NIR_DEFINE_CAST(nir_search_value_as_expression, nir_search_value,
 
 nir_ssa_def *
 nir_replace_instr(struct nir_builder *b, nir_alu_instr *instr,
+                  struct hash_table *range_ht,
+                  struct util_dynarray *states,
+                  const struct per_op_table *pass_op_table,
                   const nir_search_expression *search,
-                  const nir_search_value *replace);
+                  const nir_search_value *replace,
+                  nir_instr_worklist *algebraic_worklist);
+bool
+nir_algebraic_impl(nir_function_impl *impl,
+                   const bool *condition_flags,
+                   const struct transform **transforms,
+                   const uint16_t *transform_counts,
+                   const struct per_op_table *pass_op_table);
 
 #endif /* _NIR_SEARCH_ */

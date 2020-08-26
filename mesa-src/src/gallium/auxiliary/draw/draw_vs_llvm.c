@@ -37,6 +37,8 @@
 
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_scan.h"
+#include "nir/nir_to_tgsi_info.h"
+#include "nir.h"
 
 static void
 vs_llvm_prepare(struct draw_vertex_shader *shader,
@@ -53,7 +55,8 @@ vs_llvm_run_linear( struct draw_vertex_shader *shader,
                     const unsigned constants_size[PIPE_MAX_CONSTANT_BUFFERS],
 		    unsigned count,
 		    unsigned input_stride,
-		    unsigned output_stride )
+		    unsigned output_stride,
+		    const unsigned *elts)
 {
    /* we should never get here since the entire pipeline is
     * generated in draw_pt_fetch_shade_pipeline_llvm.c */
@@ -75,6 +78,8 @@ vs_llvm_delete( struct draw_vertex_shader *dvs )
    }
 
    assert(shader->variants_cached == 0);
+   if (dvs->state.ir.nir)
+      ralloc_free(dvs->state.ir.nir);
    FREE((void*) dvs->state.tokens);
    FREE( dvs );
 }
@@ -89,21 +94,32 @@ draw_create_vs_llvm(struct draw_context *draw,
    if (!vs)
       return NULL;
 
-   /* we make a private copy of the tokens */
-   vs->base.state.tokens = tgsi_dup_tokens(state->tokens);
-   if (!vs->base.state.tokens) {
-      FREE(vs);
-      return NULL;
-   }
+   /* due to some bugs in the feedback state tracker we have to check
+      for ir.nir & PIPE_SHADER_IR_NIR here. */
+   if (state->ir.nir && state->type == PIPE_SHADER_IR_NIR) {
+      vs->base.state.ir.nir = state->ir.nir;
+      if (!draw->pipe->screen->get_param(draw->pipe->screen, PIPE_CAP_PACKED_UNIFORMS))
+         NIR_PASS_V(state->ir.nir, nir_lower_uniforms_to_ubo, 16);
+      nir_tgsi_scan_shader(state->ir.nir, &vs->base.info, true);
+   } else {
+      /* we make a private copy of the tokens */
+      vs->base.state.tokens = tgsi_dup_tokens(state->tokens);
+      if (!vs->base.state.tokens) {
+         FREE(vs);
+         return NULL;
+      }
 
-   tgsi_scan_shader(state->tokens, &vs->base.info);
+      tgsi_scan_shader(state->tokens, &vs->base.info);
+   }
 
    vs->variant_key_size = 
       draw_llvm_variant_key_size(
          vs->base.info.file_max[TGSI_FILE_INPUT]+1,
          MAX2(vs->base.info.file_max[TGSI_FILE_SAMPLER]+1,
-              vs->base.info.file_max[TGSI_FILE_SAMPLER_VIEW]+1));
+              vs->base.info.file_max[TGSI_FILE_SAMPLER_VIEW]+1),
+         vs->base.info.file_max[TGSI_FILE_IMAGE]+1);
 
+   vs->base.state.type = state->type;
    vs->base.state.stream_output = state->stream_output;
    vs->base.draw = draw;
    vs->base.prepare = vs_llvm_prepare;

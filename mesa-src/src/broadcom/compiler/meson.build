@@ -23,9 +23,9 @@ libbroadcom_compiler_files = files(
   'vir.c',
   'vir_dump.c',
   'vir_live_variables.c',
-  'vir_lower_uniforms.c',
   'vir_opt_copy_propagate.c',
   'vir_opt_dead_code.c',
+  'vir_opt_redundant_flags.c',
   'vir_opt_small_immediates.c',
   'vir_register_allocate.c',
   'vir_to_qpu.c',
@@ -36,14 +36,19 @@ libbroadcom_compiler_files = files(
   'v3d33_vpm_setup.c',
   'v3d_compiler.h',
   'v3d_nir_lower_io.c',
+  'v3d_nir_lower_image_load_store.c',
+  'v3d_nir_lower_line_smooth.c',
+  'v3d_nir_lower_logic_ops.c',
+  'v3d_nir_lower_scratch.c',
   'v3d_nir_lower_txf_ms.c',
 )
 
 libbroadcom_compiler = static_library(
   ['broadcom_compiler', v3d_xml_pack],
   libbroadcom_compiler_files,
-  include_directories : [inc_common, inc_broadcom],
-  c_args : [c_vis_args, no_override_init_args],
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_broadcom],
+  c_args : [no_override_init_args],
+  gnu_symbol_visibility : 'hidden',
   dependencies : [dep_libdrm, dep_valgrind, idep_nir_headers],
   build_by_default : false,
 )

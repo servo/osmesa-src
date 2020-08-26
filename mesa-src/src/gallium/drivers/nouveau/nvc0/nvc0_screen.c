@@ -23,22 +23,25 @@
 #include <xf86drm.h>
 #include <nouveau_drm.h>
 #include <nvif/class.h>
-#include "util/u_format.h"
-#include "util/u_format_s3tc.h"
+#include "util/format/u_format.h"
+#include "util/format/u_format_s3tc.h"
 #include "util/u_screen.h"
 #include "pipe/p_screen.h"
 
 #include "nouveau_vp3_video.h"
+
+#include "codegen/nv50_ir_driver.h"
 
 #include "nvc0/nvc0_context.h"
 #include "nvc0/nvc0_screen.h"
 
 #include "nvc0/mme/com9097.mme.h"
 #include "nvc0/mme/com90c0.mme.h"
+#include "nvc0/mme/comc597.mme.h"
 
 #include "nv50/g80_texture.xml.h"
 
-static boolean
+static bool
 nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
                                 enum pipe_format format,
                                 enum pipe_texture_target target,
@@ -56,7 +59,7 @@ nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
    if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
       return false;
 
-   /* Short-circuit the rest of the logic -- this is used by the state tracker
+   /* Short-circuit the rest of the logic -- this is used by the gallium frontend
     * to determine valid MS levels in a no-attachments scenario.
     */
    if (format == PIPE_FORMAT_NONE && bindings & PIPE_BIND_RENDER_TARGET)
@@ -74,14 +77,12 @@ nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
           sample_count > 1)
          return false;
 
-   /* Restrict ETC2 and ASTC formats here. These are only supported on GK20A.
+   /* Restrict ETC2 and ASTC formats here. These are only supported on GK20A
+    * and GM20B.
     */
    if ((desc->layout == UTIL_FORMAT_LAYOUT_ETC ||
         desc->layout == UTIL_FORMAT_LAYOUT_ASTC) &&
-       /* The claim is that this should work on GM107 but it doesn't. Need to
-        * test further and figure out if it's a nouveau issue or a HW one.
-       nouveau_screen(pscreen)->class_3d < GM107_3D_CLASS &&
-        */
+       nouveau_screen(pscreen)->device->chipset != 0x12b &&
        nouveau_screen(pscreen)->class_3d != NVEA_3D_CLASS)
       return false;
 
@@ -106,11 +107,13 @@ static int
 nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 {
    const uint16_t class_3d = nouveau_screen(pscreen)->class_3d;
-   struct nouveau_device *dev = nouveau_screen(pscreen)->device;
+   const struct nouveau_screen *screen = nouveau_screen(pscreen);
+   struct nouveau_device *dev = screen->device;
 
    switch (param) {
    /* non-boolean caps */
-   case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
+   case PIPE_CAP_MAX_TEXTURE_2D_SIZE:
+      return 16384;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return 15;
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
@@ -154,6 +157,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1 << 27;
    case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
       return 2048;
+   case PIPE_CAP_MAX_VERTEX_ELEMENT_SRC_OFFSET:
+      return 2047;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
@@ -178,11 +183,25 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return NVC0_MAX_WINDOW_RECTANGLES;
    case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
       return class_3d >= GM200_3D_CLASS ? 8 : 0;
+   case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
+      return 64 * 1024 * 1024;
+   case PIPE_CAP_MAX_VARYINGS:
+      /* NOTE: These only count our slots for GENERIC varyings.
+       * The address space may be larger, but the actual hard limit seems to be
+       * less than what the address space layout permits, so don't add TEXCOORD,
+       * COLOR, etc. here.
+       */
+      return 0x1f0 / 16;
+   case PIPE_CAP_MAX_VERTEX_BUFFERS:
+      return 16;
+   case PIPE_CAP_GL_BEGIN_END_BUFFER_SIZE:
+      return 512 * 1024; /* TODO: Investigate tuning this */
 
    /* supported caps */
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
    case PIPE_CAP_TEXTURE_SWIZZLE:
+   case PIPE_CAP_TEXTURE_SHADOW_MAP:
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
@@ -194,7 +213,9 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
    case PIPE_CAP_POINT_SPRITE:
    case PIPE_CAP_TGSI_TEXCOORD:
-   case PIPE_CAP_SM3:
+   case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
+   case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
+   case PIPE_CAP_VERTEX_SHADER_SATURATE:
    case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
    case PIPE_CAP_VERTEX_COLOR_CLAMPED:
@@ -210,6 +231,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
    case PIPE_CAP_PRIMITIVE_RESTART:
+   case PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX:
    case PIPE_CAP_TGSI_INSTANCEID:
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
@@ -262,15 +284,32 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
    case PIPE_CAP_QUERY_SO_OVERFLOW:
+   case PIPE_CAP_DEST_SURFACE_SRGB_CONTROL:
+   case PIPE_CAP_TGSI_DIV:
+   case PIPE_CAP_TGSI_ATOMINC_WRAP:
+   case PIPE_CAP_DEMOTE_TO_HELPER_INVOCATION:
+   case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
+   case PIPE_CAP_PREFER_IMM_ARRAYS_AS_CONSTBUF:
+   case PIPE_CAP_FLATSHADE:
+   case PIPE_CAP_ALPHA_TEST:
+   case PIPE_CAP_POINT_SIZE_FIXED:
+   case PIPE_CAP_TWO_SIDED_COLOR:
+   case PIPE_CAP_CLIP_PLANES:
+   case PIPE_CAP_TEXTURE_SHADOW_LOD:
+   case PIPE_CAP_PACKED_STREAM_OUTPUT:
+   case PIPE_CAP_DRAW_INFO_START_WITH_USER_INDICES:
       return 1;
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return nouveau_screen(pscreen)->vram_domain & NOUVEAU_BO_VRAM ? 1 : 0;
-   case PIPE_CAP_TGSI_FS_FBFETCH:
-      return class_3d >= NVE4_3D_CLASS; /* needs testing on fermi */
+   case PIPE_CAP_FBFETCH:
+      return class_3d >= NVE4_3D_CLASS ? 1 : 0; /* needs testing on fermi */
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_TGSI_BALLOT:
+      return class_3d >= NVE4_3D_CLASS;
    case PIPE_CAP_BINDLESS_TEXTURE:
       return class_3d >= NVE4_3D_CLASS;
+   case PIPE_CAP_TGSI_ATOMFADD:
+      return class_3d < GM107_3D_CLASS; /* needs additional lowering */
    case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
    case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
@@ -279,9 +318,24 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES:
    case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
    case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
+   case PIPE_CAP_VIEWPORT_SWIZZLE:
+   case PIPE_CAP_VIEWPORT_MASK:
       return class_3d >= GM200_3D_CLASS;
    case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES:
       return class_3d >= GP100_3D_CLASS;
+   case PIPE_CAP_RESOURCE_FROM_USER_MEMORY_COMPUTE_ONLY:
+   case PIPE_CAP_SYSTEM_SVM:
+      return screen->has_svm ? 1 : 0;
+
+   /* caps has to be turned on with nir */
+   case PIPE_CAP_GL_SPIRV:
+   case PIPE_CAP_GL_SPIRV_VARIABLE_POINTERS:
+   case PIPE_CAP_INT64_DIVMOD:
+      return screen->prefer_nir ? 1 : 0;
+
+   /* nir related caps */
+   case PIPE_CAP_NIR_IMAGES_AS_DEREF:
+      return 0;
 
    /* unsupported caps */
    case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
@@ -296,8 +350,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_VERTEXID_NOBASE:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
-   case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
    case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
+   case PIPE_CAP_TGSI_FS_POINT_IS_SYSVAL:
    case PIPE_CAP_GENERATE_MIPMAP:
    case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
    case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
@@ -309,7 +363,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
    case PIPE_CAP_NATIVE_FENCE_FD:
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
-   case PIPE_CAP_INT64_DIVMOD:
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
    case PIPE_CAP_MEMOBJ:
@@ -324,10 +377,29 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSTBUF0_FLAGS:
    case PIPE_CAP_PACKED_UNIFORMS:
    case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
-   case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
    case PIPE_CAP_MAX_COMBINED_SHADER_BUFFERS:
    case PIPE_CAP_MAX_COMBINED_HW_ATOMIC_COUNTERS:
    case PIPE_CAP_MAX_COMBINED_HW_ATOMIC_COUNTER_BUFFERS:
+   case PIPE_CAP_SURFACE_SAMPLE_COUNT:
+   case PIPE_CAP_QUERY_PIPELINE_STATISTICS_SINGLE:
+   case PIPE_CAP_RGB_OVERRIDE_DST_ALPHA_BLEND:
+   case PIPE_CAP_GLSL_TESS_LEVELS_AS_INPUTS:
+   case PIPE_CAP_NIR_COMPACT_ARRAYS:
+   case PIPE_CAP_IMAGE_LOAD_FORMATTED:
+   case PIPE_CAP_COMPUTE_SHADER_DERIVATIVES:
+   case PIPE_CAP_ATOMIC_FLOAT_MINMAX:
+   case PIPE_CAP_CONSERVATIVE_RASTER_INNER_COVERAGE:
+   case PIPE_CAP_FRAGMENT_SHADER_INTERLOCK:
+   case PIPE_CAP_CS_DERIVED_SYSTEM_VALUES_SUPPORTED:
+   case PIPE_CAP_FBFETCH_COHERENT:
+   case PIPE_CAP_TGSI_SKIP_SHRINK_IO_ARRAYS:
+   case PIPE_CAP_TGSI_TG4_COMPONENT_IN_SWIZZLE:
+   case PIPE_CAP_OPENCL_INTEGER_FUNCTIONS: /* could be done */
+   case PIPE_CAP_INTEGER_MULTIPLY_32X16: /* could be done */
+   case PIPE_CAP_FRONTEND_NOOP:
+   case PIPE_CAP_SHADER_SAMPLES_IDENTICAL:
+   case PIPE_CAP_VIEWPORT_TRANSFORM_LOWERED:
+   case PIPE_CAP_PSIZ_CLAMPED:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -346,8 +418,14 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return dev->vram_size >> 20;
    case PIPE_CAP_UMA:
       return 0;
+
    default:
       debug_printf("%s: unhandled cap %d\n", __func__, param);
+      /* fallthrough */
+   /* caps where we want the default value */
+   case PIPE_CAP_DMABUF:
+   case PIPE_CAP_ESSL_FEATURE_LEVEL:
+   case PIPE_CAP_THROTTLE:
       return u_pipe_screen_get_param_defaults(pscreen, param);
    }
 }
@@ -357,7 +435,8 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
                              enum pipe_shader_type shader,
                              enum pipe_shader_cap param)
 {
-   const uint16_t class_3d = nouveau_screen(pscreen)->class_3d;
+   const struct nouveau_screen *screen = nouveau_screen(pscreen);
+   const uint16_t class_3d = screen->class_3d;
 
    switch (shader) {
    case PIPE_SHADER_VERTEX:
@@ -373,9 +452,14 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
 
    switch (param) {
    case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_TGSI;
-   case PIPE_SHADER_CAP_SUPPORTED_IRS:
-      return 1 << PIPE_SHADER_IR_TGSI;
+      return screen->prefer_nir ? PIPE_SHADER_IR_NIR : PIPE_SHADER_IR_TGSI;
+   case PIPE_SHADER_CAP_SUPPORTED_IRS: {
+      uint32_t irs = 1 << PIPE_SHADER_IR_NIR |
+         ((class_3d >= GV100_3D_CLASS) ? 0 : 1 << PIPE_SHADER_IR_TGSI);
+      if (screen->force_enable_cl)
+         irs |= 1 << PIPE_SHADER_IR_NIR_SERIALIZED;
+      return irs;
+   }
    case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_TEX_INSTRUCTIONS:
@@ -384,18 +468,6 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
       return 16;
    case PIPE_SHADER_CAP_MAX_INPUTS:
-      if (shader == PIPE_SHADER_VERTEX)
-         return 32;
-      /* NOTE: These only count our slots for GENERIC varyings.
-       * The address space may be larger, but the actual hard limit seems to be
-       * less than what the address space layout permits, so don't add TEXCOORD,
-       * COLOR, etc. here.
-       */
-      if (shader == PIPE_SHADER_FRAGMENT)
-         return 0x1f0 / 16;
-      /* Actually this counts CLIPVERTEX, which occupies the last generic slot,
-       * and excludes 0x60 per-patch inputs.
-       */
       return 0x200 / 16;
    case PIPE_SHADER_CAP_MAX_OUTPUTS:
       return 32;
@@ -406,6 +478,14 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
       return shader != PIPE_SHADER_FRAGMENT;
    case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
+      /* HW doesn't support indirect addressing of fragment program inputs
+       * on Volta.  The binary driver generates a function to handle every
+       * possible indirection, and indirectly calls the function to handle
+       * this instead.
+       */
+      if (class_3d >= GV100_3D_CLASS)
+         return shader != PIPE_SHADER_FRAGMENT;
+      return 1;
    case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
       return 1;
@@ -431,11 +511,12 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
    case PIPE_SHADER_CAP_INT64_ATOMICS:
    case PIPE_SHADER_CAP_FP16:
+   case PIPE_SHADER_CAP_FP16_DERIVATIVES:
+   case PIPE_SHADER_CAP_INT16:
+   case PIPE_SHADER_CAP_GLSL_16BIT_CONSTS:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
       return 0;
-   case PIPE_SHADER_CAP_SCALAR_ISA:
-      return 1;
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       return NVC0_MAX_BUFFERS;
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
@@ -625,7 +706,6 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
    nouveau_heap_destroy(&screen->lib_code);
    nouveau_heap_destroy(&screen->text_heap);
 
-   FREE(screen->default_tsc);
    FREE(screen->tic.entries);
 
    nouveau_object_del(&screen->eng3d);
@@ -659,6 +739,26 @@ nvc0_graph_set_macro(struct nvc0_screen *screen, uint32_t m, unsigned pos,
    return pos + size;
 }
 
+static int
+tu102_graph_set_macro(struct nvc0_screen *screen, uint32_t m, unsigned pos,
+                     unsigned size, const uint32_t *data)
+{
+   struct nouveau_pushbuf *push = screen->base.pushbuf;
+
+   size /= 4;
+
+   assert((pos + size) <= 0x800);
+
+   BEGIN_NVC0(push, SUBC_3D(NVC0_GRAPH_MACRO_ID), 2);
+   PUSH_DATA (push, (m - 0x3800) / 8);
+   PUSH_DATA (push, pos);
+   BEGIN_1IC0(push, SUBC_3D(NVC0_GRAPH_MACRO_UPLOAD_POS), size + 1);
+   PUSH_DATA (push, pos);
+   PUSH_DATAp(push, data, size);
+
+   return pos + (size / 3);
+}
+
 static void
 nvc0_magic_3d_init(struct nouveau_pushbuf *push, uint16_t obj_class)
 {
@@ -670,8 +770,10 @@ nvc0_magic_3d_init(struct nouveau_pushbuf *push, uint16_t obj_class)
    BEGIN_NVC0(push, SUBC_3D(0x10ec), 2);
    PUSH_DATA (push, 0xff);
    PUSH_DATA (push, 0xff);
-   BEGIN_NVC0(push, SUBC_3D(0x074c), 1);
-   PUSH_DATA (push, 0x3f);
+   if (obj_class < GV100_3D_CLASS) {
+      BEGIN_NVC0(push, SUBC_3D(0x074c), 1);
+      PUSH_DATA (push, 0x3f);
+   }
 
    BEGIN_NVC0(push, SUBC_3D(0x16a8), 1);
    PUSH_DATA (push, (3 << 16) | 3);
@@ -703,8 +805,10 @@ nvc0_magic_3d_init(struct nouveau_pushbuf *push, uint16_t obj_class)
    BEGIN_NVC0(push, SUBC_3D(0x0300), 1);
    PUSH_DATA (push, 3);
 
-   BEGIN_NVC0(push, SUBC_3D(0x02d0), 1);
-   PUSH_DATA (push, 0x3fffff);
+   if (obj_class < GV100_3D_CLASS) {
+      BEGIN_NVC0(push, SUBC_3D(0x02d0), 1);
+      PUSH_DATA (push, 0x3fffff);
+   }
    BEGIN_NVC0(push, SUBC_3D(0x0fdc), 1);
    PUSH_DATA (push, 1);
    BEGIN_NVC0(push, SUBC_3D(0x19c0), 1);
@@ -764,6 +868,8 @@ nvc0_screen_init_compute(struct nvc0_screen *screen)
    case 0x110:
    case 0x120:
    case 0x130:
+   case 0x140:
+   case 0x160:
       return nve4_screen_compute_setup(screen, screen->base.pushbuf);
    default:
       return -1;
@@ -835,13 +941,15 @@ nvc0_screen_resize_text_area(struct nvc0_screen *screen, uint64_t size)
    nouveau_heap_init(&screen->text_heap, 0, size - 0x100);
 
    /* update the code segment setup */
-   BEGIN_NVC0(push, NVC0_3D(CODE_ADDRESS_HIGH), 2);
-   PUSH_DATAh(push, screen->text->offset);
-   PUSH_DATA (push, screen->text->offset);
-   if (screen->compute) {
-      BEGIN_NVC0(push, NVC0_CP(CODE_ADDRESS_HIGH), 2);
+   if (screen->eng3d->oclass < GV100_3D_CLASS) {
+      BEGIN_NVC0(push, NVC0_3D(CODE_ADDRESS_HIGH), 2);
       PUSH_DATAh(push, screen->text->offset);
       PUSH_DATA (push, screen->text->offset);
+      if (screen->compute) {
+         BEGIN_NVC0(push, NVC0_CP(CODE_ADDRESS_HIGH), 2);
+         PUSH_DATAh(push, screen->text->offset);
+         PUSH_DATA (push, screen->text->offset);
+      }
    }
 
    return 0;
@@ -881,6 +989,17 @@ nvc0_screen_bind_cb_3d(struct nvc0_screen *screen, bool *can_serialize,
    IMMED_NVC0(push, NVC0_3D(CB_BIND(stage)), (index << 4) | (size >= 0));
 }
 
+static const void *
+nvc0_screen_get_compiler_options(struct pipe_screen *pscreen,
+                                 enum pipe_shader_ir ir,
+                                 enum pipe_shader_type shader)
+{
+   struct nvc0_screen *screen = nvc0_screen(pscreen);
+   if (ir == PIPE_SHADER_IR_NIR)
+      return nv50_ir_nir_shader_compiler_options(screen->base.device->chipset);
+   return NULL;
+}
+
 #define FAIL_SCREEN_INIT(str, err)                    \
    do {                                               \
       NOUVEAU_ERR(str, err);                          \
@@ -909,6 +1028,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    case 0x110:
    case 0x120:
    case 0x130:
+   case 0x140:
+   case 0x160:
       break;
    default:
       return NULL;
@@ -955,6 +1076,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    pscreen->get_sample_pixel_grid = nvc0_screen_get_sample_pixel_grid;
    pscreen->get_driver_query_info = nvc0_screen_get_driver_query_info;
    pscreen->get_driver_query_group_info = nvc0_screen_get_driver_query_group_info;
+   /* nir stuff */
+   pscreen->get_compiler_options = nvc0_screen_get_compiler_options;
 
    nvc0_screen_init_resource_functions(pscreen);
 
@@ -973,16 +1096,19 @@ nvc0_screen_create(struct nouveau_device *dev)
    screen->base.fence.emit = nvc0_screen_fence_emit;
    screen->base.fence.update = nvc0_screen_fence_update;
 
+   if (dev->chipset < 0x140) {
+      ret = nouveau_object_new(chan, (dev->chipset < 0xe0) ? 0x1f906e : 0x906e,
+                               NVIF_CLASS_SW_GF100, NULL, 0, &screen->nvsw);
+      if (ret)
+         FAIL_SCREEN_INIT("Error creating SW object: %d\n", ret);
 
-   ret = nouveau_object_new(chan, (dev->chipset < 0xe0) ? 0x1f906e : 0x906e,
-                            NVIF_CLASS_SW_GF100, NULL, 0, &screen->nvsw);
-   if (ret)
-      FAIL_SCREEN_INIT("Error creating SW object: %d\n", ret);
-
-   BEGIN_NVC0(push, SUBC_SW(NV01_SUBCHAN_OBJECT), 1);
-   PUSH_DATA (push, screen->nvsw->handle);
+      BEGIN_NVC0(push, SUBC_SW(NV01_SUBCHAN_OBJECT), 1);
+      PUSH_DATA (push, screen->nvsw->handle);
+   }
 
    switch (dev->chipset & ~0xf) {
+   case 0x160:
+   case 0x140:
    case 0x130:
    case 0x120:
    case 0x110:
@@ -1006,7 +1132,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, screen->m2mf->oclass);
    if (screen->m2mf->oclass == NVE4_P2MF_CLASS) {
       BEGIN_NVC0(push, SUBC_COPY(NV01_SUBCHAN_OBJECT), 1);
-      PUSH_DATA (push, 0xa0b5);
+      PUSH_DATA (push, NVE4_COPY_CLASS);
    }
 
    ret = nouveau_object_new(chan, 0xbeef902d, NVC0_2D_CLASS, NULL, 0,
@@ -1024,9 +1150,9 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, 0);
    BEGIN_NVC0(push, NVC0_2D(COLOR_KEY_ENABLE), 1);
    PUSH_DATA (push, 0);
-   BEGIN_NVC0(push, SUBC_2D(0x0884), 1);
+   BEGIN_NVC0(push, NVC0_2D(SET_PIXELS_FROM_MEMORY_CORRAL_SIZE), 1);
    PUSH_DATA (push, 0x3f);
-   BEGIN_NVC0(push, SUBC_2D(0x0888), 1);
+   BEGIN_NVC0(push, NVC0_2D(SET_PIXELS_FROM_MEMORY_SAFE_OVERLAP), 1);
    PUSH_DATA (push, 1);
    BEGIN_NVC0(push, NVC0_2D(COND_MODE), 1);
    PUSH_DATA (push, NV50_2D_COND_MODE_ALWAYS);
@@ -1036,6 +1162,12 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, screen->fence.bo->offset + 16);
 
    switch (dev->chipset & ~0xf) {
+   case 0x160:
+      obj_class = TU102_3D_CLASS;
+      break;
+   case 0x140:
+      obj_class = GV100_3D_CLASS;
+      break;
    case 0x130:
       switch (dev->chipset) {
       case 0x130:
@@ -1279,27 +1411,51 @@ nvc0_screen_create(struct nouveau_device *dev)
    for (i = 0; i < NVC0_MAX_VIEWPORTS; i++) {
       BEGIN_NVC0(push, NVC0_3D(SCISSOR_ENABLE(i)), 3);
       PUSH_DATA (push, 1);
-      PUSH_DATA (push, 8192 << 16);
-      PUSH_DATA (push, 8192 << 16);
+      PUSH_DATA (push, 16384 << 16);
+      PUSH_DATA (push, 16384 << 16);
    }
 
+   if (screen->eng3d->oclass < TU102_3D_CLASS) {
 #define MK_MACRO(m, n) i = nvc0_graph_set_macro(screen, m, i, sizeof(n), n);
 
-   i = 0;
-   MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_PER_INSTANCE, mme9097_per_instance_bf);
-   MK_MACRO(NVC0_3D_MACRO_BLEND_ENABLES, mme9097_blend_enables);
-   MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_SELECT, mme9097_vertex_array_select);
-   MK_MACRO(NVC0_3D_MACRO_TEP_SELECT, mme9097_tep_select);
-   MK_MACRO(NVC0_3D_MACRO_GP_SELECT, mme9097_gp_select);
-   MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_FRONT, mme9097_poly_mode_front);
-   MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_BACK, mme9097_poly_mode_back);
-   MK_MACRO(NVC0_3D_MACRO_DRAW_ARRAYS_INDIRECT, mme9097_draw_arrays_indirect);
-   MK_MACRO(NVC0_3D_MACRO_DRAW_ELEMENTS_INDIRECT, mme9097_draw_elts_indirect);
-   MK_MACRO(NVC0_3D_MACRO_DRAW_ARRAYS_INDIRECT_COUNT, mme9097_draw_arrays_indirect_count);
-   MK_MACRO(NVC0_3D_MACRO_DRAW_ELEMENTS_INDIRECT_COUNT, mme9097_draw_elts_indirect_count);
-   MK_MACRO(NVC0_3D_MACRO_QUERY_BUFFER_WRITE, mme9097_query_buffer_write);
-   MK_MACRO(NVC0_3D_MACRO_CONSERVATIVE_RASTER_STATE, mme9097_conservative_raster_state);
-   MK_MACRO(NVC0_CP_MACRO_LAUNCH_GRID_INDIRECT, mme90c0_launch_grid_indirect);
+      i = 0;
+      MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_PER_INSTANCE, mme9097_per_instance_bf);
+      MK_MACRO(NVC0_3D_MACRO_BLEND_ENABLES, mme9097_blend_enables);
+      MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_SELECT, mme9097_vertex_array_select);
+      MK_MACRO(NVC0_3D_MACRO_TEP_SELECT, mme9097_tep_select);
+      MK_MACRO(NVC0_3D_MACRO_GP_SELECT, mme9097_gp_select);
+      MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_FRONT, mme9097_poly_mode_front);
+      MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_BACK, mme9097_poly_mode_back);
+      MK_MACRO(NVC0_3D_MACRO_DRAW_ARRAYS_INDIRECT, mme9097_draw_arrays_indirect);
+      MK_MACRO(NVC0_3D_MACRO_DRAW_ELEMENTS_INDIRECT, mme9097_draw_elts_indirect);
+      MK_MACRO(NVC0_3D_MACRO_DRAW_ARRAYS_INDIRECT_COUNT, mme9097_draw_arrays_indirect_count);
+      MK_MACRO(NVC0_3D_MACRO_DRAW_ELEMENTS_INDIRECT_COUNT, mme9097_draw_elts_indirect_count);
+      MK_MACRO(NVC0_3D_MACRO_QUERY_BUFFER_WRITE, mme9097_query_buffer_write);
+      MK_MACRO(NVC0_3D_MACRO_CONSERVATIVE_RASTER_STATE, mme9097_conservative_raster_state);
+      MK_MACRO(NVC0_3D_MACRO_COMPUTE_COUNTER, mme9097_compute_counter);
+      MK_MACRO(NVC0_3D_MACRO_COMPUTE_COUNTER_TO_QUERY, mme9097_compute_counter_to_query);
+      MK_MACRO(NVC0_CP_MACRO_LAUNCH_GRID_INDIRECT, mme90c0_launch_grid_indirect);
+   } else {
+#undef MK_MACRO
+#define MK_MACRO(m, n) i = tu102_graph_set_macro(screen, m, i, sizeof(n), n);
+
+      i = 0;
+      MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_PER_INSTANCE, mmec597_per_instance_bf);
+      MK_MACRO(NVC0_3D_MACRO_BLEND_ENABLES, mmec597_blend_enables);
+      MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_SELECT, mmec597_vertex_array_select);
+      MK_MACRO(NVC0_3D_MACRO_TEP_SELECT, mmec597_tep_select);
+      MK_MACRO(NVC0_3D_MACRO_GP_SELECT, mmec597_gp_select);
+      MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_FRONT, mmec597_poly_mode_front);
+      MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_BACK, mmec597_poly_mode_back);
+      MK_MACRO(NVC0_3D_MACRO_DRAW_ARRAYS_INDIRECT, mmec597_draw_arrays_indirect);
+      MK_MACRO(NVC0_3D_MACRO_DRAW_ELEMENTS_INDIRECT, mmec597_draw_elts_indirect);
+      MK_MACRO(NVC0_3D_MACRO_DRAW_ARRAYS_INDIRECT_COUNT, mmec597_draw_arrays_indirect_count);
+      MK_MACRO(NVC0_3D_MACRO_DRAW_ELEMENTS_INDIRECT_COUNT, mmec597_draw_elts_indirect_count);
+      MK_MACRO(NVC0_3D_MACRO_QUERY_BUFFER_WRITE, mmec597_query_buffer_write);
+      MK_MACRO(NVC0_3D_MACRO_CONSERVATIVE_RASTER_STATE, mmec597_conservative_raster_state);
+      MK_MACRO(NVC0_3D_MACRO_COMPUTE_COUNTER, mmec597_compute_counter);
+      MK_MACRO(NVC0_3D_MACRO_COMPUTE_COUNTER_TO_QUERY, mmec597_compute_counter_to_query);
+   }
 
    BEGIN_NVC0(push, NVC0_3D(RASTERIZE_ENABLE), 1);
    PUSH_DATA (push, 1);
@@ -1383,9 +1539,6 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    if (!nvc0_blitter_create(screen))
       goto fail;
-
-   screen->default_tsc = CALLOC_STRUCT(nv50_tsc_entry);
-   screen->default_tsc->tsc[0] = G80_TSC_0_SRGB_CONVERSION;
 
    nouveau_fence_new(&screen->base, &screen->base.fence.current);
 

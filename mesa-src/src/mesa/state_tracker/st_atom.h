@@ -37,6 +37,11 @@
 #include "main/glheader.h"
 
 struct st_context;
+struct st_vertex_program;
+struct st_common_variant;
+struct pipe_vertex_buffer;
+struct pipe_vertex_element;
+struct cso_velems_state;
 
 /**
  * Enumeration of state tracker pipelines.
@@ -54,9 +59,20 @@ void st_destroy_atoms( struct st_context *st );
 void st_validate_state( struct st_context *st, enum st_pipeline pipeline );
 GLuint st_compare_func_to_pipe(GLenum func);
 
-enum pipe_format
-st_pipe_vertex_format(const struct gl_array_attributes *attrib);
+void
+st_setup_arrays(struct st_context *st,
+                const struct st_vertex_program *vp,
+                const struct st_common_variant *vp_variant,
+                struct cso_velems_state *velements,
+                struct pipe_vertex_buffer *vbuffer, unsigned *num_vbuffers,
+                bool *has_user_vertex_buffers);
 
+void
+st_setup_current_user(struct st_context *st,
+                      const struct st_vertex_program *vp,
+                      const struct st_common_variant *vp_variant,
+                      struct cso_velems_state *velements,
+                      struct pipe_vertex_buffer *vbuffer, unsigned *num_vbuffers);
 
 /* Define ST_NEW_xxx_INDEX */
 enum {
@@ -89,7 +105,7 @@ enum {
                                  ST_NEW_SAMPLE_STATE | \
                                  ST_NEW_SAMPLE_SHADING)
 
-#define ST_NEW_VERTEX_PROGRAM(st, p) (p->affected_states | \
+#define ST_NEW_VERTEX_PROGRAM(st, p) ((p)->affected_states | \
                                       (st_user_clip_planes_enabled(st->ctx) ? \
                                        ST_NEW_CLIP_STATE : 0))
 

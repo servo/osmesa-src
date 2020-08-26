@@ -23,6 +23,7 @@
 
 #include <string.h>
 #include "util/macros.h"
+#include "util/bitscan.h"
 
 #include "broadcom/common/v3d_device_info.h"
 #include "qpu_instr.h"
@@ -521,7 +522,9 @@ static const struct opcode_desc add_ops[] = {
 
         { 187, 187, 1 << 3, ANYMUX, V3D_QPU_A_VPMSETUP, 33 },
         { 188, 188, 1 << 0, ANYMUX, V3D_QPU_A_LDVPMV_IN, 40 },
+        { 188, 188, 1 << 0, ANYMUX, V3D_QPU_A_LDVPMV_OUT, 40 },
         { 188, 188, 1 << 1, ANYMUX, V3D_QPU_A_LDVPMD_IN, 40 },
+        { 188, 188, 1 << 1, ANYMUX, V3D_QPU_A_LDVPMD_OUT, 40 },
         { 188, 188, 1 << 2, ANYMUX, V3D_QPU_A_LDVPMP, 40 },
         { 188, 188, 1 << 3, ANYMUX, V3D_QPU_A_RSQRT, 41 },
         { 188, 188, 1 << 4, ANYMUX, V3D_QPU_A_EXP, 41 },
@@ -529,6 +532,7 @@ static const struct opcode_desc add_ops[] = {
         { 188, 188, 1 << 6, ANYMUX, V3D_QPU_A_SIN, 41 },
         { 188, 188, 1 << 7, ANYMUX, V3D_QPU_A_RSQRT2, 41 },
         { 189, 189, ANYMUX, ANYMUX, V3D_QPU_A_LDVPMG_IN, 40 },
+        { 189, 189, ANYMUX, ANYMUX, V3D_QPU_A_LDVPMG_OUT, 40 },
 
         /* FIXME: MORE COMPLICATED */
         /* { 190, 191, ANYMUX, ANYMUX, V3D_QPU_A_VFMOVABSNEGNAB }, */
@@ -776,7 +780,11 @@ v3d_qpu_add_unpack(const struct v3d_device_info *devinfo, uint64_t packed_inst,
         case V3D_QPU_A_FMIN:
         case V3D_QPU_A_FMAX:
         case V3D_QPU_A_FCMP:
-                instr->alu.add.output_pack = (op >> 4) & 0x3;
+        case V3D_QPU_A_VFPACK:
+                if (instr->alu.add.op != V3D_QPU_A_VFPACK)
+                        instr->alu.add.output_pack = (op >> 4) & 0x3;
+                else
+                        instr->alu.add.output_pack = V3D_QPU_PACK_NONE;
 
                 if (!v3d_qpu_float32_unpack_unpack((op >> 2) & 0x3,
                                                    &instr->alu.add.a_unpack)) {
@@ -1042,6 +1050,32 @@ v3d_qpu_add_pack(const struct v3d_device_info *devinfo,
 
                 opcode |= a_unpack << 2;
                 opcode |= b_unpack << 0;
+
+                break;
+        }
+
+        case V3D_QPU_A_VFPACK: {
+                uint32_t a_unpack;
+                uint32_t b_unpack;
+
+                if (instr->alu.add.a_unpack == V3D_QPU_UNPACK_ABS ||
+                    instr->alu.add.b_unpack == V3D_QPU_UNPACK_ABS) {
+                        return false;
+                }
+
+                if (!v3d_qpu_float32_unpack_pack(instr->alu.add.a_unpack,
+                                                 &a_unpack)) {
+                        return false;
+                }
+
+                if (!v3d_qpu_float32_unpack_pack(instr->alu.add.b_unpack,
+                                                 &b_unpack)) {
+                        return false;
+                }
+
+                opcode = (opcode & ~(1 << 2)) | (a_unpack << 2);
+                opcode = (opcode & ~(1 << 0)) | (b_unpack << 0);
+
                 break;
         }
 
@@ -1065,7 +1099,7 @@ v3d_qpu_add_pack(const struct v3d_device_info *devinfo,
                 }
                 if (packed == 0)
                         return false;
-                opcode |= packed << 2;
+                opcode = (opcode & ~(1 << 2)) | packed << 2;
                 break;
         }
 
@@ -1418,14 +1452,14 @@ v3d_qpu_instr_pack_branch(const struct v3d_device_info *devinfo,
 
                 *packed_instr |= QPU_SET_FIELD(instr->branch.offset >> 24,
                                                VC5_QPU_BRANCH_ADDR_HIGH);
-
-        case V3D_QPU_BRANCH_DEST_REGFILE:
-                *packed_instr |= QPU_SET_FIELD(instr->branch.raddr_a,
-                                               VC5_QPU_RADDR_A);
-                break;
-
         default:
                 break;
+        }
+
+        if (instr->branch.bdi == V3D_QPU_BRANCH_DEST_REGFILE ||
+            instr->branch.bdu == V3D_QPU_BRANCH_DEST_REGFILE) {
+                *packed_instr |= QPU_SET_FIELD(instr->branch.raddr_a,
+                                               VC5_QPU_RADDR_A);
         }
 
         return true;

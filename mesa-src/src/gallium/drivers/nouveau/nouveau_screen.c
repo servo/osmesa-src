@@ -4,10 +4,11 @@
 
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
-#include "util/u_format_s3tc.h"
+#include "util/format/u_format.h"
+#include "util/format/u_format_s3tc.h"
 #include "util/u_string.h"
 
+#include "os/os_mman.h"
 #include "util/os_time.h"
 
 #include <stdio.h>
@@ -15,6 +16,7 @@
 #include <stdlib.h>
 
 #include <nouveau_drm.h>
+#include <xf86drm.h>
 
 #include "nouveau_winsys.h"
 #include "nouveau_screen.h"
@@ -23,8 +25,15 @@
 #include "nouveau_mm.h"
 #include "nouveau_buffer.h"
 
+#include <compiler/glsl_types.h>
+
 /* XXX this should go away */
-#include "state_tracker/drm_driver.h"
+#include "frontend/drm_driver.h"
+
+/* Even though GPUs might allow addresses with more bits, some engines do not.
+ * Stick with 40 for compatibility.
+ */
+#define NV_GENERIC_VM_LIMIT_SHIFT 39
 
 int nouveau_mesa_debug = 0;
 
@@ -34,7 +43,7 @@ nouveau_screen_get_name(struct pipe_screen *pscreen)
    struct nouveau_device *dev = nouveau_screen(pscreen)->device;
    static char buffer[128];
 
-   util_snprintf(buffer, sizeof(buffer), "NV%02X", dev->chipset);
+   snprintf(buffer, sizeof(buffer), "NV%02X", dev->chipset);
    return buffer;
 }
 
@@ -74,7 +83,7 @@ nouveau_screen_fence_ref(struct pipe_screen *pscreen,
    nouveau_fence_ref(nouveau_fence(pfence), (struct nouveau_fence **)ptr);
 }
 
-static boolean
+static bool
 nouveau_screen_fence_finish(struct pipe_screen *screen,
                             struct pipe_context *ctx,
                             struct pipe_fence_handle *pfence,
@@ -151,6 +160,7 @@ nouveau_disk_cache_create(struct nouveau_screen *screen)
    struct mesa_sha1 ctx;
    unsigned char sha1[20];
    char cache_id[20 * 2 + 1];
+   uint64_t driver_flags = 0;
 
    _mesa_sha1_init(&ctx);
    if (!disk_cache_get_function_identifier(nouveau_disk_cache_create,
@@ -160,9 +170,24 @@ nouveau_disk_cache_create(struct nouveau_screen *screen)
    _mesa_sha1_final(&ctx, sha1);
    disk_cache_format_hex_id(cache_id, sha1, 20 * 2);
 
+   if (screen->prefer_nir)
+      driver_flags |= NOUVEAU_SHADER_CACHE_FLAGS_IR_NIR;
+   else
+      driver_flags |= NOUVEAU_SHADER_CACHE_FLAGS_IR_TGSI;
+
    screen->disk_shader_cache =
       disk_cache_create(nouveau_screen_get_name(&screen->base),
-                        cache_id, 0);
+                        cache_id, driver_flags);
+}
+
+static void*
+reserve_vma(uintptr_t start, uint64_t reserved_size)
+{
+   void *reserved = os_mmap((void*)start, reserved_size, PROT_NONE,
+                            MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+   if (reserved == MAP_FAILED)
+      return NULL;
+   return reserved;
 }
 
 int
@@ -179,6 +204,15 @@ nouveau_screen_init(struct nouveau_screen *screen, struct nouveau_device *dev)
    char *nv_dbg = getenv("NOUVEAU_MESA_DEBUG");
    if (nv_dbg)
       nouveau_mesa_debug = atoi(nv_dbg);
+
+   if (dev->chipset < 0x140)
+      screen->prefer_nir = debug_get_bool_option("NV50_PROG_USE_NIR", false);
+   else
+      screen->prefer_nir = true;
+
+   screen->force_enable_cl = debug_get_bool_option("NOUVEAU_ENABLE_CL", false);
+   if (screen->force_enable_cl)
+      glsl_type_singleton_init_or_ref();
 
    /* These must be set before any failure is possible, as the cleanup
     * paths assume they're responsible for deleting them.
@@ -200,6 +234,46 @@ nouveau_screen_init(struct nouveau_screen *screen, struct nouveau_device *dev)
       size = sizeof(nvc0_data);
    }
 
+   screen->has_svm = false;
+   /* we only care about HMM with OpenCL enabled */
+   if (dev->chipset > 0x130 && screen->force_enable_cl) {
+      /* Before being able to enable SVM we need to carve out some memory for
+       * driver bo allocations. Let's just base the size on the available VRAM.
+       *
+       * 40 bit is the biggest we care about and for 32 bit systems we don't
+       * want to allocate all of the available memory either.
+       *
+       * Also we align the size we want to reserve to the next POT to make use
+       * of hugepages.
+       */
+      const int vram_shift = util_logbase2_ceil64(dev->vram_size);
+      const int limit_bit =
+         MIN2(sizeof(void*) * 8 - 1, NV_GENERIC_VM_LIMIT_SHIFT);
+      screen->svm_cutout_size =
+         BITFIELD64_BIT(MIN2(sizeof(void*) == 4 ? 26 : NV_GENERIC_VM_LIMIT_SHIFT, vram_shift));
+
+      size_t start = screen->svm_cutout_size;
+      do {
+         screen->svm_cutout = reserve_vma(start, screen->svm_cutout_size);
+         if (!screen->svm_cutout) {
+            start += screen->svm_cutout_size;
+            continue;
+         }
+
+         struct drm_nouveau_svm_init svm_args = {
+            .unmanaged_addr = (uint64_t)screen->svm_cutout,
+            .unmanaged_size = screen->svm_cutout_size,
+         };
+
+         ret = drmCommandWrite(screen->drm->fd, DRM_NOUVEAU_SVM_INIT,
+                               &svm_args, sizeof(svm_args));
+         screen->has_svm = !ret;
+         if (!screen->has_svm)
+            os_munmap(screen->svm_cutout, screen->svm_cutout_size);
+         break;
+      } while ((start + screen->svm_cutout_size) < BITFIELD64_MASK(limit_bit));
+   }
+
    /*
     * Set default VRAM domain if not overridden
     */
@@ -213,16 +287,16 @@ nouveau_screen_init(struct nouveau_screen *screen, struct nouveau_device *dev)
    ret = nouveau_object_new(&dev->object, 0, NOUVEAU_FIFO_CHANNEL_CLASS,
                             data, size, &screen->channel);
    if (ret)
-      return ret;
+      goto err;
 
    ret = nouveau_client_new(screen->device, &screen->client);
    if (ret)
-      return ret;
+      goto err;
    ret = nouveau_pushbuf_new(screen->client, screen->channel,
                              4, 512 * 1024, 1,
                              &screen->pushbuf);
    if (ret)
-      return ret;
+      goto err;
 
    /* getting CPU time first appears to be more accurate */
    screen->cpu_gpu_time_delta = os_time_get();
@@ -264,12 +338,22 @@ nouveau_screen_init(struct nouveau_screen *screen, struct nouveau_device *dev)
                                        &mm_config);
    screen->mm_VRAM = nouveau_mm_create(dev, NOUVEAU_BO_VRAM, &mm_config);
    return 0;
+
+err:
+   if (screen->svm_cutout)
+      os_munmap(screen->svm_cutout, screen->svm_cutout_size);
+   return ret;
 }
 
 void
 nouveau_screen_fini(struct nouveau_screen *screen)
 {
    int fd = screen->drm->fd;
+
+   if (screen->force_enable_cl)
+      glsl_type_singleton_decref();
+   if (screen->has_svm)
+      os_munmap(screen->svm_cutout, screen->svm_cutout_size);
 
    nouveau_mm_destroy(screen->mm_GART);
    nouveau_mm_destroy(screen->mm_VRAM);

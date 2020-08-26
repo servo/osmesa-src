@@ -144,7 +144,6 @@ static ALWAYS_INLINE void
 clear(struct gl_context *ctx, GLbitfield mask, bool no_error)
 {
    FLUSH_VERTICES(ctx, 0);
-   FLUSH_CURRENT(ctx, 0);
 
    if (!no_error) {
       if (mask & ~(GL_COLOR_BUFFER_BIT |
@@ -203,17 +202,17 @@ clear(struct gl_context *ctx, GLbitfield mask, bool no_error)
       }
 
       if ((mask & GL_DEPTH_BUFFER_BIT)
-          && ctx->DrawBuffer->Visual.haveDepthBuffer) {
+          && ctx->DrawBuffer->Visual.depthBits > 0) {
          bufferMask |= BUFFER_BIT_DEPTH;
       }
 
       if ((mask & GL_STENCIL_BUFFER_BIT)
-          && ctx->DrawBuffer->Visual.haveStencilBuffer) {
+          && ctx->DrawBuffer->Visual.stencilBits > 0) {
          bufferMask |= BUFFER_BIT_STENCIL;
       }
 
       if ((mask & GL_ACCUM_BUFFER_BIT)
-          && ctx->DrawBuffer->Visual.haveAccumBuffer) {
+          && ctx->DrawBuffer->Visual.accumRedBits > 0) {
          bufferMask |= BUFFER_BIT_ACCUM;
       }
 
@@ -344,10 +343,15 @@ clear_bufferiv(struct gl_context *ctx, GLenum buffer, GLint drawbuffer,
                const GLint *value, bool no_error)
 {
    FLUSH_VERTICES(ctx, 0);
-   FLUSH_CURRENT(ctx, 0);
 
    if (ctx->NewState) {
       _mesa_update_state( ctx );
+   }
+
+   if (!no_error && ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glClearBufferiv(incomplete framebuffer)");
+      return;
    }
 
    switch (buffer) {
@@ -458,10 +462,15 @@ clear_bufferuiv(struct gl_context *ctx, GLenum buffer, GLint drawbuffer,
                 const GLuint *value, bool no_error)
 {
    FLUSH_VERTICES(ctx, 0);
-   FLUSH_CURRENT(ctx, 0);
 
    if (ctx->NewState) {
       _mesa_update_state( ctx );
+   }
+
+   if (!no_error && ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION,
+                  "glClearBufferuiv(incomplete framebuffer)");
+      return;
    }
 
    switch (buffer) {
@@ -547,10 +556,15 @@ clear_bufferfv(struct gl_context *ctx, GLenum buffer, GLint drawbuffer,
                const GLfloat *value, bool no_error)
 {
    FLUSH_VERTICES(ctx, 0);
-   FLUSH_CURRENT(ctx, 0);
 
    if (ctx->NewState) {
       _mesa_update_state( ctx );
+   }
+
+   if (!no_error && ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION,
+                  "glClearBufferfv(incomplete framebuffer)");
+      return;
    }
 
    switch (buffer) {
@@ -665,7 +679,6 @@ clear_bufferfi(struct gl_context *ctx, GLenum buffer, GLint drawbuffer,
    GLbitfield mask = 0;
 
    FLUSH_VERTICES(ctx, 0);
-   FLUSH_CURRENT(ctx, 0);
 
    if (!no_error) {
       if (buffer != GL_DEPTH_STENCIL) {
@@ -693,6 +706,12 @@ clear_bufferfi(struct gl_context *ctx, GLenum buffer, GLint drawbuffer,
 
    if (ctx->NewState) {
       _mesa_update_state( ctx );
+   }
+
+   if (!no_error && ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glClearBufferfi(incomplete framebuffer)");
+      return;
    }
 
    if (ctx->DrawBuffer->Attachment[BUFFER_DEPTH].Renderbuffer)

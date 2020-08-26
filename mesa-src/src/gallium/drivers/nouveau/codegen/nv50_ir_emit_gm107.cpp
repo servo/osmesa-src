@@ -23,6 +23,7 @@
  */
 
 #include "codegen/nv50_ir_target_gm107.h"
+#include "codegen/nv50_ir_sched_gm107.h"
 
 //#define GM107_DEBUG_SCHED_DATA
 
@@ -122,6 +123,8 @@ private:
    void emitSAM();
    void emitRAM();
 
+   void emitPSETP();
+
    void emitMOV();
    void emitS2R();
    void emitCS2R();
@@ -168,6 +171,7 @@ private:
    void emitBFI();
    void emitBFE();
    void emitFLO();
+   void emitPRMT();
 
    void emitLDSTs(int, DataType);
    void emitLDSTc(int);
@@ -192,6 +196,7 @@ private:
 
    void emitTEXs(int);
    void emitTEX();
+   void emitTEXS();
    void emitTLD();
    void emitTLD4();
    void emitTXD();
@@ -689,6 +694,31 @@ CodeEmitterGM107::emitRAM()
  * predicate/cc
  ******************************************************************************/
 
+void
+CodeEmitterGM107::emitPSETP()
+{
+
+   emitInsn(0x50900000);
+
+   switch (insn->op) {
+   case OP_AND: emitField(0x18, 3, 0); break;
+   case OP_OR:  emitField(0x18, 3, 1); break;
+   case OP_XOR: emitField(0x18, 3, 2); break;
+   default:
+      assert(!"unexpected operation");
+      break;
+   }
+
+   // emitINV (0x2a);
+   emitPRED(0x27); // TODO: support 3-arg
+   emitINV (0x20, insn->src(1));
+   emitPRED(0x1d, insn->src(1));
+   emitINV (0x0f, insn->src(0));
+   emitPRED(0x0c, insn->src(0));
+   emitPRED(0x03, insn->def(0));
+   emitPRED(0x00);
+}
+
 /*******************************************************************************
  * movement / conversion
  ******************************************************************************/
@@ -919,8 +949,8 @@ CodeEmitterGM107::emitI2I()
    emitGPR  (0x00, insn->def(0));
 }
 
-static void
-selpFlip(const FixupEntry *entry, uint32_t *code, const FixupData& data)
+void
+gm107_selpFlip(const FixupEntry *entry, uint32_t *code, const FixupData& data)
 {
    int loc = entry->loc;
    if (data.force_persample_interp)
@@ -956,7 +986,7 @@ CodeEmitterGM107::emitSEL()
    emitGPR (0x00, insn->def(0));
 
    if (insn->subOp == 1) {
-      addInterp(0, 0, selpFlip);
+      addInterp(0, 0, gm107_selpFlip);
    }
 }
 
@@ -2343,6 +2373,33 @@ CodeEmitterGM107::emitFLO()
    emitGPR  (0x00, insn->def(0));
 }
 
+void
+CodeEmitterGM107::emitPRMT()
+{
+   switch (insn->src(1).getFile()) {
+   case FILE_GPR:
+      emitInsn(0x5bc00000);
+      emitGPR (0x14, insn->src(1));
+      break;
+   case FILE_MEMORY_CONST:
+      emitInsn(0x4bc00000);
+      emitCBUF(0x22, -1, 0x14, 16, 2, insn->src(1));
+      break;
+   case FILE_IMMEDIATE:
+      emitInsn(0x36c00000);
+      emitIMMD(0x14, 19, insn->src(1));
+      break;
+   default:
+      assert(!"bad src1 file");
+      break;
+   }
+
+   emitField(0x30, 3, insn->subOp);
+   emitGPR  (0x27, insn->src(2));
+   emitGPR  (0x08, insn->src(0));
+   emitGPR  (0x00, insn->def(0));
+}
+
 /*******************************************************************************
  * memory
  ******************************************************************************/
@@ -2499,8 +2556,8 @@ CodeEmitterGM107::emitAL2P()
    emitGPR  (0x00, insn->def(0));
 }
 
-static void
-interpApply(const FixupEntry *entry, uint32_t *code, const FixupData& data)
+void
+gm107_interpApply(const FixupEntry *entry, uint32_t *code, const FixupData& data)
 {
    int ipa = entry->ipa;
    int reg = entry->reg;
@@ -2560,12 +2617,12 @@ CodeEmitterGM107::emitIPA()
       emitGPR(0x14, insn->src(1));
       if (insn->getSampleMode() == NV50_IR_INTERP_OFFSET)
          emitGPR(0x27, insn->src(2));
-      addInterp(insn->ipa, insn->getSrc(1)->reg.data.id, interpApply);
+      addInterp(insn->ipa, insn->getSrc(1)->reg.data.id, gm107_interpApply);
    } else {
       if (insn->getSampleMode() == NV50_IR_INTERP_OFFSET)
          emitGPR(0x27, insn->src(1));
       emitGPR(0x14);
-      addInterp(insn->ipa, 0xff, interpApply);
+      addInterp(insn->ipa, 0xff, gm107_interpApply);
    }
 
    if (insn->getSampleMode() != NV50_IR_INTERP_OFFSET)
@@ -2718,6 +2775,104 @@ CodeEmitterGM107::emitTEXs(int pos)
       emitGPR(pos);
 }
 
+static uint8_t
+getTEXSMask(uint8_t mask)
+{
+   switch (mask) {
+   case 0x1: return 0x0;
+   case 0x2: return 0x1;
+   case 0x3: return 0x4;
+   case 0x4: return 0x2;
+   case 0x7: return 0x0;
+   case 0x8: return 0x3;
+   case 0x9: return 0x5;
+   case 0xa: return 0x6;
+   case 0xb: return 0x1;
+   case 0xc: return 0x7;
+   case 0xd: return 0x2;
+   case 0xe: return 0x3;
+   case 0xf: return 0x4;
+   default:
+      assert(!"invalid mask");
+      return 0;
+   }
+}
+
+static uint8_t
+getTEXSTarget(const TexInstruction *tex)
+{
+   assert(tex->op == OP_TEX || tex->op == OP_TXL);
+
+   switch (tex->tex.target.getEnum()) {
+   case TEX_TARGET_1D:
+      assert(tex->tex.levelZero);
+      return 0x0;
+   case TEX_TARGET_2D:
+   case TEX_TARGET_RECT:
+      if (tex->tex.levelZero)
+         return 0x2;
+      if (tex->op == OP_TXL)
+         return 0x3;
+      return 0x1;
+   case TEX_TARGET_2D_SHADOW:
+   case TEX_TARGET_RECT_SHADOW:
+      if (tex->tex.levelZero)
+         return 0x6;
+      if (tex->op == OP_TXL)
+         return 0x5;
+      return 0x4;
+   case TEX_TARGET_2D_ARRAY:
+      if (tex->tex.levelZero)
+         return 0x8;
+      return 0x7;
+   case TEX_TARGET_2D_ARRAY_SHADOW:
+      assert(tex->tex.levelZero);
+      return 0x9;
+   case TEX_TARGET_3D:
+      if (tex->tex.levelZero)
+         return 0xb;
+      assert(tex->op != OP_TXL);
+      return 0xa;
+   case TEX_TARGET_CUBE:
+      assert(!tex->tex.levelZero);
+      if (tex->op == OP_TXL)
+         return 0xd;
+      return 0xc;
+   default:
+      assert(false);
+      return 0x0;
+   }
+}
+
+static uint8_t
+getTLDSTarget(const TexInstruction *tex)
+{
+   switch (tex->tex.target.getEnum()) {
+   case TEX_TARGET_1D:
+      if (tex->tex.levelZero)
+         return 0x0;
+      return 0x1;
+   case TEX_TARGET_2D:
+   case TEX_TARGET_RECT:
+      if (tex->tex.levelZero)
+         return tex->tex.useOffsets ? 0x4 : 0x2;
+      return tex->tex.useOffsets ? 0xc : 0x5;
+   case TEX_TARGET_2D_MS:
+      assert(tex->tex.levelZero);
+      return 0x6;
+   case TEX_TARGET_3D:
+      assert(tex->tex.levelZero);
+      return 0x7;
+   case TEX_TARGET_2D_ARRAY:
+      assert(tex->tex.levelZero);
+      return 0x8;
+
+   default:
+      assert(false);
+      return 0x0;
+   }
+}
+
 void
 CodeEmitterGM107::emitTEX()
 {
@@ -2756,6 +2911,50 @@ CodeEmitterGM107::emitTEX()
                       insn->tex.target.getDim() - 1);
    emitField(0x1c, 1, insn->tex.target.isArray());
    emitTEXs (0x14);
+   emitGPR  (0x08, insn->src(0));
+   emitGPR  (0x00, insn->def(0));
+}
+
+void
+CodeEmitterGM107::emitTEXS()
+{
+   const TexInstruction *insn = this->insn->asTex();
+   assert(!insn->tex.derivAll);
+
+   switch (insn->op) {
+   case OP_TEX:
+   case OP_TXL:
+      emitInsn (0xd8000000);
+      emitField(0x35, 4, getTEXSTarget(insn));
+      emitField(0x32, 3, getTEXSMask(insn->tex.mask));
+      break;
+   case OP_TXF:
+      emitInsn (0xda000000);
+      emitField(0x35, 4, getTLDSTarget(insn));
+      emitField(0x32, 3, getTEXSMask(insn->tex.mask));
+      break;
+   case OP_TXG:
+      assert(insn->tex.useOffsets != 4);
+      emitInsn (0xdf000000);
+      emitField(0x34, 2, insn->tex.gatherComp);
+      emitField(0x33, 1, insn->tex.useOffsets == 1);
+      emitField(0x32, 1, insn->tex.target.isShadow());
+      break;
+   default:
+      unreachable("unknown op in emitTEXS()");
+      break;
+   }
+
+   emitField(0x31, 1, insn->tex.liveOnly);
+   emitField(0x24, 13, insn->tex.r);
+   if (insn->defExists(1))
+      emitGPR(0x1c, insn->def(1));
+   else
+      emitGPR(0x1c);
+   if (insn->srcExists(1))
+      emitGPR(0x14, insn->getSrc(1));
+   else
+      emitGPR(0x14);
    emitGPR  (0x08, insn->src(0));
    emitGPR  (0x00, insn->def(0));
 }
@@ -3367,6 +3566,9 @@ CodeEmitterGM107::emitInstruction(Instruction *i)
    case OP_BFIND:
       emitFLO();
       break;
+   case OP_PERMT:
+      emitPRMT();
+      break;
    case OP_SLCT:
       if (isFloatType(insn->dType))
          emitFCMP();
@@ -3414,7 +3616,12 @@ CodeEmitterGM107::emitInstruction(Instruction *i)
    case OP_AND:
    case OP_OR:
    case OP_XOR:
-      emitLOP();
+      switch (insn->def(0).getFile()) {
+      case FILE_GPR: emitLOP(); break;
+      case FILE_PREDICATE: emitPSETP(); break;
+      default:
+         assert(!"invalid bool op");
+      }
       break;
    case OP_NOT:
       emitNOT();
@@ -3474,15 +3681,26 @@ CodeEmitterGM107::emitInstruction(Instruction *i)
       emitPIXLD();
       break;
    case OP_TEX:
-   case OP_TXB:
    case OP_TXL:
+      if (insn->asTex()->tex.scalar)
+         emitTEXS();
+      else
+         emitTEX();
+      break;
+   case OP_TXB:
       emitTEX();
       break;
    case OP_TXF:
-      emitTLD();
+      if (insn->asTex()->tex.scalar)
+         emitTEXS();
+      else
+         emitTLD();
       break;
    case OP_TXG:
-      emitTLD4();
+      if (insn->asTex()->tex.scalar)
+         emitTEXS();
+      else
+         emitTLD4();
       break;
    case OP_TXD:
       emitTXD();
@@ -3555,156 +3773,6 @@ CodeEmitterGM107::getMinEncodingSize(const Instruction *i) const
 /*******************************************************************************
  * sched data calculator
  ******************************************************************************/
-
-class SchedDataCalculatorGM107 : public Pass
-{
-public:
-   SchedDataCalculatorGM107(const TargetGM107 *targ) : targ(targ) {}
-
-private:
-   struct RegScores
-   {
-      struct ScoreData {
-         int r[256];
-         int p[8];
-         int c;
-      } rd, wr;
-      int base;
-
-      void rebase(const int base)
-      {
-         const int delta = this->base - base;
-         if (!delta)
-            return;
-         this->base = 0;
-
-         for (int i = 0; i < 256; ++i) {
-            rd.r[i] += delta;
-            wr.r[i] += delta;
-         }
-         for (int i = 0; i < 8; ++i) {
-            rd.p[i] += delta;
-            wr.p[i] += delta;
-         }
-         rd.c += delta;
-         wr.c += delta;
-      }
-      void wipe()
-      {
-         memset(&rd, 0, sizeof(rd));
-         memset(&wr, 0, sizeof(wr));
-      }
-      int getLatest(const ScoreData& d) const
-      {
-         int max = 0;
-         for (int i = 0; i < 256; ++i)
-            if (d.r[i] > max)
-               max = d.r[i];
-         for (int i = 0; i < 8; ++i)
-            if (d.p[i] > max)
-               max = d.p[i];
-         if (d.c > max)
-            max = d.c;
-         return max;
-      }
-      inline int getLatestRd() const
-      {
-         return getLatest(rd);
-      }
-      inline int getLatestWr() const
-      {
-         return getLatest(wr);
-      }
-      inline int getLatest() const
-      {
-         return MAX2(getLatestRd(), getLatestWr());
-      }
-      void setMax(const RegScores *that)
-      {
-         for (int i = 0; i < 256; ++i) {
-            rd.r[i] = MAX2(rd.r[i], that->rd.r[i]);
-            wr.r[i] = MAX2(wr.r[i], that->wr.r[i]);
-         }
-         for (int i = 0; i < 8; ++i) {
-            rd.p[i] = MAX2(rd.p[i], that->rd.p[i]);
-            wr.p[i] = MAX2(wr.p[i], that->wr.p[i]);
-         }
-         rd.c = MAX2(rd.c, that->rd.c);
-         wr.c = MAX2(wr.c, that->wr.c);
-      }
-      void print(int cycle)
-      {
-         for (int i = 0; i < 256; ++i) {
-            if (rd.r[i] > cycle)
-               INFO("rd $r%i @ %i\n", i, rd.r[i]);
-            if (wr.r[i] > cycle)
-               INFO("wr $r%i @ %i\n", i, wr.r[i]);
-         }
-         for (int i = 0; i < 8; ++i) {
-            if (rd.p[i] > cycle)
-               INFO("rd $p%i @ %i\n", i, rd.p[i]);
-            if (wr.p[i] > cycle)
-               INFO("wr $p%i @ %i\n", i, wr.p[i]);
-         }
-         if (rd.c > cycle)
-            INFO("rd $c @ %i\n", rd.c);
-         if (wr.c > cycle)
-            INFO("wr $c @ %i\n", wr.c);
-      }
-   };
-
-   RegScores *score; // for current BB
-   std::vector<RegScores> scoreBoards;
-
-   const TargetGM107 *targ;
-   bool visit(Function *);
-   bool visit(BasicBlock *);
-
-   void commitInsn(const Instruction *, int);
-   int calcDelay(const Instruction *, int) const;
-   void setDelay(Instruction *, int, const Instruction *);
-   void recordWr(const Value *, int, int);
-   void checkRd(const Value *, int, int&) const;
-
-   inline void emitYield(Instruction *);
-   inline void emitStall(Instruction *, uint8_t);
-   inline void emitReuse(Instruction *, uint8_t);
-   inline void emitWrDepBar(Instruction *, uint8_t);
-   inline void emitRdDepBar(Instruction *, uint8_t);
-   inline void emitWtDepBar(Instruction *, uint8_t);
-
-   inline int getStall(const Instruction *) const;
-   inline int getWrDepBar(const Instruction *) const;
-   inline int getRdDepBar(const Instruction *) const;
-   inline int getWtDepBar(const Instruction *) const;
-
-   void setReuseFlag(Instruction *);
-
-   inline void printSchedInfo(int, const Instruction *) const;
-
-   struct LiveBarUse {
-      LiveBarUse(Instruction *insn, Instruction *usei)
-         : insn(insn), usei(usei) { }
-      Instruction *insn;
-      Instruction *usei;
-   };
-
-   struct LiveBarDef {
-      LiveBarDef(Instruction *insn, Instruction *defi)
-         : insn(insn), defi(defi) { }
-      Instruction *insn;
-      Instruction *defi;
-   };
-
-   bool insertBarriers(BasicBlock *);
-
-   bool doesInsnWriteTo(const Instruction *insn, const Value *val) const;
-   Instruction *findFirstUse(const Instruction *) const;
-   Instruction *findFirstDef(const Instruction *) const;
-
-   bool needRdDepBar(const Instruction *) const;
-   bool needWrDepBar(const Instruction *) const;
-};
 
 inline void
 SchedDataCalculatorGM107::emitStall(Instruction *insn, uint8_t cnt)

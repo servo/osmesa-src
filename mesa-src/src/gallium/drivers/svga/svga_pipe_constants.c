@@ -31,11 +31,8 @@
 #include "svga_context.h"
 #include "svga_resource_buffer.h"
 
-/***********************************************************************
- * Constant buffers 
- */
 
-struct svga_constbuf 
+struct svga_constbuf
 {
    unsigned type;
    float (*data)[4];
@@ -44,9 +41,10 @@ struct svga_constbuf
 
 
 
-static void svga_set_constant_buffer(struct pipe_context *pipe,
-                                     enum pipe_shader_type shader, uint index,
-                                     const struct pipe_constant_buffer *cb)
+static void
+svga_set_constant_buffer(struct pipe_context *pipe,
+                         enum pipe_shader_type shader, uint index,
+                         const struct pipe_constant_buffer *cb)
 {
    struct svga_screen *svgascreen = svga_screen(pipe->screen);
    struct svga_context *svga = svga_context(pipe);
@@ -79,15 +77,32 @@ static void svga_set_constant_buffer(struct pipe_context *pipe,
    svga->curr.constbufs[shader][index].buffer_offset = cb ? cb->buffer_offset : 0;
    svga->curr.constbufs[shader][index].user_buffer = NULL; /* not used */
 
-   if (shader == PIPE_SHADER_FRAGMENT)
-      svga->dirty |= SVGA_NEW_FS_CONST_BUFFER;
-   else if (shader == PIPE_SHADER_VERTEX)
-      svga->dirty |= SVGA_NEW_VS_CONST_BUFFER;
-   else
-      svga->dirty |= SVGA_NEW_GS_CONST_BUFFER;
+   if (index == 0) {
+      if (shader == PIPE_SHADER_FRAGMENT)
+         svga->dirty |= SVGA_NEW_FS_CONSTS;
+      else if (shader == PIPE_SHADER_VERTEX)
+         svga->dirty |= SVGA_NEW_VS_CONSTS;
+      else if (shader == PIPE_SHADER_GEOMETRY)
+         svga->dirty |= SVGA_NEW_GS_CONSTS;
+      else if (shader == PIPE_SHADER_TESS_CTRL)
+         svga->dirty |= SVGA_NEW_TCS_CONSTS;
+      else if (shader == PIPE_SHADER_TESS_EVAL)
+         svga->dirty |= SVGA_NEW_TES_CONSTS;
+   } else {
+      if (shader == PIPE_SHADER_FRAGMENT)
+         svga->dirty |= SVGA_NEW_FS_CONST_BUFFER;
+      else if (shader == PIPE_SHADER_VERTEX)
+         svga->dirty |= SVGA_NEW_VS_CONST_BUFFER;
+      else if (shader == PIPE_SHADER_GEOMETRY)
+         svga->dirty |= SVGA_NEW_GS_CONST_BUFFER;
+      else if (shader == PIPE_SHADER_TESS_CTRL)
+         svga->dirty |= SVGA_NEW_TCS_CONST_BUFFER;
+      else if (shader == PIPE_SHADER_TESS_EVAL)
+         svga->dirty |= SVGA_NEW_TES_CONST_BUFFER;
 
-   /* update bitmask of dirty const buffers */
-   svga->state.dirty_constbufs[shader] |= (1 << index);
+      /* update bitmask of dirty const buffers */
+      svga->state.dirty_constbufs[shader] |= (1 << index);
+   }
 
    if (cb && cb->user_buffer) {
       pipe_resource_reference(&buf, NULL);
@@ -95,8 +110,8 @@ static void svga_set_constant_buffer(struct pipe_context *pipe,
 }
 
 
-
-void svga_init_constbuffer_functions( struct svga_context *svga )
+void
+svga_init_constbuffer_functions(struct svga_context *svga)
 {
    svga->pipe.set_constant_buffer = svga_set_constant_buffer;
 }

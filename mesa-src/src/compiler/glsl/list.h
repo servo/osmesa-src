@@ -81,6 +81,12 @@ struct exec_node {
     * Insert a node in the list after the current node
     */
    void insert_after(exec_node *after);
+
+   /**
+    * Insert another list in the list after the current node
+    */
+   void insert_after(struct exec_list *after);
+
    /**
     * Insert a node in the list before the current node
     */
@@ -275,7 +281,7 @@ inline bool exec_node::is_head_sentinel() const
  * \param field Name of the field in \c type that is the embedded \c exec_node
  */
 #define exec_node_data(type, node, field) \
-   ((type *) (((char *) node) - exec_list_offsetof(type, field, node)))
+   ((type *) (((uintptr_t) node) - exec_list_offsetof(type, field, node)))
 
 #ifdef __cplusplus
 struct exec_node;
@@ -364,6 +370,13 @@ exec_list_is_empty(const struct exec_list *list)
     * because they save a pointer dereference.
     */
    return list->head_sentinel.next == &list->tail_sentinel;
+}
+
+static inline bool
+exec_list_is_singular(const struct exec_list *list)
+{
+   return !exec_list_is_empty(list) &&
+          list->head_sentinel.next->next == &list->tail_sentinel;
 }
 
 static inline const struct exec_node *
@@ -508,6 +521,21 @@ exec_list_append(struct exec_list *list, struct exec_list *source)
 }
 
 static inline void
+exec_node_insert_list_after(struct exec_node *n, struct exec_list *after)
+{
+   if (exec_list_is_empty(after))
+      return;
+
+   after->tail_sentinel.prev->next = n->next;
+   after->head_sentinel.next->prev = n;
+
+   n->next->prev = after->tail_sentinel.prev;
+   n->next = after->head_sentinel.next;
+
+   exec_list_make_empty(after);
+}
+
+static inline void
 exec_list_prepend(struct exec_list *list, struct exec_list *source)
 {
    exec_list_append(source, list);
@@ -635,6 +663,11 @@ inline void exec_list::append_list(exec_list *source)
    exec_list_append(this, source);
 }
 
+inline void exec_node::insert_after(exec_list *after)
+{
+   exec_node_insert_list_after(this, after);
+}
+
 inline void exec_list::prepend_list(exec_list *source)
 {
    exec_list_prepend(this, source);
@@ -646,36 +679,44 @@ inline void exec_node::insert_before(exec_list *before)
 }
 #endif
 
-#define foreach_in_list(__type, __inst, __list)      \
-   for (__type *__inst = (__type *)(__list)->head_sentinel.next; \
-        !(__inst)->is_tail_sentinel();               \
-        (__inst) = (__type *)(__inst)->next)
+#define exec_node_typed_forward(__node, __type) \
+   (!exec_node_is_tail_sentinel(__node) ? (__type) (__node) : NULL)
 
-#define foreach_in_list_reverse(__type, __inst, __list)   \
-   for (__type *__inst = (__type *)(__list)->tail_sentinel.prev; \
-        !(__inst)->is_head_sentinel();                    \
-        (__inst) = (__type *)(__inst)->prev)
+#define exec_node_typed_backward(__node, __type) \
+   (!exec_node_is_head_sentinel(__node) ? (__type) (__node) : NULL)
+
+#define foreach_in_list(__type, __inst, __list)                                           \
+   for (__type *__inst = exec_node_typed_forward((__list)->head_sentinel.next, __type *); \
+        (__inst) != NULL;                                                                 \
+        (__inst) = exec_node_typed_forward((__inst)->next, __type *))
+
+#define foreach_in_list_reverse(__type, __inst, __list)                                      \
+   for (__type *__inst = exec_node_typed_backward((__list)->tail_sentinel.prev, __type *);   \
+        (__inst) != NULL;                                                                    \
+        (__inst) = exec_node_typed_backward((__inst)->prev, __type *))
 
 /**
  * This version is safe even if the current node is removed.
- */ 
-#define foreach_in_list_safe(__type, __node, __list) \
-   for (__type *__node = (__type *)(__list)->head_sentinel.next,   \
-               *__next = (__type *)__node->next;     \
-        __next != NULL;                              \
-        __node = __next, __next = (__type *)__next->next)
+ */
 
-#define foreach_in_list_reverse_safe(__type, __node, __list) \
-   for (__type *__node = (__type *)(__list)->tail_sentinel.prev,      \
-               *__prev = (__type *)__node->prev;             \
-        __prev != NULL;                                      \
-        __node = __prev, __prev = (__type *)__prev->prev)
+#define foreach_in_list_safe(__type, __node, __list)                                                              \
+   for (__type *__node = exec_node_typed_forward((__list)->head_sentinel.next, __type *),                         \
+               *__next = (__node) ? exec_node_typed_forward((__list)->head_sentinel.next->next, __type *) : NULL; \
+        (__node) != NULL;                                                                                         \
+        (__node) = __next, __next = __next ? exec_node_typed_forward(__next->next, __type *) : NULL)
 
-#define foreach_in_list_use_after(__type, __inst, __list) \
-   __type *__inst;                                        \
-   for ((__inst) = (__type *)(__list)->head_sentinel.next; \
-        !(__inst)->is_tail_sentinel();                    \
-        (__inst) = (__type *)(__inst)->next)
+#define foreach_in_list_reverse_safe(__type, __node, __list)                                                        \
+   for (__type *__node = exec_node_typed_backward((__list)->tail_sentinel.prev, __type *),                          \
+               *__prev = (__node) ? exec_node_typed_backward((__list)->tail_sentinel.prev->prev, __type *) : NULL;  \
+        (__node) != NULL;                                                                                           \
+        (__node) = __prev, __prev = __prev ? exec_node_typed_backward(__prev->prev, __type *) : NULL)
+
+#define foreach_in_list_use_after(__type, __inst, __list)                           \
+   __type *__inst;                                                                  \
+   for ((__inst) = exec_node_typed_forward((__list)->head_sentinel.next, __type *); \
+        (__inst) != NULL;                                                           \
+        (__inst) = exec_node_typed_forward((__inst)->next, __type *))
+
 /**
  * Iterate through two lists at once.  Stops at the end of the shorter list.
  *
@@ -692,39 +733,45 @@ inline void exec_node::insert_before(exec_list *before)
           __next1 = __next1->next,                            \
           __next2 = __next2->next)
 
-#define foreach_list_typed(__type, __node, __field, __list)		\
-   for (__type * __node =						\
-         exec_node_data(__type, (__list)->head_sentinel.next, __field); \
-	(__node)->__field.next != NULL; 				\
-	(__node) = exec_node_data(__type, (__node)->__field.next, __field))
+#define exec_node_data_forward(type, node, field) \
+   (!exec_node_is_tail_sentinel(node) ? exec_node_data(type, node, field) : NULL)
 
-#define foreach_list_typed_from(__type, __node, __field, __list, __start)  \
-   for (__type * __node = exec_node_data(__type, (__start), __field);      \
-	(__node)->__field.next != NULL;                                    \
-	(__node) = exec_node_data(__type, (__node)->__field.next, __field))
+#define exec_node_data_backward(type, node, field) \
+   (!exec_node_is_head_sentinel(node) ? exec_node_data(type, node, field) : NULL)
 
-#define foreach_list_typed_reverse(__type, __node, __field, __list)        \
-   for (__type * __node =                                                \
-           exec_node_data(__type, (__list)->tail_sentinel.prev, __field);  \
-        (__node)->__field.prev != NULL;                                 \
-        (__node) = exec_node_data(__type, (__node)->__field.prev, __field))
+#define foreach_list_typed(__type, __node, __field, __list)                     \
+   for (__type * __node =                                                       \
+         exec_node_data_forward(__type, (__list)->head_sentinel.next, __field); \
+   (__node) != NULL;                                                            \
+   (__node) = exec_node_data_forward(__type, (__node)->__field.next, __field))
 
-#define foreach_list_typed_safe(__type, __node, __field, __list)           \
-   for (__type * __node =                                                  \
-           exec_node_data(__type, (__list)->head_sentinel.next, __field),  \
-               * __next =                                                  \
-           exec_node_data(__type, (__node)->__field.next, __field);        \
-        (__node)->__field.next != NULL;                                    \
-        __node = __next, __next =                                          \
-           exec_node_data(__type, (__next)->__field.next, __field))
+#define foreach_list_typed_from(__type, __node, __field, __list, __start)        \
+   for (__type * __node = exec_node_data_forward(__type, (__start), __field);    \
+   (__node) != NULL;                                                             \
+   (__node) = exec_node_data_forward(__type, (__node)->__field.next, __field))
 
-#define foreach_list_typed_reverse_safe(__type, __node, __field, __list)   \
-   for (__type * __node =                                                  \
-           exec_node_data(__type, (__list)->tail_sentinel.prev, __field),  \
-               * __prev =                                                  \
-           exec_node_data(__type, (__node)->__field.prev, __field);        \
-        (__node)->__field.prev != NULL;                                    \
-        __node = __prev, __prev =                                          \
-           exec_node_data(__type, (__prev)->__field.prev, __field))
+#define foreach_list_typed_reverse(__type, __node, __field, __list)                 \
+   for (__type * __node =                                                           \
+           exec_node_data_backward(__type, (__list)->tail_sentinel.prev, __field);  \
+        (__node) != NULL;                                                           \
+        (__node) = exec_node_data_backward(__type, (__node)->__field.prev, __field))
+
+#define foreach_list_typed_safe(__type, __node, __field, __list)                    \
+   for (__type * __node =                                                           \
+           exec_node_data_forward(__type, (__list)->head_sentinel.next, __field),   \
+               * __next = (__node) ?                                                \
+           exec_node_data_forward(__type, (__node)->__field.next, __field) : NULL;  \
+        (__node) != NULL;                                                           \
+        (__node) = __next, __next = (__next && (__next)->__field.next) ?            \
+           exec_node_data_forward(__type, (__next)->__field.next, __field) : NULL)
+
+#define foreach_list_typed_reverse_safe(__type, __node, __field, __list)            \
+   for (__type * __node =                                                           \
+           exec_node_data_backward(__type, (__list)->tail_sentinel.prev, __field),  \
+               * __prev = (__node) ?                                                \
+           exec_node_data_backward(__type, (__node)->__field.prev, __field) : NULL; \
+        (__node) != NULL;                                                           \
+        (__node) = __prev, __prev = (__prev && (__prev)->__field.prev) ?            \
+           exec_node_data_backward(__type, (__prev)->__field.prev, __field) : NULL)
 
 #endif /* LIST_CONTAINER_H */

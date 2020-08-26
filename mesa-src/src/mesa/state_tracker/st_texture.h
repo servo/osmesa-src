@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,7 +22,7 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 #ifndef ST_TEXTURE_H
@@ -39,7 +39,8 @@
 struct pipe_resource;
 
 
-struct st_texture_image_transfer {
+struct st_texture_image_transfer
+{
    struct pipe_transfer *transfer;
 
    /* For compressed texture fallback. */
@@ -52,8 +53,12 @@ struct st_texture_image_transfer {
 /**
  * Container for one context's validated sampler view.
  */
-struct st_sampler_view {
+struct st_sampler_view
+{
    struct pipe_sampler_view *view;
+
+   /** The context which created this view */
+   struct st_context *st;
 
    /** The glsl version of the shader seen during validation */
    bool glsl130_or_later;
@@ -65,12 +70,20 @@ struct st_sampler_view {
 /**
  * Container for per-context sampler views of a texture.
  */
-struct st_sampler_views {
+struct st_sampler_views
+{
    struct st_sampler_views *next;
    uint32_t max;
    uint32_t count;
    struct st_sampler_view views[0];
 };
+
+struct st_compressed_data
+{
+   struct pipe_reference reference;
+   GLubyte *ptr;
+};
+
 
 /**
  * Subclass of gl_texure_image.
@@ -94,7 +107,7 @@ struct st_texture_image
     * the original data. This is necessary for mapping/unmapping,
     * as well as image copies.
     */
-   GLubyte *compressed_data;
+   struct st_compressed_data* compressed_data;
 };
 
 
@@ -157,15 +170,15 @@ struct st_texture_object
     */
    enum pipe_format surface_format;
 
-   /* When non-zero, samplers should use this level instead of the level
+   /* When non-negative, samplers should use this level instead of the level
     * range specified by the GL state.
     *
     * This is used for EGL images, which may correspond to a single level out
     * of an imported pipe_resources with multiple mip levels.
     */
-   uint level_override;
+   int level_override;
 
-   /* When non-zero, samplers should use this layer instead of the one
+   /* When non-negative, samplers should use this layer instead of the one
     * specified by the GL state.
     *
     * This is used for EGL images and VDPAU interop, where imported
@@ -173,7 +186,7 @@ struct st_texture_object
     * with different fields in the case of VDPAU) even though the GL state
     * describes one non-array texture per field.
     */
-   uint layer_override;
+   int layer_override;
 
     /**
      * Set when the texture images of this texture object might not all be in
@@ -249,7 +262,7 @@ st_get_view_format(struct st_texture_object *stObj)
 extern struct pipe_resource *
 st_texture_create(struct st_context *st,
                   enum pipe_texture_target target,
-		  enum pipe_format format,
+                  enum pipe_format format,
                   GLuint last_level,
                   GLuint width0,
                   GLuint height0,
@@ -314,6 +327,9 @@ st_destroy_bound_texture_handles(struct st_context *st);
 
 void
 st_destroy_bound_image_handles(struct st_context *st);
+
+bool
+st_astc_format_fallback(const struct st_context *st, mesa_format format);
 
 bool
 st_compressed_format_fallback(struct st_context *st, mesa_format format);

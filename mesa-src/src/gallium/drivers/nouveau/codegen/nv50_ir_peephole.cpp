@@ -370,7 +370,8 @@ private:
 
    void expr(Instruction *, ImmediateValue&, ImmediateValue&);
    void expr(Instruction *, ImmediateValue&, ImmediateValue&, ImmediateValue&);
-   void opnd(Instruction *, ImmediateValue&, int s);
+   /* true if i was deleted */
+   bool opnd(Instruction *i, ImmediateValue&, int s);
    void opnd3(Instruction *, ImmediateValue&);
 
    void unary(Instruction *, const ImmediateValue&);
@@ -414,18 +415,21 @@ ConstantFolding::visit(BasicBlock *bb)
       if (i->srcExists(2) &&
           i->src(0).getImmediate(src0) &&
           i->src(1).getImmediate(src1) &&
-          i->src(2).getImmediate(src2))
+          i->src(2).getImmediate(src2)) {
          expr(i, src0, src1, src2);
-      else
+      } else
       if (i->srcExists(1) &&
-          i->src(0).getImmediate(src0) && i->src(1).getImmediate(src1))
+          i->src(0).getImmediate(src0) && i->src(1).getImmediate(src1)) {
          expr(i, src0, src1);
-      else
-      if (i->srcExists(0) && i->src(0).getImmediate(src0))
-         opnd(i, src0, 0);
-      else
-      if (i->srcExists(1) && i->src(1).getImmediate(src1))
-         opnd(i, src1, 1);
+      } else
+      if (i->srcExists(0) && i->src(0).getImmediate(src0)) {
+         if (opnd(i, src0, 0))
+            continue;
+      } else
+      if (i->srcExists(1) && i->src(1).getImmediate(src1)) {
+         if (opnd(i, src1, 1))
+            continue;
+      }
       if (i->srcExists(2) && i->src(2).getImmediate(src2))
          opnd3(i, src2);
    }
@@ -554,6 +558,19 @@ ConstantFolding::expr(Instruction *i,
    memset(&res.data, 0, sizeof(res.data));
 
    switch (i->op) {
+   case OP_SGXT: {
+      int bits = b->data.u32;
+      if (bits) {
+         uint32_t data = a->data.u32 & (0xffffffff >> (32 - bits));
+         if (bits < 32 && (data & (1 << (bits - 1))))
+            data = data - (1 << bits);
+         res.data.u32 = data;
+      }
+      break;
+   }
+   case OP_BMSK:
+      res.data.u32 = ((1 << b->data.u32) - 1) << a->data.u32;
+      break;
    case OP_MAD:
    case OP_FMA:
    case OP_MUL:
@@ -740,6 +757,7 @@ ConstantFolding::expr(Instruction *i,
       // restrictions, so move it into a separate LValue.
       bld.setPosition(i, false);
       i->op = OP_ADD;
+      i->dnz = 0;
       i->setSrc(1, bld.mkMov(bld.getSSA(type), i->getSrc(0), type)->getDef(0));
       i->setSrc(0, i->getSrc(2));
       i->src(0).mod = i->src(2).mod;
@@ -775,6 +793,23 @@ ConstantFolding::expr(Instruction *i,
    memset(&res.data, 0, sizeof(res.data));
 
    switch (i->op) {
+   case OP_LOP3_LUT:
+      for (int n = 0; n < 32; n++) {
+         uint8_t lut = ((a->data.u32 >> n) & 1) << 2 |
+                       ((b->data.u32 >> n) & 1) << 1 |
+                       ((c->data.u32 >> n) & 1);
+         res.data.u32 |= !!(i->subOp & (1 << lut)) << n;
+      }
+      break;
+   case OP_PERMT:
+      if (!i->subOp) {
+         uint64_t input = (uint64_t)c->data.u32 << 32 | a->data.u32;
+         uint16_t permt = b->data.u32;
+         for (int n = 0 ; n < 4; n++, permt >>= 4)
+            res.data.u32 |= ((input >> ((permt & 0xf) * 8)) & 0xff) << n * 8;
+      } else
+         return;
+      break;
    case OP_INSBF: {
       int offset = b->data.u32 & 0xff;
       int width = (b->data.u32 >> 8) & 0xff;
@@ -843,7 +878,7 @@ ConstantFolding::unary(Instruction *i, const ImmediateValue &imm)
    switch (i->op) {
    case OP_NEG: res.data.f32 = -imm.reg.data.f32; break;
    case OP_ABS: res.data.f32 = fabsf(imm.reg.data.f32); break;
-   case OP_SAT: res.data.f32 = CLAMP(imm.reg.data.f32, 0.0f, 1.0f); break;
+   case OP_SAT: res.data.f32 = SATURATE(imm.reg.data.f32); break;
    case OP_RCP: res.data.f32 = 1.0f / imm.reg.data.f32; break;
    case OP_RSQ: res.data.f32 = 1.0f / sqrtf(imm.reg.data.f32); break;
    case OP_LG2: res.data.f32 = log2f(imm.reg.data.f32); break;
@@ -1010,12 +1045,13 @@ ConstantFolding::createMul(DataType ty, Value *def, Value *a, int64_t b, Value *
    return false;
 }
 
-void
+bool
 ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
 {
    const int t = !s;
    const operation op = i->op;
    Instruction *newi = i;
+   bool deleted = false;
 
    switch (i->op) {
    case OP_SPLIT: {
@@ -1035,10 +1071,11 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          val >>= bitsize;
       }
       delete_Instruction(prog, i);
+      deleted = true;
       break;
    }
    case OP_MUL:
-      if (i->dType == TYPE_F32)
+      if (i->dType == TYPE_F32 && !i->precise)
          tryCollapseChainedMULs(i, s, imm0);
 
       if (i->subOp == NV50_IR_SUBOP_MUL_HIGH) {
@@ -1049,6 +1086,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
             newi = bld.mkCmp(OP_SET, CC_LT, TYPE_S32, i->getDef(0),
                              TYPE_S32, i->getSrc(t), bld.mkImm(0));
             delete_Instruction(prog, i);
+            deleted = true;
          } else if (imm0.isInteger(0) || imm0.isInteger(1)) {
             // The high bits can't be set in this case (either mul by 0 or
             // unsigned by 1)
@@ -1093,14 +1131,17 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          if (imm0.isNegative())
             i->src(t).mod = i->src(t).mod ^ Modifier(NV50_IR_MOD_NEG);
          i->op = OP_ADD;
+         i->dnz = 0;
          i->setSrc(s, i->getSrc(t));
          i->src(s).mod = i->src(t).mod;
       } else
       if (!isFloatType(i->dType) && !i->src(t).mod) {
          bld.setPosition(i, false);
          int64_t b = typeSizeof(i->dType) == 8 ? imm0.reg.data.s64 : imm0.reg.data.s32;
-         if (createMul(i->dType, i->getDef(0), i->getSrc(t), b, NULL))
+         if (createMul(i->dType, i->getDef(0), i->getSrc(t), b, NULL)) {
             delete_Instruction(prog, i);
+            deleted = true;
+         }
       } else
       if (i->postFactor && i->sType == TYPE_F32) {
          /* Can't emit a postfactor with an immediate, have to fold it in */
@@ -1131,13 +1172,16 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          i->setSrc(1, i->getSrc(2));
          i->src(1).mod = i->src(2).mod;
          i->setSrc(2, NULL);
+         i->dnz = 0;
          i->op = OP_ADD;
       } else
       if (!isFloatType(i->dType) && !i->subOp && !i->src(t).mod && !i->src(2).mod) {
          bld.setPosition(i, false);
          int64_t b = typeSizeof(i->dType) == 8 ? imm0.reg.data.s64 : imm0.reg.data.s32;
-         if (createMul(i->dType, i->getDef(0), i->getSrc(t), b, i->getSrc(2)))
+         if (createMul(i->dType, i->getDef(0), i->getSrc(t), b, i->getSrc(2))) {
             delete_Instruction(prog, i);
+            deleted = true;
+         }
       }
       break;
    case OP_SUB:
@@ -1207,6 +1251,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
             bld.mkOp2(OP_SHR, TYPE_U32, i->getDef(0), tB, bld.mkImm(s));
 
          delete_Instruction(prog, i);
+         deleted = true;
       } else
       if (imm0.reg.data.s32 == -1) {
          i->op = OP_NEG;
@@ -1239,6 +1284,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
             bld.mkOp1(OP_NEG, TYPE_S32, i->getDef(0), tB);
 
          delete_Instruction(prog, i);
+         deleted = true;
       }
       break;
 
@@ -1270,6 +1316,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
             newi = bld.mkOp2(OP_UNION, TYPE_S32, i->getDef(0), v1, v2);
 
             delete_Instruction(prog, i);
+            deleted = true;
          }
       } else if (s == 1) {
          // In this case, we still want the optimized lowering that we get
@@ -1286,6 +1333,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          newi->src(1).mod = Modifier(NV50_IR_MOD_NEG);
 
          delete_Instruction(prog, i);
+         deleted = true;
       }
       break;
 
@@ -1298,7 +1346,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       CmpInstruction *si = findOriginForTestWithZero(i->getSrc(t));
       CondCode cc, ccZ;
       if (imm0.reg.data.u32 != 0 || !si)
-         return;
+         return false;
       cc = si->setCond;
       ccZ = (CondCode)((unsigned int)i->asCmp()->setCond & ~CC_U);
       // We do everything assuming var (cmp) 0, reverse the condition if 0 is
@@ -1324,7 +1372,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       case CC_GT: break; // bool > 0 -- bool
       case CC_NE: break; // bool != 0 -- bool
       default:
-         return;
+         return false;
       }
 
       // Update the condition of this SET to be identical to the origin set,
@@ -1359,13 +1407,13 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       } else if (src->asCmp()) {
          CmpInstruction *cmp = src->asCmp();
          if (!cmp || cmp->op == OP_SLCT || cmp->getDef(0)->refCount() > 1)
-            return;
+            return false;
          if (!prog->getTarget()->isOpSupported(cmp->op, TYPE_F32))
-            return;
+            return false;
          if (imm0.reg.data.f32 != 1.0)
-            return;
+            return false;
          if (cmp->dType != TYPE_U32)
-            return;
+            return false;
 
          cmp->dType = TYPE_F32;
          if (i->src(t).mod != Modifier(0)) {
@@ -1432,13 +1480,13 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       case OP_MUL:
          int muls;
          if (isFloatType(si->dType))
-            return;
+            return false;
          if (si->src(1).getImmediate(imm1))
             muls = 1;
          else if (si->src(0).getImmediate(imm1))
             muls = 0;
          else
-            return;
+            return false;
 
          bld.setPosition(i, false);
          i->op = OP_MUL;
@@ -1449,15 +1497,15 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       case OP_ADD:
          int adds;
          if (isFloatType(si->dType))
-            return;
+            return false;
          if (si->op != OP_SUB && si->src(0).getImmediate(imm1))
             adds = 0;
          else if (si->src(1).getImmediate(imm1))
             adds = 1;
          else
-            return;
+            return false;
          if (si->src(!adds).mod != Modifier(0))
-            return;
+            return false;
          // SHL(ADD(x, y), z) = ADD(SHL(x, z), SHL(y, z))
 
          // This is more operations, but if one of x, y is an immediate, then
@@ -1472,7 +1520,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
                                      bld.mkImm(imm0.reg.data.u32)));
          break;
       default:
-         return;
+         return false;
       }
    }
       break;
@@ -1497,7 +1545,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       case TYPE_S32: res = util_last_bit_signed(imm0.reg.data.s32) - 1; break;
       case TYPE_U32: res = util_last_bit(imm0.reg.data.u32) - 1; break;
       default:
-         return;
+         return false;
       }
       if (i->subOp == NV50_IR_SUBOP_BFIND_SAMT && res >= 0)
          res = 31 - res;
@@ -1506,6 +1554,12 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       i->setSrc(1, NULL);
       i->op = OP_MOV;
       i->subOp = 0;
+      break;
+   }
+   case OP_BREV: {
+      uint32_t res = util_bitreverse(imm0.reg.data.u32);
+      i->setSrc(0, new_ImmediateValue(i->bb->getProgram(), res));
+      i->op = OP_MOV;
       break;
    }
    case OP_POPCNT: {
@@ -1523,11 +1577,11 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
 
       // TODO: handle 64-bit values properly
       if (typeSizeof(i->dType) == 8 || typeSizeof(i->sType) == 8)
-         return;
+         return false;
 
       // TODO: handle single byte/word extractions
       if (i->subOp)
-         return;
+         return false;
 
       bld.setPosition(i, true); /* make sure bld is init'ed */
 
@@ -1564,7 +1618,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
                         CLAMP(imm0.reg.data.u16, umin, umax) : \
                         imm0.reg.data.u16; \
          break; \
-      default: return; \
+      default: return false; \
       } \
       i->setSrc(0, bld.mkImm(res.data.dst)); \
       break
@@ -1578,12 +1632,12 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          switch (i->sType) {
          case TYPE_F64:
             res.data.f32 = i->saturate ?
-               CLAMP(imm0.reg.data.f64, 0.0f, 1.0f) :
+               SATURATE(imm0.reg.data.f64) :
                imm0.reg.data.f64;
             break;
          case TYPE_F32:
             res.data.f32 = i->saturate ?
-               CLAMP(imm0.reg.data.f32, 0.0f, 1.0f) :
+               SATURATE(imm0.reg.data.f32) :
                imm0.reg.data.f32;
             break;
          case TYPE_U16: res.data.f32 = (float) imm0.reg.data.u16; break;
@@ -1591,7 +1645,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          case TYPE_S16: res.data.f32 = (float) imm0.reg.data.s16; break;
          case TYPE_S32: res.data.f32 = (float) imm0.reg.data.s32; break;
          default:
-            return;
+            return false;
          }
          i->setSrc(0, bld.mkImm(res.data.f32));
          break;
@@ -1599,12 +1653,12 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          switch (i->sType) {
          case TYPE_F64:
             res.data.f64 = i->saturate ?
-               CLAMP(imm0.reg.data.f64, 0.0f, 1.0f) :
+               SATURATE(imm0.reg.data.f64) :
                imm0.reg.data.f64;
             break;
          case TYPE_F32:
             res.data.f64 = i->saturate ?
-               CLAMP(imm0.reg.data.f32, 0.0f, 1.0f) :
+               SATURATE(imm0.reg.data.f32) :
                imm0.reg.data.f32;
             break;
          case TYPE_U16: res.data.f64 = (double) imm0.reg.data.u16; break;
@@ -1612,12 +1666,12 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          case TYPE_S16: res.data.f64 = (double) imm0.reg.data.s16; break;
          case TYPE_S32: res.data.f64 = (double) imm0.reg.data.s32; break;
          default:
-            return;
+            return false;
          }
          i->setSrc(0, bld.mkImm(res.data.f64));
          break;
       default:
-         return;
+         return false;
       }
 #undef CASE
 
@@ -1628,7 +1682,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
       break;
    }
    default:
-      return;
+      return false;
    }
 
    // This can get left behind some of the optimizations which simplify
@@ -1643,6 +1697,7 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
 
    if (newi->op != op)
       foldCount++;
+   return deleted;
 }
 
 // =============================================================================
@@ -1898,7 +1953,7 @@ AlgebraicOpt::handleMINMAX(Instruction *minmax)
    if (minmax->src(0).mod == minmax->src(1).mod) {
       if (minmax->def(0).mayReplace(minmax->src(0))) {
          minmax->def(0).replace(minmax->src(0), false);
-         minmax->bb->remove(minmax);
+         delete_Instruction(prog, minmax);
       } else {
          minmax->op = OP_CVT;
          minmax->setSrc(1, NULL);
@@ -2061,14 +2116,15 @@ void
 AlgebraicOpt::handleCVT_CVT(Instruction *cvt)
 {
    Instruction *insn = cvt->getSrc(0)->getInsn();
-   RoundMode rnd = insn->rnd;
 
-   if (insn->saturate ||
+   if (!insn ||
+       insn->saturate ||
        insn->subOp ||
        insn->dType != insn->sType ||
        insn->dType != cvt->sType)
       return;
 
+   RoundMode rnd = insn->rnd;
    switch (insn->op) {
    case OP_CEIL:
       rnd = ROUND_PI;
@@ -2784,6 +2840,16 @@ MemoryOpt::combineSt(Record *rec, Instruction *st)
    if (prog->getType() == Program::TYPE_COMPUTE && rec->rel[0])
       return false;
 
+   // There's really no great place to put this in a generic manner. Seemingly
+   // wide stores at 0x60 don't work in GS shaders on SM50+. Don't combine
+   // those.
+   if (prog->getTarget()->getChipset() >= NVISA_GM107_CHIPSET &&
+       prog->getType() == Program::TYPE_GEOMETRY &&
+       st->getSrc(0)->reg.file == FILE_SHADER_OUTPUT &&
+       rec->rel[0] == NULL &&
+       MIN2(offRc, offSt) == 0x60)
+      return false;
+
    // remove any existing load/store records for the store being merged into
    // the existing record.
    purgeRecords(st, DATA_FILE_COUNT);
@@ -3494,7 +3560,7 @@ PostRaLoadPropagation::handleMADforNV50(Instruction *i)
          ImmediateValue val;
          // getImmediate() has side-effects on the argument so this *shouldn't*
          // be folded into the assert()
-         MAYBE_UNUSED bool ret = def->src(0).getImmediate(val);
+         ASSERTED bool ret = def->src(0).getImmediate(val);
          assert(ret);
          if (i->getSrc(1)->reg.data.id & 1)
             val.reg.data.u32 >>= 16;

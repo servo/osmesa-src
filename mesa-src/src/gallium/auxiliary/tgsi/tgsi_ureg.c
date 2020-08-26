@@ -1241,7 +1241,7 @@ static void validate( enum tgsi_opcode opcode,
                       unsigned nr_dst,
                       unsigned nr_src )
 {
-#ifdef DEBUG
+#ifndef NDEBUG
    const struct tgsi_opcode_info *info = tgsi_get_opcode_info( opcode );
    assert(info);
    if (info) {
@@ -2133,7 +2133,7 @@ void *ureg_create_shader( struct ureg_program *ureg,
                           struct pipe_context *pipe,
                           const struct pipe_stream_output_info *so )
 {
-   struct pipe_shader_state state;
+   struct pipe_shader_state state = {0};
 
    pipe_shader_state_from_tgsi(&state, ureg_finalize(ureg));
    if(!state.tokens)

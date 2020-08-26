@@ -34,6 +34,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "radeon_common.h"
 #include "radeon_fog.h"
 #include "util/simple_list.h"
+#include "util/u_memory.h"
 
 #if defined(USE_X86_ASM)
 #define COPY_DWORDS( dst, src, nr )					\
@@ -217,7 +218,7 @@ void radeonRefillCurrentDmaRegion(radeonContextPtr rmesa, int size)
 	if (size > rmesa->dma.minimum_size)
 		rmesa->dma.minimum_size = (size + 15) & (~15);
 
-	radeon_print(RADEON_DMA, RADEON_NORMAL, "%s size %d minimum_size %Zi\n",
+	radeon_print(RADEON_DMA, RADEON_NORMAL, "%s size %d minimum_size %zi\n",
 			__func__, size, rmesa->dma.minimum_size);
 
 	if (is_empty_list(&rmesa->dma.free)

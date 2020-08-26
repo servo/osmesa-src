@@ -220,6 +220,10 @@ brw_meta_mirror_clip_and_scissor(const struct gl_context *ctx,
     * 4 * 2 = 8 > 5 in the src.
     */
 
+   if (*srcX0 == *srcX1 || *srcY0 == *srcY1
+       || *dstX0 == *dstX1 || *dstY0 == *dstY1)
+      return true;
+
    float scaleX = (float) (*srcX1 - *srcX0) / (*dstX1 - *dstX0);
    float scaleY = (float) (*srcY1 - *srcY0) / (*dstY1 - *dstY0);
 
@@ -263,7 +267,11 @@ brw_meta_mirror_clip_and_scissor(const struct gl_context *ctx,
       *mirror_y = !*mirror_y;
    }
 
-   return false;
+   /* Check for invalid bounds
+    * Can't blit for 0-dimensions
+    */
+   return *srcX0 == *srcX1 || *srcY0 == *srcY1
+      || *dstX0 == *dstX1 || *dstY0 == *dstY1;
 }
 
 /**
@@ -340,7 +348,7 @@ brw_meta_convert_fast_clear_color(const struct brw_context *brw,
    switch (_mesa_get_format_base_format(mt->format)) {
    case GL_INTENSITY:
       override_color.u32[3] = override_color.u32[0];
-      /* flow through */
+      /* fallthrough */
    case GL_LUMINANCE:
    case GL_LUMINANCE_ALPHA:
       override_color.u32[1] = override_color.u32[0];
@@ -357,7 +365,7 @@ brw_meta_convert_fast_clear_color(const struct brw_context *brw,
    switch (_mesa_get_format_datatype(mt->format)) {
    case GL_UNSIGNED_NORMALIZED:
       for (int i = 0; i < 4; i++)
-         override_color.f32[i] = CLAMP(override_color.f32[i], 0.0f, 1.0f);
+         override_color.f32[i] = SATURATE(override_color.f32[i]);
       break;
 
    case GL_SIGNED_NORMALIZED:

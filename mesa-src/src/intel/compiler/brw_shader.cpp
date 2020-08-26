@@ -26,7 +26,7 @@
 #include "brw_fs.h"
 #include "brw_nir.h"
 #include "brw_vec4_tes.h"
-#include "common/gen_debug.h"
+#include "dev/gen_debug.h"
 #include "main/uniforms.h"
 #include "util/macros.h"
 
@@ -55,6 +55,7 @@ brw_type_for_base_type(const struct glsl_type *type)
    case GLSL_TYPE_ARRAY:
       return brw_type_for_base_type(type->fields.array);
    case GLSL_TYPE_STRUCT:
+   case GLSL_TYPE_INTERFACE:
    case GLSL_TYPE_SAMPLER:
    case GLSL_TYPE_ATOMIC_UINT:
       /* These should be overridden with the type of the member when
@@ -72,7 +73,6 @@ brw_type_for_base_type(const struct glsl_type *type)
       return BRW_REGISTER_TYPE_Q;
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
-   case GLSL_TYPE_INTERFACE:
    case GLSL_TYPE_FUNCTION:
       unreachable("not reached");
    }
@@ -129,14 +129,13 @@ brw_math_function(enum opcode op)
 }
 
 bool
-brw_texture_offset(int *offsets, unsigned num_components, uint32_t *offset_bits)
+brw_texture_offset(const nir_tex_instr *tex, unsigned src,
+                   uint32_t *offset_bits_out)
 {
-   if (!offsets) return false;  /* nonconstant offset; caller will handle it. */
+   if (!nir_src_is_const(tex->src[src].src))
+      return false;
 
-   /* offset out of bounds; caller will handle it. */
-   for (unsigned i = 0; i < num_components; i++)
-      if (offsets[i] > 7 || offsets[i] < -8)
-         return false;
+   const unsigned num_components = nir_tex_instr_src_size(tex, src);
 
    /* Combine all three offsets into a single unsigned dword:
     *
@@ -144,11 +143,20 @@ brw_texture_offset(int *offsets, unsigned num_components, uint32_t *offset_bits)
     *    bits  7:4 - V Offset (Y component)
     *    bits  3:0 - R Offset (Z component)
     */
-   *offset_bits = 0;
+   uint32_t offset_bits = 0;
    for (unsigned i = 0; i < num_components; i++) {
+      int offset = nir_src_comp_as_int(tex->src[src].src, i);
+
+      /* offset out of bounds; caller will handle it. */
+      if (offset > 7 || offset < -8)
+         return false;
+
       const unsigned shift = 4 * (2 - i);
-      *offset_bits |= (offsets[i] << shift) & (0xF << shift);
+      offset_bits |= (offset << shift) & (0xF << shift);
    }
+
+   *offset_bits_out = offset_bits;
+
    return true;
 }
 
@@ -156,7 +164,7 @@ const char *
 brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
 {
    switch (op) {
-   case BRW_OPCODE_ILLEGAL ... BRW_OPCODE_NOP:
+   case 0 ... NUM_BRW_OPCODES - 1:
       /* The DO instruction doesn't exist on Gen6+, but we use it to mark the
        * start of a loop in the IR.
        */
@@ -205,6 +213,12 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "sin";
    case SHADER_OPCODE_COS:
       return "cos";
+
+   case SHADER_OPCODE_SEND:
+      return "send";
+
+   case SHADER_OPCODE_UNDEF:
+      return "undef";
 
    case SHADER_OPCODE_TEX:
       return "tex";
@@ -267,54 +281,62 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
    case SHADER_OPCODE_SAMPLEINFO_LOGICAL:
       return "sampleinfo_logical";
 
-   case SHADER_OPCODE_IMAGE_SIZE:
-      return "image_size";
+   case SHADER_OPCODE_IMAGE_SIZE_LOGICAL:
+      return "image_size_logical";
 
    case SHADER_OPCODE_SHADER_TIME_ADD:
       return "shader_time_add";
 
-   case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case VEC4_OPCODE_UNTYPED_ATOMIC:
       return "untyped_atomic";
    case SHADER_OPCODE_UNTYPED_ATOMIC_LOGICAL:
       return "untyped_atomic_logical";
-   case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT:
-      return "untyped_atomic_float";
    case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT_LOGICAL:
       return "untyped_atomic_float_logical";
-   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+   case VEC4_OPCODE_UNTYPED_SURFACE_READ:
       return "untyped_surface_read";
    case SHADER_OPCODE_UNTYPED_SURFACE_READ_LOGICAL:
       return "untyped_surface_read_logical";
-   case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
+   case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
       return "untyped_surface_write";
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE_LOGICAL:
       return "untyped_surface_write_logical";
-   case SHADER_OPCODE_TYPED_ATOMIC:
-      return "typed_atomic";
+   case SHADER_OPCODE_A64_UNTYPED_READ_LOGICAL:
+      return "a64_untyped_read_logical";
+   case SHADER_OPCODE_A64_UNTYPED_WRITE_LOGICAL:
+      return "a64_untyped_write_logical";
+   case SHADER_OPCODE_A64_BYTE_SCATTERED_READ_LOGICAL:
+      return "a64_byte_scattered_read_logical";
+   case SHADER_OPCODE_A64_BYTE_SCATTERED_WRITE_LOGICAL:
+      return "a64_byte_scattered_write_logical";
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_LOGICAL:
+      return "a64_untyped_atomic_logical";
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_INT64_LOGICAL:
+      return "a64_untyped_atomic_int64_logical";
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT_LOGICAL:
+      return "a64_untyped_atomic_float_logical";
    case SHADER_OPCODE_TYPED_ATOMIC_LOGICAL:
       return "typed_atomic_logical";
-   case SHADER_OPCODE_TYPED_SURFACE_READ:
-      return "typed_surface_read";
    case SHADER_OPCODE_TYPED_SURFACE_READ_LOGICAL:
       return "typed_surface_read_logical";
-   case SHADER_OPCODE_TYPED_SURFACE_WRITE:
-      return "typed_surface_write";
    case SHADER_OPCODE_TYPED_SURFACE_WRITE_LOGICAL:
       return "typed_surface_write_logical";
    case SHADER_OPCODE_MEMORY_FENCE:
       return "memory_fence";
+   case FS_OPCODE_SCHEDULING_FENCE:
+      return "scheduling_fence";
    case SHADER_OPCODE_INTERLOCK:
       /* For an interlock we actually issue a memory fence via sendc. */
       return "interlock";
 
-   case SHADER_OPCODE_BYTE_SCATTERED_READ:
-      return "byte_scattered_read";
    case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
       return "byte_scattered_read_logical";
-   case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
-      return "byte_scattered_write";
    case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
       return "byte_scattered_write_logical";
+   case SHADER_OPCODE_DWORD_SCATTERED_READ_LOGICAL:
+      return "dword_scattered_read_logical";
+   case SHADER_OPCODE_DWORD_SCATTERED_WRITE_LOGICAL:
+      return "dword_scattered_write_logical";
 
    case SHADER_OPCODE_LOAD_PAYLOAD:
       return "load_payload";
@@ -342,6 +364,9 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
 
    case SHADER_OPCODE_FIND_LIVE_CHANNEL:
       return "find_live_channel";
+   case FS_OPCODE_LOAD_LIVE_CHANNELS:
+      return "load_live_channels";
+
    case SHADER_OPCODE_BROADCAST:
       return "broadcast";
    case SHADER_OPCODE_SHUFFLE:
@@ -402,8 +427,6 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "uniform_pull_const_gen7";
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN4:
       return "varying_pull_const_gen4";
-   case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7:
-      return "varying_pull_const_gen7";
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_LOGICAL:
       return "varying_pull_const_logical";
 
@@ -415,10 +438,6 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
 
    case FS_OPCODE_PACK_HALF_2x16_SPLIT:
       return "pack_half_2x16_split";
-   case FS_OPCODE_UNPACK_HALF_2x16_SPLIT_X:
-      return "unpack_half_2x16_split_x";
-   case FS_OPCODE_UNPACK_HALF_2x16_SPLIT_Y:
-      return "unpack_half_2x16_split_y";
 
    case FS_OPCODE_PLACEHOLDER_HALT:
       return "placeholder_halt";
@@ -477,6 +496,10 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "barrier";
    case SHADER_OPCODE_MULH:
       return "mulh";
+   case SHADER_OPCODE_ISUB_SAT:
+      return "isub_sat";
+   case SHADER_OPCODE_USUB_SAT:
+      return "usub_sat";
    case SHADER_OPCODE_MOV_INDIRECT:
       return "mov_indirect";
 
@@ -509,6 +532,8 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
 
    case SHADER_OPCODE_RND_MODE:
       return "rnd_mode";
+   case SHADER_OPCODE_FLOAT_CONTROL_MODE:
+      return "float_control_mode";
    }
 
    unreachable("not reached");
@@ -545,10 +570,10 @@ brw_saturate_immediate(enum brw_reg_type type, struct brw_reg *reg)
       /* Nothing to do. */
       return false;
    case BRW_REGISTER_TYPE_F:
-      sat_imm.f = CLAMP(imm.f, 0.0f, 1.0f);
+      sat_imm.f = SATURATE(imm.f);
       break;
    case BRW_REGISTER_TYPE_DF:
-      sat_imm.df = CLAMP(imm.df, 0.0, 1.0);
+      sat_imm.df = SATURATE(imm.df);
       break;
    case BRW_REGISTER_TYPE_UB:
    case BRW_REGISTER_TYPE_B:
@@ -678,7 +703,7 @@ backend_shader::backend_shader(const struct brw_compiler *compiler,
      nir(shader),
      stage_prog_data(stage_prog_data),
      mem_ctx(mem_ctx),
-     cfg(NULL),
+     cfg(NULL), idom_analysis(this),
      stage(shader->info.stage)
 {
    debug_enabled = INTEL_DEBUG & intel_debug_flag_for_shader_stage(stage);
@@ -708,11 +733,20 @@ backend_reg::is_zero() const
    if (file != IMM)
       return false;
 
+   assert(type_sz(type) > 1);
+
    switch (type) {
+   case BRW_REGISTER_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0 || (d & 0xffff) == 0x8000;
    case BRW_REGISTER_TYPE_F:
       return f == 0;
    case BRW_REGISTER_TYPE_DF:
       return df == 0;
+   case BRW_REGISTER_TYPE_W:
+   case BRW_REGISTER_TYPE_UW:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0;
    case BRW_REGISTER_TYPE_D:
    case BRW_REGISTER_TYPE_UD:
       return d == 0;
@@ -730,11 +764,20 @@ backend_reg::is_one() const
    if (file != IMM)
       return false;
 
+   assert(type_sz(type) > 1);
+
    switch (type) {
+   case BRW_REGISTER_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0x3c00;
    case BRW_REGISTER_TYPE_F:
       return f == 1.0f;
    case BRW_REGISTER_TYPE_DF:
       return df == 1.0;
+   case BRW_REGISTER_TYPE_W:
+   case BRW_REGISTER_TYPE_UW:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 1;
    case BRW_REGISTER_TYPE_D:
    case BRW_REGISTER_TYPE_UD:
       return d == 1;
@@ -752,11 +795,19 @@ backend_reg::is_negative_one() const
    if (file != IMM)
       return false;
 
+   assert(type_sz(type) > 1);
+
    switch (type) {
+   case BRW_REGISTER_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0xbc00;
    case BRW_REGISTER_TYPE_F:
       return f == -1.0;
    case BRW_REGISTER_TYPE_DF:
       return df == -1.0;
+   case BRW_REGISTER_TYPE_W:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0xffff;
    case BRW_REGISTER_TYPE_D:
       return d == -1;
    case BRW_REGISTER_TYPE_Q:
@@ -890,6 +941,7 @@ backend_instruction::can_do_saturate() const
    case BRW_OPCODE_ADD:
    case BRW_OPCODE_ASR:
    case BRW_OPCODE_AVG:
+   case BRW_OPCODE_CSEL:
    case BRW_OPCODE_DP2:
    case BRW_OPCODE_DP3:
    case BRW_OPCODE_DP4:
@@ -1001,18 +1053,24 @@ bool
 backend_instruction::has_side_effects() const
 {
    switch (opcode) {
-   case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case SHADER_OPCODE_SEND:
+      return send_has_side_effects;
+
+   case BRW_OPCODE_SYNC:
+   case VEC4_OPCODE_UNTYPED_ATOMIC:
    case SHADER_OPCODE_UNTYPED_ATOMIC_LOGICAL:
-   case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT:
    case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT_LOGICAL:
    case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
-   case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
+   case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE_LOGICAL:
-   case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
+   case SHADER_OPCODE_A64_UNTYPED_WRITE_LOGICAL:
+   case SHADER_OPCODE_A64_BYTE_SCATTERED_WRITE_LOGICAL:
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_LOGICAL:
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_INT64_LOGICAL:
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT_LOGICAL:
    case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
-   case SHADER_OPCODE_TYPED_ATOMIC:
+   case SHADER_OPCODE_DWORD_SCATTERED_WRITE_LOGICAL:
    case SHADER_OPCODE_TYPED_ATOMIC_LOGICAL:
-   case SHADER_OPCODE_TYPED_SURFACE_WRITE:
    case SHADER_OPCODE_TYPED_SURFACE_WRITE_LOGICAL:
    case SHADER_OPCODE_MEMORY_FENCE:
    case SHADER_OPCODE_INTERLOCK:
@@ -1027,6 +1085,8 @@ backend_instruction::has_side_effects() const
    case TCS_OPCODE_URB_WRITE:
    case TCS_OPCODE_RELEASE_INPUT:
    case SHADER_OPCODE_RND_MODE:
+   case SHADER_OPCODE_FLOAT_CONTROL_MODE:
+   case FS_OPCODE_SCHEDULING_FENCE:
       return true;
    default:
       return eot;
@@ -1037,12 +1097,16 @@ bool
 backend_instruction::is_volatile() const
 {
    switch (opcode) {
-   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+   case SHADER_OPCODE_SEND:
+      return send_is_volatile;
+
+   case VEC4_OPCODE_UNTYPED_SURFACE_READ:
    case SHADER_OPCODE_UNTYPED_SURFACE_READ_LOGICAL:
-   case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_READ_LOGICAL:
-   case SHADER_OPCODE_BYTE_SCATTERED_READ:
    case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
+   case SHADER_OPCODE_DWORD_SCATTERED_READ_LOGICAL:
+   case SHADER_OPCODE_A64_UNTYPED_READ_LOGICAL:
+   case SHADER_OPCODE_A64_BYTE_SCATTERED_READ_LOGICAL:
    case SHADER_OPCODE_URB_READ_SIMD8:
    case SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT:
    case VEC4_OPCODE_URB_READ:
@@ -1138,13 +1202,13 @@ backend_instruction::remove(bblock_t *block)
 }
 
 void
-backend_shader::dump_instructions()
+backend_shader::dump_instructions() const
 {
    dump_instructions(NULL);
 }
 
 void
-backend_shader::dump_instructions(const char *name)
+backend_shader::dump_instructions(const char *name) const
 {
    FILE *file = stderr;
    if (name && geteuid() != 0) {
@@ -1179,7 +1243,13 @@ backend_shader::calculate_cfg()
 {
    if (this->cfg)
       return;
-   cfg = new(mem_ctx) cfg_t(&this->instructions);
+   cfg = new(mem_ctx) cfg_t(this, &this->instructions);
+}
+
+void
+backend_shader::invalidate_analysis(brw::analysis_dependency_class c)
+{
+   idom_analysis.invalidate(c);
 }
 
 extern "C" const unsigned *
@@ -1189,27 +1259,26 @@ brw_compile_tes(const struct brw_compiler *compiler,
                 const struct brw_tes_prog_key *key,
                 const struct brw_vue_map *input_vue_map,
                 struct brw_tes_prog_data *prog_data,
-                const nir_shader *src_shader,
-                struct gl_program *prog,
+                nir_shader *nir,
                 int shader_time_index,
+                struct brw_compile_stats *stats,
                 char **error_str)
 {
    const struct gen_device_info *devinfo = compiler->devinfo;
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_TESS_EVAL];
    const unsigned *assembly;
 
-   nir_shader *nir = nir_shader_clone(mem_ctx, src_shader);
    nir->info.inputs_read = key->inputs_read;
    nir->info.patch_inputs_read = key->patch_inputs_read;
 
-   nir = brw_nir_apply_sampler_key(nir, compiler, &key->tex, is_scalar);
+   brw_nir_apply_key(nir, compiler, &key->base, 8, is_scalar);
    brw_nir_lower_tes_inputs(nir, input_vue_map);
    brw_nir_lower_vue_outputs(nir);
-   nir = brw_postprocess_nir(nir, compiler, is_scalar);
+   brw_postprocess_nir(nir, compiler, is_scalar);
 
    brw_compute_vue_map(devinfo, &prog_data->base.vue_map,
                        nir->info.outputs_written,
-                       nir->info.separate_shader);
+                       nir->info.separate_shader, 1);
 
    unsigned output_size_bytes = prog_data->base.vue_map.num_slots * 4 * 4;
 
@@ -1280,8 +1349,8 @@ brw_compile_tes(const struct brw_compiler *compiler,
    }
 
    if (is_scalar) {
-      fs_visitor v(compiler, log_data, mem_ctx, (void *) key,
-                   &prog_data->base.base, NULL, nir, 8,
+      fs_visitor v(compiler, log_data, mem_ctx, &key->base,
+                   &prog_data->base.base, nir, 8,
                    shader_time_index, input_vue_map);
       if (!v.run_tes()) {
          if (error_str)
@@ -1293,8 +1362,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
       prog_data->base.dispatch_mode = DISPATCH_MODE_SIMD8;
 
       fs_generator g(compiler, log_data, mem_ctx,
-                     &prog_data->base.base, v.promoted_constants, false,
-                     MESA_SHADER_TESS_EVAL);
+                     &prog_data->base.base, false, MESA_SHADER_TESS_EVAL);
       if (unlikely(INTEL_DEBUG & DEBUG_TES)) {
          g.enable_debug(ralloc_asprintf(mem_ctx,
                                         "%s tessellation evaluation shader %s",
@@ -1303,7 +1371,8 @@ brw_compile_tes(const struct brw_compiler *compiler,
                                         nir->info.name));
       }
 
-      g.generate_code(v.cfg, 8);
+      g.generate_code(v.cfg, 8, v.shader_stats,
+                      v.performance_analysis.require(), stats);
 
       assembly = g.get_assembly();
    } else {
@@ -1319,7 +1388,9 @@ brw_compile_tes(const struct brw_compiler *compiler,
 	 v.dump_instructions();
 
       assembly = brw_vec4_generate_assembly(compiler, log_data, mem_ctx, nir,
-                                            &prog_data->base, v.cfg);
+                                            &prog_data->base, v.cfg,
+                                            v.performance_analysis.require(),
+                                            stats);
    }
 
    return assembly;

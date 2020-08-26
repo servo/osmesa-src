@@ -25,6 +25,7 @@
 #include "anv_private.h"
 #include "nir/nir.h"
 #include "nir/nir_builder.h"
+#include "nir/nir_vulkan.h"
 
 struct ycbcr_state {
    nir_builder *builder;
@@ -33,123 +34,6 @@ struct ycbcr_state {
    nir_deref_instr *tex_deref;
    struct anv_ycbcr_conversion *conversion;
 };
-
-static nir_ssa_def *
-y_range(nir_builder *b,
-        nir_ssa_def *y_channel,
-        int bpc,
-        VkSamplerYcbcrRangeKHR range)
-{
-   switch (range) {
-   case VK_SAMPLER_YCBCR_RANGE_ITU_FULL:
-      return y_channel;
-   case VK_SAMPLER_YCBCR_RANGE_ITU_NARROW:
-      return nir_fmul(b,
-                      nir_fadd(b,
-                               nir_fmul(b, y_channel,
-                                        nir_imm_float(b, pow(2, bpc) - 1)),
-                               nir_imm_float(b, -16.0f * pow(2, bpc - 8))),
-                      nir_frcp(b, nir_imm_float(b, 219.0f * pow(2, bpc - 8))));
-   default:
-      unreachable("missing Ycbcr range");
-      return NULL;
-   }
-}
-
-static nir_ssa_def *
-chroma_range(nir_builder *b,
-             nir_ssa_def *chroma_channel,
-             int bpc,
-             VkSamplerYcbcrRangeKHR range)
-{
-   switch (range) {
-   case VK_SAMPLER_YCBCR_RANGE_ITU_FULL:
-      return nir_fadd(b, chroma_channel,
-                      nir_imm_float(b, -pow(2, bpc - 1) / (pow(2, bpc) - 1.0f)));
-   case VK_SAMPLER_YCBCR_RANGE_ITU_NARROW:
-      return nir_fmul(b,
-                      nir_fadd(b,
-                               nir_fmul(b, chroma_channel,
-                                        nir_imm_float(b, pow(2, bpc) - 1)),
-                               nir_imm_float(b, -128.0f * pow(2, bpc - 8))),
-                      nir_frcp(b, nir_imm_float(b, 224.0f * pow(2, bpc - 8))));
-   default:
-      unreachable("missing Ycbcr range");
-      return NULL;
-   }
-}
-
-static const nir_const_value *
-ycbcr_model_to_rgb_matrix(VkSamplerYcbcrModelConversionKHR model)
-{
-   switch (model) {
-   case VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_601: {
-      static const nir_const_value bt601[3] = {
-         { .f32 = {  1.402f,             1.0f,  0.0f,               0.0f } },
-         { .f32 = { -0.714136286201022f, 1.0f, -0.344136286201022f, 0.0f } },
-         { .f32 = {  0.0f,               1.0f,  1.772f,             0.0f } }
-      };
-
-      return bt601;
-   }
-   case VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709: {
-      static const nir_const_value bt709[3] = {
-         { .f32 = {  1.5748031496063f,   1.0f,  0.0,                0.0f } },
-         { .f32 = { -0.468125209181067f, 1.0f, -0.187327487470334f, 0.0f } },
-         { .f32 = {  0.0f,               1.0f,  1.85563184264242f,  0.0f } }
-      };
-
-      return bt709;
-   }
-   case VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_2020: {
-      static const nir_const_value bt2020[3] = {
-         { .f32 = { 1.4746f,             1.0f,  0.0f,               0.0f } },
-         { .f32 = { -0.571353126843658f, 1.0f, -0.164553126843658f, 0.0f } },
-         { .f32 = { 0.0f,                1.0f,  1.8814f,            0.0f } }
-      };
-
-      return bt2020;
-   }
-   default:
-      unreachable("missing Ycbcr model");
-      return NULL;
-   }
-}
-
-static nir_ssa_def *
-convert_ycbcr(struct ycbcr_state *state,
-              nir_ssa_def *raw_channels,
-              uint32_t *bpcs)
-{
-   nir_builder *b = state->builder;
-   struct anv_ycbcr_conversion *conversion = state->conversion;
-
-   nir_ssa_def *expanded_channels =
-      nir_vec4(b,
-               chroma_range(b, nir_channel(b, raw_channels, 0),
-                            bpcs[0], conversion->ycbcr_range),
-               y_range(b, nir_channel(b, raw_channels, 1),
-                       bpcs[1], conversion->ycbcr_range),
-               chroma_range(b, nir_channel(b, raw_channels, 2),
-                            bpcs[2], conversion->ycbcr_range),
-               nir_imm_float(b, 1.0f));
-
-   if (conversion->ycbcr_model == VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_IDENTITY)
-      return expanded_channels;
-
-   const nir_const_value *conversion_matrix =
-      ycbcr_model_to_rgb_matrix(conversion->ycbcr_model);
-
-   nir_ssa_def *converted_channels[] = {
-      nir_fdot4(b, expanded_channels, nir_build_imm(b, 4, 32, conversion_matrix[0])),
-      nir_fdot4(b, expanded_channels, nir_build_imm(b, 4, 32, conversion_matrix[1])),
-      nir_fdot4(b, expanded_channels, nir_build_imm(b, 4, 32, conversion_matrix[2]))
-   };
-
-   return nir_vec4(b,
-                   converted_channels[0], converted_channels[1],
-                   converted_channels[2], nir_imm_float(b, 1.0f));
-}
 
 /* TODO: we should probably replace this with a push constant/uniform. */
 static nir_ssa_def *
@@ -267,8 +151,8 @@ create_plane_tex_instr_implicit(struct ycbcr_state *state,
    tex->component = old_tex->component;
 
    tex->texture_index = old_tex->texture_index;
-   tex->texture_array_size = old_tex->texture_array_size;
    tex->sampler_index = old_tex->sampler_index;
+   tex->is_array = old_tex->is_array;
 
    nir_ssa_dest_init(&tex->instr, &tex->dest,
                      old_tex->dest.ssa.num_components,
@@ -315,7 +199,7 @@ swizzle_channel(struct isl_swizzle swizzle, unsigned channel)
 }
 
 static bool
-try_lower_tex_ycbcr(struct anv_pipeline_layout *layout,
+try_lower_tex_ycbcr(const struct anv_pipeline_layout *layout,
                     nir_builder *builder,
                     nir_tex_instr *tex)
 {
@@ -344,10 +228,10 @@ try_lower_tex_ycbcr(struct anv_pipeline_layout *layout,
    unsigned array_index = 0;
    if (deref->deref_type != nir_deref_type_var) {
       assert(deref->deref_type == nir_deref_type_array);
-      nir_const_value *const_index = nir_src_as_const_value(deref->arr.index);
-      if (!const_index)
+      if (!nir_src_is_const(deref->arr.index))
          return false;
-      array_index = MIN2(const_index->u32[0], binding->array_size - 1);
+      array_index = nir_src_as_uint(deref->arr.index);
+      array_index = MIN2(array_index, binding->array_size - 1);
    }
    const struct anv_sampler *sampler = binding->immutable_samplers[array_index];
 
@@ -373,11 +257,11 @@ try_lower_tex_ycbcr(struct anv_pipeline_layout *layout,
    uint8_t y_bpc = y_isl_layout->channels_array[0].bits;
 
    /* |ycbcr_comp| holds components in the order : Cr-Y-Cb */
-   nir_ssa_def *ycbcr_comp[5] = { NULL, NULL, NULL,
-                                  /* Use extra 2 channels for following swizzle */
-                                  nir_imm_float(builder, 1.0f),
-                                  nir_imm_float(builder, 0.0f),
-   };
+   nir_ssa_def *zero = nir_imm_float(builder, 0.0f);
+   nir_ssa_def *one = nir_imm_float(builder, 1.0f);
+   /* Use extra 2 channels for following swizzle */
+   nir_ssa_def *ycbcr_comp[5] = { zero, zero, zero, one, zero };
+
    uint8_t ycbcr_bpcs[5];
    memset(ycbcr_bpcs, y_bpc, sizeof(ycbcr_bpcs));
 
@@ -432,8 +316,13 @@ try_lower_tex_ycbcr(struct anv_pipeline_layout *layout,
    }
 
    nir_ssa_def *result = nir_vec(builder, swizzled_comp, 4);
-   if (state.conversion->ycbcr_model != VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY)
-      result = convert_ycbcr(&state, result, swizzled_bpcs);
+   if (state.conversion->ycbcr_model != VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY) {
+      result = nir_convert_ycbcr_to_rgb(builder,
+                                        state.conversion->ycbcr_model,
+                                        state.conversion->ycbcr_range,
+                                        result,
+                                        swizzled_bpcs);
+   }
 
    nir_ssa_def_rewrite_uses(&tex->dest.ssa, nir_src_for_ssa(result));
    nir_instr_remove(&tex->instr);
@@ -443,7 +332,7 @@ try_lower_tex_ycbcr(struct anv_pipeline_layout *layout,
 
 bool
 anv_nir_lower_ycbcr_textures(nir_shader *shader,
-                             struct anv_pipeline_layout *layout)
+                             const struct anv_pipeline_layout *layout)
 {
    bool progress = false;
 

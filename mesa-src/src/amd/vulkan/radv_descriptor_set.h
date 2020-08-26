@@ -24,9 +24,11 @@
 #ifndef RADV_DESCRIPTOR_SET_H
 #define RADV_DESCRIPTOR_SET_H
 
-#include <vulkan/vulkan.h>
+#include "radv_constants.h"
 
-#define MAX_SETS         32
+#include "vulkan/util/vk_object.h"
+
+#include <vulkan/vulkan.h>
 
 struct radv_descriptor_set_binding_layout {
    VkDescriptorType type;
@@ -49,6 +51,8 @@ struct radv_descriptor_set_binding_layout {
 };
 
 struct radv_descriptor_set_layout {
+   struct vk_object_base base;
+
    /* The create flags for this descriptor set layout */
    VkDescriptorSetLayoutCreateFlags flags;
 
@@ -57,6 +61,9 @@ struct radv_descriptor_set_layout {
 
    /* Total size of the descriptor set with room for all array entries */
    uint32_t size;
+
+   /* CPU size of this struct + all associated data, for hashing. */
+   uint32_t layout_size;
 
    /* Shader stages affected by this descriptor set */
    uint16_t shader_stages;
@@ -71,11 +78,14 @@ struct radv_descriptor_set_layout {
    bool has_immutable_samplers;
    bool has_variable_descriptors;
 
+   uint32_t ycbcr_sampler_offsets_offset;
+
    /* Bindings in this descriptor set */
    struct radv_descriptor_set_binding_layout binding[0];
 };
 
 struct radv_pipeline_layout {
+   struct vk_object_base base;
    struct {
       struct radv_descriptor_set_layout *layout;
       uint32_t size;
@@ -85,6 +95,7 @@ struct radv_pipeline_layout {
    uint32_t num_sets;
    uint32_t push_constant_size;
    uint32_t dynamic_offset_count;
+   uint16_t dynamic_shader_stages;
 
    unsigned char sha1[20];
 };
@@ -93,5 +104,25 @@ static inline const uint32_t *
 radv_immutable_samplers(const struct radv_descriptor_set_layout *set,
                         const struct radv_descriptor_set_binding_layout *binding) {
 	return (const uint32_t*)((const char*)set + binding->immutable_samplers_offset);
+}
+
+static inline unsigned
+radv_combined_image_descriptor_sampler_offset(const struct radv_descriptor_set_binding_layout *binding)
+{
+	return binding->size - ((!binding->immutable_samplers_equal) ? 16 : 0);
+}
+
+static inline const struct radv_sampler_ycbcr_conversion *
+radv_immutable_ycbcr_samplers(const struct radv_descriptor_set_layout *set,
+                              unsigned binding_index)
+{
+	if (!set->ycbcr_sampler_offsets_offset)
+		return NULL;
+
+	const uint32_t *offsets = (const uint32_t*)((const char*)set + set->ycbcr_sampler_offsets_offset);
+
+	if (offsets[binding_index] == 0)
+		return NULL;
+	return (const struct radv_sampler_ycbcr_conversion *)((const char*)set + offsets[binding_index]);
 }
 #endif /* RADV_DESCRIPTOR_SET_H */

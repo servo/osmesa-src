@@ -73,7 +73,7 @@ struct svga_buffer_surface
 /**
  * SVGA pipe buffer.
  */
-struct svga_buffer 
+struct svga_buffer
 {
    struct u_resource b;
 
@@ -82,30 +82,35 @@ struct svga_buffer
 
    /**
     * Regular (non DMA'able) memory.
-    * 
+    *
     * Used for user buffers or for buffers which we know before hand that can
     * never be used by the virtual hardware directly, such as constant buffers.
     */
    void *swbuf;
-   
-   /** 
+
+   /**
     * Whether swbuf was created by the user or not.
     */
    boolean user;
-   
+
+   /**
+    * Whether swbuf is used for this buffer.
+    */
+   boolean use_swbuf;
+
    /**
     * Creation key for the host surface handle.
-    * 
-    * This structure describes all the host surface characteristics so that it 
+    *
+    * This structure describes all the host surface characteristics so that it
     * can be looked up in cache, since creating a host surface is often a slow
     * operation.
     */
    struct svga_host_surface_cache_key key;
-   
+
    /**
     * Host surface handle.
-    * 
-    * This is a platform independent abstraction for host SID. We create when 
+    *
+    * This is a platform independent abstraction for host SID. We create when
     * trying to bind.
     *
     * Only set for non-user buffers.
@@ -237,8 +242,8 @@ svga_buffer(struct pipe_resource *resource)
  * Returns TRUE for user buffers.  We may
  * decide to use an alternate upload path for these buffers.
  */
-static inline boolean 
-svga_buffer_is_user_buffer( struct pipe_resource *buffer )
+static inline boolean
+svga_buffer_is_user_buffer(struct pipe_resource *buffer)
 {
    if (buffer) {
       return svga_buffer(buffer)->user;
@@ -285,7 +290,26 @@ svga_buffer_hw_storage_map(struct svga_context *svga,
    svga->hud.num_buffers_mapped++;
 
    if (sws->have_gb_objects) {
-      return svga->swc->surface_map(svga->swc, sbuf->handle, flags, retry);
+      struct svga_winsys_context *swc = svga->swc;
+      boolean rebind;
+      void *map;
+
+      if (swc->force_coherent) {
+         flags |= PIPE_TRANSFER_PERSISTENT | PIPE_TRANSFER_COHERENT;
+      }
+      map = swc->surface_map(swc, sbuf->handle, flags, retry, &rebind);
+      if (map && rebind) {
+         enum pipe_error ret;
+
+         ret = SVGA3D_BindGBSurface(swc, sbuf->handle);
+         if (ret != PIPE_OK) {
+            svga_context_flush(svga, NULL);
+            ret = SVGA3D_BindGBSurface(swc, sbuf->handle);
+            assert(ret == PIPE_OK);
+         }
+         svga_context_flush(svga, NULL);
+      }
+      return map;
    } else {
       *retry = FALSE;
       return sws->buffer_map(sws, sbuf->hwbuf, flags);
@@ -304,16 +328,10 @@ svga_buffer_hw_storage_unmap(struct svga_context *svga,
    if (sws->have_gb_objects) {
       struct svga_winsys_context *swc = svga->swc;
       boolean rebind;
+
       swc->surface_unmap(swc, sbuf->handle, &rebind);
       if (rebind) {
-         enum pipe_error ret;
-         ret = SVGA3D_BindGBSurface(swc, sbuf->handle);
-         if (ret != PIPE_OK) {
-            /* flush and retry */
-            svga_context_flush(svga, NULL);
-            ret = SVGA3D_BindGBSurface(swc, sbuf->handle);
-            assert(ret == PIPE_OK);
-         }
+         SVGA_RETRY(svga, SVGA3D_BindGBSurface(swc, sbuf->handle));
       }
    } else
       sws->buffer_unmap(sws, sbuf->hwbuf);
@@ -324,11 +342,11 @@ struct pipe_resource *
 svga_user_buffer_create(struct pipe_screen *screen,
                         void *ptr,
                         unsigned bytes,
-			unsigned usage);
+                        unsigned usage);
 
 struct pipe_resource *
 svga_buffer_create(struct pipe_screen *screen,
-		   const struct pipe_resource *template);
+                   const struct pipe_resource *template);
 
 
 
@@ -351,7 +369,7 @@ svga_context_flush_buffers(struct svga_context *svga);
 
 struct svga_winsys_buffer *
 svga_winsys_buffer_create(struct svga_context *svga,
-                          unsigned alignment, 
+                          unsigned alignment,
                           unsigned usage,
                           unsigned size);
 

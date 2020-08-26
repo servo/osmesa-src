@@ -31,7 +31,7 @@
 
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 
 #include "draw/draw_context.h"
 
@@ -41,7 +41,7 @@
 #include "sp_tex_sample.h"
 #include "sp_tex_tile_cache.h"
 #include "sp_screen.h"
-#include "state_tracker/sw_winsys.h"
+#include "frontend/sw_winsys.h"
 
 
 /**
@@ -127,6 +127,7 @@ softpipe_set_sampler_views(struct pipe_context *pipe,
       if (sp_sviewsrc) {
          memcpy(sp_sviewdst, sp_sviewsrc, sizeof(*sp_sviewsrc));
          sp_sviewdst->compute_lambda = softpipe_get_lambda_func(&sp_sviewdst->base, shader);
+         sp_sviewdst->compute_lambda_from_grad = softpipe_get_lambda_from_grad_func(&sp_sviewdst->base, shader);
          sp_sviewdst->cache = softpipe->tex_cache[shader][start + i];
       }
       else {
@@ -199,7 +200,7 @@ prepare_shader_sampling(
 
          if (!sp_tex->dt) {
             /* regular texture - setup array of mipmap level offsets */
-            MAYBE_UNUSED struct pipe_resource *res = view->texture;
+            ASSERTED struct pipe_resource *res = view->texture;
             int j;
 
             if (view->target != PIPE_BUFFER) {
@@ -263,7 +264,7 @@ prepare_shader_sampling(
                                  shader_type,
                                  i,
                                  width0, tex->height0, num_layers,
-                                 first_level, last_level,
+                                 first_level, last_level, 0, 0,
                                  addr,
                                  row_stride, img_stride, mip_offsets);
       }

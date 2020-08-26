@@ -25,7 +25,7 @@
 
 
 #include "util/u_debug_image.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_string.h"
@@ -57,7 +57,7 @@ debug_dump_image(const char *prefix,
    unsigned char *rgb8;
    FILE *f;
 
-   util_snprintf(filename, sizeof(filename), "%s.ppm", prefix);
+   snprintf(filename, sizeof(filename), "%s.ppm", prefix);
 
    rgb8 = MALLOC(height * width * 3);
    if (!rgb8) {
@@ -220,6 +220,7 @@ debug_dump_transfer_bmp(UNUSED struct pipe_context *pipe,
 
    pipe_get_tile_rgba(transfer, ptr, 0, 0,
                       transfer->box.width, transfer->box.height,
+                      transfer->resource->format,
                       rgba);
 
    debug_dump_float_rgba_bmp(filename,

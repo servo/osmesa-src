@@ -25,7 +25,7 @@
 #include "nv50/g80_texture.xml.h"
 #include "nv50/g80_defs.xml.h"
 
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 
 static inline uint32_t
 nv50_tic_swizzle(const struct nv50_format *fmt, unsigned swz, bool tex_int)
@@ -315,7 +315,7 @@ nv50_validate_tic(struct nv50_context *nv50, int s)
          struct nv50_tic_entry *tic = nv50_tic_entry(nv50->textures[s][i]);
          struct nv50_miptree *res;
 
-         if (!tic) {
+         if (!tic || tic->pipe.target == PIPE_BUFFER) {
             PUSH_DATA (push, 0);
             PUSH_DATA (push, 0);
             continue;
@@ -379,6 +379,16 @@ nv50_validate_tsc(struct nv50_context *nv50, int s)
       PUSH_DATA (push, (i << 4) | 0);
    }
    nv50->state.num_samplers[s] = nv50->num_samplers[s];
+
+   // TXF, in unlinked tsc mode, will always use sampler 0. So we have to
+   // ensure that it remains bound. Its contents don't matter, all samplers we
+   // ever create have the SRGB_CONVERSION bit set, so as long as the first
+   // entry is initialized, we're good to go. This is the only bit that has
+   // any effect on what TXF does.
+   if (!nv50->samplers[s][0]) {
+      BEGIN_NV04(push, NV50_3D(BIND_TSC(s)), 1);
+      PUSH_DATA (push, 1);
+   }
 
    return need_flush;
 }
@@ -450,4 +460,15 @@ void nv50_upload_ms_info(struct nouveau_pushbuf *push)
    PUSH_DATA (push, (NV50_CB_AUX_MS_OFFSET << (8 - 2)) | NV50_CB_AUX);
    BEGIN_NI04(push, NV50_3D(CB_DATA(0)), ARRAY_SIZE(msaa_sample_xy_offsets));
    PUSH_DATAp(push, msaa_sample_xy_offsets, ARRAY_SIZE(msaa_sample_xy_offsets));
+}
+
+void nv50_upload_tsc0(struct nv50_context *nv50)
+{
+   struct nouveau_pushbuf *push = nv50->base.pushbuf;
+   u32 data[8] = { G80_TSC_0_SRGB_CONVERSION };
+   nv50_sifc_linear_u8(&nv50->base, nv50->screen->txc,
+                       65536 /* + tsc->id * 32 */,
+                       NOUVEAU_BO_VRAM, 32, data);
+   BEGIN_NV04(push, NV50_3D(TSC_FLUSH), 1);
+   PUSH_DATA (push, 0);
 }

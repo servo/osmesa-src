@@ -34,7 +34,7 @@
 #define PIPE_LOADER_H
 
 #include "pipe/p_compiler.h"
-#include "state_tracker/drm_driver.h"
+#include "frontend/drm_driver.h"
 #include "util/xmlconfig.h"
 
 #ifdef __cplusplus
@@ -91,16 +91,6 @@ struct pipe_screen *
 pipe_loader_create_screen(struct pipe_loader_device *dev);
 
 /**
- * Query the configuration parameters for the specified device.
- *
- * \param dev Device that will be queried.
- * \param conf The drm_conf id of the option to be queried.
- */
-const struct drm_conf_ret *
-pipe_loader_configuration(struct pipe_loader_device *dev,
-                          enum drm_conf conf);
-
-/**
  * Ensure that dev->option_cache is initialized appropriately for the driver.
  *
  * This function can be called multiple times.
@@ -142,7 +132,7 @@ pipe_loader_release(struct pipe_loader_device **devs, int ndev);
  */
 bool
 pipe_loader_sw_probe_dri(struct pipe_loader_device **devs,
-                         struct drisw_loader_funcs *drisw_lf);
+                         const struct drisw_loader_funcs *drisw_lf);
 
 /**
  * Initialize a kms backed sw device given an fd.

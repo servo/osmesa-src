@@ -50,264 +50,7 @@
 #include "main/varray.h"
 #include "main/arrayobj.h"
 
-/* vertex_formats[gltype - GL_BYTE][integer*2 + normalized][size - 1] */
-static const uint16_t vertex_formats[][4][4] = {
-   { /* GL_BYTE */
-      {
-         PIPE_FORMAT_R8_SSCALED,
-         PIPE_FORMAT_R8G8_SSCALED,
-         PIPE_FORMAT_R8G8B8_SSCALED,
-         PIPE_FORMAT_R8G8B8A8_SSCALED
-      },
-      {
-         PIPE_FORMAT_R8_SNORM,
-         PIPE_FORMAT_R8G8_SNORM,
-         PIPE_FORMAT_R8G8B8_SNORM,
-         PIPE_FORMAT_R8G8B8A8_SNORM
-      },
-      {
-         PIPE_FORMAT_R8_SINT,
-         PIPE_FORMAT_R8G8_SINT,
-         PIPE_FORMAT_R8G8B8_SINT,
-         PIPE_FORMAT_R8G8B8A8_SINT
-      },
-   },
-   { /* GL_UNSIGNED_BYTE */
-      {
-         PIPE_FORMAT_R8_USCALED,
-         PIPE_FORMAT_R8G8_USCALED,
-         PIPE_FORMAT_R8G8B8_USCALED,
-         PIPE_FORMAT_R8G8B8A8_USCALED
-      },
-      {
-         PIPE_FORMAT_R8_UNORM,
-         PIPE_FORMAT_R8G8_UNORM,
-         PIPE_FORMAT_R8G8B8_UNORM,
-         PIPE_FORMAT_R8G8B8A8_UNORM
-      },
-      {
-         PIPE_FORMAT_R8_UINT,
-         PIPE_FORMAT_R8G8_UINT,
-         PIPE_FORMAT_R8G8B8_UINT,
-         PIPE_FORMAT_R8G8B8A8_UINT
-      },
-   },
-   { /* GL_SHORT */
-      {
-         PIPE_FORMAT_R16_SSCALED,
-         PIPE_FORMAT_R16G16_SSCALED,
-         PIPE_FORMAT_R16G16B16_SSCALED,
-         PIPE_FORMAT_R16G16B16A16_SSCALED
-      },
-      {
-         PIPE_FORMAT_R16_SNORM,
-         PIPE_FORMAT_R16G16_SNORM,
-         PIPE_FORMAT_R16G16B16_SNORM,
-         PIPE_FORMAT_R16G16B16A16_SNORM
-      },
-      {
-         PIPE_FORMAT_R16_SINT,
-         PIPE_FORMAT_R16G16_SINT,
-         PIPE_FORMAT_R16G16B16_SINT,
-         PIPE_FORMAT_R16G16B16A16_SINT
-      },
-   },
-   { /* GL_UNSIGNED_SHORT */
-      {
-         PIPE_FORMAT_R16_USCALED,
-         PIPE_FORMAT_R16G16_USCALED,
-         PIPE_FORMAT_R16G16B16_USCALED,
-         PIPE_FORMAT_R16G16B16A16_USCALED
-      },
-      {
-         PIPE_FORMAT_R16_UNORM,
-         PIPE_FORMAT_R16G16_UNORM,
-         PIPE_FORMAT_R16G16B16_UNORM,
-         PIPE_FORMAT_R16G16B16A16_UNORM
-      },
-      {
-         PIPE_FORMAT_R16_UINT,
-         PIPE_FORMAT_R16G16_UINT,
-         PIPE_FORMAT_R16G16B16_UINT,
-         PIPE_FORMAT_R16G16B16A16_UINT
-      },
-   },
-   { /* GL_INT */
-      {
-         PIPE_FORMAT_R32_SSCALED,
-         PIPE_FORMAT_R32G32_SSCALED,
-         PIPE_FORMAT_R32G32B32_SSCALED,
-         PIPE_FORMAT_R32G32B32A32_SSCALED
-      },
-      {
-         PIPE_FORMAT_R32_SNORM,
-         PIPE_FORMAT_R32G32_SNORM,
-         PIPE_FORMAT_R32G32B32_SNORM,
-         PIPE_FORMAT_R32G32B32A32_SNORM
-      },
-      {
-         PIPE_FORMAT_R32_SINT,
-         PIPE_FORMAT_R32G32_SINT,
-         PIPE_FORMAT_R32G32B32_SINT,
-         PIPE_FORMAT_R32G32B32A32_SINT
-      },
-   },
-   { /* GL_UNSIGNED_INT */
-      {
-         PIPE_FORMAT_R32_USCALED,
-         PIPE_FORMAT_R32G32_USCALED,
-         PIPE_FORMAT_R32G32B32_USCALED,
-         PIPE_FORMAT_R32G32B32A32_USCALED
-      },
-      {
-         PIPE_FORMAT_R32_UNORM,
-         PIPE_FORMAT_R32G32_UNORM,
-         PIPE_FORMAT_R32G32B32_UNORM,
-         PIPE_FORMAT_R32G32B32A32_UNORM
-      },
-      {
-         PIPE_FORMAT_R32_UINT,
-         PIPE_FORMAT_R32G32_UINT,
-         PIPE_FORMAT_R32G32B32_UINT,
-         PIPE_FORMAT_R32G32B32A32_UINT
-      },
-   },
-   { /* GL_FLOAT */
-      {
-         PIPE_FORMAT_R32_FLOAT,
-         PIPE_FORMAT_R32G32_FLOAT,
-         PIPE_FORMAT_R32G32B32_FLOAT,
-         PIPE_FORMAT_R32G32B32A32_FLOAT
-      },
-      {
-         PIPE_FORMAT_R32_FLOAT,
-         PIPE_FORMAT_R32G32_FLOAT,
-         PIPE_FORMAT_R32G32B32_FLOAT,
-         PIPE_FORMAT_R32G32B32A32_FLOAT
-      },
-   },
-   {{0}}, /* GL_2_BYTES */
-   {{0}}, /* GL_3_BYTES */
-   {{0}}, /* GL_4_BYTES */
-   { /* GL_DOUBLE */
-      {
-         PIPE_FORMAT_R64_FLOAT,
-         PIPE_FORMAT_R64G64_FLOAT,
-         PIPE_FORMAT_R64G64B64_FLOAT,
-         PIPE_FORMAT_R64G64B64A64_FLOAT
-      },
-      {
-         PIPE_FORMAT_R64_FLOAT,
-         PIPE_FORMAT_R64G64_FLOAT,
-         PIPE_FORMAT_R64G64B64_FLOAT,
-         PIPE_FORMAT_R64G64B64A64_FLOAT
-      },
-   },
-   { /* GL_HALF_FLOAT */
-      {
-         PIPE_FORMAT_R16_FLOAT,
-         PIPE_FORMAT_R16G16_FLOAT,
-         PIPE_FORMAT_R16G16B16_FLOAT,
-         PIPE_FORMAT_R16G16B16A16_FLOAT
-      },
-      {
-         PIPE_FORMAT_R16_FLOAT,
-         PIPE_FORMAT_R16G16_FLOAT,
-         PIPE_FORMAT_R16G16B16_FLOAT,
-         PIPE_FORMAT_R16G16B16A16_FLOAT
-      },
-   },
-   { /* GL_FIXED */
-      {
-         PIPE_FORMAT_R32_FIXED,
-         PIPE_FORMAT_R32G32_FIXED,
-         PIPE_FORMAT_R32G32B32_FIXED,
-         PIPE_FORMAT_R32G32B32A32_FIXED
-      },
-      {
-         PIPE_FORMAT_R32_FIXED,
-         PIPE_FORMAT_R32G32_FIXED,
-         PIPE_FORMAT_R32G32B32_FIXED,
-         PIPE_FORMAT_R32G32B32A32_FIXED
-      },
-   },
-};
-
-
-/**
- * Return a PIPE_FORMAT_x for the given GL datatype and size.
- */
-enum pipe_format
-st_pipe_vertex_format(const struct gl_array_attributes *attrib)
-{
-   const GLubyte size = attrib->Size;
-   const GLenum16 format = attrib->Format;
-   const bool normalized = attrib->Normalized;
-   const bool integer = attrib->Integer;
-   GLenum16 type = attrib->Type;
-   unsigned index;
-
-   assert(size >= 1 && size <= 4);
-   assert(format == GL_RGBA || format == GL_BGRA);
-   assert(attrib->_ElementSize == _mesa_bytes_per_vertex_attrib(size, type));
-
-   switch (type) {
-   case GL_HALF_FLOAT_OES:
-      type = GL_HALF_FLOAT;
-      break;
-
-   case GL_INT_2_10_10_10_REV:
-      assert(size == 4 && !integer);
-
-      if (format == GL_BGRA) {
-         if (normalized)
-            return PIPE_FORMAT_B10G10R10A2_SNORM;
-         else
-            return PIPE_FORMAT_B10G10R10A2_SSCALED;
-      } else {
-         if (normalized)
-            return PIPE_FORMAT_R10G10B10A2_SNORM;
-         else
-            return PIPE_FORMAT_R10G10B10A2_SSCALED;
-      }
-      break;
-
-   case GL_UNSIGNED_INT_2_10_10_10_REV:
-      assert(size == 4 && !integer);
-
-      if (format == GL_BGRA) {
-         if (normalized)
-            return PIPE_FORMAT_B10G10R10A2_UNORM;
-         else
-            return PIPE_FORMAT_B10G10R10A2_USCALED;
-      } else {
-         if (normalized)
-            return PIPE_FORMAT_R10G10B10A2_UNORM;
-         else
-            return PIPE_FORMAT_R10G10B10A2_USCALED;
-      }
-      break;
-
-   case GL_UNSIGNED_INT_10F_11F_11F_REV:
-      assert(size == 3 && !integer && format == GL_RGBA);
-      return PIPE_FORMAT_R11G11B10_FLOAT;
-
-   case GL_UNSIGNED_BYTE:
-      if (format == GL_BGRA) {
-         /* this is an odd-ball case */
-         assert(normalized);
-         return PIPE_FORMAT_B8G8R8A8_UNORM;
-      }
-      break;
-   }
-
-   index = integer*2 + normalized;
-   assert(index <= 2);
-   assert(type >= GL_BYTE && type <= GL_FIXED);
-   return vertex_formats[type - GL_BYTE][index][size-1];
-}
-
-static void init_velement(struct pipe_vertex_element *velement,
+static void set_velement(struct pipe_vertex_element *velement,
                           int src_offset, int format,
                           int instance_divisor, int vbo_index)
 {
@@ -318,109 +61,138 @@ static void init_velement(struct pipe_vertex_element *velement,
    assert(velement->src_format);
 }
 
-static void init_velement_lowered(const struct st_vertex_program *vp,
-                                  struct pipe_vertex_element *velements,
-                                  const struct gl_array_attributes *attrib,
-                                  int src_offset, int instance_divisor,
-                                  int vbo_index, int idx)
+static void init_velement_64bit(const struct st_vertex_program *vp,
+                                struct pipe_vertex_element *velements,
+                                const struct gl_vertex_format *vformat,
+                                int src_offset, int instance_divisor,
+                                int vbo_index, int idx)
 {
-   const GLubyte nr_components = attrib->Size;
+   const GLubyte nr_components = vformat->Size;
+   int lower_format;
 
-   if (attrib->Doubles) {
-      int lower_format;
+   if (nr_components < 2)
+      lower_format = PIPE_FORMAT_R32G32_UINT;
+   else
+      lower_format = PIPE_FORMAT_R32G32B32A32_UINT;
 
-      if (nr_components < 2)
-         lower_format = PIPE_FORMAT_R32G32_UINT;
-      else
-         lower_format = PIPE_FORMAT_R32G32B32A32_UINT;
+   set_velement(&velements[idx], src_offset,
+                lower_format, instance_divisor, vbo_index);
+   idx++;
 
-      init_velement(&velements[idx], src_offset,
-                    lower_format, instance_divisor, vbo_index);
-      idx++;
+   if (idx < vp->num_inputs &&
+       vp->index_to_input[idx] == ST_DOUBLE_ATTRIB_PLACEHOLDER) {
+      if (nr_components >= 3) {
+         if (nr_components == 3)
+            lower_format = PIPE_FORMAT_R32G32_UINT;
+         else
+            lower_format = PIPE_FORMAT_R32G32B32A32_UINT;
 
-      if (idx < vp->num_inputs &&
-          vp->index_to_input[idx] == ST_DOUBLE_ATTRIB_PLACEHOLDER) {
-         if (nr_components >= 3) {
-            if (nr_components == 3)
-               lower_format = PIPE_FORMAT_R32G32_UINT;
-            else
-               lower_format = PIPE_FORMAT_R32G32B32A32_UINT;
-
-            init_velement(&velements[idx], src_offset + 4 * sizeof(float),
-                        lower_format, instance_divisor, vbo_index);
-         } else {
-            /* The values here are undefined. Fill in some conservative
-             * dummy values.
-             */
-            init_velement(&velements[idx], src_offset, PIPE_FORMAT_R32G32_UINT,
-                          instance_divisor, vbo_index);
-         }
+         set_velement(&velements[idx], src_offset + 4 * sizeof(float),
+                      lower_format, instance_divisor, vbo_index);
+      } else {
+         /* The values here are undefined. Fill in some conservative
+          * dummy values.
+          */
+         set_velement(&velements[idx], src_offset, PIPE_FORMAT_R32G32_UINT,
+                      instance_divisor, vbo_index);
       }
-   } else {
-      const unsigned format = st_pipe_vertex_format(attrib);
-
-      init_velement(&velements[idx], src_offset,
-                    format, instance_divisor, vbo_index);
    }
 }
 
-static void
-set_vertex_attribs(struct st_context *st,
-                   struct pipe_vertex_buffer *vbuffers,
-                   unsigned num_vbuffers,
-                   struct pipe_vertex_element *velements,
-                   unsigned num_velements)
+/* Always inline the non-64bit element code, so that the compiler can see
+ * that velements is on the stack.
+ */
+static void ALWAYS_INLINE
+init_velement(const struct st_vertex_program *vp,
+              struct pipe_vertex_element *velements,
+              const struct gl_vertex_format *vformat,
+              int src_offset, int instance_divisor,
+              int vbo_index, int idx)
 {
-   struct cso_context *cso = st->cso_context;
-
-   cso_set_vertex_buffers(cso, 0, num_vbuffers, vbuffers);
-   if (st->last_num_vbuffers > num_vbuffers) {
-      /* Unbind remaining buffers, if any. */
-      cso_set_vertex_buffers(cso, num_vbuffers,
-                             st->last_num_vbuffers - num_vbuffers, NULL);
+   if (!vformat->Doubles) {
+      velements[idx].src_offset = src_offset;
+      velements[idx].src_format = vformat->_PipeFormat;
+      velements[idx].instance_divisor = instance_divisor;
+      velements[idx].vertex_buffer_index = vbo_index;
+      assert(velements[idx].src_format);
+      return;
    }
-   st->last_num_vbuffers = num_vbuffers;
-   cso_set_vertex_elements(cso, num_velements, velements);
+
+   init_velement_64bit(vp, velements, vformat, src_offset, instance_divisor,
+                       vbo_index, idx);
 }
 
+/* ALWAYS_INLINE helps the compiler realize that most of the parameters are
+ * on the stack.
+ */
 void
-st_update_array(struct st_context *st)
+#ifndef _MSC_VER /* MSVC doesn't like inlining public functions */
+ALWAYS_INLINE
+#endif
+st_setup_arrays(struct st_context *st,
+                const struct st_vertex_program *vp,
+                const struct st_common_variant *vp_variant,
+                struct cso_velems_state *velements,
+                struct pipe_vertex_buffer *vbuffer, unsigned *num_vbuffers,
+                bool *has_user_vertex_buffers)
 {
    struct gl_context *ctx = st->ctx;
-   /* vertex program validation must be done before this */
-   const struct st_vertex_program *vp = st->vp;
-   /* _NEW_PROGRAM, ST_NEW_VS_STATE */
-   const GLbitfield inputs_read = st->vp_variant->vert_attrib_mask;
    const struct gl_vertex_array_object *vao = ctx->Array._DrawVAO;
+   const GLbitfield inputs_read = vp_variant->vert_attrib_mask;
    const ubyte *input_to_index = vp->input_to_index;
 
-   struct pipe_vertex_buffer vbuffer[PIPE_MAX_ATTRIBS];
-   struct pipe_vertex_element velements[PIPE_MAX_ATTRIBS];
-   unsigned num_vbuffers = 0;
-
-   st->vertex_array_out_of_memory = FALSE;
-   st->draw_needs_minmax_index = false;
-
-   /* _NEW_PROGRAM */
-   /* ST_NEW_VERTEX_ARRAYS alias ctx->DriverFlags.NewArray */
    /* Process attribute array data. */
    GLbitfield mask = inputs_read & _mesa_draw_array_bits(ctx);
+   GLbitfield userbuf_attribs = inputs_read & _mesa_draw_user_array_bits(ctx);
+
+   *has_user_vertex_buffers = userbuf_attribs != 0;
+   st->draw_needs_minmax_index =
+      (userbuf_attribs & ~_mesa_draw_nonzero_divisor_bits(ctx)) != 0;
+
+   if (vao->IsDynamic) {
+      while (mask) {
+         const gl_vert_attrib attr = u_bit_scan(&mask);
+         const struct gl_array_attributes *const attrib =
+            _mesa_draw_array_attrib(vao, attr);
+         const struct gl_vertex_buffer_binding *const binding =
+            &vao->BufferBinding[attrib->BufferBindingIndex];
+         const unsigned bufidx = (*num_vbuffers)++;
+
+         /* Set the vertex buffer. */
+         if (binding->BufferObj) {
+            struct st_buffer_object *stobj = st_buffer_object(binding->BufferObj);
+
+            vbuffer[bufidx].buffer.resource = stobj ? stobj->buffer : NULL;
+            vbuffer[bufidx].is_user_buffer = false;
+            vbuffer[bufidx].buffer_offset = binding->Offset +
+                                            attrib->RelativeOffset;
+         } else {
+            vbuffer[bufidx].buffer.user = attrib->Ptr;
+            vbuffer[bufidx].is_user_buffer = true;
+            vbuffer[bufidx].buffer_offset = 0;
+         }
+         vbuffer[bufidx].stride = binding->Stride; /* in bytes */
+
+         /* Set the vertex element. */
+         init_velement(vp, velements->velems, &attrib->Format, 0,
+                       binding->InstanceDivisor, bufidx,
+                       input_to_index[attr]);
+      }
+      return;
+   }
+
    while (mask) {
       /* The attribute index to start pulling a binding */
       const gl_vert_attrib i = ffs(mask) - 1;
       const struct gl_vertex_buffer_binding *const binding
          = _mesa_draw_buffer_binding(vao, i);
-      const unsigned bufidx = num_vbuffers++;
+      const unsigned bufidx = (*num_vbuffers)++;
 
-      if (_mesa_is_bufferobj(binding->BufferObj)) {
-         struct st_buffer_object *stobj = st_buffer_object(binding->BufferObj);
-         if (!stobj || !stobj->buffer) {
-            st->vertex_array_out_of_memory = true;
-            return; /* out-of-memory error probably */
-         }
-
+      if (binding->BufferObj) {
          /* Set the binding */
-         vbuffer[bufidx].buffer.resource = stobj->buffer;
+         struct st_buffer_object *stobj = st_buffer_object(binding->BufferObj);
+
+         vbuffer[bufidx].buffer.resource = stobj ? stobj->buffer : NULL;
          vbuffer[bufidx].is_user_buffer = false;
          vbuffer[bufidx].buffer_offset = _mesa_draw_binding_offset(binding);
       } else {
@@ -429,9 +201,6 @@ st_update_array(struct st_context *st)
          vbuffer[bufidx].buffer.user = ptr;
          vbuffer[bufidx].is_user_buffer = true;
          vbuffer[bufidx].buffer_offset = 0;
-
-         if (!binding->InstanceDivisor)
-            st->draw_needs_minmax_index = true;
       }
       vbuffer[bufidx].stride = binding->Stride; /* in bytes */
 
@@ -442,44 +211,60 @@ st_update_array(struct st_context *st)
       /* We can assume that we have array for the binding */
       assert(attrmask);
       /* Walk attributes belonging to the binding */
-      while (attrmask) {
+      do {
          const gl_vert_attrib attr = u_bit_scan(&attrmask);
          const struct gl_array_attributes *const attrib
             = _mesa_draw_array_attrib(vao, attr);
          const GLuint off = _mesa_draw_attributes_relative_offset(attrib);
-         init_velement_lowered(vp, velements, attrib, off,
-                               binding->InstanceDivisor, bufidx,
-                               input_to_index[attr]);
-      }
+         init_velement(vp, velements->velems, &attrib->Format, off,
+                       binding->InstanceDivisor, bufidx,
+                       input_to_index[attr]);
+      } while (attrmask);
    }
+}
 
-   const unsigned first_current_vbuffer = num_vbuffers;
-   /* _NEW_PROGRAM | _NEW_CURRENT_ATTRIB */
+/* ALWAYS_INLINE helps the compiler realize that most of the parameters are
+ * on the stack.
+ *
+ * Return the index of the vertex buffer where current attribs have been
+ * uploaded.
+ */
+static int ALWAYS_INLINE
+st_setup_current(struct st_context *st,
+                 const struct st_vertex_program *vp,
+                 const struct st_common_variant *vp_variant,
+                 struct cso_velems_state *velements,
+                 struct pipe_vertex_buffer *vbuffer, unsigned *num_vbuffers)
+{
+   struct gl_context *ctx = st->ctx;
+   const GLbitfield inputs_read = vp_variant->vert_attrib_mask;
+
    /* Process values that should have better been uniforms in the application */
    GLbitfield curmask = inputs_read & _mesa_draw_current_bits(ctx);
    if (curmask) {
+      const ubyte *input_to_index = vp->input_to_index;
       /* For each attribute, upload the maximum possible size. */
       GLubyte data[VERT_ATTRIB_MAX * sizeof(GLdouble) * 4];
       GLubyte *cursor = data;
-      const unsigned bufidx = num_vbuffers++;
+      const unsigned bufidx = (*num_vbuffers)++;
       unsigned max_alignment = 1;
 
-      while (curmask) {
+      do {
          const gl_vert_attrib attr = u_bit_scan(&curmask);
          const struct gl_array_attributes *const attrib
             = _mesa_draw_current_attrib(ctx, attr);
-         const unsigned size = attrib->_ElementSize;
+         const unsigned size = attrib->Format._ElementSize;
          const unsigned alignment = util_next_power_of_two(size);
          max_alignment = MAX2(max_alignment, alignment);
          memcpy(cursor, attrib->Ptr, size);
          if (alignment != size)
             memset(cursor + size, 0, alignment - size);
 
-         init_velement_lowered(vp, velements, attrib, cursor - data, 0,
-                               bufidx, input_to_index[attr]);
+         init_velement(vp, velements->velems, &attrib->Format, cursor - data,
+                       0, bufidx, input_to_index[attr]);
 
          cursor += alignment;
-      }
+      } while (curmask);
 
       vbuffer[bufidx].is_user_buffer = false;
       vbuffer[bufidx].buffer.resource = NULL;
@@ -492,23 +277,87 @@ st_update_array(struct st_context *st)
        * times (thousands of times), so a better placement is going to
        * perform better.
        */
-      u_upload_data(st->can_bind_const_buffer_as_vertex ?
-                    st->pipe->const_uploader :
-                    st->pipe->stream_uploader,
+      struct u_upload_mgr *uploader = st->can_bind_const_buffer_as_vertex ?
+                                      st->pipe->const_uploader :
+                                      st->pipe->stream_uploader;
+      u_upload_data(uploader,
                     0, cursor - data, max_alignment, data,
                     &vbuffer[bufidx].buffer_offset,
                     &vbuffer[bufidx].buffer.resource);
+      /* Always unmap. The uploader might use explicit flushes. */
+      u_upload_unmap(uploader);
+      return bufidx;
    }
+   return -1;
+}
 
-   if (!ctx->Const.AllowMappedBuffersDuringExecution) {
-      u_upload_unmap(st->pipe->stream_uploader);
+void
+st_setup_current_user(struct st_context *st,
+                      const struct st_vertex_program *vp,
+                      const struct st_common_variant *vp_variant,
+                      struct cso_velems_state *velements,
+                      struct pipe_vertex_buffer *vbuffer, unsigned *num_vbuffers)
+{
+   struct gl_context *ctx = st->ctx;
+   const GLbitfield inputs_read = vp_variant->vert_attrib_mask;
+   const ubyte *input_to_index = vp->input_to_index;
+
+   /* Process values that should have better been uniforms in the application */
+   GLbitfield curmask = inputs_read & _mesa_draw_current_bits(ctx);
+   /* For each attribute, make an own user buffer binding. */
+   while (curmask) {
+      const gl_vert_attrib attr = u_bit_scan(&curmask);
+      const struct gl_array_attributes *const attrib
+         = _mesa_draw_current_attrib(ctx, attr);
+      const unsigned bufidx = (*num_vbuffers)++;
+
+      init_velement(vp, velements->velems, &attrib->Format, 0, 0,
+                    bufidx, input_to_index[attr]);
+
+      vbuffer[bufidx].is_user_buffer = true;
+      vbuffer[bufidx].buffer.user = attrib->Ptr;
+      vbuffer[bufidx].buffer_offset = 0;
+      vbuffer[bufidx].stride = 0;
    }
+}
 
-   const unsigned num_inputs = st->vp_variant->num_inputs;
-   set_vertex_attribs(st, vbuffer, num_vbuffers, velements, num_inputs);
+void
+st_update_array(struct st_context *st)
+{
+   /* vertex program validation must be done before this */
+   /* _NEW_PROGRAM, ST_NEW_VS_STATE */
+   const struct st_vertex_program *vp = (struct st_vertex_program *)st->vp;
+   const struct st_common_variant *vp_variant = st->vp_variant;
 
-   /* Unreference uploaded zero-stride vertex buffers. */
-   for (unsigned i = first_current_vbuffer; i < num_vbuffers; ++i) {
-      pipe_resource_reference(&vbuffer[i].buffer.resource, NULL);
-   }
+   struct pipe_vertex_buffer vbuffer[PIPE_MAX_ATTRIBS];
+   unsigned num_vbuffers = 0;
+   struct cso_velems_state velements;
+   bool uses_user_vertex_buffers;
+
+   /* ST_NEW_VERTEX_ARRAYS alias ctx->DriverFlags.NewArray */
+   /* Setup arrays */
+   st_setup_arrays(st, vp, vp_variant, &velements, vbuffer, &num_vbuffers,
+                   &uses_user_vertex_buffers);
+
+   /* _NEW_CURRENT_ATTRIB */
+   /* Setup zero-stride attribs. */
+   int current_attrib_buffer =
+      st_setup_current(st, vp, vp_variant, &velements, vbuffer, &num_vbuffers);
+
+   velements.count = vp->num_inputs + vp_variant->key.passthrough_edgeflags;
+
+   /* Set vertex buffers and elements. */
+   struct cso_context *cso = st->cso_context;
+   unsigned unbind_trailing_vbuffers =
+      st->last_num_vbuffers > num_vbuffers ?
+         st->last_num_vbuffers - num_vbuffers : 0;
+   cso_set_vertex_buffers_and_elements(cso, &velements,
+                                       num_vbuffers,
+                                       unbind_trailing_vbuffers,
+                                       vbuffer, uses_user_vertex_buffers);
+   st->last_num_vbuffers = num_vbuffers;
+
+   /* Unreference uploaded current attrib buffer. */
+   if (current_attrib_buffer >= 0)
+      pipe_resource_reference(&vbuffer[current_attrib_buffer].buffer.resource, NULL);
 }

@@ -47,8 +47,7 @@ public:
                                    struct brw_wm_prog_data *prog_data,
                                    nir_shader *shader)
       : fs_visitor(compiler, NULL, NULL, NULL,
-                   &prog_data->base, (struct gl_program *) NULL,
-                   shader, 8, -1) {}
+                   &prog_data->base, shader, 16, -1) {}
 };
 
 
@@ -85,14 +84,14 @@ saturate_propagation(fs_visitor *v)
 
    if (print) {
       fprintf(stderr, "= Before =\n");
-      v->cfg->dump(v);
+      v->cfg->dump();
    }
 
    bool ret = v->opt_saturate_propagation();
 
    if (print) {
       fprintf(stderr, "\n= After =\n");
-      v->cfg->dump(v);
+      v->cfg->dump();
    }
 
    return ret;
@@ -110,12 +109,12 @@ TEST_F(saturate_propagation_test, basic)
 
    /* = Before =
     *
-    * 0: add(8)        dst0  src0  src1
-    * 1: mov.sat(8)    dst1  dst0
+    * 0: add(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  dst0
     *
     * = After =
-    * 0: add.sat(8)    dst0  src0  src1
-    * 1: mov(8)        dst1  dst0
+    * 0: add.sat(16)   dst0  src0  src1
+    * 1: mov(16)       dst1  dst0
     */
 
    v->calculate_cfg();
@@ -147,9 +146,9 @@ TEST_F(saturate_propagation_test, other_non_saturated_use)
 
    /* = Before =
     *
-    * 0: add(8)        dst0  src0  src1
-    * 1: mov.sat(8)    dst1  dst0
-    * 2: add(8)        dst2  dst0  src0
+    * 0: add(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  dst0
+    * 2: add(16)       dst2  dst0  src0
     *
     * = After =
     * (no changes)
@@ -184,8 +183,8 @@ TEST_F(saturate_propagation_test, predicated_instruction)
 
    /* = Before =
     *
-    * 0: (+f0) add(8)  dst0  src0  src1
-    * 1: mov.sat(8)    dst1  dst0
+    * 0: (+f0) add(16) dst0  src0  src1
+    * 1: mov.sat(16)   dst1  dst0
     *
     * = After =
     * (no changes)
@@ -218,8 +217,8 @@ TEST_F(saturate_propagation_test, neg_mov_sat)
 
    /* = Before =
     *
-    * 0: rndu(8)       dst0  src0
-    * 1: mov.sat(8)    dst1  -dst0
+    * 0: rndu(16)      dst0  src0
+    * 1: mov.sat(16)   dst1  -dst0
     *
     * = After =
     * (no changes)
@@ -253,12 +252,12 @@ TEST_F(saturate_propagation_test, add_neg_mov_sat)
 
    /* = Before =
     *
-    * 0: add(8)        dst0  src0  src1
-    * 1: mov.sat(8)    dst1  -dst0
+    * 0: add(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  -dst0
     *
     * = After =
-    * 0: add.sat(8)    dst0  -src0 -src1
-    * 1: mov(8)        dst1  dst0
+    * 0: add.sat(16)   dst0  -src0 -src1
+    * 1: mov(16)       dst1  dst0
     */
 
    v->calculate_cfg();
@@ -291,12 +290,12 @@ TEST_F(saturate_propagation_test, add_imm_float_neg_mov_sat)
 
    /* = Before =
     *
-    * 0: add(8)        dst0  src0  1.0f
-    * 1: mov.sat(8)    dst1  -dst0
+    * 0: add(16)       dst0  src0  1.0f
+    * 1: mov.sat(16)   dst1  -dst0
     *
     * = After =
-    * 0: add.sat(8)    dst0  -src0 -1.0f
-    * 1: mov(8)        dst1  dst0
+    * 0: add.sat(16)   dst0  -src0 -1.0f
+    * 1: mov(16)       dst1  dst0
     */
 
    v->calculate_cfg();
@@ -329,12 +328,12 @@ TEST_F(saturate_propagation_test, mul_neg_mov_sat)
 
    /* = Before =
     *
-    * 0: mul(8)        dst0  src0  src1
-    * 1: mov.sat(8)    dst1  -dst0
+    * 0: mul(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  -dst0
     *
     * = After =
-    * 0: mul.sat(8)    dst0  src0 -src1
-    * 1: mov(8)        dst1  dst0
+    * 0: mul.sat(16)   dst0  src0 -src1
+    * 1: mov(16)       dst1  dst0
     */
 
    v->calculate_cfg();
@@ -368,12 +367,12 @@ TEST_F(saturate_propagation_test, mad_neg_mov_sat)
 
    /* = Before =
     *
-    * 0: mad(8)        dst0  src0  src1 src2
-    * 1: mov.sat(8)    dst1  -dst0
+    * 0: mad(16)       dst0  src0  src1 src2
+    * 1: mov.sat(16)   dst1  -dst0
     *
     * = After =
-    * 0: mad.sat(8)    dst0  -src0 -src1 src2
-    * 1: mov(8)        dst1  dst0
+    * 0: mad.sat(16)   dst0  -src0 -src1 src2
+    * 1: mov(16)       dst1  dst0
     */
 
    v->calculate_cfg();
@@ -414,12 +413,12 @@ TEST_F(saturate_propagation_test, mad_imm_float_neg_mov_sat)
 
    /* = Before =
     *
-    * 0: mad(8)        dst0  1.0f -2.0f src2
-    * 1: mov.sat(8)    dst1  -dst0
+    * 0: mad(16)       dst0  1.0f -2.0f src2
+    * 1: mov.sat(16)   dst1  -dst0
     *
     * = After =
-    * 0: mad.sat(8)    dst0  -1.0f 2.0f src2
-    * 1: mov(8)        dst1  dst0
+    * 0: mad.sat(16)   dst0  -1.0f 2.0f src2
+    * 1: mov(16)       dst1  dst0
     */
 
    v->calculate_cfg();
@@ -455,9 +454,9 @@ TEST_F(saturate_propagation_test, mul_mov_sat_neg_mov_sat)
 
    /* = Before =
     *
-    * 0: mul(8)        dst0  src0  src1
-    * 1: mov.sat(8)    dst1  dst0
-    * 2: mov.sat(8)    dst2  -dst0
+    * 0: mul(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  dst0
+    * 2: mov.sat(16)   dst2  -dst0
     *
     * = After =
     * (no changes)
@@ -497,9 +496,9 @@ TEST_F(saturate_propagation_test, mul_neg_mov_sat_neg_mov_sat)
 
    /* = Before =
     *
-    * 0: mul(8)        dst0  src0  src1
-    * 1: mov.sat(8)    dst1  -dst0
-    * 2: mov.sat(8)    dst2  -dst0
+    * 0: mul(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  -dst0
+    * 2: mov.sat(16)   dst2  -dst0
     *
     * = After =
     * (no changes)
@@ -538,8 +537,8 @@ TEST_F(saturate_propagation_test, abs_mov_sat)
 
    /* = Before =
     *
-    * 0: add(8)        dst0  src0  src1
-    * 1: mov.sat(8)    dst1  (abs)dst0
+    * 0: add(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  (abs)dst0
     *
     * = After =
     * (no changes)
@@ -574,14 +573,14 @@ TEST_F(saturate_propagation_test, producer_saturates)
 
    /* = Before =
     *
-    * 0: add.sat(8)    dst0  src0  src1
-    * 1: mov.sat(8)    dst1  dst0
-    * 2: mov(8)        dst2  dst0
+    * 0: add.sat(16)   dst0  src0  src1
+    * 1: mov.sat(16)   dst1  dst0
+    * 2: mov(16)       dst2  dst0
     *
     * = After =
-    * 0: add.sat(8)    dst0  src0  src1
-    * 1: mov(8)        dst1  dst0
-    * 2: mov(8)        dst2  dst0
+    * 0: add.sat(16)   dst0  src0  src1
+    * 1: mov(16)       dst1  dst0
+    * 2: mov(16)       dst2  dst0
     */
 
    v->calculate_cfg();
@@ -613,14 +612,14 @@ TEST_F(saturate_propagation_test, intervening_saturating_copy)
 
    /* = Before =
     *
-    * 0: add(8)    dst0  src0  src1
-    * 1: mov.sat(8)    dst1  dst0
-    * 2: mov.sat(8)    dst2  dst0
+    * 0: add(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  dst0
+    * 2: mov.sat(16)   dst2  dst0
     *
     * = After =
-    * 0: add.sat(8)    dst0  src0  src1
-    * 1: mov(8)        dst1  dst0
-    * 2: mov(8)        dst2  dst0
+    * 0: add.sat(16)   dst0  src0  src1
+    * 1: mov(16)       dst1  dst0
+    * 2: mov(16)       dst2  dst0
     */
 
    v->calculate_cfg();
@@ -650,14 +649,14 @@ TEST_F(saturate_propagation_test, intervening_dest_write)
    fs_reg src2 = v->vgrf(glsl_type::vec2_type);
    bld.ADD(offset(dst0, bld, 2), src0, src1);
    bld.emit(SHADER_OPCODE_TEX, dst0, src2)
-      ->size_written = 4 * REG_SIZE;
+      ->size_written = 8 * REG_SIZE;
    set_saturate(true, bld.MOV(dst1, offset(dst0, bld, 2)));
 
    /* = Before =
     *
-    * 0: add(8)        dst0+2  src0    src1
-    * 1: tex(8) rlen 4 dst0+0  src2
-    * 2: mov.sat(8)    dst1    dst0+2
+    * 0: add(16)        dst0+2  src0    src1
+    * 1: tex(16) rlen 4 dst0+0  src2
+    * 2: mov.sat(16)    dst1    dst0+2
     *
     * = After =
     * (no changes)
@@ -696,9 +695,9 @@ TEST_F(saturate_propagation_test, mul_neg_mov_sat_mov_sat)
 
    /* = Before =
     *
-    * 0: mul(8)        dst0  src0  src1
-    * 1: mov.sat(8)    dst1  -dst0
-    * 2: mov.sat(8)    dst2  dst0
+    * 0: mul(16)       dst0  src0  src1
+    * 1: mov.sat(16)   dst1  -dst0
+    * 2: mov.sat(16)   dst2  dst0
     *
     * = After =
     * (no changes)
@@ -721,4 +720,72 @@ TEST_F(saturate_propagation_test, mul_neg_mov_sat_mov_sat)
    EXPECT_TRUE(instruction(block0, 1)->src[0].negate);
    EXPECT_EQ(BRW_OPCODE_MOV, instruction(block0, 2)->opcode);
    EXPECT_TRUE(instruction(block0, 2)->saturate);
+}
+
+TEST_F(saturate_propagation_test, smaller_exec_size_consumer)
+{
+   const fs_builder &bld = v->bld;
+   fs_reg dst0 = v->vgrf(glsl_type::float_type);
+   fs_reg dst1 = v->vgrf(glsl_type::float_type);
+   fs_reg src0 = v->vgrf(glsl_type::float_type);
+   fs_reg src1 = v->vgrf(glsl_type::float_type);
+   bld.ADD(dst0, src0, src1);
+   set_saturate(true, bld.group(8, 0).MOV(dst1, dst0));
+
+   /* = Before =
+    *
+    * 0: add(16)       dst0  src0  src1
+    * 1: mov.sat(8)    dst1  dst0
+    *
+    * = After =
+    * (no changes)
+    */
+
+   v->calculate_cfg();
+   bblock_t *block0 = v->cfg->blocks[0];
+
+   EXPECT_EQ(0, block0->start_ip);
+   EXPECT_EQ(1, block0->end_ip);
+
+   EXPECT_FALSE(saturate_propagation(v));
+   EXPECT_EQ(0, block0->start_ip);
+   EXPECT_EQ(1, block0->end_ip);
+   EXPECT_EQ(BRW_OPCODE_ADD, instruction(block0, 0)->opcode);
+   EXPECT_FALSE(instruction(block0, 0)->saturate);
+   EXPECT_EQ(BRW_OPCODE_MOV, instruction(block0, 1)->opcode);
+   EXPECT_TRUE(instruction(block0, 1)->saturate);
+}
+
+TEST_F(saturate_propagation_test, larger_exec_size_consumer)
+{
+   const fs_builder &bld = v->bld;
+   fs_reg dst0 = v->vgrf(glsl_type::float_type);
+   fs_reg dst1 = v->vgrf(glsl_type::float_type);
+   fs_reg src0 = v->vgrf(glsl_type::float_type);
+   fs_reg src1 = v->vgrf(glsl_type::float_type);
+   bld.group(8, 0).ADD(dst0, src0, src1);
+   set_saturate(true, bld.MOV(dst1, dst0));
+
+   /* = Before =
+    *
+    * 0: add(8)        dst0  src0  src1
+    * 1: mov.sat(16)   dst1  dst0
+    *
+    * = After =
+    * (no changes)
+    */
+
+   v->calculate_cfg();
+   bblock_t *block0 = v->cfg->blocks[0];
+
+   EXPECT_EQ(0, block0->start_ip);
+   EXPECT_EQ(1, block0->end_ip);
+
+   EXPECT_FALSE(saturate_propagation(v));
+   EXPECT_EQ(0, block0->start_ip);
+   EXPECT_EQ(1, block0->end_ip);
+   EXPECT_EQ(BRW_OPCODE_ADD, instruction(block0, 0)->opcode);
+   EXPECT_FALSE(instruction(block0, 0)->saturate);
+   EXPECT_EQ(BRW_OPCODE_MOV, instruction(block0, 1)->opcode);
+   EXPECT_TRUE(instruction(block0, 1)->saturate);
 }

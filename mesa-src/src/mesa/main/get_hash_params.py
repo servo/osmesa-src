@@ -4,7 +4,7 @@ descriptor=[
   [ "BLEND", "CONTEXT_BIT0(Color.BlendEnabled), NO_EXTRA" ],
   [ "BLEND_SRC", "CONTEXT_ENUM16(Color.Blend[0].SrcRGB), NO_EXTRA" ],
   [ "BLUE_BITS", "BUFFER_INT(Visual.blueBits), extra_new_buffers" ],
-  [ "COLOR_CLEAR_VALUE", "LOC_CUSTOM, TYPE_FLOATN_4, 0, extra_new_frag_clamp" ],
+  [ "COLOR_CLEAR_VALUE", "LOC_CUSTOM, TYPE_FLOATN_4, 0, NO_EXTRA" ],
   [ "COLOR_WRITEMASK", "LOC_CUSTOM, TYPE_INT_4, 0, NO_EXTRA" ],
   [ "CULL_FACE", "CONTEXT_BOOL(Polygon.CullFlag), NO_EXTRA" ],
   [ "CULL_FACE_MODE", "CONTEXT_ENUM16(Polygon.CullFaceMode), NO_EXTRA" ],
@@ -21,7 +21,7 @@ descriptor=[
   [ "ALIASED_LINE_WIDTH_RANGE", "CONTEXT_FLOAT2(Const.MinLineWidth), NO_EXTRA" ],
   [ "MAX_ELEMENTS_VERTICES", "CONTEXT_INT(Const.MaxArrayLockSize), NO_EXTRA" ],
   [ "MAX_ELEMENTS_INDICES", "CONTEXT_INT(Const.MaxArrayLockSize), NO_EXTRA" ],
-  [ "MAX_TEXTURE_SIZE", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_context, Const.MaxTextureLevels), NO_EXTRA" ],
+  [ "MAX_TEXTURE_SIZE", "CONTEXT_INT(Const.MaxTextureSize), NO_EXTRA" ],
   [ "MAX_VIEWPORT_DIMS", "CONTEXT_INT2(Const.MaxViewportWidth), NO_EXTRA" ],
   [ "PACK_ALIGNMENT", "CONTEXT_INT(Pack.Alignment), NO_EXTRA" ],
   [ "ALIASED_POINT_SIZE_RANGE", "CONTEXT_FLOAT2(Const.MinPointSize), NO_EXTRA" ],
@@ -161,7 +161,7 @@ descriptor=[
   [ "LIGHT_MODEL_TWO_SIDE", "CONTEXT_BOOL(Light.Model.TwoSide), NO_EXTRA" ],
   [ "ALPHA_TEST", "CONTEXT_BOOL(Color.AlphaEnabled), NO_EXTRA" ],
   [ "ALPHA_TEST_FUNC", "CONTEXT_ENUM16(Color.AlphaFunc), NO_EXTRA" ],
-  [ "ALPHA_TEST_REF", "LOC_CUSTOM, TYPE_FLOATN, 0, extra_new_frag_clamp" ],
+  [ "ALPHA_TEST_REF", "LOC_CUSTOM, TYPE_FLOATN, 0, NO_EXTRA" ],
   [ "BLEND_DST", "CONTEXT_ENUM16(Color.Blend[0].DstRGB), NO_EXTRA" ],
   [ "CLIP_DISTANCE0", "CONTEXT_BIT0(Transform.ClipPlanesEnabled), extra_valid_clip_distance" ],
   [ "CLIP_DISTANCE1", "CONTEXT_BIT1(Transform.ClipPlanesEnabled), extra_valid_clip_distance" ],
@@ -177,7 +177,7 @@ descriptor=[
   [ "CURRENT_TEXTURE_COORDS", "LOC_CUSTOM, TYPE_FLOAT_4, 0, extra_flush_current_valid_texture_unit" ],
   [ "POINT_DISTANCE_ATTENUATION", "CONTEXT_FLOAT3(Point.Params[0]), NO_EXTRA" ],
   [ "FOG", "CONTEXT_BOOL(Fog.Enabled), NO_EXTRA" ],
-  [ "FOG_COLOR", "LOC_CUSTOM, TYPE_FLOATN_4, 0, extra_new_frag_clamp" ],
+  [ "FOG_COLOR", "LOC_CUSTOM, TYPE_FLOATN_4, 0, NO_EXTRA" ],
   [ "FOG_DENSITY", "CONTEXT_FLOAT(Fog.Density), NO_EXTRA" ],
   [ "FOG_END", "CONTEXT_FLOAT(Fog.End), NO_EXTRA" ],
   [ "FOG_HINT", "CONTEXT_ENUM16(Hint.Fog), NO_EXTRA" ],
@@ -211,20 +211,20 @@ descriptor=[
   [ "TEXTURE_2D", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
   [ "TEXTURE_MATRIX", "LOC_CUSTOM, TYPE_MATRIX, 0, extra_valid_texture_unit" ],
   [ "TEXTURE_STACK_DEPTH", "LOC_CUSTOM, TYPE_INT, 0, extra_valid_texture_unit" ],
-  [ "VERTEX_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_POS].Enabled), NO_EXTRA" ],
-  [ "VERTEX_ARRAY_SIZE", "ARRAY_UBYTE(VertexAttrib[VERT_ATTRIB_POS].Size), NO_EXTRA" ],
-  [ "VERTEX_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_POS].Type), NO_EXTRA" ],
+  [ "VERTEX_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
+  [ "VERTEX_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
+  [ "VERTEX_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_POS].Format.Type), NO_EXTRA" ],
   [ "VERTEX_ARRAY_STRIDE", "ARRAY_SHORT(VertexAttrib[VERT_ATTRIB_POS].Stride), NO_EXTRA" ],
-  [ "NORMAL_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_NORMAL].Enabled), NO_EXTRA" ],
-  [ "NORMAL_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_NORMAL].Type), NO_EXTRA" ],
+  [ "NORMAL_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
+  [ "NORMAL_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_NORMAL].Format.Type), NO_EXTRA" ],
   [ "NORMAL_ARRAY_STRIDE", "ARRAY_SHORT(VertexAttrib[VERT_ATTRIB_NORMAL].Stride), NO_EXTRA" ],
-  [ "COLOR_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR0].Enabled), NO_EXTRA" ],
+  [ "COLOR_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
   [ "COLOR_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
-  [ "COLOR_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_COLOR0].Type), NO_EXTRA" ],
+  [ "COLOR_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_COLOR0].Format.Type), NO_EXTRA" ],
   [ "COLOR_ARRAY_STRIDE", "ARRAY_SHORT(VertexAttrib[VERT_ATTRIB_COLOR0].Stride), NO_EXTRA" ],
-  [ "TEXTURE_COORD_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_array_attributes, Enabled), NO_EXTRA" ],
-  [ "TEXTURE_COORD_ARRAY_SIZE", "LOC_CUSTOM, TYPE_UBYTE, offsetof(struct gl_array_attributes, Size), NO_EXTRA" ],
-  [ "TEXTURE_COORD_ARRAY_TYPE", "LOC_CUSTOM, TYPE_ENUM16, offsetof(struct gl_array_attributes, Type), NO_EXTRA" ],
+  [ "TEXTURE_COORD_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
+  [ "TEXTURE_COORD_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
+  [ "TEXTURE_COORD_ARRAY_TYPE", "LOC_CUSTOM, TYPE_ENUM16, offsetof(struct gl_array_attributes, Format.Type), NO_EXTRA" ],
   [ "TEXTURE_COORD_ARRAY_STRIDE", "LOC_CUSTOM, TYPE_SHORT, offsetof(struct gl_array_attributes, Stride), NO_EXTRA" ],
 
 # GL_ARB_multitexture
@@ -253,8 +253,8 @@ descriptor=[
 
 { "apis": ["GLES"], "params": [
 # OES_point_size_array
-  [ "POINT_SIZE_ARRAY_OES", "ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Enabled, TYPE_BOOLEAN), NO_EXTRA" ],
-  [ "POINT_SIZE_ARRAY_TYPE_OES", "ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Type, TYPE_ENUM16), NO_EXTRA" ],
+  [ "POINT_SIZE_ARRAY_OES", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
+  [ "POINT_SIZE_ARRAY_TYPE_OES", "ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Format.Type, TYPE_ENUM16), NO_EXTRA" ],
   [ "POINT_SIZE_ARRAY_STRIDE_OES", "ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Stride, TYPE_SHORT), NO_EXTRA" ],
   [ "POINT_SIZE_ARRAY_BUFFER_BINDING_OES", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
 ]},
@@ -277,8 +277,15 @@ descriptor=[
   [ "UNPACK_SKIP_IMAGES", "CONTEXT_INT(Unpack.SkipImages), NO_EXTRA" ],
   [ "UNPACK_IMAGE_HEIGHT", "CONTEXT_INT(Unpack.ImageHeight), NO_EXTRA" ],
 
+# GL_ARB_clip_control/GL_EXT_clip_control
+  [ "CLIP_DEPTH_MODE", "CONTEXT_ENUM16(Transform.ClipDepthMode), extra_ARB_clip_control" ],
+  [ "CLIP_ORIGIN", "CONTEXT_ENUM16(Transform.ClipOrigin), extra_ARB_clip_control" ],
+
 # GL_ARB_draw_buffers
   [ "MAX_DRAW_BUFFERS_ARB", "CONTEXT_INT(Const.MaxDrawBuffers), NO_EXTRA" ],
+
+# GL_ARB_parallel_shader_compile
+  [ "MAX_SHADER_COMPILER_THREADS_ARB", "CONTEXT_INT(Hint.MaxShaderCompilerThreads), NO_EXTRA" ],
 
 # GL_EXT_framebuffer_object / GL_NV_fbo_color_attachments
   [ "MAX_COLOR_ATTACHMENTS", "CONTEXT_INT(Const.MaxColorAttachments), NO_EXTRA" ],
@@ -292,7 +299,7 @@ descriptor=[
   [ "DRAW_BUFFER5_ARB", "BUFFER_ENUM16(ColorDrawBuffer[5]), extra_valid_draw_buffer" ],
   [ "DRAW_BUFFER6_ARB", "BUFFER_ENUM16(ColorDrawBuffer[6]), extra_valid_draw_buffer" ],
   [ "DRAW_BUFFER7_ARB", "BUFFER_ENUM16(ColorDrawBuffer[7]), extra_valid_draw_buffer" ],
-  [ "BLEND_COLOR_EXT", "LOC_CUSTOM, TYPE_FLOATN_4, 0, extra_new_frag_clamp" ],
+  [ "BLEND_COLOR_EXT", "LOC_CUSTOM, TYPE_FLOATN_4, 0, NO_EXTRA" ],
 
 # GL_ARB_fragment_program
 # == GL_MAX_TEXTURE_IMAGE_UNITS_NV
@@ -375,6 +382,9 @@ descriptor=[
   [ "MAX_DEPTH_STENCIL_FRAMEBUFFER_SAMPLES_AMD", "CONTEXT_INT(Const.MaxDepthStencilFramebufferSamples), extra_AMD_framebuffer_multisample_advanced" ],
   [ "NUM_SUPPORTED_MULTISAMPLE_MODES_AMD", "CONTEXT_INT(Const.NumSupportedMultisampleModes), extra_AMD_framebuffer_multisample_advanced" ],
   [ "SUPPORTED_MULTISAMPLE_MODES_AMD", "LOC_CUSTOM, TYPE_INT_N, 0, extra_AMD_framebuffer_multisample_advanced" ],
+
+# GL_NV_alpha_to_coverage_dither_control
+  [ "ALPHA_TO_COVERAGE_DITHER_MODE_NV", "CONTEXT_ENUM(Multisample.SampleAlphaToCoverageDitherControl ), NO_EXTRA" ],
 ]},
 
 # GLES3 is not a typo.
@@ -408,6 +418,9 @@ descriptor=[
 # GL_ARB_sampler_objects / GL 3.3 / GLES 3.0
   [ "SAMPLER_BINDING", "LOC_CUSTOM, TYPE_INT, GL_SAMPLER_BINDING, NO_EXTRA" ],
 
+# GL_ARB_spirv_extensions
+  [ "NUM_SPIR_V_EXTENSIONS", "LOC_CUSTOM, TYPE_INT, 0, extra_ARB_spirv_extensions" ],
+
 # GL_ARB_sync
   [ "MAX_SERVER_WAIT_TIMEOUT", "CONTEXT_INT64(Const.MaxServerWaitTimeout), extra_ARB_sync" ],
 
@@ -436,8 +449,8 @@ descriptor=[
   [ "READ_FRAMEBUFFER_BINDING_EXT", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
 
 # GL_EXT_gpu_shader4 / GLSL 1.30
-  [ "MIN_PROGRAM_TEXEL_OFFSET", "CONTEXT_INT(Const.MinProgramTexelOffset), extra_GLSL_130_es3" ],
-  [ "MAX_PROGRAM_TEXEL_OFFSET", "CONTEXT_INT(Const.MaxProgramTexelOffset), extra_GLSL_130_es3" ],
+  [ "MIN_PROGRAM_TEXEL_OFFSET", "CONTEXT_INT(Const.MinProgramTexelOffset), extra_GLSL_130_es3_gpushader4" ],
+  [ "MAX_PROGRAM_TEXEL_OFFSET", "CONTEXT_INT(Const.MaxProgramTexelOffset), extra_GLSL_130_es3_gpushader4" ],
 
 # GL_EXT_pixel_buffer_object
   [ "PIXEL_PACK_BUFFER_BINDING_EXT", "LOC_CUSTOM, TYPE_INT, 0, extra_EXT_pixel_buffer_object" ],
@@ -463,6 +476,9 @@ descriptor=[
   [ "MIN_FRAGMENT_INTERPOLATION_OFFSET", "CONTEXT_FLOAT(Const.MinFragmentInterpolationOffset), extra_ARB_gpu_shader5_or_OES_sample_variables" ],
   [ "MAX_FRAGMENT_INTERPOLATION_OFFSET", "CONTEXT_FLOAT(Const.MaxFragmentInterpolationOffset), extra_ARB_gpu_shader5_or_OES_sample_variables" ],
   [ "FRAGMENT_INTERPOLATION_OFFSET_BITS", "CONST(FRAGMENT_INTERPOLATION_OFFSET_BITS), extra_ARB_gpu_shader5_or_OES_sample_variables" ],
+
+# GL_EXT_framebuffer_EXT  / GLES 3.0 + EXT_sRGB_write_control
+  [ "FRAMEBUFFER_SRGB_EXT", "CONTEXT_BOOL(Color.sRGBEnabled), extra_EXT_framebuffer_sRGB" ],
 ]},
 
 { "apis": ["GLES", "GLES2"], "params": [
@@ -655,6 +671,12 @@ descriptor=[
 
 # INTEL_conservative_rasterization
   [ "CONSERVATIVE_RASTERIZATION_INTEL", "CONTEXT_BOOL(IntelConservativeRasterization), extra_INTEL_conservative_rasterization" ],
+
+# GL_NV_viewport_swizzle
+  [ "VIEWPORT_SWIZZLE_X_NV", "LOC_CUSTOM, TYPE_ENUM, 0, extra_NV_viewport_swizzle" ],
+  [ "VIEWPORT_SWIZZLE_Y_NV", "LOC_CUSTOM, TYPE_ENUM, 0, extra_NV_viewport_swizzle" ],
+  [ "VIEWPORT_SWIZZLE_Z_NV", "LOC_CUSTOM, TYPE_ENUM, 0, extra_NV_viewport_swizzle" ],
+  [ "VIEWPORT_SWIZZLE_W_NV", "LOC_CUSTOM, TYPE_ENUM, 0, extra_NV_viewport_swizzle" ],
 ]},
 
 # Enums in OpenGL and ES 3.2
@@ -680,8 +702,6 @@ descriptor=[
   [ "AUX_BUFFERS", "BUFFER_INT(Visual.numAuxBuffers), NO_EXTRA" ],
   [ "BLUE_BIAS", "CONTEXT_FLOAT(Pixel.BlueBias), NO_EXTRA" ],
   [ "BLUE_SCALE", "CONTEXT_FLOAT(Pixel.BlueScale), NO_EXTRA" ],
-  [ "CLIP_DEPTH_MODE", "CONTEXT_ENUM16(Transform.ClipDepthMode), extra_ARB_clip_control" ],
-  [ "CLIP_ORIGIN", "CONTEXT_ENUM16(Transform.ClipOrigin), extra_ARB_clip_control" ],
   [ "CLIENT_ATTRIB_STACK_DEPTH", "CONTEXT_INT(ClientAttribStackDepth), NO_EXTRA" ],
   [ "COLOR_MATERIAL_FACE", "CONTEXT_ENUM16(Light.ColorMaterialFace), NO_EXTRA" ],
   [ "COLOR_MATERIAL_PARAMETER", "CONTEXT_ENUM16(Light.ColorMaterialMode), NO_EXTRA" ],
@@ -703,7 +723,7 @@ descriptor=[
   [ "FOG_INDEX", "CONTEXT_FLOAT(Fog.Index), NO_EXTRA" ],
   [ "GREEN_BIAS", "CONTEXT_FLOAT(Pixel.GreenBias), NO_EXTRA" ],
   [ "GREEN_SCALE", "CONTEXT_FLOAT(Pixel.GreenScale), NO_EXTRA" ],
-  [ "INDEX_BITS", "BUFFER_INT(Visual.indexBits), extra_new_buffers" ],
+  [ "INDEX_BITS", "CONST(0), NO_EXTRA" ],
   [ "INDEX_CLEAR_VALUE", "CONTEXT_INT(Color.ClearIndex), NO_EXTRA" ],
   [ "INDEX_MODE", "CONST(0) , NO_EXTRA" ],
   [ "INDEX_OFFSET", "CONTEXT_INT(Pixel.IndexOffset), NO_EXTRA" ],
@@ -793,12 +813,12 @@ descriptor=[
   [ "VERTEX_ARRAY_COUNT_EXT", "CONST(0), NO_EXTRA" ],
   [ "NORMAL_ARRAY_COUNT_EXT", "CONST(0), NO_EXTRA" ],
   [ "COLOR_ARRAY_COUNT_EXT", "CONST(0), NO_EXTRA" ],
-  [ "INDEX_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR_INDEX].Enabled), NO_EXTRA" ],
-  [ "INDEX_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_COLOR_INDEX].Type), NO_EXTRA" ],
+  [ "INDEX_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
+  [ "INDEX_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_COLOR_INDEX].Format.Type), NO_EXTRA" ],
   [ "INDEX_ARRAY_STRIDE", "ARRAY_SHORT(VertexAttrib[VERT_ATTRIB_COLOR_INDEX].Stride), NO_EXTRA" ],
   [ "INDEX_ARRAY_COUNT_EXT", "CONST(0), NO_EXTRA" ],
   [ "TEXTURE_COORD_ARRAY_COUNT_EXT", "CONST(0), NO_EXTRA" ],
-  [ "EDGE_FLAG_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_EDGEFLAG].Enabled), NO_EXTRA" ],
+  [ "EDGE_FLAG_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
   [ "EDGE_FLAG_ARRAY_STRIDE", "ARRAY_SHORT(VertexAttrib[VERT_ATTRIB_EDGEFLAG].Stride), NO_EXTRA" ],
   [ "EDGE_FLAG_ARRAY_COUNT_EXT", "CONST(0), NO_EXTRA" ],
 
@@ -827,15 +847,15 @@ descriptor=[
 # GL_EXT_secondary_color
   [ "COLOR_SUM", "CONTEXT_BOOL(Fog.ColorSumEnabled), NO_EXTRA" ],
   [ "CURRENT_SECONDARY_COLOR", "CONTEXT_FIELD(Current.Attrib[VERT_ATTRIB_COLOR1][0], TYPE_FLOATN_4), extra_flush_current" ],
-  [ "SECONDARY_COLOR_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR1].Enabled), NO_EXTRA" ],
-  [ "SECONDARY_COLOR_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_COLOR1].Type), NO_EXTRA" ],
+  [ "SECONDARY_COLOR_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
+  [ "SECONDARY_COLOR_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_COLOR1].Format.Type), NO_EXTRA" ],
   [ "SECONDARY_COLOR_ARRAY_STRIDE", "ARRAY_SHORT(VertexAttrib[VERT_ATTRIB_COLOR1].Stride), NO_EXTRA" ],
   [ "SECONDARY_COLOR_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
 
 # GL_EXT_fog_coord
   [ "CURRENT_FOG_COORDINATE", "CONTEXT_FLOAT(Current.Attrib[VERT_ATTRIB_FOG][0]), extra_flush_current" ],
-  [ "FOG_COORDINATE_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_FOG].Enabled), NO_EXTRA" ],
-  [ "FOG_COORDINATE_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_FOG].Type), NO_EXTRA" ],
+  [ "FOG_COORDINATE_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA" ],
+  [ "FOG_COORDINATE_ARRAY_TYPE", "ARRAY_ENUM16(VertexAttrib[VERT_ATTRIB_FOG].Format.Type), NO_EXTRA" ],
   [ "FOG_COORDINATE_ARRAY_STRIDE", "ARRAY_SHORT(VertexAttrib[VERT_ATTRIB_FOG].Stride), NO_EXTRA" ],
   [ "FOG_COORDINATE_SOURCE", "CONTEXT_ENUM16(Fog.FogCoordinateSource), NO_EXTRA" ],
 
@@ -934,7 +954,6 @@ descriptor=[
   [ "RGBA_FLOAT_MODE_ARB", "BUFFER_FIELD(Visual.floatMode, TYPE_BOOLEAN), extra_core_ARB_color_buffer_float_and_new_buffers" ],
 
 # GL3.0 / GL_EXT_framebuffer_sRGB
-  [ "FRAMEBUFFER_SRGB_EXT", "CONTEXT_BOOL(Color.sRGBEnabled), extra_EXT_framebuffer_sRGB" ],
   [ "FRAMEBUFFER_SRGB_CAPABLE_EXT", "BUFFER_INT(Visual.sRGBCapable), extra_EXT_framebuffer_sRGB_and_new_buffers" ],
 
 # GL 3.1

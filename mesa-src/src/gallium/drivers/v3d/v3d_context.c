@@ -31,12 +31,14 @@
 #include "util/u_memory.h"
 #include "util/u_blitter.h"
 #include "util/u_upload_mgr.h"
+#include "util/u_prim.h"
 #include "indices/u_primconvert.h"
 #include "pipe/p_screen.h"
 
 #include "v3d_screen.h"
 #include "v3d_context.h"
 #include "v3d_resource.h"
+#include "broadcom/compiler/v3d_compiler.h"
 
 void
 v3d_flush(struct pipe_context *pctx)
@@ -66,6 +68,37 @@ v3d_pipe_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
 }
 
 static void
+v3d_memory_barrier(struct pipe_context *pctx, unsigned int flags)
+{
+        struct v3d_context *v3d = v3d_context(pctx);
+
+        /* We only need to flush for SSBOs and images, because for everything
+         * else we flush the job automatically when we needed.
+         */
+        const unsigned int flush_flags = PIPE_BARRIER_SHADER_BUFFER |
+                                         PIPE_BARRIER_IMAGE;
+
+	if (!(flags & flush_flags))
+		return;
+
+        /* We only need to flush jobs writing to SSBOs/images. */
+        perf_debug("Flushing all jobs for glMemoryBarrier(), could do better");
+        v3d_flush(pctx);
+}
+
+static void
+v3d_set_debug_callback(struct pipe_context *pctx,
+                       const struct pipe_debug_callback *cb)
+{
+        struct v3d_context *v3d = v3d_context(pctx);
+
+        if (cb)
+                v3d->debug = *cb;
+        else
+                memset(&v3d->debug, 0, sizeof(v3d->debug));
+}
+
+static void
 v3d_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
 {
         struct v3d_context *v3d = v3d_context(pctx);
@@ -83,6 +116,84 @@ v3d_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
                 job->store &= ~(PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL);
 }
 
+/**
+ * Flushes the current job to get up-to-date primive counts written to the
+ * primitive counts BO, then accumulates the transform feedback primitive count
+ * in the context and the corresponding vertex counts in the bound stream
+ * output targets.
+ */
+void
+v3d_update_primitive_counters(struct v3d_context *v3d)
+{
+        struct v3d_job *job = v3d_get_job_for_fbo(v3d);
+        if (job->draw_calls_queued == 0)
+                return;
+
+        /* In order to get up-to-date primitive counts we need to submit
+         * the job for execution so we get the counts written to memory.
+         * Notice that this will require a sync wait for the buffer write.
+         */
+        uint32_t prims_before = v3d->tf_prims_generated;
+        v3d_job_submit(v3d, job);
+        uint32_t prims_after = v3d->tf_prims_generated;
+        if (prims_before == prims_after)
+                return;
+
+        enum pipe_prim_type prim_type = u_base_prim_type(v3d->prim_mode);
+        uint32_t num_verts = u_vertices_for_prims(prim_type,
+                                                  prims_after - prims_before);
+        for (int i = 0; i < v3d->streamout.num_targets; i++) {
+                struct v3d_stream_output_target *so =
+                        v3d_stream_output_target(v3d->streamout.targets[i]);
+                so->recorded_vertex_count += num_verts;
+        }
+}
+
+bool
+v3d_line_smoothing_enabled(struct v3d_context *v3d)
+{
+        if (!v3d->rasterizer->base.line_smooth)
+                return false;
+
+        /* According to the OpenGL docs, line smoothing shouldn’t be applied
+         * when multisampling
+         */
+        if (v3d->job->msaa || v3d->rasterizer->base.multisample)
+                return false;
+
+        if (v3d->framebuffer.nr_cbufs <= 0)
+                return false;
+
+        struct pipe_surface *cbuf = v3d->framebuffer.cbufs[0];
+        if (!cbuf)
+                return false;
+
+        /* Modifying the alpha for pure integer formats probably
+         * doesn’t make sense because we don’t know how the application
+         * uses the alpha value.
+         */
+        if (util_format_is_pure_integer(cbuf->format))
+                return false;
+
+        return true;
+}
+
+float
+v3d_get_real_line_width(struct v3d_context *v3d)
+{
+        float width = v3d->rasterizer->base.line_width;
+
+        if (v3d_line_smoothing_enabled(v3d)) {
+                /* If line smoothing is enabled then we want to add some extra
+                 * pixels to the width in order to have some semi-transparent
+                 * edges.
+                 */
+                width = floorf(M_SQRT2 * width) + 3;
+        }
+
+        return width;
+}
+
 static void
 v3d_context_destroy(struct pipe_context *pctx)
 {
@@ -98,6 +209,11 @@ v3d_context_destroy(struct pipe_context *pctx)
 
         if (v3d->uploader)
                 u_upload_destroy(v3d->uploader);
+        if (v3d->state_uploader)
+                u_upload_destroy(v3d->state_uploader);
+
+        if (v3d->prim_counts)
+                pipe_resource_reference(&v3d->prim_counts, NULL);
 
         slab_destroy_child(&v3d->transfer_pool);
 
@@ -107,6 +223,27 @@ v3d_context_destroy(struct pipe_context *pctx)
         v3d_program_fini(pctx);
 
         ralloc_free(v3d);
+}
+
+static void
+v3d_get_sample_position(struct pipe_context *pctx,
+                        unsigned sample_count, unsigned sample_index,
+                        float *xy)
+{
+        struct v3d_context *v3d = v3d_context(pctx);
+
+        if (sample_count <= 1) {
+                xy[0] = 0.5;
+                xy[1] = 0.5;
+        } else {
+                static const int xoffsets_v33[] = { 1, -3, 3, -1 };
+                static const int xoffsets_v42[] = { -1, 3, -3, 1 };
+                const int *xoffsets = (v3d->screen->devinfo.ver >= 42 ?
+                                       xoffsets_v42 : xoffsets_v33);
+
+                xy[0] = 0.5 + xoffsets[sample_index] * .125;
+                xy[1] = .125 + sample_index * .25;
+        }
 }
 
 struct pipe_context *
@@ -137,7 +274,10 @@ v3d_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
         pctx->priv = priv;
         pctx->destroy = v3d_context_destroy;
         pctx->flush = v3d_pipe_flush;
+        pctx->memory_barrier = v3d_memory_barrier;
+        pctx->set_debug_callback = v3d_set_debug_callback;
         pctx->invalidate_resource = v3d_invalidate_resource;
+        pctx->get_sample_position = v3d_get_sample_position;
 
         if (screen->devinfo.ver >= 41) {
                 v3d41_draw_init(pctx);
@@ -159,6 +299,10 @@ v3d_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
         v3d->uploader = u_upload_create_default(&v3d->base);
         v3d->base.stream_uploader = v3d->uploader;
         v3d->base.const_uploader = v3d->uploader;
+        v3d->state_uploader = u_upload_create(&v3d->base,
+                                              4096,
+                                              PIPE_BIND_CONSTANT_BUFFER,
+                                              PIPE_USAGE_STREAM, 0);
 
         v3d->blitter = util_blitter_create(pctx);
         if (!v3d->blitter)
@@ -172,7 +316,7 @@ v3d_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 
         V3D_DEBUG |= saved_shaderdb_flag;
 
-        v3d->sample_mask = (1 << VC5_MAX_SAMPLES) - 1;
+        v3d->sample_mask = (1 << V3D_MAX_SAMPLES) - 1;
         v3d->active_queries = true;
 
         return &v3d->base;

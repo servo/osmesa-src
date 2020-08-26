@@ -50,7 +50,7 @@
 
 
 #include "errors.h"
-#include "imports.h"
+
 #include "extensions.h"
 #include "mtypes.h"
 #include "vbo/vbo.h"
@@ -66,7 +66,7 @@ struct _glapi_table;
 
 /** \name Visual-related functions */
 /*@{*/
- 
+
 extern struct gl_config *
 _mesa_create_visual( GLboolean dbFlag,
                      GLboolean stereoFlag,
@@ -107,6 +107,9 @@ _mesa_destroy_visual( struct gl_config *vis );
 /** \name Context-related functions */
 /*@{*/
 
+extern void
+_mesa_initialize(void);
+
 extern GLboolean
 _mesa_initialize_context( struct gl_context *ctx,
                           gl_api api,
@@ -115,7 +118,7 @@ _mesa_initialize_context( struct gl_context *ctx,
                           const struct dd_function_table *driverFunctions);
 
 extern void
-_mesa_free_context_data( struct gl_context *ctx );
+_mesa_free_context_data(struct gl_context *ctx, bool destroy_debug_output);
 
 extern void
 _mesa_destroy_context( struct gl_context *ctx );
@@ -244,14 +247,20 @@ do {								\
 do {                                                            \
    if (MESA_VERBOSE & VERBOSE_STATE)                            \
       _mesa_debug(ctx, "FLUSH_FOR_DRAW in %s\n", __func__);     \
-   if (ctx->Driver.NeedFlush)                                   \
-      vbo_exec_FlushVertices(ctx, ctx->Driver.NeedFlush);       \
+   if (ctx->Driver.NeedFlush) {                                 \
+      if (ctx->_AllowDrawOutOfOrder) {                          \
+          if (ctx->Driver.NeedFlush & FLUSH_UPDATE_CURRENT)     \
+             vbo_exec_FlushVertices(ctx, FLUSH_UPDATE_CURRENT); \
+      } else {                                                  \
+         vbo_exec_FlushVertices(ctx, ctx->Driver.NeedFlush);    \
+      }                                                         \
+   }                                                            \
 } while (0)
 
 /**
  * Macro to assert that the API call was made outside the
  * glBegin()/glEnd() pair, with return value.
- * 
+ *
  * \param ctx GL context.
  * \param retval value to return in case the assertion fails.
  */
@@ -266,7 +275,7 @@ do {									\
 /**
  * Macro to assert that the API call was made outside the
  * glBegin()/glEnd() pair.
- * 
+ *
  * \param ctx GL context.
  */
 #define ASSERT_OUTSIDE_BEGIN_END(ctx)					\
@@ -337,6 +346,64 @@ _mesa_is_no_error_enabled(const struct gl_context *ctx)
 }
 
 
+static inline bool
+_mesa_has_integer_textures(const struct gl_context *ctx)
+{
+   return _mesa_has_EXT_texture_integer(ctx) || _mesa_is_gles3(ctx);
+}
+
+static inline bool
+_mesa_has_half_float_textures(const struct gl_context *ctx)
+{
+   return _mesa_has_ARB_texture_float(ctx) ||
+          _mesa_has_OES_texture_half_float(ctx) || _mesa_is_gles3(ctx);
+}
+
+static inline bool
+_mesa_has_float_textures(const struct gl_context *ctx)
+{
+   return _mesa_has_ARB_texture_float(ctx) ||
+          _mesa_has_OES_texture_float(ctx) || _mesa_is_gles3(ctx);
+ }
+
+static inline bool
+_mesa_has_texture_rgb10_a2ui(const struct gl_context *ctx)
+{
+   return _mesa_has_ARB_texture_rgb10_a2ui(ctx) || _mesa_is_gles3(ctx);
+}
+
+static inline bool
+_mesa_has_float_depth_buffer(const struct gl_context *ctx)
+{
+   return _mesa_has_ARB_depth_buffer_float(ctx) || _mesa_is_gles3(ctx);
+}
+
+static inline bool
+_mesa_has_packed_float(const struct gl_context *ctx)
+{
+   return _mesa_has_EXT_packed_float(ctx) || _mesa_is_gles3(ctx);
+}
+
+static inline bool
+_mesa_has_rg_textures(const struct gl_context *ctx)
+{
+   return _mesa_has_ARB_texture_rg(ctx) || _mesa_has_EXT_texture_rg(ctx) ||
+          _mesa_is_gles3(ctx);
+}
+
+static inline bool
+_mesa_has_texture_shared_exponent(const struct gl_context *ctx)
+{
+   return _mesa_has_EXT_texture_shared_exponent(ctx) || _mesa_is_gles3(ctx);
+}
+
+static inline bool
+_mesa_has_texture_type_2_10_10_10_REV(const struct gl_context *ctx)
+{
+   return _mesa_is_desktop_gl(ctx) ||
+          _mesa_has_EXT_texture_type_2_10_10_10_REV(ctx);
+}
+
 /**
  * Checks if the context supports geometry shaders.
  */
@@ -361,7 +428,7 @@ _mesa_has_compute_shaders(const struct gl_context *ctx)
 /**
  * Checks if the context supports tessellation.
  */
-static inline GLboolean
+static inline bool
 _mesa_has_tessellation(const struct gl_context *ctx)
 {
    /* _mesa_has_EXT_tessellation_shader(ctx) is redundant with the OES

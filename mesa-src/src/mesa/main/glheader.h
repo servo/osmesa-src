@@ -128,16 +128,21 @@ typedef int GLclampx;
 #define GL_HALF_FLOAT_OES                                       0x8D61
 #endif
 
-#ifndef GL_MESA_framebuffer_flip_y
-#define GL_FRAMEBUFFER_FLIP_Y_MESA                              0x8BBB
-#endif
-
 /* There is no formal spec for the following extension. */
 #ifndef GL_ATI_texture_compression_3dc
 #define GL_ATI_texture_compression_3dc                          1
 #define GL_COMPRESSED_LUMINANCE_ALPHA_3DC_ATI                   0x8837
 #endif
 
+#ifndef GL_EXT_texture_sRGB_R8
+#define GL_SR8_EXT                                              0x8FBD
+#endif
+
+#ifndef GL_AMD_compressed_ATC_texture
+#define GL_ATC_RGB_AMD                                          0x8C92
+#define GL_ATC_RGBA_EXPLICIT_ALPHA_AMD                          0x8C93
+#define GL_ATC_RGBA_INTERPOLATED_ALPHA_AMD                      0x87EE
+#endif
 
 /**
  * Internal token to represent a GLSL shader program (a collection of
@@ -148,6 +153,9 @@ typedef int GLclampx;
  */
 #define GL_SHADER_PROGRAM_MESA                                  0x9999
 
+#ifndef GL_EXT_multisampled_render_to_texture
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_SAMPLES_EXT 0x8D6C
+#endif
 
 #ifdef __cplusplus
 }

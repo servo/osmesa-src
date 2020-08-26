@@ -33,18 +33,20 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <EGL/eglmesaext.h>
+#include <EGL/eglextchromium.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef struct _egl_api _EGLAPI;
 
 typedef struct _egl_array _EGLArray;
 
 typedef struct _egl_config _EGLConfig;
 
 typedef struct _egl_context _EGLContext;
+
+typedef struct _egl_device _EGLDevice;
 
 typedef struct _egl_display _EGLDisplay;
 

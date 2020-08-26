@@ -27,6 +27,7 @@
 #define AC_SURFACE_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "amd_family.h"
 
@@ -35,7 +36,7 @@ extern "C" {
 #endif
 
 /* Forward declarations. */
-typedef void* ADDR_HANDLE;
+struct ac_addrlib;
 
 struct amdgpu_gpu_info;
 struct radeon_info;
@@ -48,12 +49,14 @@ enum radeon_surf_mode {
     RADEON_SURF_MODE_2D = 3,
 };
 
-/* These are defined exactly like GB_TILE_MODEn.MICRO_TILE_MODE_NEW. */
+/* This describes D/S/Z/R swizzle modes.
+ * Defined in the GB_TILE_MODEn.MICRO_TILE_MODE_NEW order.
+ */
 enum radeon_micro_mode {
     RADEON_MICRO_MODE_DISPLAY = 0,
-    RADEON_MICRO_MODE_THIN = 1,
+    RADEON_MICRO_MODE_STANDARD = 1,
     RADEON_MICRO_MODE_DEPTH = 2,
-    RADEON_MICRO_MODE_ROTATED = 3,
+    RADEON_MICRO_MODE_RENDER = 3, /* gfx9 and older: rotated */
 };
 
 /* the first 16 bits are reserved for libdrm_radeon, don't use them */
@@ -66,14 +69,22 @@ enum radeon_micro_mode {
 #define RADEON_SURF_DISABLE_DCC                 (1 << 22)
 #define RADEON_SURF_TC_COMPATIBLE_HTILE         (1 << 23)
 #define RADEON_SURF_IMPORTED                    (1 << 24)
-#define RADEON_SURF_OPTIMIZE_FOR_SPACE          (1 << 25)
+#define RADEON_SURF_CONTIGUOUS_DCC_LAYERS       (1 << 25)
 #define RADEON_SURF_SHAREABLE                   (1 << 26)
+#define RADEON_SURF_NO_RENDER_TARGET            (1 << 27)
+/* Force a swizzle mode (gfx9+) or tile mode (gfx6-8).
+ * If this is not set, optimize for space. */
+#define RADEON_SURF_FORCE_SWIZZLE_MODE          (1 << 28)
+#define RADEON_SURF_NO_FMASK                    (1 << 29)
+#define RADEON_SURF_NO_HTILE                    (1 << 30)
+#define RADEON_SURF_FORCE_MICRO_TILE_MODE       (1u << 31)
 
 struct legacy_surf_level {
     uint64_t                    offset;
     uint32_t                    slice_size_dw; /* in dwords; max = 4GB / 4. */
     uint32_t                    dcc_offset; /* relative offset within DCC mip tree */
     uint32_t                    dcc_fast_clear_size;
+    uint32_t                    dcc_slice_fast_clear_size;
     unsigned                    nblk_x:15;
     unsigned                    nblk_y:15;
     enum radeon_surf_mode       mode:2;
@@ -84,6 +95,7 @@ struct legacy_surf_fmask {
     uint8_t tiling_index;    /* max 31 */
     uint8_t bankh;           /* max 8 */
     uint16_t pitch_in_pixels;
+    uint64_t slice_size;
 };
 
 struct legacy_surf_layout {
@@ -127,6 +139,9 @@ struct gfx9_surf_flags {
 struct gfx9_surf_meta_flags {
     unsigned                    rb_aligned:1;   /* optimal for RBs */
     unsigned                    pipe_aligned:1; /* optimal for TC */
+    unsigned                    independent_64B_blocks:1;
+    unsigned                    independent_128B_blocks:1;
+    unsigned                    max_compressed_block_size:2;
 };
 
 struct gfx9_surf_layout {
@@ -135,8 +150,6 @@ struct gfx9_surf_layout {
     struct gfx9_surf_flags      stencil; /* added to surf_size, use stencil_offset */
 
     struct gfx9_surf_meta_flags dcc;   /* metadata of color */
-    struct gfx9_surf_meta_flags htile; /* metadata of depth and stencil */
-    struct gfx9_surf_meta_flags cmask; /* metadata of fmask */
 
     enum gfx9_resource_type     resource_type; /* 1D, 2D or 3D */
     uint16_t                    surf_pitch; /* in blocks */
@@ -147,10 +160,26 @@ struct gfx9_surf_layout {
     uint64_t                    surf_slice_size;
     /* Mipmap level offset within the slice in bytes. Only valid for LINEAR. */
     uint32_t                    offset[RADEON_SURF_MAX_LEVELS];
-
-    uint16_t                    dcc_pitch_max;  /* (mip chain pitch - 1) */
+    /* Mipmap level pitch in elements. Only valid for LINEAR. */
+    uint16_t                    pitch[RADEON_SURF_MAX_LEVELS];
 
     uint64_t                    stencil_offset; /* separate stencil */
+
+    uint8_t                     dcc_block_width;
+    uint8_t                     dcc_block_height;
+    uint8_t                     dcc_block_depth;
+
+    /* Displayable DCC. This is always rb_aligned=0 and pipe_aligned=0.
+     * The 3D engine doesn't support that layout except for chips with 1 RB.
+     * All other chips must set rb_aligned=1.
+     * A compute shader needs to convert from aligned DCC to unaligned.
+     */
+    uint32_t                    display_dcc_size;
+    uint32_t                    display_dcc_alignment;
+    uint16_t                    display_dcc_pitch_max;  /* (mip chain pitch - 1) */
+    bool                        dcc_retile_use_uint16; /* if all values fit into uint16_t */
+    uint32_t                    dcc_retile_num_elements;
+    void                        *dcc_retile_map;
 };
 
 struct radeon_surf {
@@ -199,6 +228,7 @@ struct radeon_surf {
 
     /* DCC and HTILE are very small. */
     uint32_t                    dcc_size;
+    uint32_t                    dcc_slice_size;
     uint32_t                    dcc_alignment;
 
     uint32_t                    htile_size;
@@ -206,10 +236,21 @@ struct radeon_surf {
     uint32_t                    htile_alignment;
 
     uint32_t                    cmask_size;
+    uint32_t                    cmask_slice_size;
     uint32_t                    cmask_alignment;
 
+    /* All buffers combined. */
+    uint64_t                    htile_offset;
+    uint64_t                    fmask_offset;
+    uint64_t                    cmask_offset;
+    uint64_t                    dcc_offset;
+    uint64_t                    display_dcc_offset;
+    uint64_t                    dcc_retile_map_offset;
+    uint64_t                    total_size;
+    uint32_t                    alignment;
+
     union {
-        /* R600-VI return values.
+        /* Return values for GFX8 and older.
          *
          * Some of them can be set by the caller if certain parameters are
          * desirable. The allocator will try to obey them.
@@ -236,22 +277,44 @@ struct ac_surf_info {
 
 struct ac_surf_config {
 	struct ac_surf_info info;
+	unsigned is_1d : 1;
 	unsigned is_3d : 1;
 	unsigned is_cube : 1;
 };
 
-ADDR_HANDLE amdgpu_addr_create(const struct radeon_info *info,
-			       const struct amdgpu_gpu_info *amdinfo,
-			       uint64_t *max_alignment);
+struct ac_addrlib *ac_addrlib_create(const struct radeon_info *info,
+				     const struct amdgpu_gpu_info *amdinfo,
+				     uint64_t *max_alignment);
+void ac_addrlib_destroy(struct ac_addrlib *addrlib);
 
-int ac_compute_surface(ADDR_HANDLE addrlib, const struct radeon_info *info,
+int ac_compute_surface(struct ac_addrlib *addrlib, const struct radeon_info *info,
 		       const struct ac_surf_config * config,
 		       enum radeon_surf_mode mode,
 		       struct radeon_surf *surf);
+void ac_surface_zero_dcc_fields(struct radeon_surf *surf);
 
-void ac_compute_cmask(const struct radeon_info *info,
-		      const struct ac_surf_config *config,
-		      struct radeon_surf *surf);
+void ac_surface_set_bo_metadata(const struct radeon_info *info,
+                                struct radeon_surf *surf, uint64_t tiling_flags,
+                                enum radeon_surf_mode *mode);
+void ac_surface_get_bo_metadata(const struct radeon_info *info,
+                                struct radeon_surf *surf, uint64_t *tiling_flags);
+
+bool ac_surface_set_umd_metadata(const struct radeon_info *info,
+                                 struct radeon_surf *surf,
+                                 unsigned num_storage_samples,
+                                 unsigned num_mipmap_levels,
+                                 unsigned size_metadata,
+                                 uint32_t metadata[64]);
+void ac_surface_get_umd_metadata(const struct radeon_info *info,
+                                 struct radeon_surf *surf,
+                                 unsigned num_mipmap_levels,
+                                 uint32_t desc[8],
+                                 unsigned *size_metadata, uint32_t metadata[64]);
+
+void ac_surface_override_offset_stride(const struct radeon_info *info,
+                                       struct radeon_surf *surf,
+                                       unsigned num_mipmap_levels,
+                                       uint64_t offset, unsigned pitch);
 
 #ifdef __cplusplus
 }

@@ -31,22 +31,27 @@
 #include "pipebuffer/pb_cache.h"
 #include "pipebuffer/pb_slab.h"
 #include "gallium/drivers/radeon/radeon_winsys.h"
-#include "addrlib/addrinterface.h"
 #include "util/simple_mtx.h"
 #include "util/u_queue.h"
 #include <amdgpu.h>
 
 struct amdgpu_cs;
 
-#define AMDGPU_SLAB_MIN_SIZE_LOG2   9  /* 512 bytes */
-#define AMDGPU_SLAB_MAX_SIZE_LOG2   16 /* 64 KB */
-#define AMDGPU_SLAB_BO_SIZE_LOG2    17 /* 128 KB */
+#define NUM_SLAB_ALLOCATORS 3
 
 struct amdgpu_winsys {
-   struct radeon_winsys base;
    struct pipe_reference reference;
+
+   /* File descriptor which was passed to amdgpu_device_initialize */
+   int fd;
+
    struct pb_cache bo_cache;
-   struct pb_slabs bo_slabs;
+
+   /* Each slab buffer can only contain suballocations of equal sizes, so we
+    * need to layer the allocators, so that we don't waste too much memory.
+    */
+   struct pb_slabs bo_slabs[NUM_SLAB_ALLOCATORS];
+   struct pb_slabs bo_slabs_encrypted[NUM_SLAB_ALLOCATORS];
 
    amdgpu_device_handle dev;
 
@@ -74,30 +79,56 @@ struct amdgpu_winsys {
    struct util_queue cs_queue;
 
    struct amdgpu_gpu_info amdinfo;
-   ADDR_HANDLE addrlib;
+   struct ac_addrlib *addrlib;
 
    bool check_vm;
    bool debug_all_bos;
    bool reserve_vmid;
    bool zero_all_vram_allocs;
+   bool secure;
 
    /* List of all allocated buffers */
    simple_mtx_t global_bo_list_lock;
    struct list_head global_bo_list;
    unsigned num_buffers;
 
+   /* Single-linked list of all structs amdgpu_screen_winsys referencing this
+    * struct amdgpu_winsys
+    */
+   simple_mtx_t sws_list_lock;
+   struct amdgpu_screen_winsys *sws_list;
+
    /* For returning the same amdgpu_winsys_bo instance for exported
     * and re-imported buffers. */
-   struct util_hash_table *bo_export_table;
+   struct hash_table *bo_export_table;
    simple_mtx_t bo_export_table_lock;
 };
+
+struct amdgpu_screen_winsys {
+   struct radeon_winsys base;
+   struct amdgpu_winsys *aws;
+   int fd;
+   struct pipe_reference reference;
+   struct amdgpu_screen_winsys *next;
+
+   /* Maps a BO to its KMS handle valid for this DRM file descriptor
+    * Protected by amdgpu_winsys::sws_list_lock
+    */
+   struct hash_table *kms_handles;
+};
+
+static inline struct amdgpu_screen_winsys *
+amdgpu_screen_winsys(struct radeon_winsys *base)
+{
+   return (struct amdgpu_screen_winsys*)base;
+}
 
 static inline struct amdgpu_winsys *
 amdgpu_winsys(struct radeon_winsys *base)
 {
-   return (struct amdgpu_winsys*)base;
+   return amdgpu_screen_winsys(base)->aws;
 }
 
-void amdgpu_surface_init_functions(struct amdgpu_winsys *ws);
+void amdgpu_surface_init_functions(struct amdgpu_screen_winsys *ws);
 
 #endif

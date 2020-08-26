@@ -33,7 +33,7 @@
 #include "pipe/p_defines.h"
 #include "util/u_inlines.h"
 
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/u_transfer.h"
@@ -44,7 +44,7 @@
 #include "sp_texture.h"
 #include "sp_screen.h"
 
-#include "state_tracker/sw_winsys.h"
+#include "frontend/sw_winsys.h"
 
 
 /**
@@ -112,7 +112,7 @@ softpipe_resource_layout(struct pipe_screen *screen,
  * Check the size of the texture specified by 'res'.
  * \return TRUE if OK, FALSE if too large.
  */
-static boolean
+static bool
 softpipe_can_create_resource(struct pipe_screen *screen,
                              const struct pipe_resource *res)
 {
@@ -250,7 +250,7 @@ softpipe_resource_from_handle(struct pipe_screen *screen,
 }
 
 
-static boolean
+static bool
 softpipe_resource_get_handle(struct pipe_screen *screen,
                              struct pipe_context *ctx,
                              struct pipe_resource *pt,
@@ -262,7 +262,7 @@ softpipe_resource_get_handle(struct pipe_screen *screen,
 
    assert(spr->dt);
    if (!spr->dt)
-      return FALSE;
+      return false;
 
    return winsys->displaytarget_get_handle(winsys, spr->dt, whandle);
 }

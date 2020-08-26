@@ -1,9 +1,10 @@
 [package]
 name = "osmesa-src"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["mesa3d maintainers"]
 build = "build.rs"
 repository = "https://github.com/servo/osmesa-src/"
 license = "MIT"
 description = "Mesa is a 3-D graphics library with an API which is very similar to that of OpenGL."
 homepage = "http://mesa3d.org"
+edition = "2018"

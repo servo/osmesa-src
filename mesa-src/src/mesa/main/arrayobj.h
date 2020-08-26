@@ -50,10 +50,15 @@ extern struct gl_vertex_array_object *
 _mesa_lookup_vao(struct gl_context *ctx, GLuint id);
 
 extern struct gl_vertex_array_object *
-_mesa_lookup_vao_err(struct gl_context *ctx, GLuint id, const char *caller);
+_mesa_lookup_vao_err(struct gl_context *ctx, GLuint id,
+                     bool is_ext_dsa, const char *caller);
 
 extern struct gl_vertex_array_object *
 _mesa_new_vao(struct gl_context *ctx, GLuint name);
+
+extern void
+_mesa_unbind_array_object_vbos(struct gl_context *ctx,
+                               struct gl_vertex_array_object *obj);
 
 extern void
 _mesa_delete_vao(struct gl_context *ctx, struct gl_vertex_array_object *obj);
@@ -100,6 +105,24 @@ extern bool
 _mesa_all_buffers_are_unmapped(const struct gl_vertex_array_object *vao);
 
 
+extern void
+_mesa_vao_map_arrays(struct gl_context *ctx, struct gl_vertex_array_object *vao,
+                     GLbitfield access);
+
+extern void
+_mesa_vao_map(struct gl_context *ctx, struct gl_vertex_array_object *vao,
+              GLbitfield access);
+
+
+extern void
+_mesa_vao_unmap_arrays(struct gl_context *ctx,
+                       struct gl_vertex_array_object *vao);
+
+extern void
+_mesa_vao_unmap(struct gl_context *ctx,
+                struct gl_vertex_array_object *vao);
+
+
 /**
  * Array to apply the position/generic0 aliasing map to
  * an attribute value used in vertex processing inputs to an attribute
@@ -111,7 +134,7 @@ _mesa_vao_attribute_map[ATTRIBUTE_MAP_MODE_MAX][VERT_ATTRIB_MAX];
 
 /**
  * Apply the position/generic0 aliasing map to a bitfield from the vao.
- * Use for example to convert gl_vertex_array_object::_Enabled
+ * Use for example to convert gl_vertex_array_object::Enabled
  * or gl_vertex_buffer_binding::_VertexBinding from the vao numbering to
  * the numbering used with vertex processing inputs.
  */
@@ -143,7 +166,7 @@ static inline GLbitfield
 _mesa_get_vao_vp_inputs(const struct gl_vertex_array_object *vao)
 {
    const gl_attribute_map_mode mode = vao->_AttributeMapMode;
-   return _mesa_vao_enable_to_vp_inputs(mode, vao->_Enabled);
+   return _mesa_vao_enable_to_vp_inputs(mode, vao->Enabled);
 }
 
 
@@ -193,6 +216,20 @@ _mesa_draw_user_array_bits(const struct gl_context *ctx)
 
 
 /**
+ * Return which enabled vertex attributes have a non-zero instance divisor.
+ *
+ * Needs the a fully updated VAO ready for draw.
+ */
+static inline GLbitfield
+_mesa_draw_nonzero_divisor_bits(const struct gl_context *ctx)
+{
+   const struct gl_vertex_array_object *const vao = ctx->Array._DrawVAO;
+   assert(vao->NewArrays == 0);
+   return vao->_EffEnabledNonZeroDivisor & ctx->Array._DrawVAOEnabledAttribs;
+}
+
+
+/**
  * Return enabled current values attribute bits for draw.
  */
 static inline GLbitfield
@@ -226,6 +263,17 @@ _mesa_draw_array_attrib(const struct gl_vertex_array_object *vao,
    assert(vao->NewArrays == 0);
    const gl_attribute_map_mode map_mode = vao->_AttributeMapMode;
    return &vao->VertexAttrib[_mesa_vao_attribute_map[map_mode][attr]];
+}
+
+
+/**
+ * Return a vertex array vertex format provided the attribute number.
+ */
+static inline const struct gl_vertex_format *
+_mesa_draw_array_format(const struct gl_vertex_array_object *vao,
+                        gl_vert_attrib attr)
+{
+   return &_mesa_draw_array_attrib(vao, attr)->Format;
 }
 
 
@@ -289,46 +337,22 @@ _mesa_draw_current_attrib(const struct gl_context *ctx, gl_vert_attrib attr)
 
 
 /**
+ * Return a current value vertex format provided the attribute number.
+ */
+static inline const struct gl_vertex_format *
+_mesa_draw_current_format(const struct gl_context *ctx, gl_vert_attrib attr)
+{
+   return &_vbo_current_attrib(ctx, attr)->Format;
+}
+
+
+/**
  * Return true if we have the VERT_ATTRIB_EDGEFLAG array enabled.
  */
 static inline bool
 _mesa_draw_edge_flag_array_enabled(const struct gl_context *ctx)
 {
    return ctx->Array._DrawVAOEnabledAttribs & VERT_BIT_EDGEFLAG;
-}
-
-
-/**
- * Return the attrib for the given attribute.
- */
-static inline const struct gl_array_attributes*
-_mesa_draw_attrib(const struct gl_context *ctx, gl_vert_attrib attr)
-{
-   if (ctx->Array._DrawVAOEnabledAttribs & VERT_BIT(attr)) {
-      const struct gl_vertex_array_object *vao = ctx->Array._DrawVAO;
-      return _mesa_draw_array_attrib(vao, attr);
-   } else {
-      return _vbo_current_attrib(ctx, attr);
-   }
-}
-
-
-/**
- * Return the attrib, binding pair for the given attribute.
- */
-static inline void
-_mesa_draw_attrib_and_binding(const struct gl_context *ctx, gl_vert_attrib attr,
-                              const struct gl_array_attributes **attrib,
-                              const struct gl_vertex_buffer_binding **binding)
-{
-   if (ctx->Array._DrawVAOEnabledAttribs & VERT_BIT(attr)) {
-      const struct gl_vertex_array_object *vao = ctx->Array._DrawVAO;
-      *attrib = _mesa_draw_array_attrib(vao, attr);
-      *binding = _mesa_draw_buffer_binding_from_attrib(vao, *attrib);
-   } else {
-      *attrib = _vbo_current_attrib(ctx, attr);
-      *binding = _vbo_current_binding(ctx);
-   }
 }
 
 

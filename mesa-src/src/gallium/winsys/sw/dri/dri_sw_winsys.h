@@ -29,10 +29,10 @@
 #ifndef DRI_SW_WINSYS
 #define DRI_SW_WINSYS
 
-#include "state_tracker/drisw_api.h"
+#include "frontend/drisw_api.h"
 
 struct sw_winsys;
 
-struct sw_winsys *dri_create_sw_winsys(struct drisw_loader_funcs *lf);
+struct sw_winsys *dri_create_sw_winsys(const struct drisw_loader_funcs *lf);
 
 #endif

@@ -29,13 +29,16 @@
 #define H_ETNAVIV_SCREEN
 
 #include "etnaviv_internal.h"
-#include "etnaviv_query_pm.h"
+#include "etnaviv_perfmon.h"
 
 #include "os/os_thread.h"
 #include "pipe/p_screen.h"
 #include "renderonly/renderonly.h"
+#include "util/set.h"
 #include "util/slab.h"
 #include "util/u_dynarray.h"
+#include "util/u_helpers.h"
+#include "compiler/nir/nir.h"
 
 struct etna_bo;
 
@@ -48,6 +51,7 @@ enum viv_features_word {
    viv_chipMinorFeatures3 = 4,
    viv_chipMinorFeatures4 = 5,
    viv_chipMinorFeatures5 = 6,
+   viv_chipMinorFeatures6 = 7,
    VIV_FEATURES_WORD_COUNT /* Must be last */
 };
 
@@ -80,6 +84,9 @@ struct etna_screen {
    struct etna_specs specs;
 
    uint32_t drm_version;
+
+   struct etna_compiler *compiler;
+   nir_shader_compiler_options options;
 };
 
 static inline struct etna_screen *

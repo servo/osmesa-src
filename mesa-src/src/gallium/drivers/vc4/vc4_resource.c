@@ -25,14 +25,15 @@
 #include "pipe/p_defines.h"
 #include "util/u_blit.h"
 #include "util/u_memory.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_surface.h"
 #include "util/u_transfer_helper.h"
 #include "util/u_upload_mgr.h"
+#include "util/u_drm.h"
 
-#include "drm_fourcc.h"
-#include "vc4_drm.h"
+#include "drm-uapi/drm_fourcc.h"
+#include "drm-uapi/vc4_drm.h"
 #include "vc4_screen.h"
 #include "vc4_context.h"
 #include "vc4_resource.h"
@@ -283,7 +284,7 @@ vc4_resource_destroy(struct pipe_screen *pscreen,
         free(rsc);
 }
 
-static boolean
+static bool
 vc4_resource_get_handle(struct pipe_screen *pscreen,
                         struct pipe_context *pctx,
                         struct pipe_resource *prsc,
@@ -314,15 +315,17 @@ vc4_resource_get_handle(struct pipe_screen *pscreen,
                          * control node was used for pl111.
                          */
                         fprintf(stderr, "flink unsupported with pl111\n");
-                        return FALSE;
+                        return false;
                 }
 
                 return vc4_bo_flink(rsc->bo, &whandle->handle);
         case WINSYS_HANDLE_TYPE_KMS:
-                if (screen->ro && renderonly_get_handle(rsc->scanout, whandle))
-                        return TRUE;
+                if (screen->ro) {
+                        assert(rsc->scanout);
+                        return renderonly_get_handle(rsc->scanout, whandle);
+                }
                 whandle->handle = rsc->bo->handle;
-                return TRUE;
+                return true;
         case WINSYS_HANDLE_TYPE_FD:
                 /* FDs are cross-device, so we can export directly from vc4.
                  */
@@ -330,7 +333,7 @@ vc4_resource_get_handle(struct pipe_screen *pscreen,
                 return whandle->handle != -1;
         }
 
-        return FALSE;
+        return false;
 }
 
 static void
@@ -476,19 +479,6 @@ get_resource_texture_format(struct pipe_resource *prsc)
         return format;
 }
 
-static bool
-find_modifier(uint64_t needle, const uint64_t *haystack, int count)
-{
-        int i;
-
-        for (i = 0; i < count; i++) {
-                if (haystack[i] == needle)
-                        return true;
-        }
-
-        return false;
-}
-
 static struct pipe_resource *
 vc4_resource_create_with_modifiers(struct pipe_screen *pscreen,
                                    const struct pipe_resource *tmpl,
@@ -498,7 +488,7 @@ vc4_resource_create_with_modifiers(struct pipe_screen *pscreen,
         struct vc4_screen *screen = vc4_screen(pscreen);
         struct vc4_resource *rsc = vc4_resource_setup(pscreen, tmpl);
         struct pipe_resource *prsc = &rsc->base;
-        bool linear_ok = find_modifier(DRM_FORMAT_MOD_LINEAR, modifiers, count);
+        bool linear_ok = drm_find_modifier(DRM_FORMAT_MOD_LINEAR, modifiers, count);
         /* Use a tiled layout if we can, for better 3D performance. */
         bool should_tile = true;
 
@@ -539,7 +529,7 @@ vc4_resource_create_with_modifiers(struct pipe_screen *pscreen,
                 linear_ok = true;
                 rsc->tiled = should_tile;
         } else if (should_tile &&
-                   find_modifier(DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED,
+                   drm_find_modifier(DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED,
                                  modifiers, count)) {
                 rsc->tiled = true;
         } else if (linear_ok) {
@@ -572,7 +562,15 @@ vc4_resource_create_with_modifiers(struct pipe_screen *pscreen,
                         goto fail;
         }
 
-        if (screen->ro && tmpl->bind & PIPE_BIND_SCANOUT) {
+        /* Set up the "scanout resource" (the dmabuf export of our buffer to
+         * the KMS handle) if the buffer might ever have
+         * resource_get_handle(WINSYS_HANDLE_TYPE_KMS) called on it.
+         * create_with_modifiers() doesn't give us usage flags, so we have to
+         * assume that all calls with modifiers are scanout-possible.
+         */
+        if (screen->ro &&
+            ((tmpl->bind & PIPE_BIND_SCANOUT) ||
+             !(count == 1 && modifiers[0] == DRM_FORMAT_MOD_INVALID))) {
                 rsc->scanout =
                         renderonly_scanout_for_resource(prsc, screen->ro, NULL);
                 if (!rsc->scanout)
@@ -614,12 +612,10 @@ vc4_resource_from_handle(struct pipe_screen *pscreen,
 
         switch (whandle->type) {
         case WINSYS_HANDLE_TYPE_SHARED:
-                rsc->bo = vc4_bo_open_name(screen,
-                                           whandle->handle, whandle->stride);
+                rsc->bo = vc4_bo_open_name(screen, whandle->handle);
                 break;
         case WINSYS_HANDLE_TYPE_FD:
-                rsc->bo = vc4_bo_open_dmabuf(screen,
-                                             whandle->handle, whandle->stride);
+                rsc->bo = vc4_bo_open_dmabuf(screen, whandle->handle);
                 break;
         default:
                 fprintf(stderr,
@@ -1005,6 +1001,7 @@ void
 vc4_update_shadow_baselevel_texture(struct pipe_context *pctx,
                                     struct pipe_sampler_view *pview)
 {
+        struct vc4_context *vc4 = vc4_context(pctx);
         struct vc4_sampler_view *view = vc4_sampler_view(pview);
         struct vc4_resource *shadow = vc4_resource(view->texture);
         struct vc4_resource *orig = vc4_resource(pview->texture);

@@ -51,8 +51,10 @@ struct u_upload_mgr {
    struct pipe_resource *buffer;   /* Upload buffer. */
    struct pipe_transfer *transfer; /* Transfer object for the upload buffer. */
    uint8_t *map;    /* Pointer to the mapped upload buffer. */
+   unsigned buffer_size; /* Same as buffer->width0. */
    unsigned offset; /* Aligned offset to the upload buffer, pointing
                      * at the first unused byte. */
+   unsigned flushed_size; /* Size we have flushed by transfer_flush_region. */
 };
 
 
@@ -102,27 +104,57 @@ u_upload_create_default(struct pipe_context *pipe)
 struct u_upload_mgr *
 u_upload_clone(struct pipe_context *pipe, struct u_upload_mgr *upload)
 {
-   return u_upload_create(pipe, upload->default_size, upload->bind,
-                          upload->usage, upload->flags);
+   struct u_upload_mgr *result = u_upload_create(pipe, upload->default_size,
+                                                 upload->bind, upload->usage,
+                                                 upload->flags);
+   if (!upload->map_persistent && result->map_persistent)
+      u_upload_disable_persistent(result);
+   else if (upload->map_persistent &&
+            upload->map_flags & PIPE_TRANSFER_FLUSH_EXPLICIT)
+      u_upload_enable_flush_explicit(result);
+
+   return result;
+}
+
+void
+u_upload_enable_flush_explicit(struct u_upload_mgr *upload)
+{
+   assert(upload->map_persistent);
+   upload->map_flags &= ~PIPE_TRANSFER_COHERENT;
+   upload->map_flags |= PIPE_TRANSFER_FLUSH_EXPLICIT;
+}
+
+void
+u_upload_disable_persistent(struct u_upload_mgr *upload)
+{
+   upload->map_persistent = FALSE;
+   upload->map_flags &= ~(PIPE_TRANSFER_COHERENT | PIPE_TRANSFER_PERSISTENT);
+   upload->map_flags |= PIPE_TRANSFER_FLUSH_EXPLICIT;
 }
 
 static void
 upload_unmap_internal(struct u_upload_mgr *upload, boolean destroying)
 {
-   if (!destroying && upload->map_persistent)
+   if (!upload->transfer)
       return;
 
-   if (upload->transfer) {
+   if (upload->map_flags & PIPE_TRANSFER_FLUSH_EXPLICIT) {
       struct pipe_box *box = &upload->transfer->box;
+      unsigned flush_offset = box->x + upload->flushed_size;
 
-      if (!upload->map_persistent && (int) upload->offset > box->x) {
+      if (upload->offset > flush_offset) {
          pipe_buffer_flush_mapped_range(upload->pipe, upload->transfer,
-                                        box->x, upload->offset - box->x);
+                                        flush_offset,
+                                        upload->offset - flush_offset);
+         upload->flushed_size = upload->offset;
       }
+   }
 
+   if (destroying || !upload->map_persistent) {
       pipe_transfer_unmap(upload->pipe, upload->transfer);
       upload->transfer = NULL;
       upload->map = NULL;
+      upload->flushed_size = 0;
    }
 }
 
@@ -140,6 +172,7 @@ u_upload_release_buffer(struct u_upload_mgr *upload)
    /* Unmap and unreference the upload buffer. */
    upload_unmap_internal(upload, TRUE);
    pipe_resource_reference(&upload->buffer, NULL);
+   upload->buffer_size = 0;
 }
 
 
@@ -150,8 +183,8 @@ u_upload_destroy(struct u_upload_mgr *upload)
    FREE(upload);
 }
 
-
-static void
+/* Return the allocated buffer size or 0 if it failed. */
+static unsigned
 u_upload_alloc_buffer(struct u_upload_mgr *upload, unsigned min_size)
 {
    struct pipe_screen *screen = upload->pipe->screen;
@@ -171,7 +204,7 @@ u_upload_alloc_buffer(struct u_upload_mgr *upload, unsigned min_size)
    buffer.format = PIPE_FORMAT_R8_UNORM; /* want TYPELESS or similar */
    buffer.bind = upload->bind;
    buffer.usage = upload->usage;
-   buffer.flags = upload->flags;
+   buffer.flags = upload->flags | PIPE_RESOURCE_FLAG_SINGLE_THREAD_USE;
    buffer.width0 = size;
    buffer.height0 = 1;
    buffer.depth0 = 1;
@@ -184,7 +217,7 @@ u_upload_alloc_buffer(struct u_upload_mgr *upload, unsigned min_size)
 
    upload->buffer = screen->resource_create(screen, &buffer);
    if (upload->buffer == NULL)
-      return;
+      return 0;
 
    /* Map the new buffer. */
    upload->map = pipe_buffer_map_range(upload->pipe, upload->buffer,
@@ -193,10 +226,12 @@ u_upload_alloc_buffer(struct u_upload_mgr *upload, unsigned min_size)
    if (upload->map == NULL) {
       upload->transfer = NULL;
       pipe_resource_reference(&upload->buffer, NULL);
-      return;
+      return 0;
    }
 
+   upload->buffer_size = size;
    upload->offset = 0;
+   return size;
 }
 
 void
@@ -208,29 +243,25 @@ u_upload_alloc(struct u_upload_mgr *upload,
                struct pipe_resource **outbuf,
                void **ptr)
 {
-   unsigned buffer_size = upload->buffer ? upload->buffer->width0 : 0;
-   unsigned offset;
+   unsigned buffer_size = upload->buffer_size;
+   unsigned offset = MAX2(min_out_offset, upload->offset);
 
-   min_out_offset = align(min_out_offset, alignment);
-
-   offset = align(upload->offset, alignment);
-   offset = MAX2(offset, min_out_offset);
+   offset = align(offset, alignment);
 
    /* Make sure we have enough space in the upload buffer
     * for the sub-allocation.
     */
-   if (unlikely(!upload->buffer || offset + size > buffer_size)) {
-      u_upload_alloc_buffer(upload, min_out_offset + size);
+   if (unlikely(offset + size > buffer_size)) {
+      /* Allocate a new buffer and set the offset to the smallest one. */
+      offset = align(min_out_offset, alignment);
+      buffer_size = u_upload_alloc_buffer(upload, offset + size);
 
-      if (unlikely(!upload->buffer)) {
+      if (unlikely(!buffer_size)) {
          *out_offset = ~0;
          pipe_resource_reference(outbuf, NULL);
          *ptr = NULL;
          return;
       }
-
-      offset = min_out_offset;
-      buffer_size = upload->buffer->width0;
    }
 
    if (unlikely(!upload->map)) {

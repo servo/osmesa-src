@@ -35,7 +35,7 @@
 #include "dri_util.h"
 #include "brw_bufmgr.h"
 #include "dev/gen_device_info.h"
-#include "i915_drm.h"
+#include "drm-uapi/i915_drm.h"
 #include "util/xmlconfig.h"
 
 #include "isl/isl.h"
@@ -55,6 +55,9 @@ struct intel_screen
 
    /** Bytes of aperture usage beyond which execbuf is likely to fail. */
    uint64_t aperture_threshold;
+
+   /** DRM fd associated with this screen. Not owned by this object. Do not close. */
+   int fd;
 
    bool no_hw;
    bool hw_has_swizzling;
@@ -138,9 +141,6 @@ double get_time(void);
 
 const int*
 intel_supported_msaa_modes(const struct intel_screen  *screen);
-
-int
-intel_device_get_revision(int fd);
 
 static inline bool
 can_do_pipelined_register_writes(const struct intel_screen *screen)

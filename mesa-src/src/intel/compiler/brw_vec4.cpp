@@ -26,10 +26,9 @@
 #include "brw_cfg.h"
 #include "brw_nir.h"
 #include "brw_vec4_builder.h"
-#include "brw_vec4_live_variables.h"
 #include "brw_vec4_vs.h"
 #include "brw_dead_control_flow.h"
-#include "common/gen_debug.h"
+#include "dev/gen_debug.h"
 #include "program/prog_parameter.h"
 #include "util/u_math.h"
 
@@ -148,17 +147,14 @@ dst_reg::equals(const dst_reg &r) const
 }
 
 bool
-vec4_instruction::is_send_from_grf()
+vec4_instruction::is_send_from_grf() const
 {
    switch (opcode) {
    case SHADER_OPCODE_SHADER_TIME_ADD:
    case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
-   case SHADER_OPCODE_UNTYPED_ATOMIC:
-   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
-   case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
-   case SHADER_OPCODE_TYPED_ATOMIC:
-   case SHADER_OPCODE_TYPED_SURFACE_READ:
-   case SHADER_OPCODE_TYPED_SURFACE_WRITE:
+   case VEC4_OPCODE_UNTYPED_ATOMIC:
+   case VEC4_OPCODE_UNTYPED_SURFACE_READ:
+   case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
    case VEC4_OPCODE_URB_READ:
    case TCS_OPCODE_URB_WRITE:
    case TCS_OPCODE_RELEASE_INPUT:
@@ -212,12 +208,9 @@ vec4_instruction::size_read(unsigned arg) const
 {
    switch (opcode) {
    case SHADER_OPCODE_SHADER_TIME_ADD:
-   case SHADER_OPCODE_UNTYPED_ATOMIC:
-   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
-   case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
-   case SHADER_OPCODE_TYPED_ATOMIC:
-   case SHADER_OPCODE_TYPED_SURFACE_READ:
-   case SHADER_OPCODE_TYPED_SURFACE_WRITE:
+   case VEC4_OPCODE_UNTYPED_ATOMIC:
+   case VEC4_OPCODE_UNTYPED_SURFACE_READ:
+   case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
    case TCS_OPCODE_URB_WRITE:
       if (arg == 0)
          return mlen * REG_SIZE;
@@ -333,13 +326,13 @@ vec4_instruction::can_change_types() const
  * instruction -- the generate_* functions generate additional MOVs
  * for setup.
  */
-int
-vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
+unsigned
+vec4_instruction::implied_mrf_writes() const
 {
-   if (inst->mlen == 0 || inst->is_send_from_grf())
+   if (mlen == 0 || is_send_from_grf())
       return 0;
 
-   switch (inst->opcode) {
+   switch (opcode) {
    case SHADER_OPCODE_RCP:
    case SHADER_OPCODE_RSQ:
    case SHADER_OPCODE_SQRT:
@@ -383,7 +376,7 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
    case SHADER_OPCODE_TG4_OFFSET:
    case SHADER_OPCODE_SAMPLEINFO:
    case SHADER_OPCODE_GET_BUFFER_SIZE:
-      return inst->header_size;
+      return header_size;
    default:
       unreachable("not reached");
    }
@@ -409,7 +402,7 @@ vec4_visitor::opt_vector_float()
    bool progress = false;
 
    foreach_block(block, cfg) {
-      int last_reg = -1, last_offset = -1;
+      unsigned last_reg = ~0u, last_offset = ~0u;
       enum brw_reg_file last_reg_file = BAD_FILE;
 
       uint8_t imm[4] = { 0 };
@@ -420,7 +413,7 @@ vec4_visitor::opt_vector_float()
 
       foreach_inst_in_block_safe(vec4_instruction, inst, block) {
          int vf = -1;
-         enum brw_reg_type need_type;
+         enum brw_reg_type need_type = BRW_REGISTER_TYPE_LAST;
 
          /* Look for unconditional MOVs from an immediate with a partial
           * writemask.  Skip type-conversion MOVs other than integer 0,
@@ -442,7 +435,7 @@ vec4_visitor::opt_vector_float()
                need_type = BRW_REGISTER_TYPE_F;
             }
          } else {
-            last_reg = -1;
+            last_reg = ~0u;
          }
 
          /* If this wasn't a MOV, or the destination register doesn't match,
@@ -470,7 +463,7 @@ vec4_visitor::opt_vector_float()
             }
 
             inst_count = 0;
-            last_reg = -1;
+            last_reg = ~0u;;
             writemask = 0;
             dest_type = BRW_REGISTER_TYPE_F;
 
@@ -503,7 +496,7 @@ vec4_visitor::opt_vector_float()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
 
    return progress;
 }
@@ -584,7 +577,7 @@ vec4_visitor::opt_reduce_swizzle()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTION_DETAIL);
 
    return progress;
 }
@@ -639,6 +632,9 @@ set_push_constant_loc(const int nr_uniforms, int *new_uniform_count,
 void
 vec4_visitor::pack_uniform_registers()
 {
+   if (!compiler->compact_params)
+      return;
+
    uint8_t chans_used[this->uniforms];
    int new_loc[this->uniforms];
    int new_chan[this->uniforms];
@@ -892,18 +888,6 @@ vec4_visitor::opt_algebraic()
             progress = true;
 	 }
 	 break;
-      case BRW_OPCODE_CMP:
-         if (inst->conditional_mod == BRW_CONDITIONAL_GE &&
-             inst->src[0].abs &&
-             inst->src[0].negate &&
-             inst->src[1].is_zero()) {
-            inst->src[0].abs = false;
-            inst->src[0].negate = false;
-            inst->conditional_mod = BRW_CONDITIONAL_Z;
-            progress = true;
-            break;
-         }
-         break;
       case SHADER_OPCODE_BROADCAST:
          if (is_uniform(inst->src[0]) ||
              inst->src[1].is_zero()) {
@@ -920,7 +904,8 @@ vec4_visitor::opt_algebraic()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTION_DATA_FLOW |
+                          DEPENDENCY_INSTRUCTION_DETAIL);
 
    return progress;
 }
@@ -1172,6 +1157,12 @@ vec4_instruction::can_reswizzle(const struct gen_device_info *devinfo,
    if (devinfo->gen == 6 && is_math() && swizzle != BRW_SWIZZLE_XYZW)
       return false;
 
+   /* If we write to the flag register changing the swizzle would change
+    * what channels are written to the flag register.
+    */
+   if (writes_flag())
+      return false;
+
    /* We can't swizzle implicit accumulator access.  We'd have to
     * reswizzle the producer of the accumulator value in addition
     * to the consumer (i.e. both MUL and MACH).  Just skip this.
@@ -1216,8 +1207,30 @@ vec4_instruction::reswizzle(int dst_writemask, int swizzle)
        opcode != BRW_OPCODE_DP3 && opcode != BRW_OPCODE_DP2 &&
        opcode != VEC4_OPCODE_PACK_BYTES) {
       for (int i = 0; i < 3; i++) {
-         if (src[i].file == BAD_FILE || src[i].file == IMM)
+         if (src[i].file == BAD_FILE)
             continue;
+
+         if (src[i].file == IMM) {
+            assert(src[i].type != BRW_REGISTER_TYPE_V &&
+                   src[i].type != BRW_REGISTER_TYPE_UV);
+
+            /* Vector immediate types need to be reswizzled. */
+            if (src[i].type == BRW_REGISTER_TYPE_VF) {
+               const unsigned imm[] = {
+                  (src[i].ud >>  0) & 0x0ff,
+                  (src[i].ud >>  8) & 0x0ff,
+                  (src[i].ud >> 16) & 0x0ff,
+                  (src[i].ud >> 24) & 0x0ff,
+               };
+
+               src[i] = brw_imm_vf4(imm[BRW_GET_SWZ(swizzle, 0)],
+                                    imm[BRW_GET_SWZ(swizzle, 1)],
+                                    imm[BRW_GET_SWZ(swizzle, 2)],
+                                    imm[BRW_GET_SWZ(swizzle, 3)]);
+            }
+
+            continue;
+         }
 
          src[i].swizzle = brw_compose_swizzle(swizzle, src[i].swizzle);
       }
@@ -1240,8 +1253,7 @@ vec4_visitor::opt_register_coalesce()
 {
    bool progress = false;
    int next_ip = 0;
-
-   calculate_live_intervals();
+   const vec4_live_variables &live = live_analysis.require();
 
    foreach_block_and_inst_safe (block, vec4_instruction, inst, cfg) {
       int ip = next_ip;
@@ -1283,7 +1295,7 @@ vec4_visitor::opt_register_coalesce()
       /* Can't coalesce this GRF if someone else was going to
        * read it later.
        */
-      if (var_range_end(var_from_reg(alloc, dst_reg(inst->src[0])), 8) > ip)
+      if (live.var_range_end(var_from_reg(alloc, dst_reg(inst->src[0])), 8) > ip)
 	 continue;
 
       /* We need to check interference with the final destination between this
@@ -1409,8 +1421,10 @@ vec4_visitor::opt_register_coalesce()
           * in the register instead.
           */
          if (to_mrf && scan_inst->mlen > 0) {
-            if (inst->dst.nr >= scan_inst->base_mrf &&
-                inst->dst.nr < scan_inst->base_mrf + scan_inst->mlen) {
+            unsigned start = scan_inst->base_mrf;
+            unsigned end = scan_inst->base_mrf + scan_inst->mlen;
+
+            if (inst->dst.nr >= start && inst->dst.nr < end) {
                break;
             }
          } else {
@@ -1460,7 +1474,7 @@ vec4_visitor::opt_register_coalesce()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
 
    return progress;
 }
@@ -1509,6 +1523,9 @@ vec4_visitor::eliminate_find_live_channel()
          break;
       }
    }
+
+   if (progress)
+      invalidate_analysis(DEPENDENCY_INSTRUCTION_DETAIL);
 
    return progress;
 }
@@ -1584,19 +1601,19 @@ vec4_visitor::split_virtual_grfs()
          }
       }
    }
-   invalidate_live_intervals();
+   invalidate_analysis(DEPENDENCY_INSTRUCTION_DETAIL | DEPENDENCY_VARIABLES);
 }
 
 void
-vec4_visitor::dump_instruction(backend_instruction *be_inst)
+vec4_visitor::dump_instruction(const backend_instruction *be_inst) const
 {
    dump_instruction(be_inst, stderr);
 }
 
 void
-vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
+vec4_visitor::dump_instruction(const backend_instruction *be_inst, FILE *file) const
 {
-   vec4_instruction *inst = (vec4_instruction *)be_inst;
+   const vec4_instruction *inst = (const vec4_instruction *)be_inst;
 
    if (inst->predicate) {
       fprintf(file, "(%cf%d.%d%s) ",
@@ -1887,7 +1904,7 @@ vec4_visitor::lower_minmax()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
 
    return progress;
 }
@@ -2023,7 +2040,8 @@ vec4_visitor::fixup_3src_null_dest()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTION_DETAIL |
+                          DEPENDENCY_VARIABLES);
 }
 
 void
@@ -2351,7 +2369,7 @@ vec4_visitor::lower_simd_width()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS | DEPENDENCY_VARIABLES);
 
    return progress;
 }
@@ -2508,7 +2526,7 @@ vec4_visitor::scalarize_df()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
 
    return progress;
 }
@@ -2551,7 +2569,7 @@ vec4_visitor::lower_64bit_mad_to_mul_add()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS | DEPENDENCY_VARIABLES);
 
    return progress;
 }
@@ -2646,6 +2664,13 @@ vec4_visitor::apply_logical_swizzle(struct brw_reg *hw_reg,
       hw_reg->swizzle = BRW_SWIZZLE4(swizzle0 * 2, swizzle0 * 2 + 1,
                                      swizzle1 * 2, swizzle1 * 2 + 1);
    }
+}
+
+void
+vec4_visitor::invalidate_analysis(brw::analysis_dependency_class c)
+{
+   backend_shader::invalidate_analysis(c);
+   live_analysis.invalidate(c);
 }
 
 bool
@@ -2828,13 +2853,13 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
                void *mem_ctx,
                const struct brw_vs_prog_key *key,
                struct brw_vs_prog_data *prog_data,
-               const nir_shader *src_shader,
+               nir_shader *shader,
                int shader_time_index,
+               struct brw_compile_stats *stats,
                char **error_str)
 {
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_VERTEX];
-   nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
-   shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, is_scalar);
+   brw_nir_apply_key(shader, compiler, &key->base, 8, is_scalar);
 
    const unsigned *assembly = NULL;
 
@@ -2858,7 +2883,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
 
    brw_nir_lower_vs_inputs(shader, key->gl_attrib_wa_flags);
    brw_nir_lower_vue_outputs(shader);
-   shader = brw_postprocess_nir(shader, compiler, is_scalar);
+   brw_postprocess_nir(shader, compiler, is_scalar);
 
    prog_data->base.clip_distance_mask =
       ((1 << shader->info.clip_distance_array_size) - 1);
@@ -2950,8 +2975,8 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
    if (is_scalar) {
       prog_data->base.dispatch_mode = DISPATCH_MODE_SIMD8;
 
-      fs_visitor v(compiler, log_data, mem_ctx, key, &prog_data->base.base,
-                   NULL, /* prog; Only used for TEXTURE_RECTANGLE on gen < 8 */
+      fs_visitor v(compiler, log_data, mem_ctx, &key->base,
+                   &prog_data->base.base,
                    shader, 8, shader_time_index);
       if (!v.run_vs()) {
          if (error_str)
@@ -2963,8 +2988,8 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       prog_data->base.base.dispatch_grf_start_reg = v.payload.num_regs;
 
       fs_generator g(compiler, log_data, mem_ctx,
-                     &prog_data->base.base, v.promoted_constants,
-                     v.runtime_check_aads_emit, MESA_SHADER_VERTEX);
+                     &prog_data->base.base, v.runtime_check_aads_emit,
+                     MESA_SHADER_VERTEX);
       if (INTEL_DEBUG & DEBUG_VS) {
          const char *debug_name =
             ralloc_asprintf(mem_ctx, "%s vertex shader %s",
@@ -2974,7 +2999,8 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
 
          g.enable_debug(debug_name);
       }
-      g.generate_code(v.cfg, 8);
+      g.generate_code(v.cfg, 8, v.shader_stats,
+                      v.performance_analysis.require(), stats);
       assembly = g.get_assembly();
    }
 
@@ -2991,7 +3017,10 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       }
 
       assembly = brw_vec4_generate_assembly(compiler, log_data, mem_ctx,
-                                            shader, &prog_data->base, v.cfg);
+                                            shader, &prog_data->base,
+                                            v.cfg,
+                                            v.performance_analysis.require(),
+                                            stats);
    }
 
    return assembly;

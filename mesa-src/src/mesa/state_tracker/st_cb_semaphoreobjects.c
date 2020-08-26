@@ -21,7 +21,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include "main/imports.h"
+
 #include "main/mtypes.h"
 #include "main/context.h"
 
@@ -29,11 +29,12 @@
 
 #include "st_context.h"
 #include "st_texture.h"
+#include "st_util.h"
 #include "st_cb_bitmap.h"
 #include "st_cb_bufferobjects.h"
 #include "st_cb_semaphoreobjects.h"
 
-#include "state_tracker/drm_driver.h"
+#include "frontend/drm_driver.h"
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
 

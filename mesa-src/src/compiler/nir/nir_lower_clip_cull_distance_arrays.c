@@ -27,10 +27,10 @@
 /**
  * @file
  *
- * This pass combines separate clip and cull distance arrays into a
- * single array that contains both.  Clip distances come first, then
- * cull distances.  It also populates nir_shader_info with the size
- * of the original arrays so the driver knows which are which.
+ * This pass combines clip and cull distance arrays in separate locations and
+ * colocates them both in VARYING_SLOT_CLIP_DIST0.  It does so by maintaining
+ * two arrays but making them compact and using location_frac to stack them on
+ * top of each other.
  */
 
 /**
@@ -56,87 +56,15 @@ get_unwrapped_array_length(nir_shader *nir, nir_variable *var)
    return glsl_get_length(type);
 }
 
-/**
- * Update the type of the combined array (including interface block nesting).
- */
-static void
-update_type(nir_variable *var, gl_shader_stage stage, unsigned length)
-{
-   const struct glsl_type *type = glsl_array_type(glsl_float_type(), length);
-
-   if (nir_is_per_vertex_io(var, stage))
-      type = glsl_array_type(type, glsl_get_length(var->type));
-
-   var->type = type;
-}
-
-static void
-rewrite_clip_cull_deref(nir_builder *b,
-                        nir_deref_instr *deref,
-                        const struct glsl_type *type,
-                        unsigned tail_offset)
-{
-   deref->type = type;
-
-   if (glsl_type_is_array(type)) {
-      const struct glsl_type *child_type = glsl_get_array_element(type);
-      nir_foreach_use(src, &deref->dest.ssa) {
-         rewrite_clip_cull_deref(b, nir_instr_as_deref(src->parent_instr),
-                                 child_type, tail_offset);
-      }
-   } else {
-      assert(glsl_type_is_scalar(type));
-
-      /* This is the end of the line.  Add the tail offset if needed */
-      if (tail_offset > 0) {
-         b->cursor = nir_before_instr(&deref->instr);
-         assert(deref->deref_type == nir_deref_type_array);
-         nir_ssa_def *index = nir_iadd(b, deref->arr.index.ssa,
-                                          nir_imm_int(b, tail_offset));
-         nir_instr_rewrite_src(&deref->instr, &deref->arr.index,
-                               nir_src_for_ssa(index));
-      }
-   }
-}
-
-static void
-rewrite_references(nir_builder *b,
-                   nir_instr *instr,
-                   nir_variable *combined,
-                   unsigned cull_offset)
-{
-   if (instr->type != nir_instr_type_deref)
-      return;
-
-   nir_deref_instr *deref = nir_instr_as_deref(instr);
-   if (deref->deref_type != nir_deref_type_var)
-      return;
-
-   if (deref->var->data.mode != combined->data.mode)
-      return;
-
-   const unsigned location = deref->var->data.location;
-   if (location != VARYING_SLOT_CLIP_DIST0 &&
-       location != VARYING_SLOT_CULL_DIST0)
-      return;
-
-   deref->var = combined;
-   if (location == VARYING_SLOT_CULL_DIST0)
-      rewrite_clip_cull_deref(b, deref, combined->type, cull_offset);
-   else
-      rewrite_clip_cull_deref(b, deref, combined->type, 0);
-}
-
 static bool
 combine_clip_cull(nir_shader *nir,
-                  struct exec_list *vars,
+                  nir_variable_mode mode,
                   bool store_info)
 {
    nir_variable *cull = NULL;
    nir_variable *clip = NULL;
-   bool progress = false;
 
-   nir_foreach_variable(var, vars) {
+   nir_foreach_variable_with_modes(var, nir, mode) {
       if (var->data.location == VARYING_SLOT_CLIP_DIST0)
          clip = var;
 
@@ -144,9 +72,27 @@ combine_clip_cull(nir_shader *nir,
          cull = var;
    }
 
-   /* if the GLSL lowering pass has already run, don't bother repeating */
+   if (!cull && !clip) {
+      /* If this is run after optimizations and the variables have been
+       * eliminated, we should update the shader info, because no other
+       * place does that.
+       */
+      if (store_info) {
+         nir->info.clip_distance_array_size = 0;
+         nir->info.cull_distance_array_size = 0;
+      }
+      return false;
+   }
+
    if (!cull && clip) {
-      if (!glsl_type_is_array(clip->type))
+      /* The GLSL IR lowering pass must have converted these to vectors */
+      if (!clip->data.compact)
+         return false;
+
+      /* If this pass has already run, don't repeat.  We would think that
+       * the combined clip/cull distance array was clip-only and mess up.
+       */
+      if (clip->data.how_declared == nir_var_hidden)
          return false;
    }
 
@@ -158,50 +104,19 @@ combine_clip_cull(nir_shader *nir,
       nir->info.cull_distance_array_size = cull_array_size;
    }
 
-   if (clip)
-      clip->data.compact = true;
-
-   if (cull)
-      cull->data.compact = true;
-
-   if (cull_array_size > 0) {
-      if (clip_array_size == 0) {
-         /* No clip distances, just change the cull distance location */
-         cull->data.location = VARYING_SLOT_CLIP_DIST0;
-      } else {
-         /* Turn the ClipDistance array into a combined one */
-         update_type(clip, nir->info.stage, clip_array_size + cull_array_size);
-
-         /* Rewrite CullDistance to reference the combined array */
-         nir_foreach_function(function, nir) {
-            if (function->impl) {
-               nir_builder b;
-               nir_builder_init(&b, function->impl);
-
-               nir_foreach_block(block, function->impl) {
-                  nir_foreach_instr(instr, block) {
-                     rewrite_references(&b, instr, clip, clip_array_size);
-                  }
-               }
-            }
-         }
-
-         /* Delete the old CullDistance variable */
-         exec_node_remove(&cull->node);
-         ralloc_free(cull);
-      }
-
-      nir_foreach_function(function, nir) {
-         if (function->impl) {
-            nir_metadata_preserve(function->impl,
-                                  nir_metadata_block_index |
-                                  nir_metadata_dominance);
-         }
-      }
-      progress = true;
+   if (clip) {
+      assert(clip->data.compact);
+      clip->data.how_declared = nir_var_hidden;
    }
 
-   return progress;
+   if (cull) {
+      assert(cull->data.compact);
+      cull->data.how_declared = nir_var_hidden;
+      cull->data.location = VARYING_SLOT_CLIP_DIST0 + clip_array_size / 4;
+      cull->data.location_frac = clip_array_size % 4;
+   }
+
+   return true;
 }
 
 bool
@@ -210,10 +125,25 @@ nir_lower_clip_cull_distance_arrays(nir_shader *nir)
    bool progress = false;
 
    if (nir->info.stage <= MESA_SHADER_GEOMETRY)
-      progress |= combine_clip_cull(nir, &nir->outputs, true);
+      progress |= combine_clip_cull(nir, nir_var_shader_out, true);
 
    if (nir->info.stage > MESA_SHADER_VERTEX)
-      progress |= combine_clip_cull(nir, &nir->inputs, false);
+      progress |= combine_clip_cull(nir, nir_var_shader_in, false);
+
+   nir_foreach_function(function, nir) {
+      if (!function->impl)
+         continue;
+
+      if (progress) {
+         nir_metadata_preserve(function->impl,
+                               nir_metadata_block_index |
+                               nir_metadata_dominance |
+                               nir_metadata_live_ssa_defs |
+                               nir_metadata_loop_analysis);
+      } else {
+         nir_metadata_preserve(function->impl, nir_metadata_all);
+      }
+   }
 
    return progress;
 }

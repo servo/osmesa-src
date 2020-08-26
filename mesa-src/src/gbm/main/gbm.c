@@ -271,6 +271,9 @@ gbm_bo_get_bpp(struct gbm_bo *bo)
       case GBM_FORMAT_RGBA1010102:
       case GBM_FORMAT_BGRA1010102:
          return 32;
+      case GBM_FORMAT_XBGR16161616F:
+      case GBM_FORMAT_ABGR16161616F:
+         return 64;
    }
 }
 
@@ -448,14 +451,14 @@ gbm_bo_destroy(struct gbm_bo *bo)
  * \param gbm The gbm device returned from gbm_create_device()
  * \param width The width for the buffer
  * \param height The height for the buffer
- * \param format The format to use for the buffer
+ * \param format The format to use for the buffer, from GBM_FORMAT_* or
+ * GBM_BO_FORMAT_* tokens
  * \param usage The union of the usage flags for this buffer
  *
  * \return A newly allocated buffer that should be freed with gbm_bo_destroy()
  * when no longer needed. If an error occurs during allocation %NULL will be
  * returned and errno set.
  *
- * \sa enum gbm_bo_format for the list of formats
  * \sa enum gbm_bo_flags for the list of usage flags
  */
 GBM_EXPORT struct gbm_bo *
@@ -490,17 +493,19 @@ gbm_bo_create_with_modifiers(struct gbm_device *gbm,
 
    return gbm->bo_create(gbm, width, height, format, 0, modifiers, count);
 }
+
 /**
- * Create a gbm buffer object from an foreign object
+ * Create a gbm buffer object from a foreign object
  *
  * This function imports a foreign object and creates a new gbm bo for it.
- * This enabled using the foreign object with a display API such as KMS.
- * Currently three types of foreign objects are supported, indicated by the type
+ * This enables using the foreign object with a display API such as KMS.
+ * Currently these types of foreign objects are supported, indicated by the type
  * argument:
  *
  *   GBM_BO_IMPORT_WL_BUFFER
  *   GBM_BO_IMPORT_EGL_IMAGE
  *   GBM_BO_IMPORT_FD
+ *   GBM_BO_IMPORT_FD_MODIFIER
  *
  * The gbm bo shares the underlying pixels but its life-time is
  * independent of the foreign object.
@@ -528,6 +533,11 @@ gbm_bo_import(struct gbm_device *gbm,
  *
  * This function maps a region of a gbm bo for cpu read and/or write
  * access.
+ *
+ * The mapping exposes a linear view of the buffer object even if the buffer
+ * has a non-linear modifier.
+ *
+ * This function may require intermediate buffer copies (ie. it may be slow).
  *
  * \param bo The buffer object
  * \param x The X (top left origin) starting position of the mapped region for
@@ -694,4 +704,40 @@ GBM_EXPORT int
 gbm_surface_has_free_buffers(struct gbm_surface *surf)
 {
    return surf->gbm->surface_has_free_buffers(surf);
+}
+
+/* The two GBM_BO_FORMAT_[XA]RGB8888 formats alias the GBM_FORMAT_*
+ * formats of the same name. We want to accept them whenever someone
+ * has a GBM format, but never return them to the user. */
+uint32_t
+gbm_format_canonicalize(uint32_t gbm_format)
+{
+   switch (gbm_format) {
+   case GBM_BO_FORMAT_XRGB8888:
+      return GBM_FORMAT_XRGB8888;
+   case GBM_BO_FORMAT_ARGB8888:
+      return GBM_FORMAT_ARGB8888;
+   default:
+      return gbm_format;
+   }
+}
+
+/**
+ * Returns a string representing the fourcc format name.
+ *
+ * \param desc Caller-provided storage for the format name string.
+ * \return String containing the fourcc of the format.
+ */
+GBM_EXPORT char *
+gbm_format_get_name(uint32_t gbm_format, struct gbm_format_name_desc *desc)
+{
+   gbm_format = gbm_format_canonicalize(gbm_format);
+
+   desc->name[0] = gbm_format;
+   desc->name[1] = gbm_format >> 8;
+   desc->name[2] = gbm_format >> 16;
+   desc->name[3] = gbm_format >> 24;
+   desc->name[4] = 0;
+
+   return desc->name;
 }

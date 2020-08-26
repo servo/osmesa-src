@@ -4,6 +4,7 @@
  * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  * Copyright 2015 Philip Taylor <philip@zaynar.co.uk>
  * Copyright 2018 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2019 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -27,7 +28,9 @@
 #include <math.h>
 #include <assert.h>
 #include "half_float.h"
+#include "util/u_half.h"
 #include "rounding.h"
+#include "softfloat.h"
 #include "macros.h"
 
 typedef union { float f; int32_t i; uint32_t u; } fi_type;
@@ -125,6 +128,11 @@ _mesa_float_to_half(float val)
    return result;
 }
 
+uint16_t
+_mesa_float_to_float16_rtz(float val)
+{
+    return _mesa_float_to_half_rtz(val);
+}
 
 /**
  * Convert a 2-byte half float to a 4-byte float.
@@ -134,49 +142,7 @@ _mesa_float_to_half(float val)
 float
 _mesa_half_to_float(uint16_t val)
 {
-   /* XXX could also use a 64K-entry lookup table */
-   const int m = val & 0x3ff;
-   const int e = (val >> 10) & 0x1f;
-   const int s = (val >> 15) & 0x1;
-   int flt_m, flt_e, flt_s;
-   fi_type fi;
-   float result;
-
-   /* sign bit */
-   flt_s = s;
-
-   /* handle special cases */
-   if ((e == 0) && (m == 0)) {
-      /* zero */
-      flt_m = 0;
-      flt_e = 0;
-   }
-   else if ((e == 0) && (m != 0)) {
-      /* denorm -- denorm half will fit in non-denorm single */
-      const float half_denorm = 1.0f / 16384.0f; /* 2^-14 */
-      float mantissa = ((float) (m)) / 1024.0f;
-      float sign = s ? -1.0f : 1.0f;
-      return sign * mantissa * half_denorm;
-   }
-   else if ((e == 31) && (m == 0)) {
-      /* infinity */
-      flt_e = 0xff;
-      flt_m = 0;
-   }
-   else if ((e == 31) && (m != 0)) {
-      /* NaN */
-      flt_e = 0xff;
-      flt_m = 1;
-   }
-   else {
-      /* regular */
-      flt_e = e + 112;
-      flt_m = m << 13;
-   }
-
-   fi.i = (flt_s << 31) | (flt_e << 23) | flt_m;
-   result = fi.f;
-   return result;
+   return util_half_to_float(val);
 }
 
 /**
@@ -187,7 +153,7 @@ uint8_t _mesa_half_to_unorm8(uint16_t val)
 {
    const int m = val & 0x3ff;
    const int e = (val >> 10) & 0x1f;
-   MAYBE_UNUSED const int s = (val >> 15) & 0x1;
+   ASSERTED const int s = (val >> 15) & 0x1;
 
    /* v = round_to_nearest(1.mmmmmmmmmm * 2^(e-15) * 255)
     *   = round_to_nearest((1.mmmmmmmmmm * 255) * 2^(e-15))

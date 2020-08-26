@@ -54,18 +54,22 @@ struct _egl_global
    /* the list of all displays */
    _EGLDisplay *DisplayList;
 
+   _EGLDevice *DeviceList;
+
    EGLint NumAtExitCalls;
    void (*AtExitCalls[10])(void);
 
    /*
     * Under libglvnd, the client extension string has to be split into two
-    * strings, one for platform extensions, and one for everything else. So,
-    * define separate strings for them. _eglGetClientExtensionString will
-    * concatenate them together for a non-libglvnd build.
+    * strings, one for platform extensions, and one for everything else.
+    * For a non-glvnd build create a concatenated one.
     */
+#if USE_LIBGLVND
    const char *ClientOnlyExtensionString;
    const char *PlatformExtensionString;
-   char *ClientExtensionString;
+#else
+   const char *ClientExtensionString;
+#endif
 
    EGLDEBUGPROCKHR debugCallback;
    unsigned int debugTypesEnabled;
@@ -83,9 +87,6 @@ static inline unsigned int DebugBitFromType(EGLenum type)
    assert(type >= EGL_DEBUG_MSG_CRITICAL_KHR && type <= EGL_DEBUG_MSG_INFO_KHR);
    return (1 << (type - EGL_DEBUG_MSG_CRITICAL_KHR));
 }
-
-extern const char *
-_eglGetClientExtensionString(void);
 
 /**
  * Perform validity checks on a generic pointer.

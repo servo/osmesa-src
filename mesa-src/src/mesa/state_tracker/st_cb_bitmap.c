@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,7 +22,7 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
  /*
@@ -31,7 +31,7 @@
   */
 
 #include "main/errors.h"
-#include "main/imports.h"
+
 #include "main/image.h"
 #include "main/bufferobj.h"
 #include "main/dlist.h"
@@ -46,14 +46,15 @@
 #include "st_draw.h"
 #include "st_program.h"
 #include "st_cb_bitmap.h"
+#include "st_cb_drawpixels.h"
 #include "st_sampler_view.h"
 #include "st_texture.h"
+#include "st_util.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_shader_tokens.h"
 #include "util/u_inlines.h"
-#include "util/u_simple_shaders.h"
 #include "util/u_upload_mgr.h"
 #include "program/prog_instruction.h"
 #include "cso_cache/cso_context.h"
@@ -211,10 +212,10 @@ setup_render_state(struct gl_context *ctx,
    cso_set_rasterizer(cso, &st->bitmap.rasterizer);
 
    /* fragment shader state: TEX lookup program */
-   cso_set_fragment_shader_handle(cso, fpv->driver_shader);
+   cso_set_fragment_shader_handle(cso, fpv->base.driver_shader);
 
    /* vertex shader state: position + texcoord pass-through */
-   cso_set_vertex_shader_handle(cso, st->bitmap.vs);
+   cso_set_vertex_shader_handle(cso, st->passthrough_vs);
 
    /* disable other shaders */
    cso_set_tessctrl_shader_handle(cso, NULL);
@@ -254,7 +255,8 @@ setup_render_state(struct gl_context *ctx,
                          st->state.fb_height,
                          st->state.fb_orientation == Y_0_TOP);
 
-   cso_set_vertex_elements(cso, 3, st->util_velems);
+   st->util_velems.count = 3;
+   cso_set_vertex_elements(cso, &st->util_velems);
 
    cso_set_stream_outputs(st->cso_context, 0, NULL, NULL);
 }
@@ -302,9 +304,8 @@ draw_bitmap_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
       /* XXX if the bitmap is larger than the max texture size, break
        * it up into chunks.
        */
-      GLuint MAYBE_UNUSED maxSize =
-         1 << (pipe->screen->get_param(pipe->screen,
-                                       PIPE_CAP_MAX_TEXTURE_2D_LEVELS) - 1);
+      ASSERTED GLuint maxSize =
+         pipe->screen->get_param(pipe->screen, PIPE_CAP_MAX_TEXTURE_2D_SIZE);
       assert(width <= (GLsizei) maxSize);
       assert(height <= (GLsizei) maxSize);
    }
@@ -478,7 +479,7 @@ accum_bitmap(struct gl_context *ctx,
       if (px < 0 || px + width > BITMAP_CACHE_WIDTH ||
           py < 0 || py + height > BITMAP_CACHE_HEIGHT ||
           !TEST_EQ_4V(ctx->Current.RasterColor, cache->color) ||
-          ((fabs(z - cache->zpos) > Z_EPSILON))) {
+          ((fabsf(z - cache->zpos) > Z_EPSILON))) {
          /* This bitmap would extend beyond cache bounds, or the bitmap
           * color is changing
           * so flush and continue.
@@ -538,7 +539,7 @@ init_bitmap_state(struct st_context *st)
    struct pipe_screen *screen = pipe->screen;
 
    /* This function should only be called once */
-   assert(st->bitmap.vs == NULL);
+   assert(!st->bitmap.tex_format);
 
    assert(st->internal_target == PIPE_TEXTURE_2D ||
           st->internal_target == PIPE_TEXTURE_RECT);
@@ -564,20 +565,15 @@ init_bitmap_state(struct st_context *st)
    st->bitmap.rasterizer.depth_clip_far = 1;
 
    /* find a usable texture format */
-   if (screen->is_format_supported(screen, PIPE_FORMAT_I8_UNORM,
+   if (screen->is_format_supported(screen, PIPE_FORMAT_R8_UNORM,
                                    st->internal_target, 0, 0,
                                    PIPE_BIND_SAMPLER_VIEW)) {
-      st->bitmap.tex_format = PIPE_FORMAT_I8_UNORM;
+      st->bitmap.tex_format = PIPE_FORMAT_R8_UNORM;
    }
    else if (screen->is_format_supported(screen, PIPE_FORMAT_A8_UNORM,
                                         st->internal_target, 0, 0,
                                         PIPE_BIND_SAMPLER_VIEW)) {
       st->bitmap.tex_format = PIPE_FORMAT_A8_UNORM;
-   }
-   else if (screen->is_format_supported(screen, PIPE_FORMAT_L8_UNORM,
-                                        st->internal_target, 0, 0,
-                                        PIPE_BIND_SAMPLER_VIEW)) {
-      st->bitmap.tex_format = PIPE_FORMAT_L8_UNORM;
    }
    else {
       /* XXX support more formats */
@@ -585,17 +581,7 @@ init_bitmap_state(struct st_context *st)
    }
 
    /* Create the vertex shader */
-   {
-      const uint semantic_names[] = { TGSI_SEMANTIC_POSITION,
-                                      TGSI_SEMANTIC_COLOR,
-        st->needs_texcoord_semantic ? TGSI_SEMANTIC_TEXCOORD :
-                                      TGSI_SEMANTIC_GENERIC };
-      const uint semantic_indexes[] = { 0, 0, 0 };
-      st->bitmap.vs = util_make_vertex_passthrough_shader(st->pipe, 3,
-                                                          semantic_names,
-                                                          semantic_indexes,
-                                                          FALSE);
-   }
+   st_make_passthrough_vertex_shader(st);
 
    reset_cache(st);
 }
@@ -617,7 +603,7 @@ st_Bitmap(struct gl_context *ctx, GLint x, GLint y,
 
    st_invalidate_readpix_cache(st);
 
-   if (!st->bitmap.vs) {
+   if (!st->bitmap.tex_format) {
       init_bitmap_state(st);
    }
 
@@ -677,7 +663,7 @@ st_DrawAtlasBitmaps(struct gl_context *ctx,
    struct pipe_vertex_buffer vb = {0};
    unsigned i;
 
-   if (!st->bitmap.vs) {
+   if (!st->bitmap.tex_format) {
       init_bitmap_state(st);
    }
 
@@ -712,8 +698,8 @@ st_DrawAtlasBitmaps(struct gl_context *ctx,
       const float xorig = g->xorig, yorig = g->yorig;
       const float s0 = g->x, t0 = g->y;
       const float s1 = s0 + g->w, t1 = t0 + g->h;
-      const float x0 = IFLOOR(ctx->Current.RasterPos[0] - xorig + epsilon);
-      const float y0 = IFLOOR(ctx->Current.RasterPos[1] - yorig + epsilon);
+      const float x0 = util_ifloor(ctx->Current.RasterPos[0] - xorig + epsilon);
+      const float y0 = util_ifloor(ctx->Current.RasterPos[1] - yorig + epsilon);
       const float x1 = x0 + g->w, y1 = y0 + g->h;
       const float clip_x0 = x0 * clip_x_scale - 1.0f;
       const float clip_y0 = y0 * clip_y_scale - 1.0f;
@@ -806,11 +792,6 @@ st_destroy_bitmap(struct st_context *st)
 {
    struct pipe_context *pipe = st->pipe;
    struct st_bitmap_cache *cache = &st->bitmap.cache;
-
-   if (st->bitmap.vs) {
-      cso_delete_vertex_shader(st->cso_context, st->bitmap.vs);
-      st->bitmap.vs = NULL;
-   }
 
    if (cache->trans && cache->buffer) {
       pipe_transfer_unmap(pipe, cache->trans);

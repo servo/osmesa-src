@@ -25,17 +25,38 @@
  *    Rob Clark <robclark@freedesktop.org>
  */
 
+#include "drm-uapi/drm_fourcc.h"
 #include "pipe/p_screen.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 
 #include "fd6_screen.h"
+#include "fd6_blitter.h"
 #include "fd6_context.h"
+#include "fd6_emit.h"
 #include "fd6_format.h"
 #include "fd6_resource.h"
 
-#include "ir3_compiler.h"
+#include "ir3/ir3_compiler.h"
 
-static boolean
+static bool
+valid_sample_count(unsigned sample_count)
+{
+	switch (sample_count) {
+	case 0:
+	case 1:
+	case 2:
+	case 4:
+// TODO seems 8x works, but increases lrz width or height.. but the
+// blob I have doesn't seem to expose any egl configs w/ 8x, so
+// just hide it for now and revisit later.
+//	case 8:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool
 fd6_screen_is_format_supported(struct pipe_screen *pscreen,
 		enum pipe_format format,
 		enum pipe_texture_target target,
@@ -46,25 +67,25 @@ fd6_screen_is_format_supported(struct pipe_screen *pscreen,
 	unsigned retval = 0;
 
 	if ((target >= PIPE_MAX_TEXTURE_TYPES) ||
-			(sample_count > 1)) { /* TODO add MSAA */
+			!valid_sample_count(sample_count)) {
 		DBG("not supported: format=%s, target=%d, sample_count=%d, usage=%x",
 				util_format_name(format), target, sample_count, usage);
-		return FALSE;
+		return false;
 	}
 
 	if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
 		return false;
 
 	if ((usage & PIPE_BIND_VERTEX_BUFFER) &&
-			(fd6_pipe2vtx(format) != (enum a6xx_vtx_fmt)~0)) {
+			(fd6_pipe2vtx(format) != FMT6_NONE)) {
 		retval |= PIPE_BIND_VERTEX_BUFFER;
 	}
 
-	if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
+	if ((usage & (PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_SHADER_IMAGE)) &&
+			(fd6_pipe2tex(format) != FMT6_NONE) &&
 			(target == PIPE_BUFFER ||
-			 util_format_get_blocksize(format) != 12) &&
-			(fd6_pipe2tex(format) != (enum a6xx_tex_fmt)~0)) {
-		retval |= PIPE_BIND_SAMPLER_VIEW;
+			 util_format_get_blocksize(format) != 12)) {
+		retval |= usage & (PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_SHADER_IMAGE);
 	}
 
 	if ((usage & (PIPE_BIND_RENDER_TARGET |
@@ -72,8 +93,8 @@ fd6_screen_is_format_supported(struct pipe_screen *pscreen,
 				PIPE_BIND_SCANOUT |
 				PIPE_BIND_SHARED |
 				PIPE_BIND_COMPUTE_RESOURCE)) &&
-			(fd6_pipe2color(format) != (enum a6xx_color_fmt)~0) &&
-			(fd6_pipe2tex(format) != (enum a6xx_tex_fmt)~0)) {
+			(fd6_pipe2color(format) != FMT6_NONE) &&
+			(fd6_pipe2tex(format) != FMT6_NONE)) {
 		retval |= usage & (PIPE_BIND_RENDER_TARGET |
 				PIPE_BIND_DISPLAY_TARGET |
 				PIPE_BIND_SCANOUT |
@@ -88,7 +109,7 @@ fd6_screen_is_format_supported(struct pipe_screen *pscreen,
 
 	if ((usage & PIPE_BIND_DEPTH_STENCIL) &&
 			(fd6_pipe2depth(format) != (enum a6xx_depth_format)~0) &&
-			(fd6_pipe2tex(format) != (enum a6xx_tex_fmt)~0)) {
+			(fd6_pipe2tex(format) != FMT6_NONE)) {
 		retval |= PIPE_BIND_DEPTH_STENCIL;
 	}
 
@@ -115,5 +136,9 @@ fd6_screen_init(struct pipe_screen *pscreen)
 	pscreen->context_create = fd6_context_create;
 	pscreen->is_format_supported = fd6_screen_is_format_supported;
 
-	screen->setup_slices = fd6_setup_slices;
+	screen->tile_mode = fd6_tile_mode;
+
+	fd6_resource_screen_init(pscreen);
+	fd6_emit_init_screen(pscreen);
+	ir3_screen_init(pscreen);
 }

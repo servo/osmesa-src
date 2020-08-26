@@ -26,8 +26,6 @@
  *
  * Support for query buffer objects (GL_ARB_query_buffer_object) on Haswell+.
  */
-#include "main/imports.h"
-
 #include "brw_context.h"
 #include "brw_defines.h"
 #include "intel_batchbuffer.h"
@@ -154,7 +152,7 @@ static void
 shr_gpr0_by_2_bits(struct brw_context *brw)
 {
    shl_gpr0_by_30_bits(brw);
-   brw_load_register_reg(brw, HSW_CS_GPR(0) + 4, HSW_CS_GPR(0));
+   brw_load_register_reg(brw, HSW_CS_GPR(0), HSW_CS_GPR(0) + 4);
    brw_load_register_imm32(brw, HSW_CS_GPR(0) + 4, 0);
 }
 

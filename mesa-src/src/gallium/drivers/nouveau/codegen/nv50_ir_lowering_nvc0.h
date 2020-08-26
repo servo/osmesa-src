@@ -62,13 +62,16 @@ private:
 
    // we want to insert calls to the builtin library only after optimization
    void handleDIV(Instruction *); // integer division, modulus
+   void handleRCPRSQLib(Instruction *, Value *[]);
    void handleRCPRSQ(Instruction *); // double precision float recip/rsqrt
-   void handleFTZ(Instruction *);
    void handleSET(CmpInstruction *);
    void handleTEXLOD(TexInstruction *);
    void handleShift(Instruction *);
+   void handleBREV(Instruction *);
 
 protected:
+   void handleFTZ(Instruction *);
+
    BuildUtil bld;
 };
 
@@ -81,6 +84,7 @@ private:
    virtual bool visit(Function *);
    virtual bool visit(BasicBlock *);
 
+   void replaceCvt(Instruction *);
    void replaceZero(Instruction *);
    bool tryReplaceContWithBra(BasicBlock *);
    void propagateJoin(BasicBlock *);
@@ -169,10 +173,10 @@ private:
    Value *loadMsInfo32(Value *ptr, uint32_t off);
 
    void adjustCoordinatesMS(TexInstruction *);
-   void processSurfaceCoordsGM107(TexInstruction *);
+   TexInstruction *processSurfaceCoordsGM107(TexInstruction *, Instruction *[4]);
    void processSurfaceCoordsNVE4(TexInstruction *);
    void processSurfaceCoordsNVC0(TexInstruction *);
-   void convertSurfaceFormat(TexInstruction *);
+   void convertSurfaceFormat(TexInstruction *, Instruction **);
    void insertOOBSurfaceOpResult(TexInstruction *);
    Value *calculateSampleOffset(Value *sampleID);
 

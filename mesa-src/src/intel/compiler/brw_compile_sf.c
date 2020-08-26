@@ -24,7 +24,7 @@
 #include "brw_compiler.h"
 #include "brw_eu.h"
 
-#include "common/gen_debug.h"
+#include "dev/gen_debug.h"
 
 struct brw_sf_compile {
    struct brw_codegen func;
@@ -167,9 +167,9 @@ static void do_twoside_color( struct brw_sf_compile *c )
    brw_IF(p, BRW_EXECUTE_4);
    {
       switch (c->nr_verts) {
-      case 3: copy_bfc(c, c->vert[2]);
-      case 2: copy_bfc(c, c->vert[1]);
-      case 1: copy_bfc(c, c->vert[0]);
+      case 3: copy_bfc(c, c->vert[2]); /* fallthrough */
+      case 2: copy_bfc(c, c->vert[1]); /* fallthrough */
+      case 1: copy_bfc(c, c->vert[0]); /* fallthrough */
       }
    }
    brw_ENDIF(p);

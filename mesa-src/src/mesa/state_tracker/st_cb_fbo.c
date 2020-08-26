@@ -33,7 +33,7 @@
  */
 
 
-#include "main/imports.h"
+
 #include "main/context.h"
 #include "main/fbobject.h"
 #include "main/framebuffer.h"
@@ -53,9 +53,10 @@
 #include "st_cb_texture.h"
 #include "st_format.h"
 #include "st_texture.h"
+#include "st_util.h"
 #include "st_manager.h"
 
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_surface.h"
 
@@ -139,7 +140,7 @@ st_renderbuffer_alloc_storage(struct gl_context * ctx,
    /* If an sRGB framebuffer is unsupported, sRGB formats behave like linear
     * formats.
     */
-   if (!ctx->Extensions.EXT_framebuffer_sRGB) {
+   if (!ctx->Extensions.EXT_sRGB) {
       internalFormat = _mesa_get_linear_internalformat(internalFormat);
    }
 
@@ -285,8 +286,11 @@ st_renderbuffer_delete(struct gl_context *ctx, struct gl_renderbuffer *rb)
       struct st_context *st = st_context(ctx);
       pipe_surface_release(st->pipe, &strb->surface_srgb);
       pipe_surface_release(st->pipe, &strb->surface_linear);
-      strb->surface = NULL;
+   } else {
+      pipe_surface_release_no_context(&strb->surface_srgb);
+      pipe_surface_release_no_context(&strb->surface_linear);
    }
+   strb->surface = NULL;
    pipe_resource_reference(&strb->texture, NULL);
    free(strb->data);
    _mesa_delete_renderbuffer(ctx, rb);
@@ -351,6 +355,7 @@ st_new_renderbuffer_fb(enum pipe_format format, unsigned samples, boolean sw)
    case PIPE_FORMAT_R8G8B8X8_UNORM:
    case PIPE_FORMAT_B8G8R8X8_UNORM:
    case PIPE_FORMAT_X8R8G8B8_UNORM:
+   case PIPE_FORMAT_R8G8B8_UNORM:
       strb->Base.InternalFormat = GL_RGB8;
       break;
    case PIPE_FORMAT_R8G8B8A8_SRGB:
@@ -396,6 +401,9 @@ st_new_renderbuffer_fb(enum pipe_format format, unsigned samples, boolean sw)
    case PIPE_FORMAT_R16G16B16A16_UNORM:
       strb->Base.InternalFormat = GL_RGBA16;
       break;
+   case PIPE_FORMAT_R16G16B16_UNORM:
+      strb->Base.InternalFormat = GL_RGB16;
+      break;
    case PIPE_FORMAT_R8_UNORM:
       strb->Base.InternalFormat = GL_R8;
       break;
@@ -411,8 +419,15 @@ st_new_renderbuffer_fb(enum pipe_format format, unsigned samples, boolean sw)
    case PIPE_FORMAT_R32G32B32A32_FLOAT:
       strb->Base.InternalFormat = GL_RGBA32F;
       break;
+   case PIPE_FORMAT_R32G32B32X32_FLOAT:
+   case PIPE_FORMAT_R32G32B32_FLOAT:
+      strb->Base.InternalFormat = GL_RGB32F;
+      break;
    case PIPE_FORMAT_R16G16B16A16_FLOAT:
       strb->Base.InternalFormat = GL_RGBA16F;
+      break;
+   case PIPE_FORMAT_R16G16B16X16_FLOAT:
+      strb->Base.InternalFormat = GL_RGB16F;
       break;
    default:
       _mesa_problem(NULL,
@@ -455,7 +470,7 @@ st_update_renderbuffer_surface(struct st_context *st,
     * to determine if the rb is sRGB-capable.
     */
    boolean enable_srgb = st->ctx->Color.sRGBEnabled &&
-      _mesa_get_format_color_encoding(strb->Base.Format) == GL_SRGB;
+      _mesa_is_format_srgb(strb->Base.Format);
    enum pipe_format format = resource->format;
 
    if (strb->is_rtt) {
@@ -516,6 +531,7 @@ st_update_renderbuffer_surface(struct st_context *st,
        surf->texture != resource ||
        surf->width != rtt_width ||
        surf->height != rtt_height ||
+       surf->nr_samples != strb->rtt_nr_samples ||
        surf->u.tex.level != level ||
        surf->u.tex.first_layer != first_layer ||
        surf->u.tex.last_layer != last_layer) {
@@ -523,6 +539,7 @@ st_update_renderbuffer_surface(struct st_context *st,
       struct pipe_surface surf_tmpl;
       memset(&surf_tmpl, 0, sizeof(surf_tmpl));
       surf_tmpl.format = format;
+      surf_tmpl.nr_samples = strb->rtt_nr_samples;
       surf_tmpl.u.tex.level = level;
       surf_tmpl.u.tex.first_layer = first_layer;
       surf_tmpl.u.tex.last_layer = last_layer;
@@ -572,6 +589,7 @@ st_render_texture(struct gl_context *ctx,
    strb->rtt_face = att->CubeMapFace;
    strb->rtt_slice = att->Zoffset;
    strb->rtt_layered = att->Layered;
+   strb->rtt_nr_samples = att->NumSamples;
    pipe_resource_reference(&strb->texture, pt);
 
    st_update_renderbuffer_surface(st, strb);
@@ -656,8 +674,7 @@ st_validate_attachment(struct gl_context *ctx,
    /* If the encoding is sRGB and sRGB rendering cannot be enabled,
     * check for linear format support instead.
     * Later when we create a surface, we change the format to a linear one. */
-   if (!ctx->Extensions.EXT_framebuffer_sRGB &&
-       _mesa_get_format_color_encoding(texFormat) == GL_SRGB) {
+   if (!ctx->Extensions.EXT_sRGB && _mesa_is_format_srgb(texFormat)) {
       const mesa_format linearFormat = _mesa_get_srgb_format_linear(texFormat);
       format = st_mesa_format_to_pipe_format(st_context(ctx), linearFormat);
    }
@@ -757,6 +774,30 @@ st_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 
 
 /**
+ * Called by ctx->Driver.DiscardFramebuffer
+ */
+static void
+st_discard_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb,
+                       struct gl_renderbuffer_attachment *att)
+{
+   struct st_context *st = st_context(ctx);
+   struct pipe_resource *prsc;
+
+   if (!att->Renderbuffer || !att->Complete)
+      return;
+
+   prsc = st_renderbuffer(att->Renderbuffer)->surface->texture;
+
+   /* using invalidate_resource will only work for simple 2D resources */
+   if (prsc->depth0 != 1 || prsc->array_size != 1 || prsc->last_level != 0)
+      return;
+
+   if (st->pipe->invalidate_resource)
+      st->pipe->invalidate_resource(st->pipe, prsc);
+}
+
+
+/**
  * Called via glDrawBuffer.  We only provide this driver function so that we
  * can check if we need to allocate a new renderbuffer.  Specifically, we
  * don't usually allocate a front color buffer when using a double-buffered
@@ -827,12 +868,9 @@ st_MapRenderbuffer(struct gl_context *ctx,
    struct st_context *st = st_context(ctx);
    struct st_renderbuffer *strb = st_renderbuffer(rb);
    struct pipe_context *pipe = st->pipe;
-   const GLboolean invert = rb->Name == 0;
+   const GLboolean invert = flip_y;
    GLuint y2;
    GLubyte *map;
-
-   /* driver does not support GL_FRAMEBUFFER_FLIP_Y_MESA */
-   assert((rb->Name == 0) == flip_y);
 
    if (strb->software) {
       /* software-allocated renderbuffer (probably an accum buffer) */
@@ -933,6 +971,7 @@ st_init_fbo_functions(struct dd_function_table *functions)
    functions->RenderTexture = st_render_texture;
    functions->FinishRenderTexture = st_finish_render_texture;
    functions->ValidateFramebuffer = st_validate_framebuffer;
+   functions->DiscardFramebuffer = st_discard_framebuffer;
 
    functions->DrawBufferAllocate = st_DrawBufferAllocate;
    functions->ReadBuffer = st_ReadBuffer;

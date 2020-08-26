@@ -388,8 +388,8 @@ MotionVectorToPipe(const struct pipe_mpeg12_macroblock *mb, unsigned vector,
          mv.bottom.weight = weight;
          break;
 
-      default: // TODO: Support DUALPRIME and 16x8
-         break;
+      default:
+         unreachable("TODO: Support DUALPRIME and 16x8");
       }
    } else {
       mv.top.x = mv.top.y = 0;
@@ -982,10 +982,10 @@ init_idct(struct vl_mpeg12_decoder *dec, const struct format_config* format_conf
       nr_of_idct_render_targets = 1;
 
    formats[0] = formats[1] = formats[2] = format_config->idct_source_format;
+   assert(pipe_format_to_chroma_format(formats[0]) == dec->base.chroma_format);
    memset(&templat, 0, sizeof(templat));
    templat.width = dec->base.width / 4;
    templat.height = dec->base.height;
-   templat.chroma_format = dec->base.chroma_format;
    dec->idct_source = vl_video_buffer_create_ex
    (
       dec->context, &templat,
@@ -996,10 +996,10 @@ init_idct(struct vl_mpeg12_decoder *dec, const struct format_config* format_conf
       goto error_idct_source;
 
    formats[0] = formats[1] = formats[2] = format_config->mc_source_format;
+   assert(pipe_format_to_chroma_format(formats[0]) == dec->base.chroma_format);
    memset(&templat, 0, sizeof(templat));
    templat.width = dec->base.width / nr_of_idct_render_targets;
    templat.height = dec->base.height / 4;
-   templat.chroma_format = dec->base.chroma_format;
    dec->mc_source = vl_video_buffer_create_ex
    (
       dec->context, &templat,
@@ -1047,10 +1047,10 @@ init_mc_source_widthout_idct(struct vl_mpeg12_decoder *dec, const struct format_
    struct pipe_video_buffer templat;
 
    formats[0] = formats[1] = formats[2] = format_config->mc_source_format;
+   assert(pipe_format_to_chroma_format(formats[0]) == dec->base.chroma_format);
    memset(&templat, 0, sizeof(templat));
    templat.width = dec->base.width;
    templat.height = dec->base.height;
-   templat.chroma_format = dec->base.chroma_format;
    dec->mc_source = vl_video_buffer_create_ex
    (
       dec->context, &templat,
@@ -1120,7 +1120,7 @@ vl_create_mpeg12_decoder(struct pipe_context *context,
 
    dec->base = *templat;
    dec->base.context = context;
-   dec->context = context->screen->context_create(context->screen, NULL, 0);
+   dec->context = pipe_create_multimedia_context(context->screen);
 
    dec->base.destroy = vl_mpeg12_destroy;
    dec->base.begin_frame = vl_mpeg12_begin_frame;

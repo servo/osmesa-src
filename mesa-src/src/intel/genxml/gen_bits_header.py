@@ -28,6 +28,7 @@ import os
 import xml.parsers.expat
 
 from mako.template import Template
+from util import *
 
 TEMPLATE = Template("""\
 <%!
@@ -79,6 +80,7 @@ static inline uint32_t ATTRIBUTE_PURE
 ${item.token_name}_${prop}(const struct gen_device_info *devinfo)
 {
    switch (devinfo->gen) {
+   case 12: return ${item.get_prop(prop, 12)};
    case 11: return ${item.get_prop(prop, 11)};
    case 10: return ${item.get_prop(prop, 10)};
    case 9: return ${item.get_prop(prop, 9)};
@@ -130,40 +132,6 @@ ${emit_per_gen_prop_func(field, 'start')}
 
 #endif /* ${guard} */""", output_encoding='utf-8')
 
-def to_alphanum(name):
-    substitutions = {
-        ' ': '',
-        '/': '',
-        '[': '',
-        ']': '',
-        '(': '',
-        ')': '',
-        '-': '',
-        ':': '',
-        '.': '',
-        ',': '',
-        '=': '',
-        '>': '',
-        '#': '',
-        'α': 'alpha',
-        '&': '',
-        '*': '',
-        '"': '',
-        '+': '',
-        '\'': '',
-    }
-
-    for i, j in substitutions.items():
-        name = name.replace(i, j)
-
-    return name
-
-def safe_name(name):
-    name = to_alphanum(name)
-    if not name[0].isalpha():
-        name = '_' + name
-    return name
-
 class Gen(object):
 
     def __init__(self, z):
@@ -204,12 +172,13 @@ class Container(object):
             self.length_by_gen[gen] = xml_attrs['length']
 
     def get_field(self, field_name, create=False):
-        if field_name not in self.fields:
+        key = to_alphanum(field_name)
+        if key not in self.fields:
             if create:
-                self.fields[field_name] = Field(self, field_name)
+                self.fields[key] = Field(self, field_name)
             else:
                 return None
-        return self.fields[field_name]
+        return self.fields[key]
 
     def has_prop(self, prop):
         if prop == 'length':
@@ -278,7 +247,8 @@ class XmlParser(object):
 
         self.gen = None
         self.containers = containers
-        self.container = None
+        self.container_stack = []
+        self.container_stack.append(None)
 
     def parse(self, filename):
         with open(filename, 'rb') as f:
@@ -288,7 +258,14 @@ class XmlParser(object):
         if name == 'genxml':
             self.gen = Gen(attrs['gen'])
         elif name in ('instruction', 'struct', 'register'):
+            if name == 'instruction' and 'engine' in attrs:
+                engines = set(attrs['engine'].split('|'))
+                if not engines & self.engines:
+                    self.container_stack.append(None)
+                    return
             self.start_container(attrs)
+        elif name == 'group':
+            self.container_stack.append(None)
         elif name == 'field':
             self.start_field(attrs)
         else:
@@ -297,28 +274,28 @@ class XmlParser(object):
     def end_element(self, name):
         if name == 'genxml':
             self.gen = None
-        elif name in ('instruction', 'struct', 'register'):
-            self.container = None
+        elif name in ('instruction', 'struct', 'register', 'group'):
+            self.container_stack.pop()
         else:
             pass
 
     def start_container(self, attrs):
-        assert self.container is None
+        assert self.container_stack[-1] is None
         name = attrs['name']
         if name not in self.containers:
             self.containers[name] = Container(name)
-        self.container = self.containers[name]
-        self.container.add_gen(self.gen, attrs)
+        self.container_stack.append(self.containers[name])
+        self.container_stack[-1].add_gen(self.gen, attrs)
 
     def start_field(self, attrs):
-        if self.container is None:
+        if self.container_stack[-1] is None:
             return
 
         field_name = attrs.get('name', None)
         if not field_name:
             return
 
-        self.container.get_field(field_name, True).add_gen(self.gen, attrs)
+        self.container_stack[-1].get_field(field_name, True).add_gen(self.gen, attrs)
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -326,6 +303,8 @@ def parse_args():
                    help="If OUTPUT is unset or '-', then it defaults to '/dev/stdout'")
     p.add_argument('--cpp-guard', type=str,
                    help='If unset, then CPP_GUARD is derived from OUTPUT.')
+    p.add_argument('--engines', nargs='?', type=str, default='render',
+                   help="Comma-separated list of engines whose instructions should be parsed (default: %(default)s)")
     p.add_argument('xml_sources', metavar='XML_SOURCE', nargs='+')
 
     pargs = p.parse_args()
@@ -341,11 +320,21 @@ def parse_args():
 def main():
     pargs = parse_args()
 
+    engines = pargs.engines.split(',')
+    valid_engines = [ 'render', 'blitter', 'video' ]
+    if set(engines) - set(valid_engines):
+        print("Invalid engine specified, valid engines are:\n")
+        for e in valid_engines:
+            print("\t%s" % e)
+        sys.exit(1)
+
     # Maps name => Container
     containers = {}
 
     for source in pargs.xml_sources:
-        XmlParser(containers).parse(source)
+        p = XmlParser(containers)
+        p.engines = set(engines)
+        p.parse(source)
 
     with open(pargs.output, 'wb') as f:
         f.write(TEMPLATE.render(containers=containers, guard=pargs.cpp_guard))

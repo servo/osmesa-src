@@ -39,7 +39,6 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #define ENABLE_AVX512_SIMD16 1
-#define USE_8x2_TILE_BACKEND 1
 #define USE_SIMD16_FRONTEND 1
 #define USE_SIMD16_SHADERS 1 // requires USE_SIMD16_FRONTEND
 #define USE_SIMD16_VS 1      // requires USE_SIMD16_SHADERS
@@ -54,34 +53,21 @@
 #if (KNOB_ARCH == KNOB_ARCH_AVX)
 #define KNOB_ARCH_ISA AVX
 #define KNOB_ARCH_STR "AVX"
-#define KNOB_SIMD_WIDTH 8
-#define KNOB_SIMD_BYTES 32
 #elif (KNOB_ARCH == KNOB_ARCH_AVX2)
 #define KNOB_ARCH_ISA AVX2
 #define KNOB_ARCH_STR "AVX2"
-#define KNOB_SIMD_WIDTH 8
-#define KNOB_SIMD_BYTES 32
 #elif (KNOB_ARCH == KNOB_ARCH_AVX512)
 #define KNOB_ARCH_ISA AVX512F
 #define KNOB_ARCH_STR "AVX512"
-#define KNOB_SIMD_WIDTH 8
-#define KNOB_SIMD_BYTES 32
 #else
 #error "Unknown architecture"
 #endif
 
-#if ENABLE_AVX512_SIMD16
+#define KNOB_SIMD_WIDTH 8
+#define KNOB_SIMD_BYTES 32
 
 #define KNOB_SIMD16_WIDTH 16
 #define KNOB_SIMD16_BYTES 64
-
-#if (KNOB_ARCH == KNOB_ARCH_AVX512)
-#define ENABLE_AVX512_EMULATION 0
-#else
-#define ENABLE_AVX512_EMULATION 1
-#endif
-
-#endif
 
 #define MAX_KNOB_ARCH_STR_LEN sizeof("AVX512_PLUS_PADDING")
 
@@ -97,6 +83,9 @@
 // Guardband range used by the clipper
 #define KNOB_GUARDBAND_WIDTH 32768.0f
 #define KNOB_GUARDBAND_HEIGHT 32768.0f
+
+// Scratch space requirements per worker. Currently only used for TGSM sizing for some stages
+#define KNOB_WORKER_SCRATCH_SPACE_SIZE (32 * 1024)
 
 ///////////////////////////////
 // Macro tile configuration
@@ -121,8 +110,8 @@
 
 // total # of hot tiles available. This should be enough to
 // fully render a 16kx16k 128bpp render target
-#define KNOB_NUM_HOT_TILES_X 256
-#define KNOB_NUM_HOT_TILES_Y 256
+#define KNOB_NUM_HOT_TILES_X 512
+#define KNOB_NUM_HOT_TILES_Y 512
 #define KNOB_COLOR_HOT_TILE_FORMAT R32G32B32A32_FLOAT
 #define KNOB_DEPTH_HOT_TILE_FORMAT R32_FLOAT
 #define KNOB_STENCIL_HOT_TILE_FORMAT R8_UINT

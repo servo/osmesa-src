@@ -14,6 +14,7 @@
 #include "main/texobj.h"
 #include "main/teximage.h"
 #include "main/texstore.h"
+#include "main/glthread.h"
 
 #include "drivers/common/meta.h"
 
@@ -23,7 +24,6 @@
 #include "intel_tex.h"
 #include "intel_fbo.h"
 #include "intel_image.h"
-#include "intel_tiled_memcpy.h"
 #include "brw_context.h"
 #include "brw_blorp.h"
 
@@ -192,7 +192,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
    struct brw_bo *bo;
 
    uint32_t cpp;
-   mem_copy_fn_type copy_type;
+   isl_memcpy_type copy_type;
 
    /* This fastpath is restricted to specific texture types:
     * a 2D BGRA, RGBA, L8 or A8 texture. It could be generalized to support
@@ -208,7 +208,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
        !(texImage->TexObject->Target == GL_TEXTURE_2D ||
          texImage->TexObject->Target == GL_TEXTURE_RECTANGLE) ||
        pixels == NULL ||
-       _mesa_is_bufferobj(packing->BufferObj) ||
+       packing->BufferObj ||
        packing->Alignment > 4 ||
        packing->SkipPixels > 0 ||
        packing->SkipRows > 0 ||
@@ -222,8 +222,9 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
    if (ctx->_ImageTransferState)
       return false;
 
-   if (!intel_get_memcpy_type(texImage->TexFormat, format, type, &copy_type,
-                              &cpp))
+   copy_type = intel_miptree_get_memcpy_type(texImage->TexFormat, format, type,
+                                             &cpp);
+   if (copy_type == ISL_MEMCPY_INVALID)
       return false;
 
    /* If this is a nontrivial texture view, let another path handle it instead. */
@@ -290,7 +291,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
    xoffset += level_x;
    yoffset += level_y;
 
-   linear_to_tiled(
+   isl_memcpy_linear_to_tiled(
       xoffset * cpp, (xoffset + width) * cpp,
       yoffset, yoffset + height,
       map,
@@ -321,12 +322,13 @@ intel_upload_tex(struct gl_context * ctx,
    bool ok;
 
    /* Check that there is actually data to store. */
-   if (pixels == NULL && !_mesa_is_bufferobj(packing->BufferObj))
+   if (pixels == NULL && !packing->BufferObj)
       return;
 
-   bool tex_busy = mt && brw_bo_busy(mt->bo);
+   bool tex_busy = mt &&
+      (brw_batch_references(&brw->batch, mt->bo) || brw_bo_busy(mt->bo));
 
-   if (_mesa_is_bufferobj(packing->BufferObj) || tex_busy ||
+   if (packing->BufferObj || tex_busy ||
        mt->aux_usage == ISL_AUX_USAGE_CCS_E) {
       ok = intel_texsubimage_blorp(brw, dims, texImage,
                                    xoffset, yoffset, zoffset,
@@ -441,6 +443,8 @@ intelSetTexBuffer2(__DRIcontext *pDRICtx, GLint target,
    struct gl_texture_image *texImage;
    mesa_format texFormat = MESA_FORMAT_NONE;
    GLenum internal_format = 0;
+
+   _mesa_glthread_finish(ctx);
 
    texObj = _mesa_get_current_tex_object(ctx, target);
 
@@ -599,10 +603,11 @@ intelSetTexBuffer(__DRIcontext *pDRICtx, GLint target, __DRIdrawable *dPriv)
 }
 
 static void
-intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
-			      struct gl_texture_object *texObj,
-			      struct gl_texture_image *texImage,
-			      GLeglImageOES image_handle)
+intel_image_target_texture(struct gl_context *ctx, GLenum target,
+                           struct gl_texture_object *texObj,
+                           struct gl_texture_image *texImage,
+                           GLeglImageOES image_handle,
+                           bool storage)
 {
    struct brw_context *brw = brw_context(ctx);
    struct intel_mipmap_tree *mt;
@@ -613,16 +618,6 @@ intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
                                                   dri_screen->loaderPrivate);
    if (image == NULL)
       return;
-
-   /* We support external textures only for EGLImages created with
-    * EGL_EXT_image_dma_buf_import. We may lift that restriction in the future.
-    */
-   if (target == GL_TEXTURE_EXTERNAL_OES && !image->dma_buf_imported) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-            "glEGLImageTargetTexture2DOES(external target is enabled only "
-               "for images created with EGL_EXT_image_dma_buf_import");
-      return;
-   }
 
    /* Disallow depth/stencil textures: we don't have a way to pass the
     * separate stencil miptree of a GL_DEPTH_STENCIL texture through.
@@ -639,12 +634,63 @@ intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
 
    struct intel_texture_object *intel_texobj = intel_texture_object(texObj);
    intel_texobj->planar_format = image->planar_format;
+   intel_texobj->yuv_color_space = image->yuv_color_space;
 
-   const GLenum internal_format =
+   GLenum internal_format =
       image->internal_format != 0 ?
       image->internal_format : _mesa_get_format_base_format(mt->format);
+
+   /* Fix the internal format when _mesa_get_format_base_format(mt->format)
+    * isn't a valid one for that particular format.
+    */
+   if (brw->mesa_format_supports_render[image->format]) {
+      if (image->format == MESA_FORMAT_R10G10B10A2_UNORM ||
+          image->format == MESA_FORMAT_R10G10B10X2_UNORM ||
+          image->format == MESA_FORMAT_B10G10R10A2_UNORM ||
+          image->format == MESA_FORMAT_B10G10R10X2_UNORM)
+         internal_format = GL_RGB10_A2;
+   }
+
+   /* Guess sized internal format for dma-bufs, as specified by
+    * EXT_EGL_image_storage.
+    */
+   if (storage && target == GL_TEXTURE_2D && image->imported_dmabuf) {
+      internal_format = driGLFormatToSizedInternalGLFormat(image->format);
+      if (internal_format == GL_NONE) {
+         _mesa_error(ctx, GL_INVALID_OPERATION, __func__);
+         return;
+      }
+   }
+
    intel_set_texture_image_mt(brw, texImage, internal_format, mt->format, mt);
    intel_miptree_release(&mt);
+}
+
+static void
+intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
+                              struct gl_texture_object *texObj,
+                              struct gl_texture_image *texImage,
+                              GLeglImageOES image_handle)
+{
+   intel_image_target_texture(ctx, target, texObj, texImage, image_handle,
+                              false);
+}
+
+static void
+intel_image_target_tex_storage(struct gl_context *ctx, GLenum target,
+                              struct gl_texture_object *texObj,
+                              struct gl_texture_image *texImage,
+                              GLeglImageOES image_handle)
+{
+   struct intel_texture_object *intel_texobj = intel_texture_object(texObj);
+   intel_image_target_texture(ctx, target, texObj, texImage, image_handle,
+                              true);
+
+   /* The miptree is in a validated state, so no need to check later. */
+   intel_texobj->needs_validate = false;
+   intel_texobj->validated_first_level = 0;
+   intel_texobj->validated_last_level = 0;
+   intel_texobj->_Format = texImage->TexFormat;
 }
 
 static bool
@@ -695,7 +741,7 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
    struct brw_bo *bo;
 
    uint32_t cpp;
-   mem_copy_fn_type copy_type;
+   isl_memcpy_type copy_type;
 
    /* This fastpath is restricted to specific texture types:
     * a 2D BGRA, RGBA, L8 or A8 texture. It could be generalized to support
@@ -711,7 +757,7 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
        !(texImage->TexObject->Target == GL_TEXTURE_2D ||
          texImage->TexObject->Target == GL_TEXTURE_RECTANGLE) ||
        pixels == NULL ||
-       _mesa_is_bufferobj(packing->BufferObj) ||
+       packing->BufferObj ||
        packing->Alignment > 4 ||
        packing->SkipPixels > 0 ||
        packing->SkipRows > 0 ||
@@ -729,8 +775,9 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
    if (texImage->_BaseFormat == GL_RGB)
       return false;
 
-   if (!intel_get_memcpy_type(texImage->TexFormat, format, type, &copy_type,
-                              &cpp))
+   copy_type = intel_miptree_get_memcpy_type(texImage->TexFormat, format, type,
+                                             &cpp);
+   if (copy_type == ISL_MEMCPY_INVALID)
       return false;
 
    /* If this is a nontrivial texture view, let another path handle it instead. */
@@ -794,7 +841,7 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
    xoffset += level_x;
    yoffset += level_y;
 
-   tiled_to_linear(
+   isl_memcpy_tiled_to_linear(
       xoffset * cpp, (xoffset + width) * cpp,
       yoffset, yoffset + height,
       pixels,
@@ -821,7 +868,7 @@ intel_get_tex_sub_image(struct gl_context *ctx,
 
    DBG("%s\n", __func__);
 
-   if (_mesa_is_bufferobj(ctx->Pack.BufferObj)) {
+   if (ctx->Pack.BufferObj) {
       if (intel_gettexsubimage_blorp(brw, texImage,
                                      xoffset, yoffset, zoffset,
                                      width, height, depth, format, type,
@@ -938,6 +985,7 @@ intelInitTextureImageFuncs(struct dd_function_table *functions)
    functions->TexSubImage = intelTexSubImage;
    functions->CompressedTexSubImage = intelCompressedTexSubImage;
    functions->EGLImageTargetTexture2D = intel_image_target_texture_2d;
+   functions->EGLImageTargetTexStorage = intel_image_target_tex_storage;
    functions->BindRenderbufferTexImage = intel_bind_renderbuffer_tex_image;
    functions->GetTexSubImage = intel_get_tex_sub_image;
 }

@@ -28,7 +28,9 @@
 #include "program.h"
 #include "string_to_uint_map.h"
 #include "ir_array_refcount.h"
+
 #include "main/mtypes.h"
+#include "util/strndup.h"
 
 /**
  * \file link_uniforms.cpp
@@ -42,11 +44,224 @@
  */
 #define UNMAPPED_UNIFORM_LOC ~0u
 
+static char*
+get_top_level_name(const char *name)
+{
+   const char *first_dot = strchr(name, '.');
+   const char *first_square_bracket = strchr(name, '[');
+   int name_size = 0;
+
+   /* The ARB_program_interface_query spec says:
+    *
+    *     "For the property TOP_LEVEL_ARRAY_SIZE, a single integer identifying
+    *     the number of active array elements of the top-level shader storage
+    *     block member containing to the active variable is written to
+    *     <params>.  If the top-level block member is not declared as an
+    *     array, the value one is written to <params>.  If the top-level block
+    *     member is an array with no declared size, the value zero is written
+    *     to <params>."
+    */
+
+   /* The buffer variable is on top level.*/
+   if (!first_square_bracket && !first_dot)
+      name_size = strlen(name);
+   else if ((!first_square_bracket ||
+            (first_dot && first_dot < first_square_bracket)))
+      name_size = first_dot - name;
+   else
+      name_size = first_square_bracket - name;
+
+   return strndup(name, name_size);
+}
+
+static char*
+get_var_name(const char *name)
+{
+   const char *first_dot = strchr(name, '.');
+
+   if (!first_dot)
+      return strdup(name);
+
+   return strndup(first_dot+1, strlen(first_dot) - 1);
+}
+
+static bool
+is_top_level_shader_storage_block_member(const char* name,
+                                         const char* interface_name,
+                                         const char* field_name)
+{
+   bool result = false;
+
+   /* If the given variable is already a top-level shader storage
+    * block member, then return array_size = 1.
+    * We could have two possibilities: if we have an instanced
+    * shader storage block or not instanced.
+    *
+    * For the first, we check create a name as it was in top level and
+    * compare it with the real name. If they are the same, then
+    * the variable is already at top-level.
+    *
+    * Full instanced name is: interface name + '.' + var name +
+    *    NULL character
+    */
+   int name_length = strlen(interface_name) + 1 + strlen(field_name) + 1;
+   char *full_instanced_name = (char *) calloc(name_length, sizeof(char));
+   if (!full_instanced_name) {
+      fprintf(stderr, "%s: Cannot allocate space for name\n", __func__);
+      return false;
+   }
+
+   snprintf(full_instanced_name, name_length, "%s.%s",
+            interface_name, field_name);
+
+   /* Check if its top-level shader storage block member of an
+    * instanced interface block, or of a unnamed interface block.
+    */
+   if (strcmp(name, full_instanced_name) == 0 ||
+       strcmp(name, field_name) == 0)
+      result = true;
+
+   free(full_instanced_name);
+   return result;
+}
+
+static int
+get_array_size(struct gl_uniform_storage *uni, const glsl_struct_field *field,
+               char *interface_name, char *var_name)
+{
+   /* The ARB_program_interface_query spec says:
+    *
+    *     "For the property TOP_LEVEL_ARRAY_SIZE, a single integer identifying
+    *     the number of active array elements of the top-level shader storage
+    *     block member containing to the active variable is written to
+    *     <params>.  If the top-level block member is not declared as an
+    *     array, the value one is written to <params>.  If the top-level block
+    *     member is an array with no declared size, the value zero is written
+    *     to <params>."
+    */
+   if (is_top_level_shader_storage_block_member(uni->name,
+                                                interface_name,
+                                                var_name))
+      return  1;
+   else if (field->type->is_array())
+      return field->type->length;
+
+   return 1;
+}
+
+static int
+get_array_stride(struct gl_uniform_storage *uni, const glsl_type *iface,
+                 const glsl_struct_field *field, char *interface_name,
+                 char *var_name, bool use_std430_as_default)
+{
+   /* The ARB_program_interface_query spec says:
+    *
+    *     "For the property TOP_LEVEL_ARRAY_STRIDE, a single integer
+    *     identifying the stride between array elements of the top-level
+    *     shader storage block member containing the active variable is
+    *     written to <params>.  For top-level block members declared as
+    *     arrays, the value written is the difference, in basic machine units,
+    *     between the offsets of the active variable for consecutive elements
+    *     in the top-level array.  For top-level block members not declared as
+    *     an array, zero is written to <params>."
+    */
+   if (field->type->is_array()) {
+      const enum glsl_matrix_layout matrix_layout =
+         glsl_matrix_layout(field->matrix_layout);
+      bool row_major = matrix_layout == GLSL_MATRIX_LAYOUT_ROW_MAJOR;
+      const glsl_type *array_type = field->type->fields.array;
+
+      if (is_top_level_shader_storage_block_member(uni->name,
+                                                   interface_name,
+                                                   var_name))
+         return 0;
+
+      if (GLSL_INTERFACE_PACKING_STD140 ==
+          iface->get_internal_ifc_packing(use_std430_as_default)) {
+         if (array_type->is_struct() || array_type->is_array())
+            return glsl_align(array_type->std140_size(row_major), 16);
+         else
+            return MAX2(array_type->std140_base_alignment(row_major), 16);
+      } else {
+         return array_type->std430_array_stride(row_major);
+      }
+   }
+   return 0;
+}
+
+static void
+calculate_array_size_and_stride(struct gl_shader_program *shProg,
+                                struct gl_uniform_storage *uni,
+                                bool use_std430_as_default)
+{
+   if (!uni->is_shader_storage)
+      return;
+
+   int block_index = uni->block_index;
+   int array_size = -1;
+   int array_stride = -1;
+   char *var_name = get_top_level_name(uni->name);
+   char *interface_name =
+      get_top_level_name(uni->is_shader_storage ?
+                         shProg->data->ShaderStorageBlocks[block_index].Name :
+                         shProg->data->UniformBlocks[block_index].Name);
+
+   if (strcmp(var_name, interface_name) == 0) {
+      /* Deal with instanced array of SSBOs */
+      char *temp_name = get_var_name(uni->name);
+      if (!temp_name) {
+         linker_error(shProg, "Out of memory during linking.\n");
+         goto write_top_level_array_size_and_stride;
+      }
+      free(var_name);
+      var_name = get_top_level_name(temp_name);
+      free(temp_name);
+      if (!var_name) {
+         linker_error(shProg, "Out of memory during linking.\n");
+         goto write_top_level_array_size_and_stride;
+      }
+   }
+
+   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+      const gl_linked_shader *sh = shProg->_LinkedShaders[i];
+      if (sh == NULL)
+         continue;
+
+      foreach_in_list(ir_instruction, node, sh->ir) {
+         ir_variable *var = node->as_variable();
+         if (!var || !var->get_interface_type() ||
+             var->data.mode != ir_var_shader_storage)
+            continue;
+
+         const glsl_type *iface = var->get_interface_type();
+
+         if (strcmp(interface_name, iface->name) != 0)
+            continue;
+
+         for (unsigned i = 0; i < iface->length; i++) {
+            const glsl_struct_field *field = &iface->fields.structure[i];
+            if (strcmp(field->name, var_name) != 0)
+               continue;
+
+            array_stride = get_array_stride(uni, iface, field, interface_name,
+                                            var_name, use_std430_as_default);
+            array_size = get_array_size(uni, field, interface_name, var_name);
+            goto write_top_level_array_size_and_stride;
+         }
+      }
+   }
+write_top_level_array_size_and_stride:
+   free(interface_name);
+   free(var_name);
+   uni->top_level_array_stride = array_stride;
+   uni->top_level_array_size = array_size;
+}
+
 void
 program_resource_visitor::process(const glsl_type *type, const char *name,
                                   bool use_std430_as_default)
 {
-   assert(type->without_array()->is_record()
+   assert(type->without_array()->is_struct()
           || type->without_array()->is_interface());
 
    unsigned record_array_count = 1;
@@ -63,6 +278,15 @@ program_resource_visitor::process(const glsl_type *type, const char *name,
 void
 program_resource_visitor::process(ir_variable *var, bool use_std430_as_default)
 {
+   const glsl_type *t =
+      var->data.from_named_ifc_block ? var->get_interface_type() : var->type;
+   process(var, t, use_std430_as_default);
+}
+
+void
+program_resource_visitor::process(ir_variable *var, const glsl_type *var_type,
+                                  bool use_std430_as_default)
+{
    unsigned record_array_count = 1;
    const bool row_major =
       var->data.matrix_layout == GLSL_MATRIX_LAYOUT_ROW_MAJOR;
@@ -72,15 +296,14 @@ program_resource_visitor::process(ir_variable *var, bool use_std430_as_default)
          get_internal_ifc_packing(use_std430_as_default) :
       var->type->get_internal_ifc_packing(use_std430_as_default);
 
-   const glsl_type *t =
-      var->data.from_named_ifc_block ? var->get_interface_type() : var->type;
+   const glsl_type *t = var_type;
    const glsl_type *t_without_array = t->without_array();
 
    /* false is always passed for the row_major parameter to the other
     * processing functions because no information is available to do
     * otherwise.  See the warning in linker.h.
     */
-   if (t_without_array->is_record() ||
+   if (t_without_array->is_struct() ||
               (t->is_array() && t->fields.array->is_array())) {
       char *name = ralloc_strdup(NULL, var->name);
       recursion(var->type, &name, strlen(name), row_major, NULL, packing,
@@ -121,11 +344,11 @@ program_resource_visitor::recursion(const glsl_type *t, char **name,
                                    named_ifc_member->name);
       recursion(named_ifc_member->type, name, name_length, row_major, NULL,
                 packing, false, record_array_count, NULL);
-   } else if (t->is_record() || t->is_interface()) {
-      if (record_type == NULL && t->is_record())
+   } else if (t->is_struct() || t->is_interface()) {
+      if (record_type == NULL && t->is_struct())
          record_type = t;
 
-      if (t->is_record())
+      if (t->is_struct())
          this->enter_record(t, *name, row_major, packing);
 
       for (unsigned i = 0; i < t->length; i++) {
@@ -169,14 +392,14 @@ program_resource_visitor::recursion(const glsl_type *t, char **name,
          record_type = NULL;
       }
 
-      if (t->is_record()) {
+      if (t->is_struct()) {
          (*name)[name_length] = '\0';
          this->leave_record(t, *name, row_major, packing);
       }
-   } else if (t->without_array()->is_record() ||
+   } else if (t->without_array()->is_struct() ||
               t->without_array()->is_interface() ||
               (t->is_array() && t->fields.array->is_array())) {
-      if (record_type == NULL && t->fields.array->is_record())
+      if (record_type == NULL && t->fields.array->is_struct())
          record_type = t->fields.array;
 
       unsigned length = t->length;
@@ -326,7 +549,7 @@ private:
                             const enum glsl_interface_packing,
                             bool /* last_field */)
    {
-      assert(!type->without_array()->is_record());
+      assert(!type->without_array()->is_struct());
       assert(!type->without_array()->is_interface());
       assert(!(type->is_array() && type->fields.array->is_array()));
 
@@ -464,7 +687,8 @@ public:
                               bool use_std430_as_default)
       : prog(prog), map(map), uniforms(uniforms),
         use_std430_as_default(use_std430_as_default), values(values),
-        bindless_targets(NULL), bindless_access(NULL)
+        bindless_targets(NULL), bindless_access(NULL),
+        shader_storage_blocks_write_access(0)
    {
    }
 
@@ -496,6 +720,7 @@ public:
       this->next_bindless_image = 0;
       free(this->bindless_access);
       this->bindless_access = NULL;
+      this->shader_storage_blocks_write_access = 0;
    }
 
    void set_and_process(ir_variable *var)
@@ -513,8 +738,10 @@ public:
             prog->data->ShaderStorageBlocks : prog->data->UniformBlocks;
          unsigned num_blks = var->is_in_shader_storage_block() ?
             prog->data->NumShaderStorageBlocks : prog->data->NumUniformBlocks;
+         bool is_interface_array =
+            var->is_interface_instance() && var->type->is_array();
 
-         if (var->is_interface_instance() && var->type->is_array()) {
+         if (is_interface_array) {
             unsigned l = strlen(var->get_interface_type()->name);
 
             for (unsigned i = 0; i < num_blks; i++) {
@@ -533,6 +760,24 @@ public:
             }
          }
          assert(buffer_block_index != -1);
+
+         if (var->is_in_shader_storage_block() &&
+             !var->data.memory_read_only) {
+            unsigned array_size = is_interface_array ?
+                                     var->type->array_size() : 1;
+
+            STATIC_ASSERT(MAX_SHADER_STORAGE_BUFFERS <= 32);
+
+            /* Shaders that use too many SSBOs will fail to compile, which
+             * we don't care about.
+             *
+             * This is true for shaders that do not use too many SSBOs:
+             */
+            if (buffer_block_index + array_size <= 32) {
+               shader_storage_blocks_write_access |=
+                  u_bit_consecutive(buffer_block_index, array_size);
+            }
+         }
 
          /* Uniform blocks that were specified with an instance name must be
           * handled a little bit differently.  The name of the variable is the
@@ -759,7 +1004,7 @@ private:
                              bool row_major,
                              const enum glsl_interface_packing packing)
    {
-      assert(type->is_record());
+      assert(type->is_struct());
       if (this->buffer_block_index == -1)
          return;
       if (packing == GLSL_INTERFACE_PACKING_STD430)
@@ -774,7 +1019,7 @@ private:
                              bool row_major,
                              const enum glsl_interface_packing packing)
    {
-      assert(type->is_record());
+      assert(type->is_struct());
       if (this->buffer_block_index == -1)
          return;
       if (packing == GLSL_INTERFACE_PACKING_STD430)
@@ -790,7 +1035,7 @@ private:
                             const enum glsl_interface_packing packing,
                             bool /* last_field */)
    {
-      assert(!type->without_array()->is_record());
+      assert(!type->without_array()->is_struct());
       assert(!type->without_array()->is_interface());
       assert(!(type->is_array() && type->fields.array->is_array()));
 
@@ -814,7 +1059,8 @@ private:
       this->uniforms[id].opaque[shader_type].index = ~0;
       this->uniforms[id].opaque[shader_type].active = false;
 
-      this->uniforms[id].active_shader_mask |= 1 << shader_type;
+      if (current_var->data.used || base_type->is_subroutine())
+         this->uniforms[id].active_shader_mask |= 1 << shader_type;
 
       /* This assigns uniform indices to sampler and image uniforms. */
       handle_samplers(base_type, &this->uniforms[id], name);
@@ -841,7 +1087,7 @@ private:
       /* Assign explicit locations. */
       if (current_var->data.explicit_location) {
          /* Set sequential locations for struct fields. */
-         if (current_var->type->without_array()->is_record() ||
+         if (current_var->type->without_array()->is_struct() ||
              current_var->type->is_array_of_arrays()) {
             const unsigned entries = MAX2(1, this->uniforms[id].array_elements);
             this->uniforms[id].remap_location =
@@ -921,6 +1167,9 @@ private:
           !this->uniforms[id].is_shader_storage &&
           this->buffer_block_index == -1)
          this->values += type->component_slots();
+
+      calculate_array_size_and_stride(prog, &this->uniforms[id],
+                                      use_std430_as_default);
    }
 
    /**
@@ -1013,6 +1262,10 @@ public:
     */
    GLenum *bindless_access;
 
+   /**
+    * Bitmask of shader storage blocks not declared as read-only.
+    */
+   unsigned shader_storage_blocks_write_access;
 };
 
 static bool
@@ -1097,10 +1350,10 @@ link_update_uniform_buffer_variables(struct gl_linked_shader *shader,
       bool found = false;
       char sentinel = '\0';
 
-      if (var->type->is_record()) {
+      if (var->type->is_struct()) {
          sentinel = '.';
       } else if (var->type->is_array() && (var->type->fields.array->is_array()
-                 || var->type->without_array()->is_record())) {
+                 || var->type->without_array()->is_struct())) {
          sentinel = '[';
       }
 
@@ -1374,6 +1627,8 @@ link_assign_uniform_storage(struct gl_context *ctx,
 
       shader->Program->SamplersUsed = parcel.shader_samplers_used;
       shader->shadow_samplers = parcel.shader_shadow_samplers;
+      shader->Program->sh.ShaderStorageBlocksWriteAccess =
+         parcel.shader_storage_blocks_write_access;
 
       if (parcel.num_bindless_samplers > 0) {
          shader->Program->sh.NumBindlessSamplers = parcel.num_bindless_samplers;
@@ -1469,6 +1724,22 @@ link_assign_uniform_locations(struct gl_shader_program *prog,
          uniform_size.process(var);
       }
 
+      if (uniform_size.num_shader_samplers >
+          ctx->Const.Program[i].MaxTextureImageUnits) {
+         linker_error(prog, "Too many %s shader texture samplers\n",
+                      _mesa_shader_stage_to_string(i));
+         continue;
+      }
+
+      if (uniform_size.num_shader_images >
+          ctx->Const.Program[i].MaxImageUniforms) {
+         linker_error(prog, "Too many %s shader image uniforms (%u > %u)\n",
+                      _mesa_shader_stage_to_string(i),
+                      sh->Program->info.num_images,
+                      ctx->Const.Program[i].MaxImageUniforms);
+         continue;
+      }
+
       sh->Program->info.num_textures = uniform_size.num_shader_samplers;
       sh->Program->info.num_images = uniform_size.num_shader_images;
       sh->num_uniform_components = uniform_size.num_shader_uniform_components;
@@ -1478,6 +1749,11 @@ link_assign_uniform_locations(struct gl_shader_program *prog,
          sh->num_combined_uniform_components +=
             sh->Program->sh.UniformBlocks[i]->UniformBufferSize / 4;
       }
+   }
+
+   if (prog->data->LinkStatus == LINKING_FAILURE) {
+      delete hiddenUniforms;
+      return;
    }
 
    prog->data->NumUniformStorage = uniform_size.num_active_uniforms;

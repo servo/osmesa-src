@@ -50,8 +50,6 @@ enum adreno_pa_su_sc_draw fd_polygon_mode(unsigned mode);
 enum adreno_stencil_op fd_stencil_op(unsigned op);
 
 #define A3XX_MAX_MIP_LEVELS 14
-/* TBD if it is same on a2xx, but for now: */
-#define MAX_MIP_LEVELS A3XX_MAX_MIP_LEVELS
 
 #define A2XX_MAX_RENDER_TARGETS 1
 #define A3XX_MAX_RENDER_TARGETS 4
@@ -61,30 +59,37 @@ enum adreno_stencil_op fd_stencil_op(unsigned op);
 
 #define MAX_RENDER_TARGETS A6XX_MAX_RENDER_TARGETS
 
-#define FD_DBG_MSGS     0x0001
-#define FD_DBG_DISASM   0x0002
-#define FD_DBG_DCLEAR   0x0004
-#define FD_DBG_DDRAW    0x0008
-#define FD_DBG_NOSCIS   0x0010
-#define FD_DBG_DIRECT   0x0020
-#define FD_DBG_NOBYPASS 0x0040
-#define FD_DBG_FRAGHALF 0x0080
-#define FD_DBG_NOBIN    0x0100
-#define FD_DBG_OPTMSGS  0x0200
-#define FD_DBG_GLSL120  0x0400
-#define FD_DBG_SHADERDB 0x0800
-#define FD_DBG_FLUSH    0x1000
-#define FD_DBG_DEQP     0x2000
-#define FD_DBG_INORDER  0x4000
-#define FD_DBG_BSTAT    0x8000
-#define FD_DBG_NOGROW  0x10000
-#define FD_DBG_LRZ     0x20000
-#define FD_DBG_NOINDR  0x40000
-#define FD_DBG_NOBLIT  0x80000
-#define FD_DBG_HIPRIO 0x100000
-#define FD_DBG_TTILE  0x200000
-#define FD_DBG_PERFC  0x400000
-#define FD_DBG_SOFTPIN 0x800000
+enum fd_debug_flag {
+	FD_DBG_MSGS         = BITFIELD_BIT(0),
+	FD_DBG_DISASM       = BITFIELD_BIT(1),
+	FD_DBG_DCLEAR       = BITFIELD_BIT(2),
+	FD_DBG_DDRAW        = BITFIELD_BIT(3),
+	FD_DBG_NOSCIS       = BITFIELD_BIT(4),
+	FD_DBG_DIRECT       = BITFIELD_BIT(5),
+	FD_DBG_NOBYPASS     = BITFIELD_BIT(6),
+	FD_DBG_LOG          = BITFIELD_BIT(7),
+	FD_DBG_NOBIN        = BITFIELD_BIT(8),
+	FD_DBG_NOGMEM       = BITFIELD_BIT(9),
+	/* BIT(10) */
+	FD_DBG_SHADERDB     = BITFIELD_BIT(11),
+	FD_DBG_FLUSH        = BITFIELD_BIT(12),
+	FD_DBG_DEQP         = BITFIELD_BIT(13),
+	FD_DBG_INORDER      = BITFIELD_BIT(14),
+	FD_DBG_BSTAT        = BITFIELD_BIT(15),
+	FD_DBG_NOGROW       = BITFIELD_BIT(16),
+	FD_DBG_LRZ          = BITFIELD_BIT(17),
+	FD_DBG_NOINDR       = BITFIELD_BIT(18),
+	FD_DBG_NOBLIT       = BITFIELD_BIT(19),
+	FD_DBG_HIPRIO       = BITFIELD_BIT(20),
+	FD_DBG_TTILE        = BITFIELD_BIT(21),
+	FD_DBG_PERFC        = BITFIELD_BIT(22),
+	FD_DBG_NOUBWC       = BITFIELD_BIT(23),
+	FD_DBG_NOLRZ        = BITFIELD_BIT(24),
+	FD_DBG_NOTILE       = BITFIELD_BIT(25),
+	FD_DBG_LAYOUT       = BITFIELD_BIT(26),
+	FD_DBG_NOFP16       = BITFIELD_BIT(27),
+	FD_DBG_NOHW         = BITFIELD_BIT(28),
+};
 
 extern int fd_mesa_debug;
 extern bool fd_binning_enabled;
@@ -114,15 +119,19 @@ static inline uint32_t DRAW(enum pc_di_primtype prim_type,
 }
 
 static inline uint32_t DRAW_A20X(enum pc_di_primtype prim_type,
+		enum pc_di_face_cull_sel faceness_cull_select,
 		enum pc_di_src_sel source_select, enum pc_di_index_size index_size,
-		enum pc_di_vis_cull_mode vis_cull_mode,
+		bool pre_fetch_cull_enable,
+		bool grp_cull_enable,
 		uint16_t count)
 {
 	return (prim_type         << 0) |
 			(source_select     << 6) |
+			(faceness_cull_select << 8) |
 			((index_size & 1)  << 11) |
 			((index_size >> 1) << 13) |
-			(vis_cull_mode     << 9) |
+			(pre_fetch_cull_enable << 14) |
+			(grp_cull_enable << 15) |
 			(count         << 16);
 }
 
@@ -194,19 +203,7 @@ fd_half_precision(struct pipe_framebuffer_state *pfb)
 	return true;
 }
 
-#define LOG_DWORDS 0
-
 static inline void emit_marker(struct fd_ringbuffer *ring, int scratch_idx);
-
-static inline void
-OUT_RING(struct fd_ringbuffer *ring, uint32_t data)
-{
-	if (LOG_DWORDS) {
-		DBG("ring[%p]: OUT_RING   %04x:  %08x", ring,
-				(uint32_t)(ring->cur - ring->start), data);
-	}
-	fd_ringbuffer_emit(ring, data);
-}
 
 /* like OUT_RING() but appends a cmdstream patch point to 'buf' */
 static inline void
@@ -221,131 +218,6 @@ OUT_RINGP(struct fd_ringbuffer *ring, uint32_t data,
 		.cs  = ring->cur++,
 		.val = data,
 	}));
-}
-
-/*
- * NOTE: OUT_RELOC*() is 2 dwords (64b) on a5xx+
- */
-
-static inline void
-OUT_RELOC(struct fd_ringbuffer *ring, struct fd_bo *bo,
-		uint32_t offset, uint64_t or, int32_t shift)
-{
-	if (LOG_DWORDS) {
-		DBG("ring[%p]: OUT_RELOC   %04x:  %p+%u << %d", ring,
-				(uint32_t)(ring->cur - ring->start), bo, offset, shift);
-	}
-	debug_assert(offset < fd_bo_size(bo));
-	fd_ringbuffer_reloc(ring, &(struct fd_reloc){
-		.bo = bo,
-		.flags = FD_RELOC_READ,
-		.offset = offset,
-		.or = or,
-		.shift = shift,
-		.orhi = or >> 32,
-	});
-}
-
-static inline void
-OUT_RELOCW(struct fd_ringbuffer *ring, struct fd_bo *bo,
-		uint32_t offset, uint64_t or, int32_t shift)
-{
-	if (LOG_DWORDS) {
-		DBG("ring[%p]: OUT_RELOCW  %04x:  %p+%u << %d", ring,
-				(uint32_t)(ring->cur - ring->start), bo, offset, shift);
-	}
-	debug_assert(offset < fd_bo_size(bo));
-	fd_ringbuffer_reloc(ring, &(struct fd_reloc){
-		.bo = bo,
-		.flags = FD_RELOC_READ | FD_RELOC_WRITE,
-		.offset = offset,
-		.or = or,
-		.shift = shift,
-		.orhi = or >> 32,
-	});
-}
-
-static inline void
-OUT_RB(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
-{
-	fd_ringbuffer_emit_reloc_ring_full(ring, target, 0);
-}
-
-static inline void BEGIN_RING(struct fd_ringbuffer *ring, uint32_t ndwords)
-{
-	if (ring->cur + ndwords > ring->end)
-		fd_ringbuffer_grow(ring, ndwords);
-}
-
-static inline void
-OUT_PKT0(struct fd_ringbuffer *ring, uint16_t regindx, uint16_t cnt)
-{
-	BEGIN_RING(ring, cnt+1);
-	OUT_RING(ring, CP_TYPE0_PKT | ((cnt-1) << 16) | (regindx & 0x7FFF));
-}
-
-static inline void
-OUT_PKT2(struct fd_ringbuffer *ring)
-{
-	BEGIN_RING(ring, 1);
-	OUT_RING(ring, CP_TYPE2_PKT);
-}
-
-static inline void
-OUT_PKT3(struct fd_ringbuffer *ring, uint8_t opcode, uint16_t cnt)
-{
-	BEGIN_RING(ring, cnt+1);
-	OUT_RING(ring, CP_TYPE3_PKT | ((cnt-1) << 16) | ((opcode & 0xFF) << 8));
-}
-
-/*
- * Starting with a5xx, pkt4/pkt7 are used instead of pkt0/pkt3
- */
-
-static inline unsigned
-_odd_parity_bit(unsigned val)
-{
-	/* See: http://graphics.stanford.edu/~seander/bithacks.html#ParityParallel
-	 * note that we want odd parity so 0x6996 is inverted.
-	 */
-	val ^= val >> 16;
-	val ^= val >> 8;
-	val ^= val >> 4;
-	val &= 0xf;
-	return (~0x6996 >> val) & 1;
-}
-
-static inline void
-OUT_PKT4(struct fd_ringbuffer *ring, uint16_t regindx, uint16_t cnt)
-{
-	BEGIN_RING(ring, cnt+1);
-	OUT_RING(ring, CP_TYPE4_PKT | cnt |
-			(_odd_parity_bit(cnt) << 7) |
-			((regindx & 0x3ffff) << 8) |
-			((_odd_parity_bit(regindx) << 27)));
-}
-
-static inline void
-OUT_PKT7(struct fd_ringbuffer *ring, uint8_t opcode, uint16_t cnt)
-{
-	BEGIN_RING(ring, cnt+1);
-	OUT_RING(ring, CP_TYPE7_PKT | cnt |
-			(_odd_parity_bit(cnt) << 15) |
-			((opcode & 0x7f) << 16) |
-			((_odd_parity_bit(opcode) << 23)));
-}
-
-static inline void
-OUT_WFI(struct fd_ringbuffer *ring)
-{
-	OUT_PKT3(ring, CP_WAIT_FOR_IDLE, 1);
-	OUT_RING(ring, 0x00000000);
-}
-
-static inline void
-OUT_WFI5(struct fd_ringbuffer *ring)
-{
-	OUT_PKT7(ring, CP_WAIT_FOR_IDLE, 0);
 }
 
 static inline void
@@ -411,18 +283,6 @@ emit_marker(struct fd_ringbuffer *ring, int scratch_idx)
 	OUT_RING(ring, ++marker_cnt);
 }
 
-/* helper to get numeric value from environment variable..  mostly
- * just leaving this here because it is helpful to brute-force figure
- * out unknown formats, etc, which blob driver does not support:
- */
-static inline uint32_t env2u(const char *envvar)
-{
-	char *str = getenv(envvar);
-	if (str)
-		return strtoul(str, NULL, 0);
-	return 0;
-}
-
 static inline uint32_t
 pack_rgba(enum pipe_format format, const float *rgba)
 {
@@ -438,7 +298,7 @@ pack_rgba(enum pipe_format format, const float *rgba)
 	do { __typeof(a) __tmp = (a); (a) = (b); (b) = __tmp; } while (0)
 
 #define foreach_bit(b, mask) \
-	for (uint32_t _m = (mask); _m && ({(b) = u_bit_scan(&_m); 1;});)
+	for (uint32_t _m = (mask), b; _m && ({(b) = u_bit_scan(&_m); (void)(b); 1;});)
 
 
 #define BIT(bit) (1u << bit)
@@ -453,9 +313,12 @@ fd_msaa_samples(unsigned samples)
 	switch (samples) {
 	default:
 		debug_assert(0);
+		/* fallthrough */
+	case 0:
 	case 1: return MSAA_ONE;
 	case 2: return MSAA_TWO;
 	case 4: return MSAA_FOUR;
+	case 8: return MSAA_EIGHT;
 	}
 }
 
@@ -464,19 +327,33 @@ fd_msaa_samples(unsigned samples)
  */
 
 static inline enum a4xx_state_block
-fd4_stage2shadersb(enum shader_t type)
+fd4_stage2shadersb(gl_shader_stage type)
 {
 	switch (type) {
-	case SHADER_VERTEX:
+	case MESA_SHADER_VERTEX:
 		return SB4_VS_SHADER;
-	case SHADER_FRAGMENT:
+	case MESA_SHADER_FRAGMENT:
 		return SB4_FS_SHADER;
-	case SHADER_COMPUTE:
+	case MESA_SHADER_COMPUTE:
+	case MESA_SHADER_KERNEL:
 		return SB4_CS_SHADER;
 	default:
 		unreachable("bad shader type");
 		return ~0;
 	}
+}
+
+static inline enum a4xx_index_size
+fd4_size2indextype(unsigned index_size)
+{
+	switch (index_size) {
+	case 1: return INDEX4_SIZE_8_BIT;
+	case 2: return INDEX4_SIZE_16_BIT;
+	case 4: return INDEX4_SIZE_32_BIT;
+	}
+	DBG("unsupported index size: %d", index_size);
+	assert(0);
+	return INDEX4_SIZE_32_BIT;
 }
 
 #endif /* FREEDRENO_UTIL_H_ */

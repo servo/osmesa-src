@@ -34,6 +34,7 @@
 #include "glheader.h"
 #include "formats.h"
 #include "menums.h"
+#include "compiler/shader_enums.h"
 
 struct gl_bitmap_atlas;
 struct gl_buffer_object;
@@ -69,6 +70,9 @@ struct _mesa_index_buffer;
  * respect the contents of already referenced data.
  */
 #define MESA_MAP_NOWAIT_BIT       0x4000
+
+/* Mapping a buffer is allowed from any thread. */
+#define MESA_MAP_THREAD_SAFE_BIT  0x8000
 
 
 /**
@@ -367,6 +371,12 @@ struct dd_function_table {
    void (*DeleteTexture)(struct gl_context *ctx,
                          struct gl_texture_object *texObj);
 
+   /**
+    * Called to notify that texture is removed from ctx->Shared->TexObjects
+    */
+   void (*TextureRemovedFromShared)(struct gl_context *ctx,
+                                   struct gl_texture_object *texObj);
+
    /** Called to allocate a new texture image object. */
    struct gl_texture_image * (*NewTextureImage)(struct gl_context *ctx);
 
@@ -450,7 +460,8 @@ struct dd_function_table {
     */
    /*@{*/
    /** Allocate a new program */
-   struct gl_program * (*NewProgram)(struct gl_context *ctx, GLenum target,
+   struct gl_program * (*NewProgram)(struct gl_context *ctx,
+                                     gl_shader_stage stage,
                                      GLuint id, bool is_arb_asm);
    /** Delete a program */
    void (*DeleteProgram)(struct gl_context *ctx, struct gl_program *prog);   
@@ -528,6 +539,8 @@ struct dd_function_table {
     * \param index_bounds_valid  are min_index and max_index valid?
     * \param min_index  lowest vertex index used
     * \param max_index  highest vertex index used
+    * \param num_instances  instance count from ARB_draw_instanced
+    * \param base_instance  base instance from ARB_base_instance
     * \param tfb_vertcount  if non-null, indicates which transform feedback
     *                       object has the vertex count.
     * \param tfb_stream  If called via DrawTransformFeedbackStream, specifies
@@ -542,8 +555,9 @@ struct dd_function_table {
                 const struct _mesa_index_buffer *ib,
                 GLboolean index_bounds_valid,
                 GLuint min_index, GLuint max_index,
+                GLuint num_instances, GLuint base_instance,
                 struct gl_transform_feedback_object *tfb_vertcount,
-                unsigned tfb_stream, struct gl_buffer_object *indirect);
+                unsigned tfb_stream);
 
 
    /**
@@ -784,9 +798,8 @@ struct dd_function_table {
                            GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                            GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                            GLbitfield mask, GLenum filter);
-   void (*DiscardFramebuffer)(struct gl_context *ctx,
-                              GLenum target, GLsizei numAttachments,
-                              const GLenum *attachments);
+   void (*DiscardFramebuffer)(struct gl_context *ctx, struct gl_framebuffer *fb,
+                              struct gl_renderbuffer_attachment *att);
 
    /**
     * \name Functions for GL_ARB_sample_locations
@@ -975,6 +988,13 @@ struct dd_function_table {
 					     struct gl_renderbuffer *rb,
 					     void *image_handle);
 
+   /**
+    * \name GL_EXT_EGL_image_storage interface
+    */
+   void (*EGLImageTargetTexStorage)(struct gl_context *ctx, GLenum target,
+                                    struct gl_texture_object *texObj,
+                                    struct gl_texture_image *texImage,
+                                    GLeglImageOES image_handle);
    /**
     * \name GL_EXT_transform_feedback interface
     */
@@ -1299,6 +1319,13 @@ struct dd_function_table {
    void (*ShaderCacheSerializeDriverBlob)(struct gl_context *ctx,
                                           struct gl_program *prog);
    /*@}*/
+
+   /**
+    * \name Set the number of compiler threads for ARB_parallel_shader_compile
+    */
+   void (*SetMaxShaderCompilerThreads)(struct gl_context *ctx, unsigned count);
+   bool (*GetShaderProgramCompletionStatus)(struct gl_context *ctx,
+                                            struct gl_shader_program *shprog);
 };
 
 
@@ -1476,6 +1503,41 @@ typedef struct {
 
    void (GLAPIENTRYP VertexAttribL1ui64ARB)( GLuint index, GLuint64EXT x);
    void (GLAPIENTRYP VertexAttribL1ui64vARB)( GLuint index, const GLuint64EXT *v);
+
+   /* GL_NV_half_float */
+   void (GLAPIENTRYP Vertex2hNV)( GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP Vertex2hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP Vertex3hNV)( GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP Vertex3hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP Vertex4hNV)( GLhalfNV, GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP Vertex4hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP Normal3hNV)( GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP Normal3hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP Color3hNV)( GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP Color3hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP Color4hNV)( GLhalfNV, GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP Color4hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP TexCoord1hNV)( GLhalfNV );
+   void (GLAPIENTRYP TexCoord1hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP TexCoord2hNV)( GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP TexCoord2hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP TexCoord3hNV)( GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP TexCoord3hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP TexCoord4hNV)( GLhalfNV, GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP TexCoord4hvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP MultiTexCoord1hNV)( GLenum, GLhalfNV );
+   void (GLAPIENTRYP MultiTexCoord1hvNV)( GLenum, const GLhalfNV * );
+   void (GLAPIENTRYP MultiTexCoord2hNV)( GLenum, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP MultiTexCoord2hvNV)( GLenum, const GLhalfNV * );
+   void (GLAPIENTRYP MultiTexCoord3hNV)( GLenum, GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP MultiTexCoord3hvNV)( GLenum, const GLhalfNV * );
+   void (GLAPIENTRYP MultiTexCoord4hNV)( GLenum, GLhalfNV, GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP MultiTexCoord4hvNV)( GLenum, const GLhalfNV * );
+   void (GLAPIENTRYP FogCoordhNV)( GLhalfNV );
+   void (GLAPIENTRYP FogCoordhvNV)( const GLhalfNV * );
+   void (GLAPIENTRYP SecondaryColor3hNV)( GLhalfNV, GLhalfNV, GLhalfNV );
+   void (GLAPIENTRYP SecondaryColor3hvNV)( const GLhalfNV * );
+
 } GLvertexformat;
 
 

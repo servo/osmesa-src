@@ -29,7 +29,7 @@
 #include "main/texobj.h"
 #include "main/teximage.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "st_cb_eglimage.h"
 #include "st_cb_fbo.h"
 #include "st_context.h"
@@ -42,11 +42,12 @@
 static bool
 is_format_supported(struct pipe_screen *screen, enum pipe_format format,
                     unsigned nr_samples, unsigned nr_storage_samples,
-                    unsigned usage)
+                    unsigned usage, bool *native_supported)
 {
    bool supported = screen->is_format_supported(screen, format, PIPE_TEXTURE_2D,
                                                 nr_samples, nr_storage_samples,
                                                 usage);
+   *native_supported = supported;
 
    /* for sampling, some formats can be emulated.. it doesn't matter that
     * the surface will have a format that the driver can't cope with because
@@ -54,17 +55,56 @@ is_format_supported(struct pipe_screen *screen, enum pipe_format format,
     * a shader variant that converts.
     */
    if ((usage == PIPE_BIND_SAMPLER_VIEW) && !supported) {
-      if (format == PIPE_FORMAT_IYUV) {
+      switch (format) {
+      case PIPE_FORMAT_IYUV:
          supported = screen->is_format_supported(screen, PIPE_FORMAT_R8_UNORM,
                                                  PIPE_TEXTURE_2D, nr_samples,
                                                  nr_storage_samples, usage);
-      } else if (format == PIPE_FORMAT_NV12) {
+         break;
+      case PIPE_FORMAT_NV12:
          supported = screen->is_format_supported(screen, PIPE_FORMAT_R8_UNORM,
                                                  PIPE_TEXTURE_2D, nr_samples,
                                                  nr_storage_samples, usage) &&
                      screen->is_format_supported(screen, PIPE_FORMAT_R8G8_UNORM,
                                                  PIPE_TEXTURE_2D, nr_samples,
                                                  nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_P016:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_R16_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage) &&
+                     screen->is_format_supported(screen, PIPE_FORMAT_R16G16_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_YUYV:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_RG88_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage) &&
+                     screen->is_format_supported(screen, PIPE_FORMAT_BGRA8888_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_UYVY:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_RG88_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage) &&
+                     screen->is_format_supported(screen, PIPE_FORMAT_RGBA8888_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_AYUV:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_RGBA8888_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+      case PIPE_FORMAT_XYUV:
+         supported = screen->is_format_supported(screen, PIPE_FORMAT_RGBX8888_UNORM,
+                                                 PIPE_TEXTURE_2D, nr_samples,
+                                                 nr_storage_samples, usage);
+         break;
+       default:
+         break;
       }
    }
 
@@ -76,7 +116,8 @@ is_format_supported(struct pipe_screen *screen, enum pipe_format format,
  */
 static bool
 st_get_egl_image(struct gl_context *ctx, GLeglImageOES image_handle,
-                 unsigned usage, const char *error, struct st_egl_image *out)
+                 unsigned usage, const char *error, struct st_egl_image *out,
+                 bool *native_supported)
 {
    struct st_context *st = st_context(ctx);
    struct pipe_screen *screen = st->pipe->screen;
@@ -94,7 +135,8 @@ st_get_egl_image(struct gl_context *ctx, GLeglImageOES image_handle,
    }
 
    if (!is_format_supported(screen, out->format, out->texture->nr_samples,
-                            out->texture->nr_storage_samples, usage)) {
+                            out->texture->nr_storage_samples, usage,
+                            native_supported)) {
       /* unable to specify a texture object using the specified EGL image */
       pipe_resource_reference(&out->texture, NULL);
       _mesa_error(ctx, GL_INVALID_OPERATION, "%s(format not supported)", error);
@@ -141,10 +183,11 @@ st_egl_image_target_renderbuffer_storage(struct gl_context *ctx,
 {
    struct st_renderbuffer *strb = st_renderbuffer(rb);
    struct st_egl_image stimg;
+   bool native_supported;
 
    if (st_get_egl_image(ctx, image_handle, PIPE_BIND_RENDER_TARGET,
                         "glEGLImageTargetRenderbufferStorage",
-                        &stimg)) {
+                        &stimg, &native_supported)) {
       struct pipe_context *pipe = st_context(ctx)->pipe;
       struct pipe_surface *ps, surf_tmpl;
 
@@ -159,20 +202,11 @@ st_egl_image_target_renderbuffer_storage(struct gl_context *ctx,
       if (!ps)
          return;
 
-      strb->Base.Width = ps->width;
-      strb->Base.Height = ps->height;
       strb->Base.Format = st_pipe_format_to_mesa_format(ps->format);
       strb->Base._BaseFormat = st_pipe_format_to_base_format(ps->format);
       strb->Base.InternalFormat = strb->Base._BaseFormat;
 
-      struct pipe_surface **psurf =
-         util_format_is_srgb(ps->format) ? &strb->surface_srgb :
-                                           &strb->surface_linear;
-
-      pipe_surface_reference(psurf, ps);
-      strb->surface = *psurf;
-      pipe_resource_reference(&strb->texture, ps->texture);
-
+      st_set_ws_renderbuffer_surface(strb, ps);
       pipe_surface_reference(&ps, NULL);
    }
 }
@@ -181,7 +215,9 @@ static void
 st_bind_egl_image(struct gl_context *ctx,
                   struct gl_texture_object *texObj,
                   struct gl_texture_image *texImage,
-                  struct st_egl_image *stimg)
+                  struct st_egl_image *stimg,
+                  bool tex_storage,
+                  bool native_supported)
 {
    struct st_context *st = st_context(ctx);
    struct st_texture_object *stObj;
@@ -205,28 +241,63 @@ st_bind_egl_image(struct gl_context *ctx,
       stObj->surface_based = GL_TRUE;
    }
 
-   texFormat = st_pipe_format_to_mesa_format(stimg->format);
-
    /* TODO RequiredTextureImageUnits should probably be reset back
     * to 1 somewhere if different texture is bound??
     */
-   if (texFormat == MESA_FORMAT_NONE) {
+   if (!native_supported) {
       switch (stimg->format) {
       case PIPE_FORMAT_NV12:
          texFormat = MESA_FORMAT_R_UNORM8;
+         texObj->RequiredTextureImageUnits = 2;
+         break;
+      case PIPE_FORMAT_P016:
+         texFormat = MESA_FORMAT_R_UNORM16;
          texObj->RequiredTextureImageUnits = 2;
          break;
       case PIPE_FORMAT_IYUV:
          texFormat = MESA_FORMAT_R_UNORM8;
          texObj->RequiredTextureImageUnits = 3;
          break;
+      case PIPE_FORMAT_YUYV:
+      case PIPE_FORMAT_UYVY:
+         texFormat = MESA_FORMAT_RG_UNORM8;
+         texObj->RequiredTextureImageUnits = 2;
+         break;
+      case PIPE_FORMAT_AYUV:
+         texFormat = MESA_FORMAT_R8G8B8A8_UNORM;
+         internalFormat = GL_RGBA;
+         texObj->RequiredTextureImageUnits = 1;
+         break;
+      case PIPE_FORMAT_XYUV:
+         texFormat = MESA_FORMAT_R8G8B8X8_UNORM;
+         texObj->RequiredTextureImageUnits = 1;
+         break;
       default:
-         unreachable("bad YUV format!");
+         unreachable("unexpected emulated format");
+         break;
+      }
+   } else {
+      texFormat = st_pipe_format_to_mesa_format(stimg->format);
+      /* Use previously derived internalformat as specified by
+       * EXT_EGL_image_storage.
+       */
+      if (tex_storage && texObj->Target == GL_TEXTURE_2D
+          && stimg->internalformat) {
+         internalFormat = stimg->internalformat;
+         if (internalFormat == GL_NONE) {
+            _mesa_error(ctx, GL_INVALID_OPERATION, __func__);
+            return;
+         }
       }
    }
+   assert(texFormat != MESA_FORMAT_NONE);
 
-   _mesa_init_teximage_fields(ctx, texImage,
-                              stimg->texture->width0, stimg->texture->height0,
+
+   /* Minify texture size based on level set on the EGLImage. */
+   uint32_t width = u_minify(stimg->texture->width0, stimg->level);
+   uint32_t height = u_minify(stimg->texture->height0, stimg->level);
+
+   _mesa_init_teximage_fields(ctx, texImage, width, height,
                               1, 0, internalFormat, texFormat);
 
    pipe_resource_reference(&stObj->pt, stimg->texture);
@@ -249,12 +320,34 @@ st_egl_image_target_texture_2d(struct gl_context *ctx, GLenum target,
 			       GLeglImageOES image_handle)
 {
    struct st_egl_image stimg;
+   bool native_supported;
 
    if (!st_get_egl_image(ctx, image_handle, PIPE_BIND_SAMPLER_VIEW,
-                         "glEGLImageTargetTexture2D", &stimg))
+                         "glEGLImageTargetTexture2D", &stimg,
+                         &native_supported))
       return;
 
-   st_bind_egl_image(ctx, texObj, texImage, &stimg);
+   st_bind_egl_image(ctx, texObj, texImage, &stimg,
+                     target != GL_TEXTURE_EXTERNAL_OES,
+                     native_supported);
+   pipe_resource_reference(&stimg.texture, NULL);
+}
+
+static void
+st_egl_image_target_tex_storage(struct gl_context *ctx, GLenum target,
+                                struct gl_texture_object *texObj,
+                                struct gl_texture_image *texImage,
+                                GLeglImageOES image_handle)
+{
+   struct st_egl_image stimg;
+   bool native_supported;
+
+   if (!st_get_egl_image(ctx, image_handle, PIPE_BIND_SAMPLER_VIEW,
+                         "glEGLImageTargetTexture2D", &stimg,
+                         &native_supported))
+      return;
+
+   st_bind_egl_image(ctx, texObj, texImage, &stimg, true, native_supported);
    pipe_resource_reference(&stimg.texture, NULL);
 }
 
@@ -262,5 +355,6 @@ void
 st_init_eglimage_functions(struct dd_function_table *functions)
 {
    functions->EGLImageTargetTexture2D = st_egl_image_target_texture_2d;
+   functions->EGLImageTargetTexStorage = st_egl_image_target_tex_storage;
    functions->EGLImageTargetRenderbufferStorage = st_egl_image_target_renderbuffer_storage;
 }

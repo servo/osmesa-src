@@ -42,7 +42,7 @@
 
 #include "util/u_blit.h"
 #include "util/u_draw_quad.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/u_sampler.h"
@@ -62,7 +62,7 @@ struct blit_state
    struct pipe_rasterizer_state rasterizer;
    struct pipe_sampler_state sampler;
    struct pipe_viewport_state viewport;
-   struct pipe_vertex_element velem[2];
+   struct cso_velems_state velem;
 
    void *vs;
    void *fs[PIPE_MAX_TEXTURE_TYPES][4];
@@ -110,11 +110,12 @@ util_create_blit(struct pipe_context *pipe, struct cso_context *cso)
    ctx->sampler.mag_img_filter = 0; /* set later */
 
    /* vertex elements state */
+   ctx->velem.count = 2;
    for (i = 0; i < 2; i++) {
-      ctx->velem[i].src_offset = i * 4 * sizeof(float);
-      ctx->velem[i].instance_divisor = 0;
-      ctx->velem[i].vertex_buffer_index = 0;
-      ctx->velem[i].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+      ctx->velem.velems[i].src_offset = i * 4 * sizeof(float);
+      ctx->velem.velems[i].instance_divisor = 0;
+      ctx->velem.velems[i].vertex_buffer_index = 0;
+      ctx->velem.velems[i].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
    }
 
    ctx->vbuf = NULL;
@@ -213,8 +214,10 @@ set_vertex_shader(struct blit_state *ctx)
     * fragment shader input semantics and vertex_element/buffers.
     */
    if (!ctx->vs) {
-      const uint semantic_names[] = { TGSI_SEMANTIC_POSITION,
-                                      TGSI_SEMANTIC_GENERIC };
+      const enum tgsi_semantic semantic_names[] = {
+         TGSI_SEMANTIC_POSITION,
+         TGSI_SEMANTIC_GENERIC
+      };
       const uint semantic_indexes[] = { 0, 0 };
       ctx->vs = util_make_vertex_passthrough_shader(ctx->pipe, 2,
                                                     semantic_names,
@@ -382,7 +385,7 @@ util_blit_pixels(struct blit_state *ctx,
                  struct pipe_surface *dst,
                  int dstX0, int dstY0,
                  int dstX1, int dstY1,
-                 MAYBE_UNUSED float z,
+                 ASSERTED float z,
                  enum pipe_tex_filter filter,
                  uint writemask)
 {
@@ -581,7 +584,7 @@ util_blit_pixels_tex(struct blit_state *ctx,
    cso_set_sample_mask(ctx->cso, ~0);
    cso_set_min_samples(ctx->cso, 1);
    cso_set_rasterizer(ctx->cso, &ctx->rasterizer);
-   cso_set_vertex_elements(ctx->cso, 2, ctx->velem);
+   cso_set_vertex_elements(ctx->cso, &ctx->velem);
    cso_set_stream_outputs(ctx->cso, 0, NULL, NULL);
 
    /* sampler */

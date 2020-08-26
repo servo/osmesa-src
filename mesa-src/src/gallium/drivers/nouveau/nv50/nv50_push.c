@@ -2,7 +2,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "translate/translate.h"
 
 #include "nv50/nv50_context.h"
@@ -264,10 +264,13 @@ nv50_push_vbo(struct nv50_context *nv50, const struct pipe_draw_info *info)
       const struct pipe_vertex_buffer *vb = &nv50->vtxbuf[i];
       const uint8_t *data;
 
-      if (unlikely(!vb->is_user_buffer))
+      if (unlikely(!vb->is_user_buffer)) {
+         if (!vb->buffer.resource)
+            continue;
+
          data = nouveau_resource_map_offset(&nv50->base,
             nv04_resource(vb->buffer.resource), vb->buffer_offset, NOUVEAU_BO_RD);
-      else
+      } else
          data = vb->buffer.user;
 
       if (apply_bias && likely(!(nv50->vertex->instance_bufs & (1 << i))))

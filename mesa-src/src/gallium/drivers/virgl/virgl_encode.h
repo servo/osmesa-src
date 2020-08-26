@@ -27,11 +27,14 @@
 #include "pipe/p_state.h"
 
 #include "virgl_winsys.h"
+#include "virtio-gpu/virgl_protocol.h"
 
 struct tgsi_token;
 
 struct virgl_context;
 struct virgl_resource;
+struct virgl_screen;
+struct virgl_transfer;
 struct virgl_sampler_view;
 
 struct virgl_surface {
@@ -112,6 +115,12 @@ int virgl_encode_clear(struct virgl_context *ctx,
                       unsigned buffers,
                       const union pipe_color_union *color,
                       double depth, unsigned stencil);
+
+int virgl_encode_clear_texture(struct virgl_context *ctx,
+                               struct virgl_resource *res,
+                               unsigned int level,
+                               const struct pipe_box *box,
+                               const void *data);
 
 int virgl_encode_bind_object(struct virgl_context *ctx,
                             uint32_t handle, uint32_t object);
@@ -276,4 +285,26 @@ int virgl_encode_launch_grid(struct virgl_context *ctx,
                              const struct pipe_grid_info *grid_info);
 int virgl_encode_texture_barrier(struct virgl_context *ctx,
                                  unsigned flags);
+
+int virgl_encode_host_debug_flagstring(struct virgl_context *ctx,
+                                  const char *envname);
+
+int virgl_encode_get_query_result_qbo(struct virgl_context *ctx,
+                                      uint32_t handle,
+                                      struct virgl_resource *res, boolean wait,
+                                      uint32_t result_type,
+                                      uint32_t offset,
+                                      uint32_t index);
+
+void virgl_encode_transfer(struct virgl_screen *vs, struct virgl_cmd_buf *buf,
+                           struct virgl_transfer *trans, uint32_t direction);
+
+void virgl_encode_copy_transfer(struct virgl_context *ctx,
+                                struct virgl_transfer *trans);
+
+void virgl_encode_end_transfers(struct virgl_cmd_buf *buf);
+
+int virgl_encode_tweak(struct virgl_context *ctx, enum vrend_tweak_type tweak, uint32_t value);
+
+enum virgl_formats pipe_to_virgl_format(enum pipe_format format);
 #endif

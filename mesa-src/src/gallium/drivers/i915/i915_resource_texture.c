@@ -34,7 +34,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/u_rect.h"
@@ -681,7 +681,7 @@ i945_texture_layout(struct i915_texture * tex)
 
 
 
-static boolean
+static bool
 i915_texture_get_handle(struct pipe_screen * screen,
                         struct pipe_resource *texture,
                         struct winsys_handle *whandle)

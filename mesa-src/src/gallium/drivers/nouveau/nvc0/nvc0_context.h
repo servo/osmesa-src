@@ -27,6 +27,7 @@
 #include "nvc0/nvc0_3d.xml.h"
 #include "nv50/nv50_2d.xml.h"
 #include "nvc0/nvc0_m2mf.xml.h"
+#include "nvc0/nve4_copy.xml.h"
 #include "nvc0/nve4_p2mf.xml.h"
 #include "nvc0/nvc0_compute.xml.h"
 #include "nvc0/nvc0_macros.h"
@@ -282,6 +283,8 @@ struct nvc0_context {
    uint16_t images_valid[6];
 
    struct util_dynarray global_residents;
+
+   uint64_t compute_invocations;
 };
 
 static inline struct nvc0_context *
@@ -319,12 +322,11 @@ extern struct draw_stage *nvc0_draw_render_stage(struct nvc0_context *);
 
 /* nvc0_program.c */
 bool nvc0_program_translate(struct nvc0_program *, uint16_t chipset,
+                            struct disk_cache *,
                             struct pipe_debug_callback *);
 bool nvc0_program_upload(struct nvc0_context *, struct nvc0_program *);
 void nvc0_program_destroy(struct nvc0_context *, struct nvc0_program *);
 void nvc0_program_library_upload(struct nvc0_context *);
-uint32_t nvc0_program_symbol_offset(const struct nvc0_program *,
-                                    uint32_t label);
 void nvc0_program_init_tcp_empty(struct nvc0_context *);
 
 /* nvc0_shader_state.c */
@@ -354,6 +356,7 @@ bool nvc0_state_validate_3d(struct nvc0_context *, uint32_t);
 
 /* nvc0_surface.c */
 extern void nvc0_clear(struct pipe_context *, unsigned buffers,
+                       const struct pipe_scissor_state *scissor_state,
                        const union pipe_color_union *color,
                        double depth, unsigned stencil);
 extern void nvc0_init_surface_functions(struct nvc0_context *);
@@ -365,6 +368,7 @@ bool nve4_validate_tsc(struct nvc0_context *nvc0, int s);
 void nvc0_validate_suf(struct nvc0_context *nvc0, int s);
 void nvc0_validate_textures(struct nvc0_context *);
 void nvc0_validate_samplers(struct nvc0_context *);
+void nvc0_upload_tsc0(struct nvc0_context *);
 void nve4_set_tex_handles(struct nvc0_context *);
 void nvc0_validate_surfaces(struct nvc0_context *);
 void nve4_set_surface_info(struct nouveau_pushbuf *,
@@ -433,6 +437,7 @@ nvc0_video_buffer_create(struct pipe_context *pipe,
 
 /* nvc0_push.c */
 void nvc0_push_vbo(struct nvc0_context *, const struct pipe_draw_info *);
+void nvc0_push_vbo_indirect(struct nvc0_context *, const struct pipe_draw_info *);
 
 /* nve4_compute.c */
 void nve4_launch_grid(struct pipe_context *, const struct pipe_grid_info *);
@@ -440,5 +445,7 @@ void nve4_launch_grid(struct pipe_context *, const struct pipe_grid_info *);
 /* nvc0_compute.c */
 void nvc0_launch_grid(struct pipe_context *, const struct pipe_grid_info *);
 void nvc0_compute_validate_globals(struct nvc0_context *);
+void nvc0_update_compute_invocations_counter(struct nvc0_context *nvc0,
+                                             const struct pipe_grid_info *info);
 
 #endif

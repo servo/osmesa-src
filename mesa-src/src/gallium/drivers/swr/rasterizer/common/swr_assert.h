@@ -164,12 +164,6 @@ void SwrTrace(
 #define SWR_ASSERT(e, ...) _SWR_ASSERT(true, e, ##__VA_ARGS__)
 #define SWR_ASSUME_ASSERT(e, ...) SWR_ASSERT(e, ##__VA_ARGS__)
 #define SWR_TRACE(_fmtstr, ...) _SWR_TRACE(_fmtstr, ##__VA_ARGS__)
-
-#if defined(assert)
-#undef assert
-#endif
-#define assert(exp) SWR_ASSERT(exp)
-
 #endif // SWR_ENABLE_ASSERTS
 
 #if SWR_ENABLE_REL_ASSERTS
@@ -192,7 +186,11 @@ void SwrTrace(
 #define SWR_INVALID(...)                                                                       \
     _SWR_INVALID_CONCAT(_SWR_INVALID_, _SWR_INVALID_VARGS(_SWR_INVALID_VARGS_0 __VA_ARGS__())) \
     (__VA_ARGS__)
-#endif
+
+#define SWR_STATIC_ASSERT(expression, ...) \
+    static_assert((expression), "Failed:\n    " #expression "\n    " __VA_ARGS__);
+
+#endif // SWR_ENABLE_REL_ASSERTS
 
 #endif // C++
 
@@ -225,6 +223,9 @@ static bool SwrSizeofWorkaround(T)
 #define SWR_REL_ASSUME_ASSERT(e, ...) SWR_ASSUME(e, ##__VA_ARGS__)
 #define SWR_REL_TRACE(_fmtstr, ...) \
     _SWR_MACRO_START(void)(0);      \
+    _SWR_MACRO_END
+#define SWR_STATIC_ASSERT(e, ...)                           \
+    _SWR_MACRO_START(void)  sizeof(SwrSizeofWorkaround(e)); \
     _SWR_MACRO_END
 #endif
 

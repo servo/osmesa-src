@@ -38,7 +38,8 @@
 #include "lp_screen.h"
 #include "lp_state.h"
 #include "lp_debug.h"
-#include "state_tracker/sw_winsys.h"
+#include "frontend/sw_winsys.h"
+#include "lp_flush.h"
 
 
 static void *
@@ -92,13 +93,18 @@ llvmpipe_bind_sampler_states(struct pipe_context *pipe,
       llvmpipe->num_samplers[shader] = j;
    }
 
-   if (shader == PIPE_SHADER_VERTEX || shader == PIPE_SHADER_GEOMETRY) {
+   if (shader == PIPE_SHADER_VERTEX ||
+       shader == PIPE_SHADER_GEOMETRY ||
+       shader == PIPE_SHADER_TESS_CTRL ||
+       shader == PIPE_SHADER_TESS_EVAL) {
       draw_set_samplers(llvmpipe->draw,
                         shader,
                         llvmpipe->samplers[shader],
                         llvmpipe->num_samplers[shader]);
    }
-   else {
+   else if (shader == PIPE_SHADER_COMPUTE) {
+      llvmpipe->cs_dirty |= LP_CSNEW_SAMPLER;
+   } else {
       llvmpipe->dirty |= LP_NEW_SAMPLER;
    }
 }
@@ -123,12 +129,6 @@ llvmpipe_set_sampler_views(struct pipe_context *pipe,
 
    /* set the new sampler views */
    for (i = 0; i < num; i++) {
-      /* Note: we're using pipe_sampler_view_release() here to work around
-       * a possible crash when the old view belongs to another context that
-       * was already destroyed.
-       */
-      pipe_sampler_view_release(pipe,
-                                &llvmpipe->sampler_views[shader][start + i]);
       /*
        * Warn if someone tries to set a view created in a different context
        * (which is why we need the hack above in the first place).
@@ -138,6 +138,9 @@ llvmpipe_set_sampler_views(struct pipe_context *pipe,
          debug_printf("Illegal setting of sampler_view %d created in another "
                       "context\n", i);
       }
+
+      if (views[i])
+         llvmpipe_flush_resource(pipe, views[i]->texture, 0, true, false, false, "sampler_view");
       pipe_sampler_view_reference(&llvmpipe->sampler_views[shader][start + i],
                                   views[i]);
    }
@@ -150,13 +153,18 @@ llvmpipe_set_sampler_views(struct pipe_context *pipe,
       llvmpipe->num_sampler_views[shader] = j;
    }
 
-   if (shader == PIPE_SHADER_VERTEX || shader == PIPE_SHADER_GEOMETRY) {
+   if (shader == PIPE_SHADER_VERTEX ||
+       shader == PIPE_SHADER_GEOMETRY ||
+       shader == PIPE_SHADER_TESS_CTRL ||
+       shader == PIPE_SHADER_TESS_EVAL) {
       draw_set_sampler_views(llvmpipe->draw,
                              shader,
                              llvmpipe->sampler_views[shader],
                              llvmpipe->num_sampler_views[shader]);
    }
-   else {
+   else if (shader == PIPE_SHADER_COMPUTE) {
+      llvmpipe->cs_dirty |= LP_CSNEW_SAMPLER_VIEW;
+   } else {
       llvmpipe->dirty |= LP_NEW_SAMPLER_VIEW;
    }
 }
@@ -187,7 +195,7 @@ llvmpipe_create_sampler_view(struct pipe_context *pipe,
 #ifdef DEBUG
      /*
       * This is possibly too lenient, but the primary reason is just
-      * to catch state trackers which forget to initialize this, so
+      * to catch gallium frontends which forget to initialize this, so
       * it only catches clearly impossible view targets.
       */
       if (view->target != texture->target) {
@@ -264,6 +272,8 @@ prepare_shader_sampling(
          unsigned num_layers = tex->depth0;
          unsigned first_level = 0;
          unsigned last_level = 0;
+         unsigned sample_stride = 0;
+         unsigned num_samples = tex->nr_samples;
 
          if (!lp_tex->dt) {
             /* regular texture - setup array of mipmap level offsets */
@@ -276,6 +286,8 @@ prepare_shader_sampling(
                assert(first_level <= last_level);
                assert(last_level <= res->last_level);
                addr = lp_tex->tex_data;
+
+               sample_stride = lp_tex->sample_stride;
 
                for (j = first_level; j <= last_level; j++) {
                   mip_offsets[j] = lp_tex->mip_offsets[j];
@@ -332,6 +344,7 @@ prepare_shader_sampling(
                                  i,
                                  width0, tex->height0, num_layers,
                                  first_level, last_level,
+                                 num_samples, sample_stride,
                                  addr,
                                  row_stride, img_stride, mip_offsets);
       }
@@ -362,6 +375,167 @@ llvmpipe_prepare_geometry_sampling(struct llvmpipe_context *lp,
    prepare_shader_sampling(lp, num, views, PIPE_SHADER_GEOMETRY);
 }
 
+/**
+ * Called whenever we're about to draw (no dirty flag, FIXME?).
+ */
+void
+llvmpipe_prepare_tess_ctrl_sampling(struct llvmpipe_context *lp,
+				    unsigned num,
+				    struct pipe_sampler_view **views)
+{
+   prepare_shader_sampling(lp, num, views, PIPE_SHADER_TESS_CTRL);
+}
+
+/**
+ * Called whenever we're about to draw (no dirty flag, FIXME?).
+ */
+void
+llvmpipe_prepare_tess_eval_sampling(struct llvmpipe_context *lp,
+				    unsigned num,
+				    struct pipe_sampler_view **views)
+{
+   prepare_shader_sampling(lp, num, views, PIPE_SHADER_TESS_EVAL);
+}
+
+static void
+prepare_shader_images(
+   struct llvmpipe_context *lp,
+   unsigned num,
+   struct pipe_image_view *views,
+   enum pipe_shader_type shader_type)
+{
+
+   unsigned i;
+   uint32_t row_stride;
+   uint32_t img_stride;
+   uint32_t sample_stride;
+   const void *addr;
+
+   assert(num <= PIPE_MAX_SHADER_SAMPLER_VIEWS);
+   if (!num)
+      return;
+
+   for (i = 0; i < num; i++) {
+      struct pipe_image_view *view = i < num ? &views[i] : NULL;
+
+      if (view) {
+         struct pipe_resource *img = view->resource;
+         struct llvmpipe_resource *lp_img = llvmpipe_resource(img);
+         if (!img)
+            continue;
+
+         unsigned width = u_minify(img->width0, view->u.tex.level);
+         unsigned height = u_minify(img->height0, view->u.tex.level);
+         unsigned num_layers = img->depth0;
+         unsigned num_samples = img->nr_samples;
+
+         if (!lp_img->dt) {
+            /* regular texture - setup array of mipmap level offsets */
+            struct pipe_resource *res = view->resource;
+
+            if (llvmpipe_resource_is_texture(res)) {
+               uint32_t mip_offset = lp_img->mip_offsets[view->u.tex.level];
+               addr = lp_img->tex_data;
+
+               if (img->target == PIPE_TEXTURE_1D_ARRAY ||
+                   img->target == PIPE_TEXTURE_2D_ARRAY ||
+                   img->target == PIPE_TEXTURE_3D ||
+                   img->target == PIPE_TEXTURE_CUBE ||
+                   img->target == PIPE_TEXTURE_CUBE_ARRAY) {
+                  num_layers = view->u.tex.last_layer - view->u.tex.first_layer + 1;
+                  assert(view->u.tex.first_layer <= view->u.tex.last_layer);
+                  mip_offset += view->u.tex.first_layer * lp_img->img_stride[view->u.tex.level];
+               }
+
+               row_stride = lp_img->row_stride[view->u.tex.level];
+               img_stride = lp_img->img_stride[view->u.tex.level];
+               sample_stride = lp_img->sample_stride;
+               addr = (uint8_t *)addr + mip_offset;
+            }
+            else {
+               unsigned view_blocksize = util_format_get_blocksize(view->format);
+               addr = lp_img->data;
+               /* probably don't really need to fill that out */
+               row_stride = 0;
+               img_stride = 0;
+               sample_stride = 0;
+
+               /* everything specified in number of elements here. */
+               width = view->u.buf.size / view_blocksize;
+               addr = (uint8_t *)addr + view->u.buf.offset;
+               assert(view->u.buf.offset + view->u.buf.size <= res->width0);
+            }
+         }
+         else {
+            /* display target texture/surface */
+            /*
+             * XXX: Where should this be unmapped?
+             */
+            struct llvmpipe_screen *screen = llvmpipe_screen(img->screen);
+            struct sw_winsys *winsys = screen->winsys;
+            addr = winsys->displaytarget_map(winsys, lp_img->dt,
+                                                PIPE_TRANSFER_READ);
+            row_stride = lp_img->row_stride[0];
+            img_stride = lp_img->img_stride[0];
+            sample_stride = 0;
+            assert(addr);
+         }
+         draw_set_mapped_image(lp->draw,
+                               shader_type,
+                               i,
+                               width, height, num_layers,
+                               addr,
+                               row_stride, img_stride,
+                               num_samples, sample_stride);
+      }
+   }
+}
+
+
+/**
+ * Called whenever we're about to draw (no dirty flag, FIXME?).
+ */
+void
+llvmpipe_prepare_vertex_images(struct llvmpipe_context *lp,
+                               unsigned num,
+                               struct pipe_image_view *views)
+{
+   prepare_shader_images(lp, num, views, PIPE_SHADER_VERTEX);
+}
+
+
+/**
+ * Called whenever we're about to draw (no dirty flag, FIXME?).
+ */
+void
+llvmpipe_prepare_geometry_images(struct llvmpipe_context *lp,
+                                 unsigned num,
+                                 struct pipe_image_view *views)
+{
+   prepare_shader_images(lp, num, views, PIPE_SHADER_GEOMETRY);
+}
+
+/**
+ * Called whenever we're about to draw (no dirty flag, FIXME?).
+ */
+void
+llvmpipe_prepare_tess_ctrl_images(struct llvmpipe_context *lp,
+                                  unsigned num,
+                                  struct pipe_image_view *views)
+{
+   prepare_shader_images(lp, num, views, PIPE_SHADER_TESS_CTRL);
+}
+
+/**
+ * Called whenever we're about to draw (no dirty flag, FIXME?).
+ */
+void
+llvmpipe_prepare_tess_eval_images(struct llvmpipe_context *lp,
+                                  unsigned num,
+                                  struct pipe_image_view *views)
+{
+   prepare_shader_images(lp, num, views, PIPE_SHADER_TESS_EVAL);
+}
 
 void
 llvmpipe_init_sampler_funcs(struct llvmpipe_context *llvmpipe)

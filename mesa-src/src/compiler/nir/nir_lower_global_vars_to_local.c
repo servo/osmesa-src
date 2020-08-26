@@ -36,7 +36,7 @@ static void
 register_var_use(nir_variable *var, nir_function_impl *impl,
                  struct hash_table *var_func_table)
 {
-   if (var->data.mode != nir_var_global)
+   if (var->data.mode != nir_var_shader_temp)
       return;
 
    struct hash_entry *entry =
@@ -74,9 +74,7 @@ nir_lower_global_vars_to_local(nir_shader *shader)
     * nir_function_impl that uses the given variable.  If a variable is
     * used in multiple functions, the data for the given key will be NULL.
     */
-   struct hash_table *var_func_table =
-      _mesa_hash_table_create(NULL, _mesa_hash_pointer,
-                              _mesa_key_pointer_equal);
+   struct hash_table *var_func_table = _mesa_pointer_hash_table_create(NULL);
 
    nir_foreach_function(function, shader) {
       if (function->impl) {
@@ -85,15 +83,16 @@ nir_lower_global_vars_to_local(nir_shader *shader)
       }
    }
 
-   hash_table_foreach(var_func_table, entry) {
-      nir_variable *var = (void *)entry->key;
-      nir_function_impl *impl = entry->data;
+   nir_foreach_variable_with_modes_safe(var, shader, nir_var_shader_temp) {
+      struct hash_entry *entry = _mesa_hash_table_search(var_func_table, var);
+      if (!entry)
+         continue;
 
-      assert(var->data.mode == nir_var_global);
+      nir_function_impl *impl = entry->data;
 
       if (impl != NULL) {
          exec_node_remove(&var->node);
-         var->data.mode = nir_var_local;
+         var->data.mode = nir_var_function_temp;
          exec_list_push_tail(&impl->locals, &var->node);
          nir_metadata_preserve(impl, nir_metadata_block_index |
                                      nir_metadata_dominance |
@@ -106,6 +105,11 @@ nir_lower_global_vars_to_local(nir_shader *shader)
 
    if (progress)
       nir_fixup_deref_modes(shader);
+
+   nir_foreach_function(function, shader) {
+      if (function->impl)
+         nir_metadata_preserve(function->impl, nir_metadata_all);
+   }
 
    return progress;
 }

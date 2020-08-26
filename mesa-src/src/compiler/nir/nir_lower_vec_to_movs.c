@@ -57,7 +57,7 @@ insert_mov(nir_alu_instr *vec, unsigned start_idx, nir_shader *shader)
 {
    assert(start_idx < nir_op_infos[vec->op].num_inputs);
 
-   nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_imov);
+   nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_mov);
    nir_alu_src_copy(&mov->src[0], &vec->src[start_idx], mov);
    nir_alu_dest_copy(&mov->dest, &vec->dest, mov);
 
@@ -140,7 +140,7 @@ try_coalesce(nir_alu_instr *vec, unsigned start_idx)
          return 0;
    }
 
-   if (!list_empty(&vec->src[start_idx].src.ssa->if_uses))
+   if (!list_is_empty(&vec->src[start_idx].src.ssa->if_uses))
       return 0;
 
    if (vec->src[start_idx].src.ssa->parent_instr->type != nir_instr_type_alu)
@@ -295,6 +295,8 @@ nir_lower_vec_to_movs_impl(nir_function_impl *impl)
    if (progress) {
       nir_metadata_preserve(impl, nir_metadata_block_index |
                                   nir_metadata_dominance);
+   } else {
+      nir_metadata_preserve(impl, nir_metadata_all);
    }
 
    return progress;

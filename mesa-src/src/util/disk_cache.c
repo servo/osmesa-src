@@ -37,7 +37,12 @@
 #include <pwd.h>
 #include <errno.h>
 #include <dirent.h>
+#include <inttypes.h>
 #include "zlib.h"
+
+#ifdef HAVE_ZSTD
+#include "zstd.h"
+#endif
 
 #include "util/crc32.h"
 #include "util/debug.h"
@@ -46,8 +51,7 @@
 #include "util/u_queue.h"
 #include "util/mesa-sha1.h"
 #include "util/ralloc.h"
-#include "main/compiler.h"
-#include "main/errors.h"
+#include "util/compiler.h"
 
 #include "disk_cache.h"
 
@@ -73,6 +77,9 @@
  *   compatible but effort should be taken to limit disruption where possible.
  */
 #define CACHE_VERSION 1
+
+/* 3 is the recomended level, with 22 as the absolute maximum */
+#define ZSTD_COMPRESSION_LEVEL 3
 
 struct disk_cache {
    /* The path to the cache directory. */
@@ -330,8 +337,6 @@ disk_cache_create(const char *gpu_name, const char *driver_id,
       goto path_fail;
    cache->index_mmap_size = size;
 
-   close(fd);
-
    cache->size = (uint64_t *) cache->index_mmap;
    cache->stored_keys = cache->index_mmap + sizeof(uint64_t);
 
@@ -370,13 +375,17 @@ disk_cache_create(const char *gpu_name, const char *driver_id,
 
    cache->max_size = max_size;
 
-   /* 1 thread was chosen because we don't really care about getting things
-    * to disk quickly just that it's not blocking other tasks.
+   /* 4 threads were chosen below because just about all modern CPUs currently
+    * available that run Mesa have *at least* 4 cores. For these CPUs allowing
+    * more threads can result in the queue being processed faster, thus
+    * avoiding excessive memory use due to a backlog of cache entrys building
+    * up in the queue. Since we set the UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY
+    * flag this should have little negative impact on low core systems.
     *
     * The queue will resize automatically when it's full, so adding new jobs
     * doesn't stall.
     */
-   util_queue_init(&cache->cache_queue, "disk$", 32, 1,
+   util_queue_init(&cache->cache_queue, "disk$", 32, 4,
                    UTIL_QUEUE_INIT_RESIZE_IF_FULL |
                    UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY |
                    UTIL_QUEUE_INIT_SET_FULL_THREAD_AFFINITY);
@@ -384,6 +393,9 @@ disk_cache_create(const char *gpu_name, const char *driver_id,
    cache->path_init_failed = false;
 
  path_fail:
+
+   if (fd != -1)
+      close(fd);
 
    cache->driver_keys_blob_size = cv_size;
 
@@ -423,8 +435,6 @@ disk_cache_create(const char *gpu_name, const char *driver_id,
    return cache;
 
  fail:
-   if (fd != -1)
-      close(fd);
    if (cache)
       ralloc_free(cache);
    ralloc_free(local);
@@ -436,11 +446,18 @@ void
 disk_cache_destroy(struct disk_cache *cache)
 {
    if (cache && !cache->path_init_failed) {
+      util_queue_finish(&cache->cache_queue);
       util_queue_destroy(&cache->cache_queue);
       munmap(cache->index_mmap, cache->index_mmap_size);
    }
 
    ralloc_free(cache);
+}
+
+void
+disk_cache_wait_for_idle(struct disk_cache *cache)
+{
+   util_queue_finish(&cache->cache_queue);
 }
 
 /* Return a filename within the cache's directory corresponding to 'key'. The
@@ -733,7 +750,28 @@ static size_t
 deflate_and_write_to_disk(const void *in_data, size_t in_data_size, int dest,
                           const char *filename)
 {
-   unsigned char out[BUFSIZE];
+#ifdef HAVE_ZSTD
+   /* from the zstd docs (https://facebook.github.io/zstd/zstd_manual.html):
+    * compression runs faster if `dstCapacity` >= `ZSTD_compressBound(srcSize)`.
+    */
+   size_t out_size = ZSTD_compressBound(in_data_size);
+   void * out = malloc(out_size);
+
+   size_t ret = ZSTD_compress(out, out_size, in_data, in_data_size,
+                              ZSTD_COMPRESSION_LEVEL);
+   if (ZSTD_isError(ret)) {
+      free(out);
+      return 0;
+   }
+   ssize_t written = write_all(dest, out, ret);
+   if (written == -1) {
+      free(out);
+      return 0;
+   }
+   free(out);
+   return ret;
+#else
+   unsigned char *out;
 
    /* allocate deflate state */
    z_stream strm;
@@ -750,6 +788,11 @@ deflate_and_write_to_disk(const void *in_data, size_t in_data_size, int dest,
    /* compress until end of in_data */
    size_t compressed_size = 0;
    int flush;
+
+   out = malloc(BUFSIZE * sizeof(unsigned char));
+   if (out == NULL)
+      return 0;
+
    do {
       int remaining = in_data_size - BUFSIZE;
       flush = remaining > 0 ? Z_NO_FLUSH : Z_FINISH;
@@ -771,6 +814,7 @@ deflate_and_write_to_disk(const void *in_data, size_t in_data_size, int dest,
          ssize_t written = write_all(dest, out, have);
          if (written == -1) {
             (void)deflateEnd(&strm);
+            free(out);
             return 0;
          }
       } while (strm.avail_out == 0);
@@ -785,7 +829,9 @@ deflate_and_write_to_disk(const void *in_data, size_t in_data_size, int dest,
 
    /* clean up and return */
    (void)deflateEnd(&strm);
+   free(out);
    return compressed_size;
+# endif
 }
 
 static struct disk_cache_put_job *
@@ -896,7 +942,17 @@ cache_put(void *job, int thread_index)
     * open with the flock held. So just let that file be responsible
     * for writing the file.
     */
+#ifdef HAVE_FLOCK
    err = flock(fd, LOCK_EX | LOCK_NB);
+#else
+   struct flock lock = {
+      .l_start = 0,
+      .l_len = 0, /* entire file */
+      .l_type = F_WRLCK,
+      .l_whence = SEEK_SET
+   };
+   err = fcntl(fd, F_SETLK, &lock);
+#endif
    if (err == -1)
       goto done;
 
@@ -1026,7 +1082,7 @@ disk_cache_put(struct disk_cache *cache, const cache_key key,
    if (dc_job) {
       util_queue_fence_init(&dc_job->fence);
       util_queue_add_job(&cache->cache_queue, dc_job, &dc_job->fence,
-                         cache_put, destroy_put_job);
+                         cache_put, destroy_put_job, dc_job->size);
    }
 }
 
@@ -1037,6 +1093,10 @@ static bool
 inflate_cache_data(uint8_t *in_data, size_t in_data_size,
                    uint8_t *out_data, size_t out_data_size)
 {
+#ifdef HAVE_ZSTD
+   size_t ret = ZSTD_decompress(out_data, out_data_size, in_data, in_data_size);
+   return !ZSTD_isError(ret);
+#else
    z_stream strm;
 
    /* allocate inflate state */
@@ -1067,6 +1127,7 @@ inflate_cache_data(uint8_t *in_data, size_t in_data_size,
    /* clean up and return */
    (void)inflateEnd(&strm);
    return true;
+#endif
 }
 
 void *

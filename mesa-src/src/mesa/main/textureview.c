@@ -34,7 +34,7 @@
 #include "glheader.h"
 #include "context.h"
 #include "enums.h"
-#include "imports.h"
+
 #include "macros.h"
 #include "teximage.h"
 #include "texobj.h"
@@ -174,6 +174,7 @@ static const struct internal_format_class_info compatible_internal_formats[] = {
    {GL_VIEW_CLASS_8_BITS, GL_R8I},
    {GL_VIEW_CLASS_8_BITS, GL_R8},
    {GL_VIEW_CLASS_8_BITS, GL_R8_SNORM},
+   {GL_VIEW_CLASS_8_BITS, GL_SR8_EXT},
    {GL_VIEW_CLASS_RGTC1_RED, GL_COMPRESSED_RED_RGTC1},
    {GL_VIEW_CLASS_RGTC1_RED, GL_COMPRESSED_SIGNED_RED_RGTC1},
    {GL_VIEW_CLASS_RGTC2_RG, GL_COMPRESSED_RG_RGTC2},
@@ -502,7 +503,7 @@ _mesa_set_texture_view_state(struct gl_context *ctx,
    case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
       texObj->NumLevels = 1;
       texObj->ImmutableLevels = 1;
-      /* fall through to set NumLayers */
+      /* fallthrough - to set NumLayers */
 
    case GL_TEXTURE_2D_ARRAY:
    case GL_TEXTURE_CUBE_MAP_ARRAY:

@@ -38,6 +38,15 @@
 #ifdef PIPE_OS_WINDOWS
 #include <windows.h>
 #endif
+#if defined(PIPE_OS_BSD)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#if defined(PIPE_OS_NETBSD) || defined(PIPE_OS_OPENBSD)
+#include <sys/sched.h>
+#else
+#include <sys/resource.h>
+#endif
+#endif
 
 
 #ifdef PIPE_OS_WINDOWS
@@ -83,6 +92,81 @@ get_cpu_stats(unsigned cpu_index, uint64_t *busy_time, uint64_t *total_time)
    /* XXX: we ignore cpu_index, i.e, we assume that the individual CPU usage
     * and the system usage are one and the same.
     */
+   return TRUE;
+}
+
+#elif defined(PIPE_OS_BSD)
+
+static boolean
+get_cpu_stats(unsigned cpu_index, uint64_t *busy_time, uint64_t *total_time)
+{
+#if defined(PIPE_OS_NETBSD) || defined(PIPE_OS_OPENBSD)
+   uint64_t cp_time[CPUSTATES];
+#else
+   long cp_time[CPUSTATES];
+#endif
+   size_t len;
+
+   if (cpu_index == ALL_CPUS) {
+      len = sizeof(cp_time);
+
+#if defined(PIPE_OS_NETBSD)
+      int mib[] = { CTL_KERN, KERN_CP_TIME };
+
+      if (sysctl(mib, ARRAY_SIZE(mib), cp_time, &len, NULL, 0) == -1)
+         return FALSE;
+#elif defined(PIPE_OS_OPENBSD)
+      int mib[] = { CTL_KERN, KERN_CPTIME };
+      long sum_cp_time[CPUSTATES];
+
+      len = sizeof(sum_cp_time);
+      if (sysctl(mib, ARRAY_SIZE(mib), sum_cp_time, &len, NULL, 0) == -1)
+         return FALSE;
+
+      for (int state = 0; state < CPUSTATES; state++)
+         cp_time[state] = sum_cp_time[state];
+#else
+      if (sysctlbyname("kern.cp_time", cp_time, &len, NULL, 0) == -1)
+         return FALSE;
+#endif
+   } else {
+#if defined(PIPE_OS_NETBSD)
+      int mib[] = { CTL_KERN, KERN_CP_TIME, cpu_index };
+
+      len = sizeof(cp_time);
+      if (sysctl(mib, ARRAY_SIZE(mib), cp_time, &len, NULL, 0) == -1)
+         return FALSE;
+#elif defined(PIPE_OS_OPENBSD)
+      int mib[] = { CTL_KERN, KERN_CPTIME2, cpu_index };
+
+      len = sizeof(cp_time);
+      if (sysctl(mib, ARRAY_SIZE(mib), cp_time, &len, NULL, 0) == -1)
+         return FALSE;
+#else
+      long *cp_times = NULL;
+
+      if (sysctlbyname("kern.cp_times", NULL, &len, NULL, 0) == -1)
+         return FALSE;
+
+      if (len < (cpu_index + 1) * sizeof(cp_time))
+         return FALSE;
+
+      cp_times = malloc(len);
+
+      if (sysctlbyname("kern.cp_times", cp_times, &len, NULL, 0) == -1)
+         return FALSE;
+
+      memcpy(cp_time, cp_times + (cpu_index * CPUSTATES),
+            sizeof(cp_time));
+      free(cp_times);
+#endif
+   }
+
+   *busy_time = cp_time[CP_USER] + cp_time[CP_NICE] +
+      cp_time[CP_SYS] + cp_time[CP_INTR];
+
+   *total_time = *busy_time + cp_time[CP_IDLE];
+
    return TRUE;
 }
 

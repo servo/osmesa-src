@@ -65,9 +65,7 @@ is_phi_src_scalarizable(nir_phi_src *src,
        * are ok too.
        */
       return nir_op_infos[src_alu->op].output_size == 0 ||
-             src_alu->op == nir_op_vec2 ||
-             src_alu->op == nir_op_vec3 ||
-             src_alu->op == nir_op_vec4;
+             nir_op_is_vec(src_alu->op);
    }
 
    case nir_instr_type_phi:
@@ -75,9 +73,14 @@ is_phi_src_scalarizable(nir_phi_src *src,
       return should_lower_phi(nir_instr_as_phi(src_instr), state);
 
    case nir_instr_type_load_const:
-   case nir_instr_type_ssa_undef:
       /* These are trivially scalarizable */
       return true;
+
+   case nir_instr_type_ssa_undef:
+      /* The caller of this function is going to OR the results and we don't
+       * want undefs to count so we return false.
+       */
+      return false;
 
    case nir_instr_type_intrinsic: {
       nir_intrinsic_instr *src_intrin = nir_instr_as_intrinsic(src_instr);
@@ -86,21 +89,27 @@ is_phi_src_scalarizable(nir_phi_src *src,
       case nir_intrinsic_load_deref: {
          nir_deref_instr *deref = nir_src_as_deref(src_intrin->src[0]);
          return deref->mode == nir_var_shader_in ||
-                deref->mode == nir_var_uniform;
+                deref->mode == nir_var_uniform ||
+                deref->mode == nir_var_mem_ubo ||
+                deref->mode == nir_var_mem_ssbo ||
+                deref->mode == nir_var_mem_global;
       }
 
       case nir_intrinsic_interp_deref_at_centroid:
       case nir_intrinsic_interp_deref_at_sample:
       case nir_intrinsic_interp_deref_at_offset:
+      case nir_intrinsic_interp_deref_at_vertex:
       case nir_intrinsic_load_uniform:
       case nir_intrinsic_load_ubo:
       case nir_intrinsic_load_ssbo:
+      case nir_intrinsic_load_global:
       case nir_intrinsic_load_input:
          return true;
       default:
          break;
       }
    }
+   /* fallthrough */
 
    default:
       /* We can't scalarize this type of instruction */
@@ -146,11 +155,16 @@ should_lower_phi(nir_phi_instr *phi, struct lower_phis_to_scalar_state *state)
     */
    entry = _mesa_hash_table_insert(state->phi_table, phi, (void *)(intptr_t)1);
 
-   bool scalarizable = true;
+   bool scalarizable = false;
 
    nir_foreach_phi_src(src, phi) {
+      /* This loop ignores srcs that are not scalarizable because its likely
+       * still worth copying to temps if another phi source is scalarizable.
+       * This reduces register spilling by a huge amount in the i965 driver for
+       * Deus Ex: MD.
+       */
       scalarizable = is_phi_src_scalarizable(src, state);
-      if (!scalarizable)
+      if (scalarizable)
          break;
    }
 
@@ -197,13 +211,7 @@ lower_phis_to_scalar_block(nir_block *block,
        * will be redundant, but copy propagation should clean them up for
        * us.  No need to add the complexity here.
        */
-      nir_op vec_op;
-      switch (phi->dest.ssa.num_components) {
-      case 2: vec_op = nir_op_vec2; break;
-      case 3: vec_op = nir_op_vec3; break;
-      case 4: vec_op = nir_op_vec4; break;
-      default: unreachable("Invalid number of components");
-      }
+      nir_op vec_op = nir_op_vec(phi->dest.ssa.num_components);
 
       nir_alu_instr *vec = nir_alu_instr_create(state->mem_ctx, vec_op);
       nir_ssa_dest_init(&vec->instr, &vec->dest.dest,
@@ -221,7 +229,7 @@ lower_phis_to_scalar_block(nir_block *block,
          nir_foreach_phi_src(src, phi) {
             /* We need to insert a mov to grab the i'th component of src */
             nir_alu_instr *mov = nir_alu_instr_create(state->mem_ctx,
-                                                      nir_op_imov);
+                                                      nir_op_mov);
             nir_ssa_dest_init(&mov->instr, &mov->dest.dest, 1, bit_size, NULL);
             mov->dest.write_mask = 1;
             nir_src_copy(&mov->src[0].src, &src->src, state->mem_ctx);
@@ -275,8 +283,7 @@ lower_phis_to_scalar_impl(nir_function_impl *impl)
 
    state.mem_ctx = ralloc_parent(impl);
    state.dead_ctx = ralloc_context(NULL);
-   state.phi_table = _mesa_hash_table_create(state.dead_ctx, _mesa_hash_pointer,
-                                             _mesa_key_pointer_equal);
+   state.phi_table = _mesa_pointer_hash_table_create(state.dead_ctx);
 
    nir_foreach_block(block, impl) {
       progress = lower_phis_to_scalar_block(block, &state) || progress;

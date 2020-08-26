@@ -25,7 +25,7 @@
 
 #include <stdio.h>
 #include "context.h"
-#include "imports.h"
+
 #include "mtypes.h"
 #include "version.h"
 #include "git_sha1.h"
@@ -120,7 +120,7 @@ create_version_string(struct gl_context *ctx, const char *prefix)
 
    ctx->VersionString = malloc(max);
    if (ctx->VersionString) {
-      _mesa_snprintf(ctx->VersionString, max,
+      snprintf(ctx->VersionString, max,
 		     "%s%u.%u%s Mesa " PACKAGE_VERSION MESA_GIT_SHA1,
 		     prefix,
 		     ctx->Version / 10, ctx->Version % 10,
@@ -330,6 +330,8 @@ compute_version(const struct gl_extensions *extensions,
                          extensions->ARB_transform_feedback3);
    const bool ver_4_1 = (ver_4_0 &&
                          consts->GLSLVersion >= 410 &&
+                         consts->MaxTextureSize >= 16384 &&
+                         consts->MaxRenderbufferSize >= 16384 &&
                          extensions->ARB_ES2_compatibility &&
                          extensions->ARB_shader_precision &&
                          extensions->ARB_vertex_attrib_64bit &&
@@ -384,8 +386,8 @@ compute_version(const struct gl_extensions *extensions,
                          extensions->NV_texture_barrier);
    const bool ver_4_6 = (ver_4_5 &&
                          consts->GLSLVersion >= 460 &&
-                         /* extensions->ARB_gl_spirv */ 0 &&
-                         /* extensions->ARB_spirv_extensions */ 0 &&
+                         extensions->ARB_gl_spirv &&
+                         extensions->ARB_spirv_extensions &&
                          extensions->ARB_indirect_parameters &&
                          extensions->ARB_pipeline_statistics_query &&
                          extensions->ARB_polygon_offset_clamp &&
@@ -509,20 +511,25 @@ compute_version_es2(const struct gl_extensions *extensions,
                          extensions->ARB_internalformat_query &&
                          extensions->ARB_map_buffer_range &&
                          extensions->ARB_shader_texture_lod &&
-                         extensions->ARB_texture_float &&
+                         extensions->OES_texture_float &&
+                         extensions->OES_texture_half_float &&
+                         extensions->OES_texture_half_float_linear &&
                          extensions->ARB_texture_rg &&
                          extensions->ARB_depth_buffer_float &&
-                         /* extensions->ARB_framebuffer_object && */
-                         extensions->EXT_framebuffer_sRGB &&
+                         extensions->ARB_framebuffer_object &&
+                         extensions->EXT_sRGB &&
                          extensions->EXT_packed_float &&
                          extensions->EXT_texture_array &&
                          extensions->EXT_texture_shared_exponent &&
+                         extensions->EXT_texture_sRGB &&
                          extensions->EXT_transform_feedback &&
                          extensions->ARB_draw_instanced &&
                          extensions->ARB_uniform_buffer_object &&
                          extensions->EXT_texture_snorm &&
-                         extensions->NV_primitive_restart &&
-                         extensions->OES_depth_texture_cube_map);
+                         (extensions->NV_primitive_restart ||
+                          consts->PrimitiveRestartFixedIndex) &&
+                         extensions->OES_depth_texture_cube_map &&
+                         extensions->EXT_texture_type_2_10_10_10_REV);
    const bool es31_compute_shader =
       consts->MaxComputeWorkGroupInvocations >= 128;
    const bool ver_3_1 = (ver_3_0 &&

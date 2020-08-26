@@ -68,6 +68,8 @@ typedef struct YYLTYPE {
    int last_line;
    int last_column;
    unsigned source;
+   /* Path for ARB_shading_language_include include source */
+   char *path;
 } YYLTYPE;
 # define YYLTYPE_IS_DECLARED 1
 # define YYLTYPE_IS_TRIVIAL 1
@@ -141,7 +143,8 @@ struct _mesa_glsl_parse_state {
 
    bool check_bitwise_operations_allowed(YYLTYPE *locp)
    {
-      return check_version(130, 300, locp, "bit-wise operations are forbidden");
+      return EXT_gpu_shader4_enable ||
+             check_version(130, 300, locp, "bit-wise operations are forbidden");
    }
 
    bool check_explicit_attrib_stream_allowed(YYLTYPE *locp)
@@ -336,12 +339,33 @@ struct _mesa_glsl_parse_state {
 
    bool has_shader_image_load_store() const
    {
-      return ARB_shader_image_load_store_enable || is_version(420, 310);
+      return ARB_shader_image_load_store_enable ||
+             EXT_shader_image_load_store_enable ||
+             is_version(420, 310);
    }
 
    bool has_bindless() const
    {
       return ARB_bindless_texture_enable;
+   }
+
+   bool has_image_load_formatted() const
+   {
+      return EXT_shader_image_load_formatted_enable;
+   }
+
+   bool has_implicit_conversions() const
+   {
+      return EXT_shader_implicit_conversions_enable ||
+             is_version(allow_glsl_120_subset_in_110 ? 110 : 120, 0);
+   }
+
+   bool has_implicit_int_to_uint_conversion() const
+   {
+      return ARB_gpu_shader5_enable ||
+             MESA_shader_integer_functions_enable ||
+             EXT_shader_implicit_conversions_enable ||
+             is_version(400, 0);
    }
 
    void process_version_directive(YYLTYPE *locp, int version,
@@ -365,7 +389,8 @@ struct _mesa_glsl_parse_state {
    bool compat_shader;
    unsigned language_version;
    unsigned forced_language_version;
-   bool zero_init;
+   /* Bitfield of ir_variable_mode to zero init */
+   uint32_t zero_init;
    unsigned gl_version;
    gl_shader_stage stage;
 
@@ -431,6 +456,12 @@ struct _mesa_glsl_parse_state {
     * a layout directive as specified by ARB_compute_variable_group_size.
     */
    bool cs_input_local_size_variable_specified;
+
+   /**
+    * Arrangement of invocations used to calculate derivatives in a compute
+    * shader.  From NV_compute_shader_derivatives.
+    */
+   enum gl_derivative_group cs_derivative_group;
 
    /**
     * True if a shader declare bindless_sampler/bindless_image, and
@@ -580,6 +611,10 @@ struct _mesa_glsl_parse_state {
    /** Have we found a return statement in this function? */
    bool found_return;
 
+   /** Have we found the interlock builtins in this function? */
+   bool found_begin_interlock;
+   bool found_end_interlock;
+
    /** Was there an error during compilation? */
    bool error;
 
@@ -600,6 +635,13 @@ struct _mesa_glsl_parse_state {
    unsigned num_user_structures;
 
    char *info_log;
+
+   /**
+    * Are warnings enabled?
+    *
+    * Emission of warngins is controlled by '#pragma warning(...)'.
+    */
+   bool warnings_enabled;
 
    /**
     * \name Enable bits for GLSL extensions
@@ -689,6 +731,8 @@ struct _mesa_glsl_parse_state {
    bool ARB_shader_viewport_layer_array_warn;
    bool ARB_shading_language_420pack_enable;
    bool ARB_shading_language_420pack_warn;
+   bool ARB_shading_language_include_enable;
+   bool ARB_shading_language_include_warn;
    bool ARB_shading_language_packing_enable;
    bool ARB_shading_language_packing_warn;
    bool ARB_tessellation_shader_enable;
@@ -766,6 +810,8 @@ struct _mesa_glsl_parse_state {
    bool AMD_shader_stencil_export_warn;
    bool AMD_shader_trinary_minmax_enable;
    bool AMD_shader_trinary_minmax_warn;
+   bool AMD_texture_texture4_enable;
+   bool AMD_texture_texture4_warn;
    bool AMD_vertex_shader_layer_enable;
    bool AMD_vertex_shader_layer_warn;
    bool AMD_vertex_shader_viewport_index_enable;
@@ -776,14 +822,20 @@ struct _mesa_glsl_parse_state {
    bool EXT_blend_func_extended_warn;
    bool EXT_clip_cull_distance_enable;
    bool EXT_clip_cull_distance_warn;
+   bool EXT_demote_to_helper_invocation_enable;
+   bool EXT_demote_to_helper_invocation_warn;
    bool EXT_draw_buffers_enable;
    bool EXT_draw_buffers_warn;
+   bool EXT_draw_instanced_enable;
+   bool EXT_draw_instanced_warn;
    bool EXT_frag_depth_enable;
    bool EXT_frag_depth_warn;
    bool EXT_geometry_point_size_enable;
    bool EXT_geometry_point_size_warn;
    bool EXT_geometry_shader_enable;
    bool EXT_geometry_shader_warn;
+   bool EXT_gpu_shader4_enable;
+   bool EXT_gpu_shader4_warn;
    bool EXT_gpu_shader5_enable;
    bool EXT_gpu_shader5_warn;
    bool EXT_primitive_bounding_box_enable;
@@ -794,6 +846,14 @@ struct _mesa_glsl_parse_state {
    bool EXT_shader_framebuffer_fetch_warn;
    bool EXT_shader_framebuffer_fetch_non_coherent_enable;
    bool EXT_shader_framebuffer_fetch_non_coherent_warn;
+   bool EXT_shader_group_vote_enable;
+   bool EXT_shader_group_vote_warn;
+   bool EXT_shader_image_load_formatted_enable;
+   bool EXT_shader_image_load_formatted_warn;
+   bool EXT_shader_image_load_store_enable;
+   bool EXT_shader_image_load_store_warn;
+   bool EXT_shader_implicit_conversions_enable;
+   bool EXT_shader_implicit_conversions_warn;
    bool EXT_shader_integer_mix_enable;
    bool EXT_shader_integer_mix_warn;
    bool EXT_shader_io_blocks_enable;
@@ -810,20 +870,28 @@ struct _mesa_glsl_parse_state {
    bool EXT_texture_buffer_warn;
    bool EXT_texture_cube_map_array_enable;
    bool EXT_texture_cube_map_array_warn;
+   bool EXT_texture_query_lod_enable;
+   bool EXT_texture_query_lod_warn;
+   bool EXT_texture_shadow_lod_enable;
+   bool EXT_texture_shadow_lod_warn;
    bool INTEL_conservative_rasterization_enable;
    bool INTEL_conservative_rasterization_warn;
-   bool INTEL_fragment_shader_ordering_enable;
-   bool INTEL_fragment_shader_ordering_warn;
    bool INTEL_shader_atomic_float_minmax_enable;
    bool INTEL_shader_atomic_float_minmax_warn;
+   bool INTEL_shader_integer_functions2_enable;
+   bool INTEL_shader_integer_functions2_warn;
    bool MESA_shader_integer_functions_enable;
    bool MESA_shader_integer_functions_warn;
+   bool NV_compute_shader_derivatives_enable;
+   bool NV_compute_shader_derivatives_warn;
    bool NV_fragment_shader_interlock_enable;
    bool NV_fragment_shader_interlock_warn;
    bool NV_image_formats_enable;
    bool NV_image_formats_warn;
    bool NV_shader_atomic_float_enable;
    bool NV_shader_atomic_float_warn;
+   bool NV_viewport_array2_enable;
+   bool NV_viewport_array2_warn;
    /*@}*/
 
    /** Extensions supported by the OpenGL implementation. */
@@ -866,7 +934,12 @@ struct _mesa_glsl_parse_state {
    /** Atomic counter offsets by binding */
    unsigned atomic_counter_offsets[MAX_COMBINED_ATOMIC_BUFFERS];
 
+   /** Whether gl_Layer output is viewport-relative. */
+   bool redeclares_gl_layer;
+   bool layer_viewport_relative;
+
    bool allow_extension_directive_midshader;
+   bool allow_glsl_120_subset_in_110;
    bool allow_builtin_variable_redeclaration;
    bool allow_layout_qualifier_on_function_parameter;
 
@@ -904,6 +977,7 @@ do {                                                            \
       (Current).first_column = YYRHSLOC(Rhs, 1).first_column;   \
       (Current).last_line    = YYRHSLOC(Rhs, N).last_line;      \
       (Current).last_column  = YYRHSLOC(Rhs, N).last_column;    \
+      (Current).path         = YYRHSLOC(Rhs, N).path;           \
    }                                                            \
    else                                                         \
    {                                                            \
@@ -911,6 +985,7 @@ do {                                                            \
          YYRHSLOC(Rhs, 0).last_line;                            \
       (Current).first_column = (Current).last_column =          \
          YYRHSLOC(Rhs, 0).last_column;                          \
+      (Current).path = YYRHSLOC(Rhs, 0).path;                   \
    }                                                            \
    (Current).source = 0;                                        \
 } while (0)
@@ -958,6 +1033,7 @@ extern "C" {
 #endif
 
 struct glcpp_parser;
+struct _mesa_glsl_parse_state;
 
 typedef void (*glcpp_extension_iterator)(
               struct _mesa_glsl_parse_state *state,
@@ -970,9 +1046,6 @@ extern int glcpp_preprocess(void *ctx, const char **shader, char **info_log,
                             glcpp_extension_iterator extensions,
                             struct _mesa_glsl_parse_state *state,
                             struct gl_context *gl_ctx);
-
-extern void _mesa_destroy_shader_compiler(void);
-extern void _mesa_destroy_shader_compiler_caches(void);
 
 extern void
 _mesa_glsl_copy_symbols_from_table(struct exec_list *shader_ir,

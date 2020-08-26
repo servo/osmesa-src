@@ -86,8 +86,7 @@ public:
       mem_ctx = ralloc_context(0);
       this->lin_ctx = linear_alloc_parent(this->mem_ctx, 0);
       this->acp = new(mem_ctx) exec_list;
-      this->kills = _mesa_hash_table_create(mem_ctx, _mesa_hash_pointer,
-                                            _mesa_key_pointer_equal);
+      this->kills = _mesa_pointer_hash_table_create(mem_ctx);
    }
    ~ir_constant_propagation_visitor()
    {
@@ -209,6 +208,9 @@ ir_constant_propagation_visitor::constant_propagation(ir_rvalue **rvalue) {
       case GLSL_TYPE_FLOAT:
 	 data.f[i] = found->constant->value.f[rhs_channel];
 	 break;
+      case GLSL_TYPE_FLOAT16:
+	 data.f16[i] = found->constant->value.f16[rhs_channel];
+	 break;
       case GLSL_TYPE_DOUBLE:
 	 data.d[i] = found->constant->value.d[rhs_channel];
 	 break;
@@ -217,6 +219,12 @@ ir_constant_propagation_visitor::constant_propagation(ir_rvalue **rvalue) {
 	 break;
       case GLSL_TYPE_UINT:
 	 data.u[i] = found->constant->value.u[rhs_channel];
+	 break;
+      case GLSL_TYPE_INT16:
+	 data.i16[i] = found->constant->value.i16[rhs_channel];
+	 break;
+      case GLSL_TYPE_UINT16:
+	 data.u16[i] = found->constant->value.u16[rhs_channel];
 	 break;
       case GLSL_TYPE_BOOL:
 	 data.b[i] = found->constant->value.b[rhs_channel];
@@ -256,8 +264,7 @@ ir_constant_propagation_visitor::visit_enter(ir_function_signature *ir)
    bool orig_killed_all = this->killed_all;
 
    this->acp = new(mem_ctx) exec_list;
-   this->kills = _mesa_hash_table_create(mem_ctx, _mesa_hash_pointer,
-                                         _mesa_key_pointer_equal);
+   this->kills = _mesa_pointer_hash_table_create(mem_ctx);
    this->killed_all = false;
 
    visit_list_elements(this, &ir->body);
@@ -368,8 +375,7 @@ ir_constant_propagation_visitor::visit_enter(ir_if *ir)
    ir->condition->accept(this);
    handle_rvalue(&ir->condition);
 
-   hash_table *new_kills = _mesa_hash_table_create(mem_ctx, _mesa_hash_pointer,
-                                                   _mesa_key_pointer_equal);
+   hash_table *new_kills = _mesa_pointer_hash_table_create(mem_ctx);
    bool then_killed_all = false;
    bool else_killed_all = false;
 
@@ -398,8 +404,7 @@ ir_constant_propagation_visitor::handle_loop(ir_loop *ir, bool keep_acp)
    bool orig_killed_all = this->killed_all;
 
    this->acp = new(mem_ctx) exec_list;
-   this->kills = _mesa_hash_table_create(mem_ctx, _mesa_hash_pointer,
-                                         _mesa_key_pointer_equal);
+   this->kills = _mesa_pointer_hash_table_create(mem_ctx);
    this->killed_all = false;
 
    if (keep_acp) {

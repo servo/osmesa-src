@@ -77,6 +77,7 @@ extern "C" {
 #define PIPE_MAX_SAMPLE_LOCATION_GRID_SIZE 4
 
 #define PIPE_MAX_HW_ATOMIC_BUFFERS 32
+#define PIPE_MAX_VERTEX_STREAMS   4
 
 struct pipe_reference
 {
@@ -212,6 +213,10 @@ struct pipe_viewport_state
 {
    float scale[3];
    float translate[3];
+   enum pipe_viewport_swizzle swizzle_x:3;
+   enum pipe_viewport_swizzle swizzle_y:3;
+   enum pipe_viewport_swizzle swizzle_z:3;
+   enum pipe_viewport_swizzle swizzle_w:3;
 };
 
 
@@ -271,7 +276,7 @@ struct pipe_stream_output_info
  *
  * NOTE: since it is expected that the consumer will want to perform
  * additional passes on the nir_shader, the driver takes ownership of
- * the nir_shader.  If state trackers need to hang on to the IR (for
+ * the nir_shader.  If gallium frontends need to hang on to the IR (for
  * example, variant management), it should use nir_shader_clone().
  */
 struct pipe_shader_state
@@ -357,7 +362,10 @@ struct pipe_blend_state
    unsigned logicop_func:4;      /**< PIPE_LOGICOP_x */
    unsigned dither:1;
    unsigned alpha_to_coverage:1;
+   unsigned alpha_to_coverage_dither:1;
    unsigned alpha_to_one:1;
+   unsigned max_rt:3;            /* index of max rt, Ie. # of cbufs minus 1 */
+   unsigned advanced_blend_func:4;
    struct pipe_rt_blend_state rt[PIPE_MAX_COLOR_BUFS];
 };
 
@@ -442,6 +450,13 @@ struct pipe_surface
    /* XXX width/height should be removed */
    uint16_t width;               /**< logical width in pixels */
    uint16_t height;              /**< logical height in pixels */
+
+   /**
+    * Number of samples for the surface.  This will be 0 if rendering
+    * should use the resource's nr_samples, or another value if the resource
+    * is bound using FramebufferTexture2DMultisampleEXT.
+    */
+   unsigned nr_samples:8;
 
    union pipe_surface_desc u;
 };
@@ -559,6 +574,10 @@ struct pipe_resource
    struct pipe_screen *screen; /**< screen that this texture belongs to */
 };
 
+/**
+ * Opaque object used for separate resource/memory allocations.
+ */
+struct pipe_memory_allocation;
 
 /**
  * Transfer object.  For data transfer to/from a resource.
@@ -788,17 +807,17 @@ struct pipe_blit_info
    unsigned mask; /**< bitmask of PIPE_MASK_R/G/B/A/Z/S */
    unsigned filter; /**< PIPE_TEX_FILTER_* */
 
-   boolean scissor_enable;
+   bool scissor_enable;
    struct pipe_scissor_state scissor;
 
    /* Window rectangles can either be inclusive or exclusive. */
-   boolean window_rectangle_include;
+   bool window_rectangle_include;
    unsigned num_window_rectangles;
    struct pipe_scissor_state window_rectangles[PIPE_MAX_WINDOW_RECTANGLES];
 
-   boolean render_condition_enable; /**< whether the blit should honor the
-                                    current render condition */
-   boolean alpha_blend; /* dst.rgb = src.rgb * src.a + dst.rgb * (1 - src.a) */
+   bool render_condition_enable; /**< whether the blit should honor the
+                                 current render condition */
+   bool alpha_blend; /* dst.rgb = src.rgb * src.a + dst.rgb * (1 - src.a) */
 };
 
 /**
@@ -832,6 +851,27 @@ struct pipe_grid_info
    uint block[3];
 
    /**
+    * last_block allows disabling threads at the farthermost grid boundary.
+    * Full blocks as specified by "block" are launched, but the threads
+    * outside of "last_block" dimensions are disabled.
+    *
+    * If a block touches the grid boundary in the i-th axis, threads with
+    * THREAD_ID[i] >= last_block[i] are disabled.
+    *
+    * If last_block[i] is 0, it has the same behavior as last_block[i] = block[i],
+    * meaning no effect.
+    *
+    * It's equivalent to doing this at the beginning of the compute shader:
+    *
+    *   for (i = 0; i < 3; i++) {
+    *      if (block_id[i] == grid[i] - 1 &&
+    *          last_block[i] && thread_id[i] >= last_block[i])
+    *         return;
+    *   }
+    */
+   uint last_block[3];
+
+   /**
     * Determine the layout of the grid (in block units) to be used.
     */
    uint grid[3];
@@ -850,11 +890,12 @@ struct pipe_grid_info
 };
 
 /**
- * Structure used as a header for serialized LLVM programs.
+ * Structure used as a header for serialized compute programs.
  */
-struct pipe_llvm_program_header
+struct pipe_binary_program_header
 {
    uint32_t num_bytes; /**< Number of bytes in the LLVM bytecode program. */
+   char blob[];
 };
 
 struct pipe_compute_state
@@ -868,7 +909,7 @@ struct pipe_compute_state
 
 /**
  * Structure that contains a callback for debug messages from the driver back
- * to the state tracker.
+ * to the gallium frontend.
  */
 struct pipe_debug_callback
 {
@@ -880,7 +921,7 @@ struct pipe_debug_callback
 
    /**
     * Callback for the driver to report debug/performance/etc information back
-    * to the state tracker.
+    * to the gallium frontend.
     *
     * \param data       user-supplied data pointer
     * \param id         message type identifier, if pointed value is 0, then a
@@ -899,7 +940,7 @@ struct pipe_debug_callback
 
 /**
  * Structure that contains a callback for device reset messages from the driver
- * back to the state tracker.
+ * back to the gallium frontend.
  *
  * The callback must not be called from driver-created threads.
  */

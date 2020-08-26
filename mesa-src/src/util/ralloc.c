@@ -28,6 +28,9 @@
 #include <string.h>
 #include <stdint.h>
 
+#include "util/macros.h"
+#include "util/u_math.h"
+
 /* Some versions of MinGW are missing _vscprintf's declaration, although they
  * still provide the symbol in the import library. */
 #ifdef __MINGW32__
@@ -53,7 +56,11 @@ _CRTIMP int _vscprintf(const char *format, va_list argptr);
  */
 struct
 #ifdef _MSC_VER
+#if _WIN64
+__declspec(align(16))
+#else
  __declspec(align(8))
+#endif
 #elif defined(__LP64__)
  __attribute__((aligned(16)))
 #else
@@ -61,7 +68,7 @@ struct
 #endif
    ralloc_header
 {
-#ifdef DEBUG
+#ifndef NDEBUG
    /* A canary value used to determine whether a pointer is ralloc'd. */
    unsigned canary;
 #endif
@@ -88,9 +95,7 @@ get_header(const void *ptr)
 {
    ralloc_header *info = (ralloc_header *) (((char *) ptr) -
 					    sizeof(ralloc_header));
-#ifdef DEBUG
    assert(info->canary == CANARY);
-#endif
    return info;
 }
 
@@ -118,7 +123,15 @@ ralloc_context(const void *ctx)
 void *
 ralloc_size(const void *ctx, size_t size)
 {
-   void *block = malloc(size + sizeof(ralloc_header));
+   /* Some malloc allocation doesn't always align to 16 bytes even on 64 bits
+    * system, from Android bionic/tests/malloc_test.cpp:
+    *  - Allocations of a size that rounds up to a multiple of 16 bytes
+    *    must have at least 16 byte alignment.
+    *  - Allocations of a size that rounds up to a multiple of 8 bytes and
+    *    not 16 bytes, are only required to have at least 8 byte alignment.
+    */
+   void *block = malloc(align64(size + sizeof(ralloc_header),
+                                alignof(ralloc_header)));
    ralloc_header *info;
    ralloc_header *parent;
 
@@ -140,7 +153,7 @@ ralloc_size(const void *ctx, size_t size)
 
    add_child(parent, info);
 
-#ifdef DEBUG
+#ifndef NDEBUG
    info->canary = CANARY;
 #endif
 
@@ -165,7 +178,8 @@ resize(void *ptr, size_t size)
    ralloc_header *child, *old, *info;
 
    old = get_header(ptr);
-   info = realloc(old, size + sizeof(ralloc_header));
+   info = realloc(old, align64(size + sizeof(ralloc_header),
+                               alignof(ralloc_header)));
 
    if (info == NULL)
       return NULL;
@@ -200,6 +214,21 @@ reralloc_size(const void *ctx, void *ptr, size_t size)
 }
 
 void *
+rerzalloc_size(const void *ctx, void *ptr, size_t old_size, size_t new_size)
+{
+   if (unlikely(ptr == NULL))
+      return rzalloc_size(ctx, new_size);
+
+   assert(ralloc_parent(ptr) == ctx);
+   ptr = resize(ptr, new_size);
+
+   if (new_size > old_size)
+      memset((char *)ptr + old_size, 0, new_size - old_size);
+
+   return ptr;
+}
+
+void *
 ralloc_array_size(const void *ctx, size_t size, unsigned count)
 {
    if (count > SIZE_MAX/size)
@@ -224,6 +253,16 @@ reralloc_array_size(const void *ctx, void *ptr, size_t size, unsigned count)
       return NULL;
 
    return reralloc_size(ctx, ptr, size * count);
+}
+
+void *
+rerzalloc_array_size(const void *ctx, void *ptr, size_t size,
+                     unsigned old_count, unsigned new_count)
+{
+   if (new_count > SIZE_MAX/size)
+      return NULL;
+
+   return rerzalloc_size(ctx, ptr, size * old_count, size * new_count);
 }
 
 void
@@ -554,11 +593,19 @@ ralloc_vasprintf_rewrite_tail(char **str, size_t *start, const char *fmt,
  */
 
 #define MIN_LINEAR_BUFSIZE 2048
-#define SUBALLOC_ALIGNMENT sizeof(uintptr_t)
+#define SUBALLOC_ALIGNMENT 8
 #define LMAGIC 0x87b9c7d3
 
-struct linear_header {
-#ifdef DEBUG
+struct
+#ifdef _MSC_VER
+ __declspec(align(8))
+#elif defined(__LP64__)
+ __attribute__((aligned(16)))
+#else
+ __attribute__((aligned(8)))
+#endif
+   linear_header {
+#ifndef NDEBUG
    unsigned magic;   /* for debugging */
 #endif
    unsigned offset;  /* points to the first unused byte in the buffer */
@@ -608,7 +655,7 @@ create_linear_node(void *ralloc_ctx, unsigned min_size)
    if (unlikely(!node))
       return NULL;
 
-#ifdef DEBUG
+#ifndef NDEBUG
    node->magic = LMAGIC;
 #endif
    node->offset = 0;
@@ -628,9 +675,7 @@ linear_alloc_child(void *parent, unsigned size)
    linear_size_chunk *ptr;
    unsigned full_size;
 
-#ifdef DEBUG
    assert(first->magic == LMAGIC);
-#endif
    assert(!latest->next);
 
    size = ALIGN_POT(size, SUBALLOC_ALIGNMENT);
@@ -651,6 +696,8 @@ linear_alloc_child(void *parent, unsigned size)
    ptr = (linear_size_chunk *)((char*)&latest[1] + latest->offset);
    ptr->size = size;
    latest->offset += full_size;
+
+   assert((uintptr_t)&ptr[1] % SUBALLOC_ALIGNMENT == 0);
    return &ptr[1];
 }
 
@@ -702,9 +749,7 @@ linear_free_parent(void *ptr)
       return;
 
    node = LINEAR_PARENT_TO_HEADER(ptr);
-#ifdef DEBUG
    assert(node->magic == LMAGIC);
-#endif
 
    while (node) {
       void *ptr = node;
@@ -723,9 +768,7 @@ ralloc_steal_linear_parent(void *new_ralloc_ctx, void *ptr)
       return;
 
    node = LINEAR_PARENT_TO_HEADER(ptr);
-#ifdef DEBUG
    assert(node->magic == LMAGIC);
-#endif
 
    while (node) {
       ralloc_steal(new_ralloc_ctx, node);
@@ -738,9 +781,7 @@ void *
 ralloc_parent_of_linear_parent(void *ptr)
 {
    linear_header *node = LINEAR_PARENT_TO_HEADER(ptr);
-#ifdef DEBUG
    assert(node->magic == LMAGIC);
-#endif
    return node->ralloc_parent;
 }
 

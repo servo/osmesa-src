@@ -3,12 +3,14 @@
 from __future__ import (
     absolute_import, division, print_function, unicode_literals
 )
+import argparse
 import ast
 import xml.parsers.expat
 import re
 import sys
 import copy
 import textwrap
+from util import *
 
 license =  """/*
  * Copyright (C) 2016 Intel Corporation
@@ -68,13 +70,13 @@ union __gen_value {
    uint32_t dw;
 };
 
-static inline uint64_t
+static inline __attribute__((always_inline)) uint64_t
 __gen_mbo(uint32_t start, uint32_t end)
 {
    return (~0ull >> (64 - (end - start + 1))) << start;
 }
 
-static inline uint64_t
+static inline __attribute__((always_inline)) uint64_t
 __gen_uint(uint64_t v, uint32_t start, NDEBUG_UNUSED uint32_t end)
 {
    __gen_validate_value(v);
@@ -90,7 +92,7 @@ __gen_uint(uint64_t v, uint32_t start, NDEBUG_UNUSED uint32_t end)
    return v << start;
 }
 
-static inline uint64_t
+static inline __attribute__((always_inline)) uint64_t
 __gen_sint(int64_t v, uint32_t start, uint32_t end)
 {
    const int width = end - start + 1;
@@ -110,7 +112,7 @@ __gen_sint(int64_t v, uint32_t start, uint32_t end)
    return (v & mask) << start;
 }
 
-static inline uint64_t
+static inline __attribute__((always_inline)) uint64_t
 __gen_offset(uint64_t v, NDEBUG_UNUSED uint32_t start, NDEBUG_UNUSED uint32_t end)
 {
    __gen_validate_value(v);
@@ -123,14 +125,14 @@ __gen_offset(uint64_t v, NDEBUG_UNUSED uint32_t start, NDEBUG_UNUSED uint32_t en
    return v;
 }
 
-static inline uint32_t
+static inline __attribute__((always_inline)) uint32_t
 __gen_float(float v)
 {
    __gen_validate_value(v);
    return ((union __gen_value) { .f = (v) }).dw;
 }
 
-static inline uint64_t
+static inline __attribute__((always_inline)) uint64_t
 __gen_sfixed(float v, uint32_t start, uint32_t end, uint32_t fract_bits)
 {
    __gen_validate_value(v);
@@ -149,7 +151,7 @@ __gen_sfixed(float v, uint32_t start, uint32_t end, uint32_t fract_bits)
    return (int_val & mask) << start;
 }
 
-static inline uint64_t
+static inline __attribute__((always_inline)) uint64_t
 __gen_ufixed(float v, uint32_t start, NDEBUG_UNUSED uint32_t end, uint32_t fract_bits)
 {
    __gen_validate_value(v);
@@ -180,41 +182,6 @@ __gen_ufixed(float v, uint32_t start, NDEBUG_UNUSED uint32_t end, uint32_t fract
 #endif
 
 """
-
-def to_alphanum(name):
-    substitutions = {
-        ' ': '',
-        '/': '',
-        '[': '',
-        ']': '',
-        '(': '',
-        ')': '',
-        '-': '',
-        ':': '',
-        '.': '',
-        ',': '',
-        '=': '',
-        '>': '',
-        '#': '',
-        'α': 'alpha',
-        '&': '',
-        '*': '',
-        '"': '',
-        '+': '',
-        '\'': '',
-    }
-
-    for i, j in substitutions.items():
-        name = name.replace(i, j)
-
-    return name
-
-def safe_name(name):
-    name = to_alphanum(name)
-    if not name[0].isalpha():
-        name = '_' + name
-
-    return name
 
 def num_from_str(num_str):
     if num_str.lower().startswith('0x'):
@@ -545,6 +512,13 @@ class Parser(object):
             if name == "instruction":
                 self.instruction = safe_name(attrs["name"])
                 self.length_bias = int(attrs["bias"])
+                if "engine" in attrs:
+                    self.instruction_engines = set(attrs["engine"].split('|'))
+                else:
+                    # When an instruction doesn't have the engine specified,
+                    # it is considered to be for all engines, so 'None' is used
+                    # to signify that the instruction belongs to all engines.
+                    self.instruction_engines = None
             elif name == "struct":
                 self.struct = safe_name(attrs["name"])
                 self.structs[attrs["name"]] = 1
@@ -611,7 +585,7 @@ class Parser(object):
     def emit_pack_function(self, name, group):
         name = self.gen_prefix(name)
         print(textwrap.dedent("""\
-            static inline void
+            static inline __attribute__((always_inline)) void
             %s_pack(__attribute__((unused)) __gen_user_data *data,
                   %s__attribute__((unused)) void * restrict dst,
                   %s__attribute__((unused)) const struct %s * restrict values)
@@ -628,6 +602,9 @@ class Parser(object):
 
     def emit_instruction(self):
         name = self.instruction
+        if self.instruction_engines and not self.instruction_engines & self.engines:
+            return
+
         if not self.length is None:
             print('#define %-33s %6d' %
                   (self.gen_prefix(name + "_length"), self.length))
@@ -640,7 +617,13 @@ class Parser(object):
                 continue
             if field.default is None:
                 continue
-            default_fields.append("   .%-35s = %6d" % (field.name, field.default))
+
+            if field.is_builtin_type():
+                default_fields.append("   .%-35s = %6d" % (field.name, field.default))
+            else:
+                # Default values should not apply to structures
+                assert field.is_enum_type()
+                default_fields.append("   .%-35s = (enum %s) %6d" % (field.name, self.gen_prefix(safe_name(field.type)), field.default))
 
         if default_fields:
             print('#define %-40s\\' % (self.gen_prefix(name + '_header')))
@@ -688,11 +671,36 @@ class Parser(object):
         self.parser.ParseFile(file)
         file.close()
 
-if len(sys.argv) < 2:
-    print("No input xml file specified")
-    sys.exit(1)
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument('xml_source', metavar='XML_SOURCE',
+                   help="Input xml file")
+    p.add_argument('--engines', nargs='?', type=str, default='render',
+                   help="Comma-separated list of engines whose instructions should be parsed (default: %(default)s)")
 
-input_file = sys.argv[1]
+    pargs = p.parse_args()
 
-p = Parser()
-p.parse(input_file)
+    if pargs.engines is None:
+        print("No engines specified")
+        sys.exit(1)
+
+    return pargs
+
+def main():
+    pargs = parse_args()
+
+    input_file = pargs.xml_source
+    engines = pargs.engines.split(',')
+    valid_engines = [ 'render', 'blitter', 'video' ]
+    if set(engines) - set(valid_engines):
+        print("Invalid engine specified, valid engines are:\n")
+        for e in valid_engines:
+            print("\t%s" % e)
+        sys.exit(1)
+
+    p = Parser()
+    p.engines = set(engines)
+    p.parse(input_file)
+
+if __name__ == '__main__':
+    main()

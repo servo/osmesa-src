@@ -41,16 +41,15 @@ vec4_visitor::dead_code_eliminate()
 {
    bool progress = false;
 
-   calculate_live_intervals();
-
-   int num_vars = live_intervals->num_vars;
+   const vec4_live_variables &live_vars = live_analysis.require();
+   int num_vars = live_vars.num_vars;
    BITSET_WORD *live = rzalloc_array(NULL, BITSET_WORD, BITSET_WORDS(num_vars));
    BITSET_WORD *flag_live = rzalloc_array(NULL, BITSET_WORD, 1);
 
    foreach_block_reverse_safe(block, cfg) {
-      memcpy(live, live_intervals->block_data[block->num].liveout,
+      memcpy(live, live_vars.block_data[block->num].liveout,
              sizeof(BITSET_WORD) * BITSET_WORDS(num_vars));
-      memcpy(flag_live, live_intervals->block_data[block->num].flag_liveout,
+      memcpy(flag_live, live_vars.block_data[block->num].flag_liveout,
              sizeof(BITSET_WORD));
 
       foreach_inst_in_block_reverse_safe(vec4_instruction, inst, block) {
@@ -81,17 +80,46 @@ vec4_visitor::dead_code_eliminate()
                result_live[3] = result;
             }
 
-            for (int c = 0; c < 4; c++) {
-               if (!result_live[c] && inst->dst.writemask & (1 << c)) {
-                  inst->dst.writemask &= ~(1 << c);
-                  progress = true;
+            if (inst->writes_flag()) {
+               /* Independently calculate the usage of the flag components and
+                * the destination value components.
+                */
+               uint8_t flag_mask = inst->dst.writemask;
+               uint8_t dest_mask = inst->dst.writemask;
 
-                  if (inst->dst.writemask == 0) {
-                     if (inst->writes_accumulator || inst->writes_flag()) {
-                        inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
-                     } else {
-                        inst->opcode = BRW_OPCODE_NOP;
-                        break;
+               for (int c = 0; c < 4; c++) {
+                  if (!result_live[c] && dest_mask & (1 << c))
+                     dest_mask &= ~(1 << c);
+
+                  if (!BITSET_TEST(flag_live, c))
+                     flag_mask &= ~(1 << c);
+               }
+
+               if (inst->dst.writemask != (flag_mask | dest_mask)) {
+                  progress = true;
+                  inst->dst.writemask = flag_mask | dest_mask;
+               }
+
+               /* If none of the destination components are read, replace the
+                * destination register with the NULL register.
+                */
+               if (dest_mask == 0) {
+                  progress = true;
+                  inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
+               }
+            } else {
+               for (int c = 0; c < 4; c++) {
+                  if (!result_live[c] && inst->dst.writemask & (1 << c)) {
+                     inst->dst.writemask &= ~(1 << c);
+                     progress = true;
+
+                     if (inst->dst.writemask == 0) {
+                        if (inst->writes_accumulator) {
+                           inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
+                        } else {
+                           inst->opcode = BRW_OPCODE_NOP;
+                           break;
+                        }
                      }
                   }
                }
@@ -154,7 +182,7 @@ vec4_visitor::dead_code_eliminate()
    ralloc_free(flag_live);
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
 
    return progress;
 }

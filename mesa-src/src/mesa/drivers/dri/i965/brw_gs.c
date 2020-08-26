@@ -36,30 +36,6 @@
 #include "compiler/glsl/ir_uniform.h"
 
 static void
-brw_gs_debug_recompile(struct brw_context *brw, struct gl_program *prog,
-                       const struct brw_gs_prog_key *key)
-{
-   perf_debug("Recompiling geometry shader for program %d\n", prog->Id);
-
-   bool found = false;
-   const struct brw_gs_prog_key *old_key =
-      brw_find_previous_compile(&brw->cache, BRW_CACHE_GS_PROG,
-                                key->program_string_id);
-
-   if (!old_key) {
-      perf_debug("  Didn't find previous compile in the shader cache for "
-                 "debug\n");
-      return;
-   }
-
-   found |= brw_debug_recompile_sampler_key(brw, &old_key->tex, &key->tex);
-
-   if (!found) {
-      perf_debug("  Something else\n");
-   }
-}
-
-static void
 assign_gs_binding_table_offsets(const struct gen_device_info *devinfo,
                                 const struct gl_program *prog,
                                 struct brw_gs_prog_data *prog_data)
@@ -89,19 +65,21 @@ brw_codegen_gs_prog(struct brw_context *brw,
 
    void *mem_ctx = ralloc_context(NULL);
 
+   nir_shader *nir = nir_shader_clone(mem_ctx, gp->program.nir);
+
    assign_gs_binding_table_offsets(devinfo, &gp->program, &prog_data);
 
-   brw_nir_setup_glsl_uniforms(mem_ctx, gp->program.nir, &gp->program,
+   brw_nir_setup_glsl_uniforms(mem_ctx, nir, &gp->program,
                                &prog_data.base.base,
                                compiler->scalar_stage[MESA_SHADER_GEOMETRY]);
-   brw_nir_analyze_ubo_ranges(compiler, gp->program.nir, NULL,
+   brw_nir_analyze_ubo_ranges(compiler, nir, NULL,
                               prog_data.base.base.ubo_ranges);
 
-   uint64_t outputs_written = gp->program.nir->info.outputs_written;
+   uint64_t outputs_written = nir->info.outputs_written;
 
    brw_compute_vue_map(devinfo,
                        &prog_data.base.vue_map, outputs_written,
-                       gp->program.info.separate_shader);
+                       gp->program.info.separate_shader, 1);
 
    int st_index = -1;
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
@@ -115,8 +93,8 @@ brw_codegen_gs_prog(struct brw_context *brw,
    char *error_str;
    const unsigned *program =
       brw_compile_gs(brw->screen->compiler, brw, mem_ctx, key,
-                     &prog_data, gp->program.nir, &gp->program,
-                     st_index, &error_str);
+                     &prog_data, nir, &gp->program, st_index,
+                     NULL, &error_str);
    if (program == NULL) {
       ralloc_strcat(&gp->program.sh.data->InfoLog, error_str);
       _mesa_problem(NULL, "Failed to compile geometry shader: %s\n", error_str);
@@ -127,7 +105,8 @@ brw_codegen_gs_prog(struct brw_context *brw,
 
    if (unlikely(brw->perf_debug)) {
       if (gp->compiled_once) {
-         brw_gs_debug_recompile(brw, &gp->program, key);
+         brw_debug_recompile(brw, MESA_SHADER_GEOMETRY, gp->program.Id,
+                             &key->base);
       }
       if (start_busy && !brw_bo_busy(brw->batch.last_bo)) {
          perf_debug("GS compile took %.03f ms and stalled the GPU\n",
@@ -172,10 +151,7 @@ brw_gs_populate_key(struct brw_context *brw,
 
    memset(key, 0, sizeof(*key));
 
-   key->program_string_id = gp->id;
-
-   /* _NEW_TEXTURE */
-   brw_populate_sampler_prog_key_data(ctx, &gp->program, &key->tex);
+   brw_populate_base_prog_key(ctx, gp, &key->base);
 }
 
 void
@@ -201,21 +177,23 @@ brw_upload_gs_prog(struct brw_context *brw)
       return;
 
    gp = (struct brw_program *) brw->programs[MESA_SHADER_GEOMETRY];
-   gp->id = key.program_string_id;
+   gp->id = key.base.program_string_id;
 
-   MAYBE_UNUSED bool success = brw_codegen_gs_prog(brw, gp, &key);
+   ASSERTED bool success = brw_codegen_gs_prog(brw, gp, &key);
    assert(success);
 }
 
 void
-brw_gs_populate_default_key(const struct gen_device_info *devinfo,
+brw_gs_populate_default_key(const struct brw_compiler *compiler,
                             struct brw_gs_prog_key *key,
                             struct gl_program *prog)
 {
+   const struct gen_device_info *devinfo = compiler->devinfo;
+
    memset(key, 0, sizeof(*key));
 
-   brw_setup_tex_for_precompile(devinfo, &key->tex, prog);
-   key->program_string_id = brw_program(prog)->id;
+   brw_populate_default_base_prog_key(devinfo, brw_program(prog),
+                                      &key->base);
 }
 
 bool
@@ -229,7 +207,7 @@ brw_gs_precompile(struct gl_context *ctx, struct gl_program *prog)
 
    struct brw_program *bgp = brw_program(prog);
 
-   brw_gs_populate_default_key(&brw->screen->devinfo, &key, prog);
+   brw_gs_populate_default_key(brw->screen->compiler, &key, prog);
 
    success = brw_codegen_gs_prog(brw, bgp, &key);
 

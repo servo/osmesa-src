@@ -18,6 +18,11 @@ C_SOURCES :=  \
 	etnaviv_clear_blit.h \
 	etnaviv_compiler.c \
 	etnaviv_compiler.h \
+	etnaviv_compiler_nir.c \
+	etnaviv_compiler_nir_emit.c \
+	etnaviv_compiler_nir_liveness.c \
+	etnaviv_compiler_nir_ra.c \
+	etnaviv_compiler_tgsi.c \
 	etnaviv_context.c \
 	etnaviv_context.h \
 	etnaviv_debug.h \
@@ -25,19 +30,25 @@ C_SOURCES :=  \
 	etnaviv_disasm.h \
 	etnaviv_emit.c \
 	etnaviv_emit.h \
+	etnaviv_etc2.c \
+	etnaviv_etc2.h \
 	etnaviv_fence.c \
 	etnaviv_fence.h \
 	etnaviv_format.c \
 	etnaviv_format.h \
 	etnaviv_internal.h \
+	etnaviv_nir.c \
+	etnaviv_nir.h \
+	etnaviv_perfmon.c \
+	etnaviv_perfmon.h \
 	etnaviv_query.c \
 	etnaviv_query.h \
-	etnaviv_query_hw.c \
-	etnaviv_query_hw.h \
+	etnaviv_query_acc_occlusion.c \
+	etnaviv_query_acc_perfmon.c \
+	etnaviv_query_acc.c \
+	etnaviv_query_acc.h \
 	etnaviv_query_sw.c \
 	etnaviv_query_sw.h \
-	etnaviv_query_pm.c \
-	etnaviv_query_pm.h \
 	etnaviv_rasterizer.c \
 	etnaviv_rasterizer.h \
 	etnaviv_resource.c \
@@ -54,6 +65,8 @@ C_SOURCES :=  \
 	etnaviv_surface.h \
 	etnaviv_texture.c \
 	etnaviv_texture.h \
+	etnaviv_texture_desc.c \
+	etnaviv_texture_desc.h \
 	etnaviv_texture_state.c \
 	etnaviv_texture_state.h \
 	etnaviv_tiling.c \

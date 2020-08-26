@@ -29,6 +29,7 @@ gen_xml_files = [
   'gen9.xml',
   'gen10.xml',
   'gen11.xml',
+  'gen12.xml',
 ]
 
 genX_xml_h = custom_target(
@@ -57,3 +58,7 @@ foreach f : gen_xml_files
     capture : true,
   )
 endforeach
+
+gen_pack_header_py = files('gen_pack_header.py')
+
+idep_genxml = declare_dependency(sources : [gen_xml_pack, genX_bits_h, genX_xml_h])

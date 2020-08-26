@@ -107,10 +107,6 @@ get_variable(lower_builtin_state *state, nir_deref_path *path,
    memcpy(tokens, element->tokens, sizeof(tokens));
 
    if (path->path[idx]->deref_type == nir_deref_type_array) {
-      nir_const_value *c = nir_src_as_const_value(path->path[idx]->arr.index);
-
-      assert(c);
-
       /* we need to fixup the array index slot: */
       switch (tokens[0]) {
       case STATE_MODELVIEW_MATRIX:
@@ -123,14 +119,14 @@ get_variable(lower_builtin_state *state, nir_deref_path *path,
       case STATE_TEXGEN:
       case STATE_TEXENV_COLOR:
       case STATE_CLIPPLANE:
-         tokens[1] = c->u32[0];
+         tokens[1] = nir_src_as_uint(path->path[idx]->arr.index);
          break;
       }
    }
 
    char *name = _mesa_program_state_string(tokens);
 
-   nir_foreach_variable(var, &shader->uniforms) {
+   nir_foreach_uniform_variable(var, shader) {
       if (strcmp(var->name, name) == 0) {
          free(name);
          return var;
@@ -142,7 +138,7 @@ get_variable(lower_builtin_state *state, nir_deref_path *path,
       nir_variable_create(shader, nir_var_uniform, glsl_vec4_type(), name);
 
    var->num_state_slots = 1;
-   var->state_slots = ralloc_array(var, nir_state_slot, 1);
+   var->state_slots = rzalloc_array(var, nir_state_slot, 1);
    memcpy(var->state_slots[0].tokens, tokens,
           sizeof(var->state_slots[0].tokens));
 
@@ -208,12 +204,12 @@ lower_builtin_block(lower_builtin_state *state, nir_block *block)
       nir_ssa_def *def = nir_load_var(b, new_var);
 
       /* swizzle the result: */
-      unsigned swiz[4];
+      unsigned swiz[NIR_MAX_VEC_COMPONENTS] = {0};
       for (unsigned i = 0; i < 4; i++) {
          swiz[i] = GET_SWZ(element->swizzle, i);
          assert(swiz[i] <= SWIZZLE_W);
       }
-      def = nir_swizzle(b, def, swiz, intrin->num_components, true);
+      def = nir_swizzle(b, def, swiz, intrin->num_components);
 
       /* and rewrite uses of original instruction: */
       assert(intrin->dest.is_ssa);

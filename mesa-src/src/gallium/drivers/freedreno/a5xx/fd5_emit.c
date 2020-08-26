@@ -28,7 +28,7 @@
 #include "util/u_string.h"
 #include "util/u_memory.h"
 #include "util/u_helpers.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_viewport.h"
 
 #include "freedreno_resource.h"
@@ -46,51 +46,55 @@
 #include "fd5_format.h"
 #include "fd5_zsa.h"
 
+#define emit_const_user fd5_emit_const_user
+#define emit_const_bo fd5_emit_const_bo
+#include "ir3_const.h"
+
 /* regid:          base const register
  * prsc or dwords: buffer containing constant values
  * sizedwords:     size of const value buffer
  */
 static void
-fd5_emit_const(struct fd_ringbuffer *ring, enum shader_t type,
-		uint32_t regid, uint32_t offset, uint32_t sizedwords,
-		const uint32_t *dwords, struct pipe_resource *prsc)
+fd5_emit_const_user(struct fd_ringbuffer *ring,
+		const struct ir3_shader_variant *v, uint32_t regid, uint32_t sizedwords,
+		const uint32_t *dwords)
 {
-	uint32_t i, sz;
-	enum a4xx_state_src src;
+	emit_const_asserts(ring, v, regid, sizedwords);
 
-	debug_assert((regid % 4) == 0);
-	debug_assert((sizedwords % 4) == 0);
-
-	if (prsc) {
-		sz = 0;
-		src = SS4_INDIRECT;
-	} else {
-		sz = sizedwords;
-		src = SS4_DIRECT;
-	}
-
-	OUT_PKT7(ring, CP_LOAD_STATE4, 3 + sz);
+	OUT_PKT7(ring, CP_LOAD_STATE4, 3 + sizedwords);
 	OUT_RING(ring, CP_LOAD_STATE4_0_DST_OFF(regid/4) |
-			CP_LOAD_STATE4_0_STATE_SRC(src) |
-			CP_LOAD_STATE4_0_STATE_BLOCK(fd4_stage2shadersb(type)) |
+			CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
+			CP_LOAD_STATE4_0_STATE_BLOCK(fd4_stage2shadersb(v->type)) |
 			CP_LOAD_STATE4_0_NUM_UNIT(sizedwords/4));
-	if (prsc) {
-		struct fd_bo *bo = fd_resource(prsc)->bo;
-		OUT_RELOC(ring, bo, offset,
-				CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS), 0);
-	} else {
-		OUT_RING(ring, CP_LOAD_STATE4_1_EXT_SRC_ADDR(0) |
-				CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS));
-		OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
-		dwords = (uint32_t *)&((uint8_t *)dwords)[offset];
-	}
-	for (i = 0; i < sz; i++) {
-		OUT_RING(ring, dwords[i]);
-	}
+	OUT_RING(ring, CP_LOAD_STATE4_1_EXT_SRC_ADDR(0) |
+			CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS));
+	OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
+	for (int i = 0; i < sizedwords; i++)
+		OUT_RING(ring, ((uint32_t *)dwords)[i]);
 }
 
 static void
-fd5_emit_const_bo(struct fd_ringbuffer *ring, enum shader_t type, boolean write,
+fd5_emit_const_bo(struct fd_ringbuffer *ring, const struct ir3_shader_variant *v,
+		uint32_t regid, uint32_t offset, uint32_t sizedwords, struct fd_bo *bo)
+{
+	uint32_t dst_off = regid / 4;
+	assert(dst_off % 4 == 0);
+	uint32_t num_unit = sizedwords / 4;
+	assert(num_unit % 4 == 0);
+
+	emit_const_asserts(ring, v, regid, sizedwords);
+
+	OUT_PKT7(ring, CP_LOAD_STATE4, 3);
+	OUT_RING(ring, CP_LOAD_STATE4_0_DST_OFF(dst_off) |
+			CP_LOAD_STATE4_0_STATE_SRC(SS4_INDIRECT) |
+			CP_LOAD_STATE4_0_STATE_BLOCK(fd4_stage2shadersb(v->type)) |
+			CP_LOAD_STATE4_0_NUM_UNIT(num_unit));
+	OUT_RELOC(ring, bo, offset,
+			CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS), 0);
+}
+
+static void
+fd5_emit_const_ptrs(struct fd_ringbuffer *ring, gl_shader_stage type,
 		uint32_t regid, uint32_t num, struct pipe_resource **prscs, uint32_t *offsets)
 {
 	uint32_t anum = align(num, 2);
@@ -109,11 +113,7 @@ fd5_emit_const_bo(struct fd_ringbuffer *ring, enum shader_t type, boolean write,
 
 	for (i = 0; i < num; i++) {
 		if (prscs[i]) {
-			if (write) {
-				OUT_RELOCW(ring, fd_resource(prscs[i])->bo, offsets[i], 0, 0);
-			} else {
-				OUT_RELOC(ring, fd_resource(prscs[i])->bo, offsets[i], 0, 0);
-			}
+			OUT_RELOC(ring, fd_resource(prscs[i])->bo, offsets[i], 0, 0);
 		} else {
 			OUT_RING(ring, 0xbad00000 | (i << 16));
 			OUT_RING(ring, 0xbad00000 | (i << 16));
@@ -124,6 +124,29 @@ fd5_emit_const_bo(struct fd_ringbuffer *ring, enum shader_t type, boolean write,
 		OUT_RING(ring, 0xffffffff);
 		OUT_RING(ring, 0xffffffff);
 	}
+}
+
+static bool
+is_stateobj(struct fd_ringbuffer *ring)
+{
+	return false;
+}
+
+static void
+emit_const_ptrs(struct fd_ringbuffer *ring,
+		const struct ir3_shader_variant *v, uint32_t dst_offset,
+		uint32_t num, struct pipe_resource **prscs, uint32_t *offsets)
+{
+	/* TODO inline this */
+	assert(dst_offset + num <= v->constlen * 4);
+	fd5_emit_const_ptrs(ring, v->type, dst_offset, num, prscs, offsets);
+}
+
+void
+fd5_emit_cs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
+		struct fd_context *ctx, const struct pipe_grid_info *info)
+{
+	ir3_emit_cs_consts(v, ring, ctx, info);
 }
 
 /* Border color layout is diff from a4xx/a5xx.. if it turns out to be
@@ -365,7 +388,7 @@ emit_textures(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			enum a5xx_tile_mode tile_mode = TILE5_LINEAR;
 
 			if (view->base.texture)
-				tile_mode = fd_resource(view->base.texture)->tile_mode;
+				tile_mode = fd_resource(view->base.texture)->layout.tile_mode;
 
 			OUT_RING(ring, view->texconst0 |
 					A5XX_TEX_CONST_0_TILE_MODE(tile_mode));
@@ -396,37 +419,21 @@ emit_textures(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 static void
 emit_ssbos(struct fd_context *ctx, struct fd_ringbuffer *ring,
-		enum a4xx_state_block sb, struct fd_shaderbuf_stateobj *so)
+		enum a4xx_state_block sb, struct fd_shaderbuf_stateobj *so,
+		const struct ir3_shader_variant *v)
 {
 	unsigned count = util_last_bit(so->enabled_mask);
 
-	if (count == 0)
-		return;
-
-	OUT_PKT7(ring, CP_LOAD_STATE4, 3 + (4 * count));
-	OUT_RING(ring, CP_LOAD_STATE4_0_DST_OFF(0) |
-			CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
-			CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
-			CP_LOAD_STATE4_0_NUM_UNIT(count));
-	OUT_RING(ring, CP_LOAD_STATE4_1_STATE_TYPE(0) |
-			CP_LOAD_STATE4_1_EXT_SRC_ADDR(0));
-	OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
 	for (unsigned i = 0; i < count; i++) {
-		OUT_RING(ring, 0x00000000);
-		OUT_RING(ring, 0x00000000);
-		OUT_RING(ring, 0x00000000);
-		OUT_RING(ring, 0x00000000);
-	}
+		OUT_PKT7(ring, CP_LOAD_STATE4, 5);
+		OUT_RING(ring, CP_LOAD_STATE4_0_DST_OFF(i) |
+				CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
+				CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
+				CP_LOAD_STATE4_0_NUM_UNIT(1));
+		OUT_RING(ring, CP_LOAD_STATE4_1_STATE_TYPE(1) |
+				CP_LOAD_STATE4_1_EXT_SRC_ADDR(0));
+		OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
 
-	OUT_PKT7(ring, CP_LOAD_STATE4, 3 + (2 * count));
-	OUT_RING(ring, CP_LOAD_STATE4_0_DST_OFF(0) |
-			CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
-			CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
-			CP_LOAD_STATE4_0_NUM_UNIT(count));
-	OUT_RING(ring, CP_LOAD_STATE4_1_STATE_TYPE(1) |
-			CP_LOAD_STATE4_1_EXT_SRC_ADDR(0));
-	OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
-	for (unsigned i = 0; i < count; i++) {
 		struct pipe_shader_buffer *buf = &so->sb[i];
 		unsigned sz = buf->buffer_size;
 
@@ -435,21 +442,19 @@ emit_ssbos(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 		OUT_RING(ring, A5XX_SSBO_1_0_WIDTH(sz));
 		OUT_RING(ring, A5XX_SSBO_1_1_HEIGHT(sz >> 16));
-	}
 
-	OUT_PKT7(ring, CP_LOAD_STATE4, 3 + (2 * count));
-	OUT_RING(ring, CP_LOAD_STATE4_0_DST_OFF(0) |
-			CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
-			CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
-			CP_LOAD_STATE4_0_NUM_UNIT(count));
-	OUT_RING(ring, CP_LOAD_STATE4_1_STATE_TYPE(2) |
-			CP_LOAD_STATE4_1_EXT_SRC_ADDR(0));
-	OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
-	for (unsigned i = 0; i < count; i++) {
-		struct pipe_shader_buffer *buf = &so->sb[i];
+		OUT_PKT7(ring, CP_LOAD_STATE4, 5);
+		OUT_RING(ring, CP_LOAD_STATE4_0_DST_OFF(i) |
+				CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
+				CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
+				CP_LOAD_STATE4_0_NUM_UNIT(1));
+		OUT_RING(ring, CP_LOAD_STATE4_1_STATE_TYPE(2) |
+				CP_LOAD_STATE4_1_EXT_SRC_ADDR(0));
+		OUT_RING(ring, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
+
 		if (buf->buffer) {
 			struct fd_resource *rsc = fd_resource(buf->buffer);
-			OUT_RELOCW(ring, rsc->bo, buf->buffer_offset, 0, 0);
+			OUT_RELOC(ring, rsc->bo, buf->buffer_offset, 0, 0);
 		} else {
 			OUT_RING(ring, 0x00000000);
 			OUT_RING(ring, 0x00000000);
@@ -477,7 +482,7 @@ fd5_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd5_emit *emit)
 			bool isint = util_format_is_pure_integer(pfmt);
 			uint32_t off = vb->buffer_offset + elem->src_offset;
 			uint32_t size = fd_bo_size(rsc->bo) - off;
-			debug_assert(fmt != ~0);
+			debug_assert(fmt != VFMT5_NONE);
 
 #ifdef DEBUG
 			/* see dEQP-GLES31.stress.vertex_attribute_binding.buffer_bounds.bind_vertex_buffer_offset_near_wrap_10
@@ -587,18 +592,20 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	if (dirty & (FD_DIRTY_ZSA | FD_DIRTY_RASTERIZER | FD_DIRTY_PROG)) {
 		struct fd5_zsa_stateobj *zsa = fd5_zsa_stateobj(ctx->zsa);
-		bool fragz = fp->has_kill | fp->writes_pos;
+		bool fragz = fp->no_earlyz || fp->has_kill || fp->writes_pos;
 
 		OUT_PKT4(ring, REG_A5XX_RB_DEPTH_CNTL, 1);
 		OUT_RING(ring, zsa->rb_depth_cntl);
 
 		OUT_PKT4(ring, REG_A5XX_RB_DEPTH_PLANE_CNTL, 1);
 		OUT_RING(ring, COND(fragz, A5XX_RB_DEPTH_PLANE_CNTL_FRAG_WRITES_Z) |
-				COND(fragz && fp->frag_coord, A5XX_RB_DEPTH_PLANE_CNTL_UNK1));
+				COND(fragz && fp->fragcoord_compmask != 0,
+				A5XX_RB_DEPTH_PLANE_CNTL_UNK1));
 
 		OUT_PKT4(ring, REG_A5XX_GRAS_SU_DEPTH_PLANE_CNTL, 1);
 		OUT_RING(ring, COND(fragz, A5XX_GRAS_SU_DEPTH_PLANE_CNTL_FRAG_WRITES_Z) |
-				COND(fragz && fp->frag_coord, A5XX_GRAS_SU_DEPTH_PLANE_CNTL_UNK1));
+				COND(fragz && fp->fragcoord_compmask != 0,
+				A5XX_GRAS_SU_DEPTH_PLANE_CNTL_UNK1));
 	}
 
 	/* NOTE: scissor enabled bit is part of rasterizer state: */
@@ -704,7 +711,7 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	if (!emit->binning_pass)
 		ir3_emit_fs_consts(fp, ring, ctx);
 
-	struct pipe_stream_output_info *info = &vp->shader->stream_output;
+	struct ir3_stream_output_info *info = &vp->shader->stream_output;
 	if (info->num_outputs) {
 		struct fd_streamout_stateobj *so = &ctx->streamout;
 
@@ -719,7 +726,7 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 			OUT_PKT4(ring, REG_A5XX_VPC_SO_BUFFER_BASE_LO(i), 3);
 			/* VPC_SO[i].BUFFER_BASE_LO: */
-			OUT_RELOCW(ring, fd_resource(target->buffer)->bo, 0, 0, 0);
+			OUT_RELOC(ring, fd_resource(target->buffer)->bo, 0, 0, 0);
 			OUT_RING(ring, target->buffer_size + offset);
 
 			OUT_PKT4(ring, REG_A5XX_VPC_SO_BUFFER_OFFSET(i), 3);
@@ -728,7 +735,7 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			// TODO just give hw a dummy addr for now.. we should
 			// be using this an then CP_MEM_TO_REG to set the
 			// VPC_SO[i].BUFFER_OFFSET for the next draw..
-			OUT_RELOCW(ring, fd5_context(ctx)->blit_mem, 0x100, 0, 0);
+			OUT_RELOC(ring, fd5_context(ctx)->blit_mem, 0x100, 0, 0);
 
 			emit->streamout_mask |= (1 << i);
 		}
@@ -743,17 +750,13 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			bool is_int = util_format_is_pure_integer(format);
 			bool has_alpha = util_format_has_alpha(format);
 			uint32_t control = blend->rb_mrt[i].control;
-			uint32_t blend_control = blend->rb_mrt[i].blend_control_alpha;
 
 			if (is_int) {
 				control &= A5XX_RB_MRT_CONTROL_COMPONENT_ENABLE__MASK;
 				control |= A5XX_RB_MRT_CONTROL_ROP_CODE(ROP_COPY);
 			}
 
-			if (has_alpha) {
-				blend_control |= blend->rb_mrt[i].blend_control_rgb;
-			} else {
-				blend_control |= blend->rb_mrt[i].blend_control_no_alpha_rgb;
+			if (!has_alpha) {
 				control &= ~A5XX_RB_MRT_CONTROL_BLEND2;
 			}
 
@@ -761,7 +764,7 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			OUT_RING(ring, control);
 
 			OUT_PKT4(ring, REG_A5XX_RB_MRT_BLEND_CONTROL(i), 1);
-			OUT_RING(ring, blend_control);
+			OUT_RING(ring, blend->rb_mrt[i].blend_control);
 		}
 
 		OUT_PKT4(ring, REG_A5XX_SP_BLEND_CNTL, 1);
@@ -821,10 +824,10 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		emit_border_color(ctx, ring);
 
 	if (ctx->dirty_shader[PIPE_SHADER_FRAGMENT] & FD_DIRTY_SHADER_SSBO)
-		emit_ssbos(ctx, ring, SB4_SSBO, &ctx->shaderbuf[PIPE_SHADER_FRAGMENT]);
+		emit_ssbos(ctx, ring, SB4_SSBO, &ctx->shaderbuf[PIPE_SHADER_FRAGMENT], fp);
 
 	if (ctx->dirty_shader[PIPE_SHADER_FRAGMENT] & FD_DIRTY_SHADER_IMAGE)
-		fd5_emit_images(ctx, ring, PIPE_SHADER_FRAGMENT);
+		fd5_emit_images(ctx, ring, PIPE_SHADER_FRAGMENT, fp);
 }
 
 void
@@ -862,10 +865,10 @@ fd5_emit_cs_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			~0 : ctx->tex[PIPE_SHADER_COMPUTE].num_textures);
 
 	if (dirty & FD_DIRTY_SHADER_SSBO)
-		emit_ssbos(ctx, ring, SB4_CS_SSBO, &ctx->shaderbuf[PIPE_SHADER_COMPUTE]);
+		emit_ssbos(ctx, ring, SB4_CS_SSBO, &ctx->shaderbuf[PIPE_SHADER_COMPUTE], cp);
 
 	if (dirty & FD_DIRTY_SHADER_IMAGE)
-		fd5_emit_images(ctx, ring, PIPE_SHADER_COMPUTE);
+		fd5_emit_images(ctx, ring, PIPE_SHADER_COMPUTE, cp);
 }
 
 /* emit setup at begin of new cmdstream buffer (don't rely on previous
@@ -934,8 +937,19 @@ t7              opcode: CP_WAIT_FOR_IDLE (26) (1 dwords)
 	OUT_PKT4(ring, REG_A5XX_SP_MODE_CNTL, 1);
 	OUT_RING(ring, 0x0000001e);   /* SP_MODE_CNTL */
 
-	OUT_PKT4(ring, REG_A5XX_SP_DBG_ECO_CNTL, 1);
-	OUT_RING(ring, 0x40000800);   /* SP_DBG_ECO_CNTL */
+	if (ctx->screen->gpu_id == 540) {
+		OUT_PKT4(ring, REG_A5XX_SP_DBG_ECO_CNTL, 1);
+		OUT_RING(ring, 0x800);   /* SP_DBG_ECO_CNTL */
+
+		OUT_PKT4(ring, REG_A5XX_HLSQ_DBG_ECO_CNTL, 1);
+		OUT_RING(ring, 0x0);
+
+		OUT_PKT4(ring, REG_A5XX_VPC_DBG_ECO_CNTL, 1);
+		OUT_RING(ring, 0x800400);
+	} else {
+		OUT_PKT4(ring, REG_A5XX_SP_DBG_ECO_CNTL, 1);
+		OUT_RING(ring, 0x40000800);   /* SP_DBG_ECO_CNTL */
+	}
 
 	OUT_PKT4(ring, REG_A5XX_TPL1_MODE_CNTL, 1);
 	OUT_RING(ring, 0x00000544);   /* TPL1_MODE_CNTL */
@@ -1104,20 +1118,6 @@ t7              opcode: CP_WAIT_FOR_IDLE (26) (1 dwords)
 }
 
 static void
-fd5_emit_ib(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
-{
-	/* for debug after a lock up, write a unique counter value
-	 * to scratch6 for each IB, to make it easier to match up
-	 * register dumps to cmdstream.  The combination of IB and
-	 * DRAW (scratch7) is enough to "triangulate" the particular
-	 * draw that caused lockup.
-	 */
-	emit_marker5(ring, 6);
-	__OUT_IB5(ring, target);
-	emit_marker5(ring, 6);
-}
-
-static void
 fd5_mem_to_mem(struct fd_ringbuffer *ring, struct pipe_resource *dst,
 		unsigned dst_off, struct pipe_resource *src, unsigned src_off,
 		unsigned sizedwords)
@@ -1129,8 +1129,8 @@ fd5_mem_to_mem(struct fd_ringbuffer *ring, struct pipe_resource *dst,
 	for (i = 0; i < sizedwords; i++) {
 		OUT_PKT7(ring, CP_MEM_TO_MEM, 5);
 		OUT_RING(ring, 0x00000000);
-		OUT_RELOCW(ring, dst_bo, dst_off, 0, 0);
-		OUT_RELOC (ring, src_bo, src_off, 0, 0);
+		OUT_RELOC(ring, dst_bo, dst_off, 0, 0);
+		OUT_RELOC(ring, src_bo, src_off, 0, 0);
 
 		dst_off += 4;
 		src_off += 4;
@@ -1138,11 +1138,14 @@ fd5_mem_to_mem(struct fd_ringbuffer *ring, struct pipe_resource *dst,
 }
 
 void
+fd5_emit_init_screen(struct pipe_screen *pscreen)
+{
+	struct fd_screen *screen = fd_screen(pscreen);
+	screen->emit_ib = fd5_emit_ib;
+	screen->mem_to_mem = fd5_mem_to_mem;
+}
+
+void
 fd5_emit_init(struct pipe_context *pctx)
 {
-	struct fd_context *ctx = fd_context(pctx);
-	ctx->emit_const = fd5_emit_const;
-	ctx->emit_const_bo = fd5_emit_const_bo;
-	ctx->emit_ib = fd5_emit_ib;
-	ctx->mem_to_mem = fd5_mem_to_mem;
 }

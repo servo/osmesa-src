@@ -201,8 +201,7 @@ vec4_visitor::reg_allocate()
    if (0)
       return reg_allocate_trivial();
 
-   calculate_live_intervals();
-
+   const vec4_live_variables &live = live_analysis.require();
    int node_count = alloc.count;
    int first_payload_node = node_count;
    node_count += payload_reg_count;
@@ -215,7 +214,7 @@ vec4_visitor::reg_allocate()
       ra_set_node_class(g, i, compiler->vec4_reg_set.classes[size - 1]);
 
       for (unsigned j = 0; j < i; j++) {
-	 if (virtual_grf_interferes(i, j)) {
+	 if (live.vgrfs_interfere(i, j)) {
 	    ra_add_node_interference(g, i, j);
 	 }
       }
@@ -502,18 +501,18 @@ vec4_visitor::choose_spill_reg(struct ra_graph *g)
 }
 
 void
-vec4_visitor::spill_reg(int spill_reg_nr)
+vec4_visitor::spill_reg(unsigned spill_reg_nr)
 {
    assert(alloc.sizes[spill_reg_nr] == 1 || alloc.sizes[spill_reg_nr] == 2);
-   unsigned int spill_offset = last_scratch;
+   unsigned spill_offset = last_scratch;
    last_scratch += alloc.sizes[spill_reg_nr];
 
    /* Generate spill/unspill instructions for the objects being spilled. */
-   int scratch_reg = -1;
+   unsigned scratch_reg = ~0u;
    foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
-      for (unsigned int i = 0; i < 3; i++) {
+      for (unsigned i = 0; i < 3; i++) {
          if (inst->src[i].file == VGRF && inst->src[i].nr == spill_reg_nr) {
-            if (scratch_reg == -1 ||
+            if (scratch_reg == ~0u ||
                 !can_use_scratch_for_source(inst, i, scratch_reg)) {
                /* We need to unspill anyway so make sure we read the full vec4
                 * in any case. This way, the cached register can be reused
@@ -529,7 +528,7 @@ vec4_visitor::spill_reg(int spill_reg_nr)
                                  dst_reg(temp), inst->src[i], spill_offset);
                temp.offset = inst->src[i].offset;
             }
-            assert(scratch_reg != -1);
+            assert(scratch_reg != ~0u);
             inst->src[i].nr = scratch_reg;
          }
       }
@@ -540,7 +539,7 @@ vec4_visitor::spill_reg(int spill_reg_nr)
       }
    }
 
-   invalidate_live_intervals();
+   invalidate_analysis(DEPENDENCY_INSTRUCTIONS | DEPENDENCY_VARIABLES);
 }
 
 } /* namespace brw */

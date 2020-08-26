@@ -31,7 +31,7 @@
 
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_atomic.h"
 #include "util/u_upload_mgr.h"
 #include "util/u_transfer.h"
@@ -320,13 +320,15 @@ swr_blit(struct pipe_context *pipe, const struct pipe_blit_info *blit_info)
    util_blitter_save_vertex_elements(ctx->blitter, (void *)ctx->velems);
    util_blitter_save_vertex_shader(ctx->blitter, (void *)ctx->vs);
    util_blitter_save_geometry_shader(ctx->blitter, (void*)ctx->gs);
+   util_blitter_save_tessctrl_shader(ctx->blitter, (void*)ctx->tcs);
+   util_blitter_save_tesseval_shader(ctx->blitter, (void*)ctx->tes);
    util_blitter_save_so_targets(
       ctx->blitter,
       ctx->num_so_targets,
       (struct pipe_stream_output_target **)ctx->so_targets);
    util_blitter_save_rasterizer(ctx->blitter, (void *)ctx->rasterizer);
-   util_blitter_save_viewport(ctx->blitter, &ctx->viewport);
-   util_blitter_save_scissor(ctx->blitter, &ctx->scissor);
+   util_blitter_save_viewport(ctx->blitter, &ctx->viewports[0]);
+   util_blitter_save_scissor(ctx->blitter, &ctx->scissors[0]);
    util_blitter_save_fragment_shader(ctx->blitter, ctx->fs);
    util_blitter_save_blend(ctx->blitter, (void *)ctx->blend);
    util_blitter_save_depth_stencil_alpha(ctx->blitter,
@@ -403,6 +405,7 @@ swr_destroy(struct pipe_context *pipe)
 
    swr_destroy_scratch_buffers(ctx);
 
+
    /* Only update screen->pipe if current context is being destroyed */
    assert(screen);
    if (screen->pipe == pipe)
@@ -415,7 +418,7 @@ swr_destroy(struct pipe_context *pipe)
 static void
 swr_render_condition(struct pipe_context *pipe,
                      struct pipe_query *query,
-                     boolean condition,
+                     bool condition,
                      enum pipe_render_cond_flag mode)
 {
    struct swr_context *ctx = swr_context(pipe);
@@ -471,29 +474,44 @@ swr_UpdateStatsFE(HANDLE hPrivateContext, const SWR_STATS_FE *pStats)
    }
 }
 
+static void
+swr_UpdateStreamOut(HANDLE hPrivateContext, uint64_t numPrims)
+{
+   swr_draw_context *pDC = (swr_draw_context*)hPrivateContext;
+
+   if (!pDC)
+      return;
+
+   if (pDC->soPrims)
+       *pDC->soPrims += numPrims;
+}
+
 struct pipe_context *
 swr_create_context(struct pipe_screen *p_screen, void *priv, unsigned flags)
 {
    struct swr_context *ctx = (struct swr_context *)
       AlignedMalloc(sizeof(struct swr_context), KNOB_SIMD_BYTES);
-   memset(ctx, 0, sizeof(struct swr_context));
+   memset((void*)ctx, 0, sizeof(struct swr_context));
 
    swr_screen(p_screen)->pfnSwrGetInterface(ctx->api);
+   swr_screen(p_screen)->pfnSwrGetTileInterface(ctx->tileApi);
    ctx->swrDC.pAPI = &ctx->api;
+   ctx->swrDC.pTileAPI = &ctx->tileApi;
 
    ctx->blendJIT =
       new std::unordered_map<BLEND_COMPILE_STATE, PFN_BLEND_JIT_FUNC>;
 
    ctx->max_draws_in_flight = KNOB_MAX_DRAWS_IN_FLIGHT;
 
-   SWR_CREATECONTEXT_INFO createInfo;
-   memset(&createInfo, 0, sizeof(createInfo));
+   SWR_CREATECONTEXT_INFO createInfo {0};
+
    createInfo.privateStateSize = sizeof(swr_draw_context);
    createInfo.pfnLoadTile = swr_LoadHotTile;
    createInfo.pfnStoreTile = swr_StoreHotTile;
-   createInfo.pfnClearTile = swr_StoreHotTileClear;
    createInfo.pfnUpdateStats = swr_UpdateStats;
    createInfo.pfnUpdateStatsFE = swr_UpdateStatsFE;
+   createInfo.pfnUpdateStreamOut = swr_UpdateStreamOut;
+   createInfo.pfnMakeGfxPtr = swr_MakeGfxPtr;
 
    SWR_THREADING_INFO threadingInfo {0};
 

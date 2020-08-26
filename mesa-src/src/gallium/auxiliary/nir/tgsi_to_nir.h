@@ -21,8 +21,19 @@
  * IN THE SOFTWARE.
  */
 
+#ifndef TGSI_TO_NIR_H
+#define TGSI_TO_NIR_H
+
 #include "compiler/nir/nir.h"
+#include "pipe/p_screen.h"
 
 struct nir_shader *
 tgsi_to_nir(const void *tgsi_tokens,
-            const struct nir_shader_compiler_options *options);
+            struct pipe_screen *screen,
+            bool allow_disk_cache);
+
+struct nir_shader *
+tgsi_to_nir_noscreen(const void *tgsi_tokens,
+                     const nir_shader_compiler_options *options);
+
+#endif

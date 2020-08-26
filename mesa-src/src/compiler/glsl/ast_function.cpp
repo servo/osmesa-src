@@ -49,6 +49,13 @@ process_parameters(exec_list *instructions, exec_list *actual_parameters,
       ast->set_is_lhs(true);
       ir_rvalue *result = ast->hir(instructions, state);
 
+      /* Error happened processing function parameter */
+      if (!result) {
+         actual_parameters->push_tail(ir_rvalue::error_value(mem_ctx));
+         count++;
+         continue;
+      }
+
       ir_constant *const constant =
          result->constant_expression_value(mem_ctx);
 
@@ -175,6 +182,37 @@ is_atomic_function(const char *func_name)
           !strcmp(func_name, "atomicCompSwap");
 }
 
+static bool
+verify_atomic_image_parameter_qualifier(YYLTYPE *loc, _mesa_glsl_parse_state *state,
+                                        ir_variable *var)
+{
+   if (!var ||
+       (var->data.image_format != PIPE_FORMAT_R32_UINT &&
+        var->data.image_format != PIPE_FORMAT_R32_SINT &&
+        var->data.image_format != PIPE_FORMAT_R32_FLOAT)) {
+      _mesa_glsl_error(loc, state, "Image atomic functions should use r32i/r32ui "
+                       "format qualifier");
+      return false;
+   }
+   return true;
+}
+
+static bool
+is_atomic_image_function(const char *func_name)
+{
+   return !strcmp(func_name, "imageAtomicAdd") ||
+          !strcmp(func_name, "imageAtomicMin") ||
+          !strcmp(func_name, "imageAtomicMax") ||
+          !strcmp(func_name, "imageAtomicAnd") ||
+          !strcmp(func_name, "imageAtomicOr") ||
+          !strcmp(func_name, "imageAtomicXor") ||
+          !strcmp(func_name, "imageAtomicExchange") ||
+          !strcmp(func_name, "imageAtomicCompSwap") ||
+          !strcmp(func_name, "imageAtomicIncWrap") ||
+          !strcmp(func_name, "imageAtomicDecWrap");
+}
+
+
 /**
  * Verify that 'out' and 'inout' actual parameters are lvalues.  Also, verify
  * that 'const_in' formal parameters (an extension in our IR) correspond to
@@ -198,9 +236,6 @@ verify_parameter_modes(_mesa_glsl_parse_state *state,
       const ast_expression *const actual_ast =
          exec_node_data(ast_expression, actual_ast_node, link);
 
-      /* FIXME: 'loc' is incorrect (as of 2011-01-21). It is always
-       * FIXME: 0:0(0).
-       */
       YYLTYPE loc = actual_ast->get_location();
 
       /* Verify that 'const_in' parameters are ir_constants. */
@@ -343,6 +378,19 @@ verify_parameter_modes(_mesa_glsl_parse_state *state,
                                          actual->variable_referenced())) {
          return false;
       }
+   } else if (is_atomic_image_function(func_name)) {
+      const ir_rvalue *const actual =
+         (ir_rvalue *) actual_ir_parameters.get_head_raw();
+
+      const ast_expression *const actual_ast =
+         exec_node_data(ast_expression,
+                        actual_ast_parameters.get_head_raw(), link);
+      YYLTYPE loc = actual_ast->get_location();
+
+      if (!verify_atomic_image_parameter_qualifier(&loc, state,
+                                         actual->variable_referenced())) {
+         return false;
+      }
    }
 
    return true;
@@ -363,31 +411,29 @@ copy_index_derefs_to_temps(ir_instruction *ir, void *data)
       ir = a->array->as_dereference();
 
       ir_rvalue *idx = a->array_index;
-      if (idx->as_dereference_variable()) {
-         ir_variable *var = idx->variable_referenced();
+      ir_variable *var = idx->variable_referenced();
 
-         /* If the index is read only it cannot change so there is no need
-          * to copy it.
-          */
-         if (var->data.read_only || var->data.memory_read_only)
-            return;
+      /* If the index is read only it cannot change so there is no need
+       * to copy it.
+       */
+      if (!var || var->data.read_only || var->data.memory_read_only)
+         return;
 
-         ir_variable *tmp = new(d->mem_ctx) ir_variable(idx->type, "idx_tmp",
-                                                        ir_var_temporary);
-         d->before_instructions->push_tail(tmp);
+      ir_variable *tmp = new(d->mem_ctx) ir_variable(idx->type, "idx_tmp",
+                                                      ir_var_temporary);
+      d->before_instructions->push_tail(tmp);
 
-         ir_dereference_variable *const deref_tmp_1 =
-            new(d->mem_ctx) ir_dereference_variable(tmp);
-         ir_assignment *const assignment =
-            new(d->mem_ctx) ir_assignment(deref_tmp_1,
-                                          idx->clone(d->mem_ctx, NULL));
-         d->before_instructions->push_tail(assignment);
+      ir_dereference_variable *const deref_tmp_1 =
+         new(d->mem_ctx) ir_dereference_variable(tmp);
+      ir_assignment *const assignment =
+         new(d->mem_ctx) ir_assignment(deref_tmp_1,
+                                       idx->clone(d->mem_ctx, NULL));
+      d->before_instructions->push_tail(assignment);
 
-         /* Replace the array index with a dereference of the new temporary */
-         ir_dereference_variable *const deref_tmp_2 =
-            new(d->mem_ctx) ir_dereference_variable(tmp);
-         a->array_index = deref_tmp_2;
-      }
+      /* Replace the array index with a dereference of the new temporary */
+      ir_dereference_variable *const deref_tmp_2 =
+         new(d->mem_ctx) ir_dereference_variable(tmp);
+      a->array_index = deref_tmp_2;
    }
 }
 
@@ -402,7 +448,8 @@ fix_parameter(void *mem_ctx, ir_rvalue *actual, const glsl_type *formal_type,
     * nothing needs to be done to fix the parameter.
     */
    if (formal_type == actual->type
-       && (expr == NULL || expr->operation != ir_binop_vector_extract))
+       && (expr == NULL || expr->operation != ir_binop_vector_extract)
+       && actual->as_dereference_variable())
       return;
 
    /* An array index could also be an out variable so we need to make a copy
@@ -456,7 +503,7 @@ fix_parameter(void *mem_ctx, ir_rvalue *actual, const glsl_type *formal_type,
       ir_dereference_variable *const deref_tmp_1 =
          new(mem_ctx) ir_dereference_variable(tmp);
       ir_assignment *const assignment =
-         new(mem_ctx) ir_assignment(deref_tmp_1, actual);
+         new(mem_ctx) ir_assignment(deref_tmp_1, actual->clone(mem_ctx, NULL));
       before_instructions->push_tail(assignment);
    }
 
@@ -613,11 +660,6 @@ generate_call(exec_list *instructions, ir_function_signature *sig,
    ir_call *call = new(ctx) ir_call(sig, deref,
                                     actual_parameters, sub_var, array_idx);
    instructions->push_tail(call);
-   if (sig->is_builtin()) {
-      /* inline immediately */
-      call->generate_inline(call);
-      call->remove();
-   }
 
    /* Also emit any necessary out-parameter conversions. */
    instructions->append_list(&post_call_conversions);
@@ -665,9 +707,13 @@ match_function_by_name(const char *name,
    }
 
    /* Local shader has no exact candidates; check the built-ins. */
-   _mesa_glsl_initialize_builtin_functions();
    sig = _mesa_glsl_find_builtin_function(state, name, actual_parameters);
-   return sig;
+
+   /* if _mesa_glsl_find_builtin_function failed, fall back to the result
+    * of choose_best_inexact_overload() instead. This should only affect
+    * GLES.
+    */
+   return sig ? sig : local_sig;
 }
 
 static ir_function_signature *
@@ -744,6 +790,21 @@ generate_array_index(void *mem_ctx, exec_list *instructions,
    }
 }
 
+static bool
+function_exists(_mesa_glsl_parse_state *state,
+                struct glsl_symbol_table *symbols, const char *name)
+{
+   ir_function *f = symbols->get_function(name);
+   if (f != NULL) {
+      foreach_in_list(ir_function_signature, sig, &f->signatures) {
+         if (sig->is_builtin() && !sig->is_builtin_available(state))
+            continue;
+         return true;
+      }
+   }
+   return false;
+}
+
 static void
 print_function_prototypes(_mesa_glsl_parse_state *state, YYLTYPE *loc,
                           ir_function *f)
@@ -774,9 +835,9 @@ no_matching_function_error(const char *name,
 {
    gl_shader *sh = _mesa_glsl_get_builtin_function_shader();
 
-   if (state->symbols->get_function(name) == NULL
+   if (!function_exists(state, state->symbols, name)
        && (!state->uses_builtin_functions
-           || sh->symbols->get_function(name) == NULL)) {
+           || !function_exists(state, sh->symbols, name))) {
       _mesa_glsl_error(loc, state, "no function with name '%s'", name);
    } else {
       char *str = prototype_string(NULL, name, actual_parameters);
@@ -2090,8 +2151,8 @@ ast_function_expression::hir(exec_list *instructions,
       }
 
       if (constructor_type->is_array()) {
-         if (!state->check_version(120, 300, &loc,
-                                   "array constructors forbidden")) {
+         if (!state->check_version(state->allow_glsl_120_subset_in_110 ? 110 : 120,
+                                   300, &loc, "array constructors forbidden")) {
             return ir_rvalue::error_value(ctx);
          }
 
@@ -2114,7 +2175,7 @@ ast_function_expression::hir(exec_list *instructions,
        * must have the exact number of arguments with matching types in the
        * correct order.
        */
-      if (constructor_type->is_record()) {
+      if (constructor_type->is_struct()) {
          return process_record_constructor(instructions, constructor_type,
                                            &loc, &this->expressions,
                                            state);
@@ -2383,23 +2444,51 @@ ast_function_expression::hir(exec_list *instructions,
                                         new(ctx) ir_dereference_variable(mvp),
                                         new(ctx) ir_dereference_variable(vtx));
       } else {
-         if (state->stage == MESA_SHADER_TESS_CTRL &&
-             sig->is_builtin() && strcmp(func_name, "barrier") == 0) {
+         bool is_begin_interlock = false;
+         bool is_end_interlock = false;
+         if (sig->is_builtin() &&
+             state->stage == MESA_SHADER_FRAGMENT &&
+             state->ARB_fragment_shader_interlock_enable) {
+            is_begin_interlock = strcmp(func_name, "beginInvocationInterlockARB") == 0;
+            is_end_interlock = strcmp(func_name, "endInvocationInterlockARB") == 0;
+         }
+
+         if (sig->is_builtin() &&
+             ((state->stage == MESA_SHADER_TESS_CTRL &&
+               strcmp(func_name, "barrier") == 0) ||
+              is_begin_interlock || is_end_interlock)) {
             if (state->current_function == NULL ||
                 strcmp(state->current_function->function_name(), "main") != 0) {
                _mesa_glsl_error(&loc, state,
-                                "barrier() may only be used in main()");
+                                "%s() may only be used in main()", func_name);
             }
 
             if (state->found_return) {
                _mesa_glsl_error(&loc, state,
-                                "barrier() may not be used after return");
+                                "%s() may not be used after return", func_name);
             }
 
             if (instructions != &state->current_function->body) {
                _mesa_glsl_error(&loc, state,
-                                "barrier() may not be used in control flow");
+                                "%s() may not be used in control flow", func_name);
             }
+         }
+
+         /* There can be only one begin/end interlock pair in the function. */
+         if (is_begin_interlock) {
+            if (state->found_begin_interlock)
+               _mesa_glsl_error(&loc, state,
+                                "beginInvocationInterlockARB may not be used twice");
+            state->found_begin_interlock = true;
+         } else if (is_end_interlock) {
+            if (!state->found_begin_interlock)
+               _mesa_glsl_error(&loc, state,
+                                "endInvocationInterlockARB may not be used "
+                                "before beginInvocationInterlockARB");
+            if (state->found_end_interlock)
+               _mesa_glsl_error(&loc, state,
+                                "endInvocationInterlockARB may not be used twice");
+            state->found_end_interlock = true;
          }
 
          value = generate_call(instructions, sig, &actual_parameters, sub_var,
@@ -2454,7 +2543,7 @@ ast_aggregate_initializer::hir(exec_list *instructions,
                                        &this->expressions, state);
    }
 
-   if (constructor_type->is_record()) {
+   if (constructor_type->is_struct()) {
       return process_record_constructor(instructions, constructor_type, &loc,
                                         &this->expressions, state);
    }

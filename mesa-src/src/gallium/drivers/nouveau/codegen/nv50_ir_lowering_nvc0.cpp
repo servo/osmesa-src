@@ -51,12 +51,12 @@ NVC0LegalizeSSA::handleDIV(Instruction *i)
    // Generate movs to the input regs for the call we want to generate
    for (int s = 0; i->srcExists(s); ++s) {
       Instruction *ld = i->getSrc(s)->getInsn();
-      assert(ld->getSrc(0) != NULL);
       // check if we are moving an immediate, propagate it in that case
       if (!ld || ld->fixed || (ld->op != OP_LOAD && ld->op != OP_MOV) ||
             !(ld->src(0).getFile() == FILE_IMMEDIATE))
          bld.mkMovToReg(s, i->getSrc(s));
       else {
+         assert(ld->getSrc(0) != NULL);
          bld.mkMovToReg(s, ld->getSrc(0));
          // Clear the src, to make code elimination possible here before we
          // delete the instruction i later
@@ -84,6 +84,38 @@ NVC0LegalizeSSA::handleDIV(Instruction *i)
 }
 
 void
+NVC0LegalizeSSA::handleRCPRSQLib(Instruction *i, Value *src[])
+{
+   FlowInstruction *call;
+   Value *def[2];
+   int builtin;
+
+   def[0] = bld.mkMovToReg(0, src[0])->getDef(0);
+   def[1] = bld.mkMovToReg(1, src[1])->getDef(0);
+
+   if (i->op == OP_RCP)
+      builtin = NVC0_BUILTIN_RCP_F64;
+   else
+      builtin = NVC0_BUILTIN_RSQ_F64;
+
+   call = bld.mkFlow(OP_CALL, NULL, CC_ALWAYS, NULL);
+   def[0] = bld.getSSA();
+   def[1] = bld.getSSA();
+   bld.mkMovFromReg(def[0], 0);
+   bld.mkMovFromReg(def[1], 1);
+   bld.mkClobber(FILE_GPR, 0x3fc, 2);
+   bld.mkClobber(FILE_PREDICATE, i->op == OP_RSQ ? 0x3 : 0x1, 0);
+   bld.mkOp2(OP_MERGE, TYPE_U64, i->getDef(0), def[0], def[1]);
+
+   call->fixed = 1;
+   call->absolute = call->builtin = 1;
+   call->target.builtin = builtin;
+   delete_Instruction(prog, i);
+
+   prog->fp64 = true;
+}
+
+void
 NVC0LegalizeSSA::handleRCPRSQ(Instruction *i)
 {
    assert(i->dType == TYPE_F64);
@@ -95,6 +127,12 @@ NVC0LegalizeSSA::handleRCPRSQ(Instruction *i)
    // 1. Take the source and it up.
    Value *src[2], *dst[2], *def = i->getDef(0);
    bld.mkSplit(src, 4, i->getSrc(0));
+
+   int chip = prog->getTarget()->getChipset();
+   if (chip >= NVISA_GK104_CHIPSET) {
+      handleRCPRSQLib(i, src);
+      return;
+   }
 
    // 2. We don't care about the low 32 bits of the destination. Stick a 0 in.
    dst[0] = bld.loadImm(NULL, 0);
@@ -272,6 +310,14 @@ NVC0LegalizeSSA::handleSET(CmpInstruction *cmp)
    cmp->sType = hTy;
 }
 
+void
+NVC0LegalizeSSA::handleBREV(Instruction *i)
+{
+   i->op = OP_EXTBF;
+   i->subOp = NV50_IR_SUBOP_EXTBF_REV;
+   i->setSrc(1, bld.mkImm(0x2000));
+}
+
 bool
 NVC0LegalizeSSA::visit(Function *fn)
 {
@@ -315,6 +361,9 @@ NVC0LegalizeSSA::visit(BasicBlock *bb)
       case OP_SET_XOR:
          if (typeSizeof(i->sType) == 8 && i->sType != TYPE_F64)
             handleSET(i->asCmp());
+         break;
+      case OP_BREV:
+         handleBREV(i);
          break;
       default:
          break;
@@ -719,6 +768,66 @@ NVC0LegalizePostRA::propagateJoin(BasicBlock *bb)
    bb->remove(bb->getEntry());
 }
 
+// replaces instructions which would end up as f2f or i2i with faster
+// alternatives:
+//  - fabs(a)     -> fadd(0, abs a)
+//  - fneg(a)     -> fadd(neg 0, neg a)
+//  - ineg(a)     -> iadd(0, neg a)
+//  - fneg(abs a) -> fadd(neg 0, neg abs a)
+//  - sat(a)      -> sat add(0, a)
+void
+NVC0LegalizePostRA::replaceCvt(Instruction *cvt)
+{
+   if (!isFloatType(cvt->sType) && typeSizeof(cvt->sType) != 4)
+      return;
+   if (cvt->sType != cvt->dType)
+      return;
+   // we could make it work, but in this case we have optimizations disabled
+   // and we don't really care either way.
+   if (cvt->src(0).getFile() != FILE_GPR &&
+       cvt->src(0).getFile() != FILE_MEMORY_CONST)
+      return;
+
+   Modifier mod0, mod1;
+
+   switch (cvt->op) {
+   case OP_ABS:
+      if (cvt->src(0).mod)
+         return;
+      if (!isFloatType(cvt->sType))
+         return;
+      mod0 = 0;
+      mod1 = NV50_IR_MOD_ABS;
+      break;
+   case OP_NEG:
+      if (!isFloatType(cvt->sType) && cvt->src(0).mod)
+         return;
+      if (isFloatType(cvt->sType) &&
+          (cvt->src(0).mod && cvt->src(0).mod != Modifier(NV50_IR_MOD_ABS)))
+         return;
+
+      mod0 = isFloatType(cvt->sType) ? NV50_IR_MOD_NEG : 0;
+      mod1 = cvt->src(0).mod == Modifier(NV50_IR_MOD_ABS) ?
+         NV50_IR_MOD_NEG_ABS : NV50_IR_MOD_NEG;
+      break;
+   case OP_SAT:
+      if (!isFloatType(cvt->sType) && cvt->src(0).mod.abs())
+         return;
+      mod0 = 0;
+      mod1 = cvt->src(0).mod;
+      cvt->saturate = true;
+      break;
+   default:
+      return;
+   }
+
+   cvt->op = OP_ADD;
+   cvt->moveSources(0, 1);
+   cvt->setSrc(0, rZero);
+   cvt->src(0).mod = mod0;
+   cvt->src(1).mod = mod1;
+}
+
 bool
 NVC0LegalizePostRA::visit(BasicBlock *bb)
 {
@@ -760,6 +869,9 @@ NVC0LegalizePostRA::visit(BasicBlock *bb)
 
          if (i->op != OP_MOV && i->op != OP_PFETCH)
             replaceZero(i);
+
+         if (i->op == OP_SAT || i->op == OP_NEG || i->op == OP_ABS)
+            replaceCvt(i);
       }
    }
    if (!bb->getEntry())
@@ -786,6 +898,8 @@ NVC0LoweringPass::visit(Function *fn)
       gpEmitAddress = bld.loadImm(NULL, 0)->asLValue();
       if (fn->cfgExit) {
          bld.setPosition(BasicBlock::get(fn->cfgExit)->getExit(), false);
+         if (prog->getTarget()->getChipset() >= NVISA_GV100_CHIPSET)
+            bld.mkOp1(OP_FINAL, TYPE_NONE, NULL, gpEmitAddress)->fixed = 1;
          bld.mkMovToReg(0, gpEmitAddress);
       }
    }
@@ -1060,22 +1174,6 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
          } else {
             i->setSrc(s, bld.loadImm(NULL, imm));
          }
-      }
-   }
-
-   if (chipset >= NVISA_GK104_CHIPSET) {
-      //
-      // If TEX requires more than 4 sources, the 2nd register tuple must be
-      // aligned to 4, even if it consists of just a single 4-byte register.
-      //
-      // XXX HACK: We insert 0 sources to avoid the 5 or 6 regs case.
-      //
-      int s = i->srcCount(0xff, true);
-      if (s > 4 && s < 7) {
-         if (i->srcExists(s)) // move potential predicate out of the way
-            i->moveSources(s, 7 - s);
-         while (s < 7)
-            i->setSrc(s++, bld.loadImm(NULL, 0));
       }
    }
 
@@ -1560,6 +1658,8 @@ NVC0LoweringPass::handleATOM(Instruction *atom)
       else if (targ->getChipset() < NVISA_GM107_CHIPSET)
          handleSharedATOMNVE4(atom);
       return true;
+   case FILE_MEMORY_GLOBAL:
+      return true;
    default:
       assert(atom->src(0).getFile() == FILE_MEMORY_BUFFER);
       base = loadBufInfo64(ind, atom->getSrc(0)->reg.fileIndex * 16);
@@ -1627,7 +1727,8 @@ NVC0LoweringPass::handleCasExch(Instruction *cas, bool needCctl)
          cctl->setPredicate(cas->cc, cas->getPredicate());
    }
 
-   if (cas->subOp == NV50_IR_SUBOP_ATOM_CAS) {
+   if (cas->subOp == NV50_IR_SUBOP_ATOM_CAS &&
+       targ->getChipset() < NVISA_GV100_CHIPSET) {
       // CAS is crazy. It's 2nd source is a double reg, and the 3rd source
       // should be set to the high part of the double reg or bad things will
       // happen elsewhere in the universe.
@@ -1716,6 +1817,9 @@ inline Value *
 NVC0LoweringPass::loadSuInfo32(Value *ptr, int slot, uint32_t off, bool bindless)
 {
    uint32_t base = slot * NVC0_SU_INFO__STRIDE;
+
+   // We don't upload surface info for bindless for GM107+
+   assert(!bindless || targ->getChipset() < NVISA_GM107_CHIPSET);
 
    if (ptr) {
       ptr = bld.mkOp2v(OP_ADD, TYPE_U32, bld.getSSA(), ptr, bld.mkImm(slot));
@@ -1887,7 +1991,8 @@ NVC0LoweringPass::processSurfaceCoordsNVE4(TexInstruction *su)
       su->op == OP_SULDB || su->op == OP_SUSTB || su->op == OP_SUREDB;
    const int slot = su->tex.r;
    const int dim = su->tex.target.getDim();
-   const int arg = dim + (su->tex.target.isArray() || su->tex.target.isCube());
+   const bool array = su->tex.target.isArray() || su->tex.target.isCube();
+   const int arg = dim + array;
    int c;
    Value *zero = bld.mkImm(0);
    Value *p1 = NULL;
@@ -1896,6 +2001,7 @@ NVC0LoweringPass::processSurfaceCoordsNVE4(TexInstruction *su)
    Value *bf, *eau, *off;
    Value *addr, *pred;
    Value *ind = su->getIndirectR();
+   Value *y, *z;
 
    off = bld.getScratch(4);
    bf = bld.getScratch(4);
@@ -1926,34 +2032,42 @@ NVC0LoweringPass::processSurfaceCoordsNVE4(TexInstruction *su)
    for (; c < 3; ++c)
       src[c] = zero;
 
+   if (dim == 2 && !array) {
+      v = loadSuInfo32(ind, slot, NVC0_SU_INFO_UNK1C, su->tex.bindless);
+      src[2] = bld.mkOp2v(OP_SHR, TYPE_U32, bld.getSSA(),
+                          v, bld.loadImm(NULL, 16));
+
+      v = loadSuInfo32(ind, slot, NVC0_SU_INFO_DIM(2), su->tex.bindless);
+      bld.mkOp3(OP_SUCLAMP, TYPE_S32, src[2], src[2], v, zero)
+         ->subOp = NV50_IR_SUBOP_SUCLAMP_SD(0, 2);
+   }
+
    // set predicate output
    if (su->tex.target == TEX_TARGET_BUFFER) {
       src[0]->getInsn()->setFlagsDef(1, pred);
    } else
-   if (su->tex.target.isArray() || su->tex.target.isCube()) {
+   if (array) {
       p1 = bld.getSSA(1, FILE_PREDICATE);
       src[dim]->getInsn()->setFlagsDef(1, p1);
    }
 
    // calculate pixel offset
    if (dim == 1) {
+      y = z = zero;
       if (su->tex.target != TEX_TARGET_BUFFER)
          bld.mkOp2(OP_AND, TYPE_U32, off, src[0], bld.loadImm(NULL, 0xffff));
-   } else
-   if (dim == 3) {
+   } else {
+      y = src[1];
+      z = src[2];
+
       v = loadSuInfo32(ind, slot, NVC0_SU_INFO_UNK1C, su->tex.bindless);
       bld.mkOp3(OP_MADSP, TYPE_U32, off, src[2], v, src[1])
-         ->subOp = NV50_IR_SUBOP_MADSP(4,2,8); // u16l u16l u16l
+         ->subOp = NV50_IR_SUBOP_MADSP(4,4,8); // u16l u16l u16l
 
       v = loadSuInfo32(ind, slot, NVC0_SU_INFO_PITCH, su->tex.bindless);
       bld.mkOp3(OP_MADSP, TYPE_U32, off, off, v, src[0])
-         ->subOp = NV50_IR_SUBOP_MADSP(0,2,8); // u32 u16l u16l
-   } else {
-      assert(dim == 2);
-      v = loadSuInfo32(ind, slot, NVC0_SU_INFO_PITCH, su->tex.bindless);
-      bld.mkOp3(OP_MADSP, TYPE_U32, off, src[1], v, src[0])
-         ->subOp = (su->tex.target.isArray() || su->tex.target.isCube()) ?
-         NV50_IR_SUBOP_MADSP_SD : NV50_IR_SUBOP_MADSP(4,2,8); // u16l u16l u16l
+         ->subOp = array ?
+         NV50_IR_SUBOP_MADSP_SD : NV50_IR_SUBOP_MADSP(0,2,8); // u32 u16l u16l
    }
 
    // calculate effective address part 1
@@ -1966,19 +2080,15 @@ NVC0LoweringPass::processSurfaceCoordsNVE4(TexInstruction *su)
             ->subOp = NV50_IR_SUBOP_V1(7,6,8|2);
       }
    } else {
-      Value *y = src[1];
-      Value *z = src[2];
       uint16_t subOp = 0;
 
       switch (dim) {
       case 1:
-         y = zero;
-         z = zero;
          break;
       case 2:
-         z = off;
-         if (!su->tex.target.isArray() && !su->tex.target.isCube()) {
-            z = loadSuInfo32(ind, slot, NVC0_SU_INFO_UNK1C, su->tex.bindless);
+         if (array) {
+            z = off;
+         } else {
             subOp = NV50_IR_SUBOP_SUBFM_3D;
          }
          break;
@@ -2001,7 +2111,7 @@ NVC0LoweringPass::processSurfaceCoordsNVE4(TexInstruction *su)
       eau = bld.mkOp3v(OP_SUEAU, TYPE_U32, bld.getScratch(4), off, bf, v);
    }
    // add array layer offset
-   if (su->tex.target.isArray() || su->tex.target.isCube()) {
+   if (array) {
       v = loadSuInfo32(ind, slot, NVC0_SU_INFO_ARRAY, su->tex.bindless);
       if (dim == 1)
          bld.mkOp3(OP_MADSP, TYPE_U32, eau, src[1], v, eau)
@@ -2113,7 +2223,7 @@ getDestType(const ImgType type) {
 }
 
 void
-NVC0LoweringPass::convertSurfaceFormat(TexInstruction *su)
+NVC0LoweringPass::convertSurfaceFormat(TexInstruction *su, Instruction **loaded)
 {
    const TexInstruction::ImgFormatDesc *format = su->tex.format;
    int width = format->bits[0] + format->bits[1] +
@@ -2132,21 +2242,38 @@ NVC0LoweringPass::convertSurfaceFormat(TexInstruction *su)
    if (width < 32)
       untypedDst[0] = bld.getSSA();
 
-   for (int i = 0; i < 4; i++) {
-      typedDst[i] = su->getDef(i);
+   if (loaded && loaded[0]) {
+      for (int i = 0; i < 4; i++) {
+         if (loaded[i])
+            typedDst[i] = loaded[i]->getDef(0);
+      }
+   } else {
+      for (int i = 0; i < 4; i++) {
+         typedDst[i] = su->getDef(i);
+      }
    }
 
    // Set the untyped dsts as the su's destinations
-   for (int i = 0; i < 4; i++)
-      su->setDef(i, untypedDst[i]);
+   if (loaded && loaded[0]) {
+      for (int i = 0; i < 4; i++)
+         if (loaded[i])
+            loaded[i]->setDef(0, untypedDst[i]);
+   } else {
+      for (int i = 0; i < 4; i++)
+         su->setDef(i, untypedDst[i]);
 
-   bld.setPosition(su, true);
+      bld.setPosition(su, true);
+   }
 
    // Unpack each component into the typed dsts
    int bits = 0;
    for (int i = 0; i < 4; bits += format->bits[i], i++) {
       if (!typedDst[i])
          continue;
+
+      if (loaded && loaded[0])
+         bld.setPosition(loaded[i], true);
+
       if (i >= format->components) {
          if (format->type == FLOAT ||
              format->type == UNORM ||
@@ -2217,7 +2344,7 @@ NVC0LoweringPass::handleSurfaceOpNVE4(TexInstruction *su)
    processSurfaceCoordsNVE4(su);
 
    if (su->op == OP_SULDP) {
-      convertSurfaceFormat(su);
+      convertSurfaceFormat(su, NULL);
       insertOOBSurfaceOpResult(su);
    }
 
@@ -2330,7 +2457,7 @@ NVC0LoweringPass::handleSurfaceOpNVC0(TexInstruction *su)
    processSurfaceCoordsNVC0(su);
 
    if (su->op == OP_SULDP) {
-      convertSurfaceFormat(su);
+      convertSurfaceFormat(su, NULL);
       insertOOBSurfaceOpResult(su);
    }
 
@@ -2372,14 +2499,16 @@ NVC0LoweringPass::handleSurfaceOpNVC0(TexInstruction *su)
    }
 }
 
-void
-NVC0LoweringPass::processSurfaceCoordsGM107(TexInstruction *su)
+TexInstruction *
+NVC0LoweringPass::processSurfaceCoordsGM107(TexInstruction *su, Instruction *ret[4])
 {
    const int slot = su->tex.r;
    const int dim = su->tex.target.getDim();
-   const int arg = dim + (su->tex.target.isArray() || su->tex.target.isCube());
+   const bool array = su->tex.target.isArray() || su->tex.target.isCube();
+   const int arg = dim + array;
    Value *ind = su->getIndirectR();
    Value *handle;
+   Instruction *pred = NULL, *pred2d = NULL;
    int pos = 0;
 
    bld.setPosition(su, false);
@@ -2398,67 +2527,153 @@ NVC0LoweringPass::processSurfaceCoordsGM107(TexInstruction *su)
       assert(pos == 0);
       break;
    }
+
+   if (dim == 2 && !array) {
+      // This might be a 2d slice of a 3d texture, try to load the z
+      // coordinate in.
+      Value *v;
+      if (!su->tex.bindless)
+         v = loadSuInfo32(ind, slot, NVC0_SU_INFO_UNK1C, su->tex.bindless);
+      else
+         v = bld.mkOp2v(OP_SHR, TYPE_U32, bld.getSSA(), ind, bld.mkImm(11));
+      Value *is_3d = bld.mkOp2v(OP_AND, TYPE_U32, bld.getSSA(), v, bld.mkImm(1));
+      pred2d = bld.mkCmp(OP_SET, CC_EQ, TYPE_U32, bld.getSSA(1, FILE_PREDICATE),
+                         TYPE_U32, bld.mkImm(0), is_3d);
+
+      bld.mkOp2(OP_SHR, TYPE_U32, v, v, bld.loadImm(NULL, 16));
+      su->moveSources(dim, 1);
+      su->setSrc(dim, v);
+      su->tex.target = nv50_ir::TEX_TARGET_3D;
+      pos++;
+   }
+
    if (su->tex.bindless)
-      handle = ind;
+      handle = bld.mkOp2v(OP_AND, TYPE_U32, bld.getSSA(), ind, bld.mkImm(2047));
    else
       handle = loadTexHandle(ind, slot + 32);
+
    su->setSrc(arg + pos, handle);
 
    // The address check doesn't make sense here. The format check could make
    // sense but it's a bit of a pain.
-   if (su->tex.bindless)
-      return;
+   if (!su->tex.bindless) {
+      // prevent read fault when the image is not actually bound
+      pred =
+         bld.mkCmp(OP_SET, CC_EQ, TYPE_U32, bld.getSSA(1, FILE_PREDICATE),
+                   TYPE_U32, bld.mkImm(0),
+                   loadSuInfo32(ind, slot, NVC0_SU_INFO_ADDR, su->tex.bindless));
+      if (su->op != OP_SUSTP && su->tex.format) {
+         const TexInstruction::ImgFormatDesc *format = su->tex.format;
+         int blockwidth = format->bits[0] + format->bits[1] +
+            format->bits[2] + format->bits[3];
 
-   // prevent read fault when the image is not actually bound
-   CmpInstruction *pred =
-      bld.mkCmp(OP_SET, CC_EQ, TYPE_U32, bld.getSSA(1, FILE_PREDICATE),
-                TYPE_U32, bld.mkImm(0),
-                loadSuInfo32(ind, slot, NVC0_SU_INFO_ADDR, su->tex.bindless));
-   if (su->op != OP_SUSTP && su->tex.format) {
-      const TexInstruction::ImgFormatDesc *format = su->tex.format;
-      int blockwidth = format->bits[0] + format->bits[1] +
-                       format->bits[2] + format->bits[3];
-
-      assert(format->components != 0);
-      // make sure that the format doesn't mismatch when it's not FMT_NONE
-      bld.mkCmp(OP_SET_OR, CC_NE, TYPE_U32, pred->getDef(0),
-                TYPE_U32, bld.loadImm(NULL, blockwidth / 8),
-                loadSuInfo32(ind, slot, NVC0_SU_INFO_BSIZE, su->tex.bindless),
-                pred->getDef(0));
+         assert(format->components != 0);
+         // make sure that the format doesn't mismatch when it's not FMT_NONE
+         bld.mkCmp(OP_SET_OR, CC_NE, TYPE_U32, pred->getDef(0),
+                   TYPE_U32, bld.loadImm(NULL, blockwidth / 8),
+                   loadSuInfo32(ind, slot, NVC0_SU_INFO_BSIZE, su->tex.bindless),
+                   pred->getDef(0));
+      }
    }
-   su->setPredicate(CC_NOT_P, pred->getDef(0));
+
+   // Now we have "pred" which (optionally) contains whether to do the surface
+   // op at all, and a "pred2d" which indicates that, in case of doing the
+   // surface op, we have to create a 2d and 3d version, conditioned on pred2d.
+   TexInstruction *su2d = NULL;
+   if (pred2d) {
+      su2d = cloneForward(func, su)->asTex();
+      for (unsigned i = 0; su->defExists(i); ++i)
+         su2d->setDef(i, bld.getSSA());
+      su2d->moveSources(dim + 1, -1);
+      su2d->tex.target = nv50_ir::TEX_TARGET_2D;
+   }
+   if (pred2d && pred) {
+      Instruction *pred3d = bld.mkOp2(OP_AND, TYPE_U8,
+                                      bld.getSSA(1, FILE_PREDICATE),
+                                      pred->getDef(0), pred2d->getDef(0));
+      pred3d->src(0).mod = Modifier(NV50_IR_MOD_NOT);
+      pred3d->src(1).mod = Modifier(NV50_IR_MOD_NOT);
+      su->setPredicate(CC_P, pred3d->getDef(0));
+      pred2d = bld.mkOp2(OP_AND, TYPE_U8, bld.getSSA(1, FILE_PREDICATE),
+                         pred->getDef(0), pred2d->getDef(0));
+      pred2d->src(0).mod = Modifier(NV50_IR_MOD_NOT);
+   } else if (pred) {
+      su->setPredicate(CC_NOT_P, pred->getDef(0));
+   } else if (pred2d) {
+      su->setPredicate(CC_NOT_P, pred2d->getDef(0));
+   }
+   if (su2d) {
+      su2d->setPredicate(CC_P, pred2d->getDef(0));
+      bld.insert(su2d);
+
+      // Create a UNION so that RA assigns the same registers
+      bld.setPosition(su, true);
+      for (unsigned i = 0; su->defExists(i); ++i) {
+         assert(i < 4);
+
+         ValueDef &def = su->def(i);
+         ValueDef &def2 = su2d->def(i);
+         Instruction *mov = NULL;
+
+         if (pred) {
+            mov = bld.mkMov(bld.getSSA(), bld.loadImm(NULL, 0));
+            mov->setPredicate(CC_P, pred->getDef(0));
+         }
+
+         Instruction *uni = ret[i] = bld.mkOp2(OP_UNION, TYPE_U32,
+                                      bld.getSSA(),
+                                      NULL, def2.get());
+         def.replace(uni->getDef(0), false);
+         uni->setSrc(0, def.get());
+         if (mov)
+            uni->setSrc(2, mov->getDef(0));
+      }
+   } else if (pred) {
+      // Create a UNION so that RA assigns the same registers
+      bld.setPosition(su, true);
+      for (unsigned i = 0; su->defExists(i); ++i) {
+         assert(i < 4);
+
+         ValueDef &def = su->def(i);
+
+         Instruction *mov = bld.mkMov(bld.getSSA(), bld.loadImm(NULL, 0));
+         mov->setPredicate(CC_P, pred->getDef(0));
+
+         Instruction *uni = ret[i] = bld.mkOp2(OP_UNION, TYPE_U32,
+                                      bld.getSSA(),
+                                      NULL, mov->getDef(0));
+         def.replace(uni->getDef(0), false);
+         uni->setSrc(0, def.get());
+      }
+   }
+
+   return su2d;
 }
 
 void
 NVC0LoweringPass::handleSurfaceOpGM107(TexInstruction *su)
 {
-   processSurfaceCoordsGM107(su);
+   // processSurfaceCoords also takes care of fixing up the outputs and
+   // union'ing them with 0 as necessary. Additionally it may create a second
+   // surface which needs some of the similar fixups.
+
+   Instruction *loaded[4] = {};
+   TexInstruction *su2 = processSurfaceCoordsGM107(su, loaded);
 
    if (su->op == OP_SULDP) {
-      convertSurfaceFormat(su);
-      insertOOBSurfaceOpResult(su);
+      convertSurfaceFormat(su, loaded);
    }
 
    if (su->op == OP_SUREDP) {
-      Value *def = su->getDef(0);
-
       su->op = OP_SUREDB;
+   }
 
-      // There may not be a predicate in the bindless case.
-      if (su->getPredicate()) {
-         su->setDef(0, bld.getSSA());
-
-         bld.setPosition(su, true);
-
-         // make sure to initialize dst value when the atomic operation is not
-         // performed
-         Instruction *mov = bld.mkMov(bld.getSSA(), bld.loadImm(NULL, 0));
-
-         assert(su->cc == CC_NOT_P);
-         mov->setPredicate(CC_P, su->getPredicate());
-
-         bld.mkOp2(OP_UNION, TYPE_U32, def, su->getDef(0), mov->getDef(0));
-      }
+   // If we fixed up the type of the regular surface load instruction, we also
+   // have to fix up the copy.
+   if (su2) {
+      su2->op = su->op;
+      su2->dType = su->dType;
+      su2->sType = su->sType;
    }
 }
 
@@ -2607,7 +2822,7 @@ NVC0LoweringPass::readTessCoord(LValue *dst, int c)
       y = dst;
    } else {
       assert(c == 2);
-      if (prog->driver->prop.tp.domain != PIPE_PRIM_TRIANGLES) {
+      if (prog->driver_out->prop.tp.domain != PIPE_PRIM_TRIANGLES) {
          bld.mkMov(dst, bld.loadImm(NULL, 0));
          return;
       }
@@ -2716,7 +2931,7 @@ NVC0LoweringPass::handleRDSV(Instruction *i)
       ld->subOp = NV50_IR_SUBOP_PIXLD_SAMPLEID;
       Value *offset = calculateSampleOffset(sampleID);
 
-      assert(prog->driver->prop.fp.readsSampleLocations);
+      assert(prog->driver_out->prop.fp.readsSampleLocations);
 
       if (targ->getChipset() >= NVISA_GM200_CHIPSET) {
          bld.mkLoad(TYPE_F32,
@@ -2750,7 +2965,7 @@ NVC0LoweringPass::handleRDSV(Instruction *i)
          bld.mkOp2v(OP_AND, TYPE_U32, bld.getSSA(), ld->getDef(0),
                     bld.mkOp2v(OP_SHL, TYPE_U32, bld.getSSA(),
                                bld.loadImm(NULL, 1), sampleid->getDef(0)));
-      if (prog->driver->prop.fp.persampleInvocation) {
+      if (prog->persampleInvocation) {
          bld.mkMov(i->getDef(0), masked);
       } else {
          bld.mkOp3(OP_SELP, TYPE_U32, i->getDef(0), ld->getDef(0), masked,
@@ -2951,7 +3166,7 @@ NVC0LoweringPass::handlePIXLD(Instruction *i)
    if (targ->getChipset() < NVISA_GM200_CHIPSET)
       return;
 
-   assert(prog->driver->prop.fp.readsSampleLocations);
+   assert(prog->driver_out->prop.fp.readsSampleLocations);
 
    bld.mkLoad(TYPE_F32,
               i->getDef(0),

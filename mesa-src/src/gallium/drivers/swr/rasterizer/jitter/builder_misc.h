@@ -51,6 +51,17 @@ Constant* C(const std::initializer_list<Ty>& constList)
 }
 
 template <typename Ty>
+Constant* C(const std::vector<Ty>& constList)
+{
+    std::vector<Constant*> vConsts;
+    for (auto i : constList)
+    {
+        vConsts.push_back(C((Ty)i));
+    }
+    return ConstantVector::get(vConsts);
+}
+
+template <typename Ty>
 Constant* CA(LLVMContext& ctx, ArrayRef<Ty> constList)
 {
     return ConstantDataArray::get(ctx, constList);
@@ -70,6 +81,9 @@ Constant* CInc(uint32_t base, uint32_t count)
 }
 
 Constant* PRED(bool pred);
+
+Value* VIMMED1(uint64_t i);
+Value* VIMMED1_16(uint64_t i);
 
 Value* VIMMED1(int i);
 Value* VIMMED1_16(int i);
@@ -104,11 +118,17 @@ Value* VPLANEPS(Value* vA, Value* vB, Value* vC, Value*& vX, Value*& vY);
 uint32_t IMMED(Value* i);
 int32_t  S_IMMED(Value* i);
 
-CallInst*
-          CALL(Value* Callee, const std::initializer_list<Value*>& args, const llvm::Twine& name = "");
+CallInst* CALL(Value* Callee, const std::initializer_list<Value*>& args, const llvm::Twine& name = "");
 CallInst* CALL(Value* Callee)
 {
+#if LLVM_VERSION_MAJOR >= 11
+    // Not a great idea - we loose type info (Function) calling CALL
+    // and then we recast it here. Good for now, but needs to be
+    // more clean - optimally just always CALL a Function
+    return CALLA(FunctionCallee(cast<Function>(Callee)));
+#else
     return CALLA(Callee);
+#endif
 }
 CallInst* CALL(Value* Callee, Value* arg);
 CallInst* CALL2(Value* Callee, Value* arg1, Value* arg2);
@@ -121,6 +141,28 @@ Value* VMASK(Value* mask);
 Value* VMASK_16(Value* mask);
 
 Value* VMOVMSK(Value* mask);
+
+//////////////////////////////////////////////////////////////////////////
+/// @brief Float / Fixed-point conversions
+//////////////////////////////////////////////////////////////////////////
+// Signed
+Value* VCVT_F32_FIXED_SI(Value*             vFloat,
+                         uint32_t           numIntBits,
+                         uint32_t           numFracBits,
+                         const llvm::Twine& name = "");
+Value* VCVT_FIXED_SI_F32(Value*             vFixed,
+                         uint32_t           numIntBits,
+                         uint32_t           numFracBits,
+                         const llvm::Twine& name = "");
+// Unsigned
+Value* VCVT_F32_FIXED_UI(Value*             vFloat,
+                         uint32_t           numIntBits,
+                         uint32_t           numFracBits,
+                         const llvm::Twine& name = "");
+Value* VCVT_FIXED_UI_F32(Value*             vFixed,
+                         uint32_t           numIntBits,
+                         uint32_t           numFracBits,
+                         const llvm::Twine& name = "");
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief functions that build IR to call x86 intrinsics directly, or

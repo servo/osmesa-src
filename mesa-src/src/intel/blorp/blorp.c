@@ -66,6 +66,7 @@ brw_blorp_surface_info_init(struct blorp_context *blorp,
                             unsigned int level, unsigned int layer,
                             enum isl_format format, bool is_render_target)
 {
+   memset(info, 0, sizeof(*info));
    assert(level < surf->surf->levels);
    assert(layer < MAX2(surf->surf->logical_level0_px.depth >> level,
                        surf->surf->logical_level0_px.array_len));
@@ -82,9 +83,6 @@ brw_blorp_surface_info_init(struct blorp_context *blorp,
    if (info->aux_usage != ISL_AUX_USAGE_NONE) {
       info->aux_surf = *surf->aux_surf;
       info->aux_addr = surf->aux_addr;
-      assert(level < info->aux_surf.levels);
-      assert(layer < MAX2(info->aux_surf.logical_level0_px.depth >> level,
-                          info->aux_surf.logical_level0_px.array_len));
    }
 
    info->clear_color = surf->clear_color;
@@ -165,7 +163,7 @@ brw_blorp_init_wm_prog_key(struct brw_wm_prog_key *wm_key)
    memset(wm_key, 0, sizeof(*wm_key));
    wm_key->nr_color_regions = 1;
    for (int i = 0; i < MAX_SAMPLERS; i++)
-      wm_key->tex.swizzles[i] = SWIZZLE_XYZW;
+      wm_key->base.tex.swizzles[i] = SWIZZLE_XYZW;
 }
 
 const unsigned *
@@ -182,7 +180,6 @@ blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
 
    memset(wm_prog_data, 0, sizeof(*wm_prog_data));
 
-   assert(exec_list_is_empty(&nir->uniforms));
    wm_prog_data->base.nr_params = 0;
    wm_prog_data->base.param = NULL;
 
@@ -192,8 +189,8 @@ blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
     */
    wm_prog_data->base.binding_table.texture_start = BLORP_TEXTURE_BT_INDEX;
 
-   nir = brw_preprocess_nir(compiler, nir);
-   nir_remove_dead_variables(nir, nir_var_shader_in);
+   brw_preprocess_nir(compiler, nir, NULL);
+   nir_remove_dead_variables(nir, nir_var_shader_in, NULL);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    if (blorp->compiler->devinfo->gen < 6) {
@@ -205,8 +202,8 @@ blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
 
    const unsigned *program =
       brw_compile_fs(compiler, blorp->driver_ctx, mem_ctx, wm_key,
-                     wm_prog_data, nir, NULL, -1, -1, -1, false, use_repclear,
-                     NULL, NULL);
+                     wm_prog_data, nir, -1, -1, -1, false, use_repclear,
+                     NULL, NULL, NULL);
 
    return program;
 }
@@ -221,7 +218,7 @@ blorp_compile_vs(struct blorp_context *blorp, void *mem_ctx,
    nir->options =
       compiler->glsl_compiler_options[MESA_SHADER_VERTEX].NirOptions;
 
-   nir = brw_preprocess_nir(compiler, nir);
+   brw_preprocess_nir(compiler, nir, NULL);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    vs_prog_data->inputs_read = nir->info.inputs_read;
@@ -229,13 +226,14 @@ blorp_compile_vs(struct blorp_context *blorp, void *mem_ctx,
    brw_compute_vue_map(compiler->devinfo,
                        &vs_prog_data->base.vue_map,
                        nir->info.outputs_written,
-                       nir->info.separate_shader);
+                       nir->info.separate_shader,
+                       1);
 
    struct brw_vs_prog_key vs_key = { 0, };
 
    const unsigned *program =
       brw_compile_vs(compiler, blorp->driver_ctx, mem_ctx,
-                     &vs_key, vs_prog_data, nir, -1, NULL);
+                     &vs_key, vs_prog_data, nir, -1, NULL, NULL);
 
    return program;
 }
@@ -247,9 +245,10 @@ struct blorp_sf_key {
 };
 
 bool
-blorp_ensure_sf_program(struct blorp_context *blorp,
+blorp_ensure_sf_program(struct blorp_batch *batch,
                         struct blorp_params *params)
 {
+   struct blorp_context *blorp = batch->blorp;
    const struct brw_wm_prog_data *wm_prog_data = params->wm_prog_data;
    assert(params->wm_prog_data);
 
@@ -276,7 +275,7 @@ blorp_ensure_sf_program(struct blorp_context *blorp,
    memcpy(key.key.interp_mode, wm_prog_data->interp_mode,
           sizeof(key.key.interp_mode));
 
-   if (blorp->lookup_shader(blorp, &key, sizeof(key),
+   if (blorp->lookup_shader(batch, &key, sizeof(key),
                             &params->sf_prog_kernel, &params->sf_prog_data))
       return true;
 
@@ -286,14 +285,15 @@ blorp_ensure_sf_program(struct blorp_context *blorp,
    unsigned program_size;
 
    struct brw_vue_map vue_map;
-   brw_compute_vue_map(blorp->compiler->devinfo, &vue_map, slots_valid, false);
+   brw_compute_vue_map(blorp->compiler->devinfo, &vue_map, slots_valid, false, 1);
 
    struct brw_sf_prog_data prog_data_tmp;
    program = brw_compile_sf(blorp->compiler, mem_ctx, &key.key,
                             &prog_data_tmp, &vue_map, &program_size);
 
    bool result =
-      blorp->upload_shader(blorp, &key, sizeof(key), program, program_size,
+      blorp->upload_shader(batch, MESA_SHADER_NONE,
+                           &key, sizeof(key), program, program_size,
                            (void *)&prog_data_tmp, sizeof(prog_data_tmp),
                            &params->sf_prog_kernel, &params->sf_prog_data);
 
@@ -365,5 +365,35 @@ blorp_hiz_op(struct blorp_batch *batch, struct blorp_surf *surf,
       params.num_samples = params.depth.surf.samples;
 
       batch->blorp->exec(batch, &params);
+   }
+}
+
+void
+blorp_hiz_stencil_op(struct blorp_batch *batch, struct blorp_surf *stencil,
+                     uint32_t level, uint32_t start_layer,
+                     uint32_t num_layers, enum isl_aux_op op)
+{
+   struct blorp_params params;
+   blorp_params_init(&params);
+
+   params.hiz_op = op;
+   params.full_surface_hiz_op = true;
+
+   for (uint32_t a = 0; a < num_layers; a++) {
+      const uint32_t layer = start_layer + a;
+
+         brw_blorp_surface_info_init(batch->blorp, &params.stencil, stencil, level,
+                                     layer, stencil->surf->format, true);
+         params.x1 = minify(params.stencil.surf.logical_level0_px.width,
+                            params.stencil.view.base_level);
+         params.y1 = minify(params.stencil.surf.logical_level0_px.height,
+                            params.stencil.view.base_level);
+         params.dst.surf.samples = params.stencil.surf.samples;
+         params.dst.surf.logical_level0_px =
+            params.stencil.surf.logical_level0_px;
+         params.dst.view = params.stencil.view;
+         params.num_samples = params.stencil.surf.samples;
+
+         batch->blorp->exec(batch, &params);
    }
 }

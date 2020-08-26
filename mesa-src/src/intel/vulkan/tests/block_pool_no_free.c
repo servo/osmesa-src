@@ -24,6 +24,7 @@
 #include <pthread.h>
 
 #include "anv_private.h"
+#include "test_common.h"
 
 #define NUM_THREADS 16
 #define BLOCKS_PER_THREAD 1024
@@ -33,8 +34,8 @@ struct job {
    pthread_t thread;
    unsigned id;
    struct anv_block_pool *pool;
-   uint32_t blocks[BLOCKS_PER_THREAD];
-   uint32_t back_blocks[BLOCKS_PER_THREAD];
+   int32_t blocks[BLOCKS_PER_THREAD];
+   int32_t back_blocks[BLOCKS_PER_THREAD];
 } jobs[NUM_THREADS];
 
 
@@ -46,33 +47,33 @@ static void *alloc_blocks(void *_job)
    int32_t block, *data;
 
    for (unsigned i = 0; i < BLOCKS_PER_THREAD; i++) {
-      block = anv_block_pool_alloc(job->pool, block_size);
-      data = job->pool->map + block;
+      block = anv_block_pool_alloc(job->pool, block_size, NULL);
+      data = anv_block_pool_map(job->pool, block, block_size);
       *data = block;
-      assert(block >= 0);
+      ASSERT(block >= 0);
       job->blocks[i] = block;
 
       block = anv_block_pool_alloc_back(job->pool, block_size);
-      data = job->pool->map + block;
+      data = anv_block_pool_map(job->pool, block, block_size);
       *data = block;
-      assert(block < 0);
+      ASSERT(block < 0);
       job->back_blocks[i] = -block;
    }
 
    for (unsigned i = 0; i < BLOCKS_PER_THREAD; i++) {
       block = job->blocks[i];
-      data = job->pool->map + block;
-      assert(*data == block);
+      data = anv_block_pool_map(job->pool, block, block_size);
+      ASSERT(*data == block);
 
       block = -job->back_blocks[i];
-      data = job->pool->map + block;
-      assert(*data == block);
+      data = anv_block_pool_map(job->pool, block, block_size);
+      ASSERT(*data == block);
    }
 
    return NULL;
 }
 
-static void validate_monotonic(uint32_t **blocks)
+static void validate_monotonic(int32_t **blocks)
 {
    /* A list of indices, one per thread */
    unsigned next[NUM_THREADS];
@@ -80,43 +81,44 @@ static void validate_monotonic(uint32_t **blocks)
 
    int highest = -1;
    while (true) {
-      /* First, we find which thread has the highest next element */
-      int thread_max = -1;
-      int max_thread_idx = -1;
+      /* First, we find which thread has the lowest next element */
+      int32_t thread_min = INT32_MAX;
+      int min_thread_idx = -1;
       for (unsigned i = 0; i < NUM_THREADS; i++) {
          if (next[i] >= BLOCKS_PER_THREAD)
             continue;
 
-         if (thread_max < blocks[i][next[i]]) {
-            thread_max = blocks[i][next[i]];
-            max_thread_idx = i;
+         if (thread_min > blocks[i][next[i]]) {
+            thread_min = blocks[i][next[i]];
+            min_thread_idx = i;
          }
       }
 
       /* The only way this can happen is if all of the next[] values are at
        * BLOCKS_PER_THREAD, in which case, we're done.
        */
-      if (thread_max == -1)
+      if (thread_min == INT32_MAX)
          break;
 
       /* That next element had better be higher than the previous highest */
-      assert(blocks[max_thread_idx][next[max_thread_idx]] > highest);
+      ASSERT(blocks[min_thread_idx][next[min_thread_idx]] > highest);
 
-      highest = blocks[max_thread_idx][next[max_thread_idx]];
-      next[max_thread_idx]++;
+      highest = blocks[min_thread_idx][next[min_thread_idx]];
+      next[min_thread_idx]++;
    }
 }
 
 static void run_test()
 {
-   struct anv_instance instance;
+   struct anv_physical_device physical_device = { };
    struct anv_device device = {
-      .instance = &instance,
+      .physical = &physical_device,
    };
    struct anv_block_pool pool;
 
    pthread_mutex_init(&device.mutex, NULL);
-   anv_block_pool_init(&pool, &device, 4096, 4096, 0);
+   anv_bo_cache_init(&device.bo_cache);
+   anv_block_pool_init(&pool, &device, 4096, 4096);
 
    for (unsigned i = 0; i < NUM_THREADS; i++) {
       jobs[i].pool = &pool;
@@ -128,7 +130,7 @@ static void run_test()
       pthread_join(jobs[i].thread, NULL);
 
    /* Validate that the block allocations were monotonic */
-   uint32_t *block_ptrs[NUM_THREADS];
+   int32_t *block_ptrs[NUM_THREADS];
    for (unsigned i = 0; i < NUM_THREADS; i++)
       block_ptrs[i] = jobs[i].blocks;
    validate_monotonic(block_ptrs);
@@ -142,7 +144,7 @@ static void run_test()
    pthread_mutex_destroy(&device.mutex);
 }
 
-int main(int argc, char **argv)
+int main(void)
 {
    for (unsigned i = 0; i < NUM_RUNS; i++)
       run_test();

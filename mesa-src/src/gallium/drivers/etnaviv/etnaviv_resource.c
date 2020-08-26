@@ -33,14 +33,11 @@
 #include "etnaviv_screen.h"
 #include "etnaviv_translate.h"
 
+#include "util/hash_table.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 
-#include <drm_fourcc.h>
-
-#ifndef DRM_FORMAT_MOD_INVALID
-#define DRM_FORMAT_MOD_INVALID ((1ULL<<56) - 1)
-#endif
+#include "drm-uapi/drm_fourcc.h"
 
 static enum etna_surface_layout modifier_to_layout(uint64_t modifier)
 {
@@ -87,13 +84,36 @@ etna_screen_resource_alloc_ts(struct pipe_screen *pscreen,
                               struct etna_resource *rsc)
 {
    struct etna_screen *screen = etna_screen(pscreen);
-   size_t rt_ts_size, ts_layer_stride, pixels;
+   size_t rt_ts_size, ts_layer_stride;
+   size_t ts_bits_per_tile, bytes_per_tile;
+   uint8_t ts_mode = TS_MODE_128B; /* only used by halti5 */
+   int8_t ts_compress_fmt;
 
    assert(!rsc->ts_bo);
 
-   /* TS only for level 0 -- XXX is this formula correct? */
-   pixels = rsc->levels[0].layer_stride / util_format_get_blocksize(rsc->base.format);
-   ts_layer_stride = align(pixels * screen->specs.bits_per_tile / 0x80,
+   /* pre-v4 compression is largely useless, so disable it when not wanted for MSAA
+    * v4 compression can be enabled everywhere without any known drawback,
+    * except that in-place resolve must go through a slower path
+    */
+   ts_compress_fmt = (screen->specs.v4_compression || rsc->base.nr_samples > 1) ?
+                      translate_ts_format(rsc->base.format) : -1;
+
+   if (screen->specs.halti >= 5) {
+      /* enable 256B ts mode with compression, as it improves performance
+       * the size of the resource might also determine if we want to use it or not
+       */
+      if (ts_compress_fmt >= 0)
+         ts_mode = TS_MODE_256B;
+
+      ts_bits_per_tile = 4;
+      bytes_per_tile = ts_mode == TS_MODE_256B ? 256 : 128;
+   } else {
+      ts_bits_per_tile = screen->specs.bits_per_tile;
+      bytes_per_tile = 64;
+   }
+
+   ts_layer_stride = align(DIV_ROUND_UP(rsc->levels[0].layer_stride,
+                                        bytes_per_tile * 8 / ts_bits_per_tile),
                            0x100 * screen->specs.pixel_pipes);
    rt_ts_size = ts_layer_stride * rsc->base.array_size;
    if (rt_ts_size == 0)
@@ -114,23 +134,18 @@ etna_screen_resource_alloc_ts(struct pipe_screen *pscreen,
    rsc->levels[0].ts_offset = 0;
    rsc->levels[0].ts_layer_stride = ts_layer_stride;
    rsc->levels[0].ts_size = rt_ts_size;
-
-   /* It is important to initialize the TS, as random pattern
-    * can result in crashes. Do this on the CPU as this only happens once
-    * per surface anyway and it's a small area, so it may not be worth
-    * queuing this to the GPU. */
-   void *ts_map = etna_bo_map(rt_ts);
-   memset(ts_map, screen->specs.ts_clear_value, rt_ts_size);
+   rsc->levels[0].ts_mode = ts_mode;
+   rsc->levels[0].ts_compress_fmt = ts_compress_fmt;
 
    return true;
 }
 
-static boolean
+static bool
 etna_screen_can_create_resource(struct pipe_screen *pscreen,
                                 const struct pipe_resource *templat)
 {
    struct etna_screen *screen = etna_screen(pscreen);
-   if (!translate_samples_to_xyscale(templat->nr_samples, NULL, NULL, NULL))
+   if (!translate_samples_to_xyscale(templat->nr_samples, NULL, NULL))
       return false;
 
    /* templat->bind is not set here, so we must use the minimum sizes */
@@ -158,6 +173,7 @@ setup_miptree(struct etna_resource *rsc, unsigned paddingX, unsigned paddingY,
 
       mip->width = width;
       mip->height = height;
+      mip->depth = depth;
       mip->padded_width = align(width * msaa_xscale, paddingX);
       mip->padded_height = align(height * msaa_yscale, paddingY);
       mip->stride = util_format_get_stride(prsc->format, mip->padded_width);
@@ -174,6 +190,15 @@ setup_miptree(struct etna_resource *rsc, unsigned paddingX, unsigned paddingY,
    }
 
    return size;
+}
+
+/* Is rs alignment needed? */
+static bool is_rs_align(struct etna_screen *screen,
+                        const struct pipe_resource *tmpl)
+{
+   return screen->specs.use_blt ? false : (
+      VIV_FEATURE(screen, chipMinorFeatures1, TEXTURE_HALIGN) ||
+      !etna_resource_sampler_only(tmpl));
 }
 
 /* Create a new resource object, using the given template info */
@@ -204,7 +229,7 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
    }
 
    int msaa_xscale = 1, msaa_yscale = 1;
-   if (!translate_samples_to_xyscale(nr_samples, &msaa_xscale, &msaa_yscale, NULL)) {
+   if (!translate_samples_to_xyscale(nr_samples, &msaa_xscale, &msaa_yscale)) {
       /* Number of samples not supported */
       return NULL;
    }
@@ -217,11 +242,9 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
        * resolve engine's width.  If not, we must not align resources used
        * only for textures. If this GPU uses the BLT engine, never do RS align.
        */
-      bool rs_align = screen->specs.use_blt ? false : (
-                         VIV_FEATURE(screen, chipMinorFeatures1, TEXTURE_HALIGN) ||
-                         !etna_resource_sampler_only(templat));
-      etna_layout_multiple(layout, screen->specs.pixel_pipes, rs_align, &paddingX,
-                           &paddingY, &halign);
+      etna_layout_multiple(layout, screen->specs.pixel_pipes,
+                           is_rs_align (screen, templat),
+                           &paddingX, &paddingY, &halign);
       assert(paddingX && paddingY);
    } else {
       /* Compressed textures are padded to their block size, but we don't have
@@ -230,17 +253,19 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
       paddingY = 1;
    }
 
-   if (!screen->specs.use_blt && templat->target != PIPE_BUFFER)
-      etna_adjust_rs_align(screen->specs.pixel_pipes, NULL, &paddingY);
+   if (!screen->specs.use_blt && templat->target != PIPE_BUFFER && layout == ETNA_LAYOUT_LINEAR)
+      paddingY = align(paddingY, ETNA_RS_HEIGHT_MASK + 1);
 
-   if (templat->bind & PIPE_BIND_SCANOUT) {
+   if (templat->bind & PIPE_BIND_SCANOUT && screen->ro->kms_fd >= 0) {
       struct pipe_resource scanout_templat = *templat;
       struct renderonly_scanout *scanout;
       struct winsys_handle handle;
 
       /* pad scanout buffer size to be compatible with the RS */
-      if (!screen->specs.use_blt && modifier == DRM_FORMAT_MOD_LINEAR)
-         etna_adjust_rs_align(screen->specs.pixel_pipes, &paddingX, &paddingY);
+      if (!screen->specs.use_blt && modifier == DRM_FORMAT_MOD_LINEAR) {
+         paddingX = align(paddingX, ETNA_RS_WIDTH_MASK + 1);
+         paddingY = align(paddingY, ETNA_RS_HEIGHT_MASK + 1);
+      }
 
       scanout_templat.width0 = align(scanout_templat.width0, paddingX);
       scanout_templat.height0 = align(scanout_templat.height0, paddingY);
@@ -275,7 +300,7 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
    rsc->halign = halign;
 
    pipe_reference_init(&rsc->base.reference, 1);
-   list_inithead(&rsc->list);
+   util_range_init(&rsc->valid_buffer_range);
 
    size = setup_miptree(rsc, paddingX, paddingY, msaa_xscale, msaa_yscale);
 
@@ -296,6 +321,12 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
       memset(map, 0, size);
    }
 
+   mtx_init(&rsc->lock, mtx_recursive);
+   rsc->pending_ctx = _mesa_set_create(NULL, _mesa_hash_pointer,
+                                       _mesa_key_pointer_equal);
+   if (!rsc->pending_ctx)
+      goto free_rsc;
+
    return &rsc->base;
 
 free_rsc:
@@ -308,53 +339,35 @@ etna_resource_create(struct pipe_screen *pscreen,
                      const struct pipe_resource *templat)
 {
    struct etna_screen *screen = etna_screen(pscreen);
+   unsigned layout = ETNA_LAYOUT_TILED;
 
-   /* Figure out what tiling to use -- for now, assume that texture cannot be linear.
-    * there is a capability LINEAR_TEXTURE_SUPPORT (supported on gc880 and
-    * gc2000 at least), but not sure how it works.
-    * Buffers always have LINEAR layout.
+   /* At this point we don't know if the resource will be used as a texture,
+    * render target, or both, because gallium sets the bits whenever possible
+    * This matters because on some GPUs (GC2000) there is no tiling that is
+    * compatible with both TE and PE.
+    *
+    * We expect that depth/stencil buffers will always be used by PE (rendering),
+    * and any other non-scanout resource will be used as a texture at some point,
+    * So allocate a render-compatible base buffer for scanout/depthstencil buffers,
+    * and a texture-compatible base buffer in other cases
+    *
     */
-   unsigned layout = ETNA_LAYOUT_LINEAR;
-   if (etna_resource_sampler_only(templat)) {
-      /* The buffer is only used for texturing, so create something
-       * directly compatible with the sampler.  Such a buffer can
-       * never be rendered to. */
-      layout = ETNA_LAYOUT_TILED;
-
-      if (util_format_is_compressed(templat->format))
-         layout = ETNA_LAYOUT_LINEAR;
-   } else if (templat->target != PIPE_BUFFER) {
-      bool want_multitiled = false;
-      bool want_supertiled = screen->specs.can_supertile;
-
-      /* When this GPU supports single-buffer rendering, don't ever enable
-       * multi-tiling. This replicates the blob behavior on GC3000.
-       */
-      if (!screen->specs.single_buffer)
-         want_multitiled = screen->specs.pixel_pipes > 1;
-
-      /* Keep single byte blocksized resources as tiled, since we
-       * are unable to use the RS blit to de-tile them. However,
-       * if they're used as a render target or depth/stencil, they
-       * must be multi-tiled for GPUs with multiple pixel pipes.
-       * Ignore depth/stencil here, but it is an error for a render
-       * target.
-       */
-      if (util_format_get_blocksize(templat->format) == 1 &&
-          !(templat->bind & PIPE_BIND_DEPTH_STENCIL)) {
-         assert(!(templat->bind & PIPE_BIND_RENDER_TARGET && want_multitiled));
-         want_multitiled = want_supertiled = false;
-      }
-
-      layout = ETNA_LAYOUT_BIT_TILE;
-      if (want_multitiled)
+   if (templat->bind & (PIPE_BIND_SCANOUT | PIPE_BIND_DEPTH_STENCIL)) {
+      if (screen->specs.pixel_pipes > 1 && !screen->specs.single_buffer)
          layout |= ETNA_LAYOUT_BIT_MULTI;
-      if (want_supertiled)
+      if (screen->specs.can_supertile)
          layout |= ETNA_LAYOUT_BIT_SUPER;
+   } else if (VIV_FEATURE(screen, chipMinorFeatures2, SUPERTILED_TEXTURE) &&
+              etna_resource_hw_tileable(screen->specs.use_blt, templat)) {
+      layout |= ETNA_LAYOUT_BIT_SUPER;
    }
 
-   if (templat->target == PIPE_TEXTURE_3D)
+   if ((templat->bind & PIPE_BIND_LINEAR) || /* linear base requested */
+       templat->target == PIPE_BUFFER || /* buffer always linear */
+       /* compressed textures don't use tiling, they have their own "tiles" */
+       util_format_is_compressed(templat->format)) {
       layout = ETNA_LAYOUT_LINEAR;
+   }
 
    /* modifier is only used for scanout surfaces, so safe to use LINEAR here */
    return etna_resource_alloc(pscreen, layout, DRM_FORMAT_MOD_LINEAR, templat);
@@ -369,7 +382,7 @@ enum modifier_priority {
    MODIFIER_PRIORITY_SUPER_TILED,
 };
 
-const uint64_t priority_to_modifier[] = {
+static const uint64_t priority_to_modifier[] = {
    [MODIFIER_PRIORITY_INVALID] = DRM_FORMAT_MOD_INVALID,
    [MODIFIER_PRIORITY_LINEAR] = DRM_FORMAT_MOD_LINEAR,
    [MODIFIER_PRIORITY_SPLIT_TILED] = DRM_FORMAT_MOD_VIVANTE_SPLIT_TILED,
@@ -437,25 +450,24 @@ etna_resource_create_modifiers(struct pipe_screen *pscreen,
     */
    tmpl.bind |= PIPE_BIND_SCANOUT;
 
-   return etna_resource_alloc(pscreen, modifier_to_layout(modifier),
-                              modifier, &tmpl);
+   return etna_resource_alloc(pscreen, modifier_to_layout(modifier), modifier, &tmpl);
 }
 
 static void
 etna_resource_changed(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 {
-   struct etna_resource *res = etna_resource(prsc);
-
-   if (res->external)
-      etna_resource(res->external)->seqno++;
-   else
-      res->seqno++;
+   etna_resource(prsc)->seqno++;
 }
 
 static void
 etna_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 {
    struct etna_resource *rsc = etna_resource(prsc);
+
+   mtx_lock(&rsc->lock);
+   assert(!_mesa_set_next_entry(rsc->pending_ctx, NULL));
+   _mesa_set_destroy(rsc->pending_ctx, NULL);
+   mtx_unlock(&rsc->lock);
 
    if (rsc->bo)
       etna_bo_del(rsc->bo);
@@ -466,10 +478,15 @@ etna_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
    if (rsc->scanout)
       renderonly_scanout_destroy(rsc->scanout, etna_screen(pscreen)->ro);
 
-   list_delinit(&rsc->list);
+   util_range_destroy(&rsc->valid_buffer_range);
 
    pipe_resource_reference(&rsc->texture, NULL);
-   pipe_resource_reference(&rsc->external, NULL);
+   pipe_resource_reference(&rsc->render, NULL);
+
+   for (unsigned i = 0; i < ETNA_NUM_LOD; i++)
+      FREE(rsc->levels[i].patch_offsets);
+
+   mtx_destroy(&rsc->lock);
 
    FREE(rsc);
 }
@@ -483,7 +500,6 @@ etna_resource_from_handle(struct pipe_screen *pscreen,
    struct etna_resource *rsc;
    struct etna_resource_level *level;
    struct pipe_resource *prsc;
-   struct pipe_resource *ptiled = NULL;
 
    DBG("target=%d, format=%s, %ux%ux%u, array_size=%u, last_level=%u, "
        "nr_samples=%u, usage=%u, bind=%x, flags=%x",
@@ -501,7 +517,7 @@ etna_resource_from_handle(struct pipe_screen *pscreen,
    *prsc = *tmpl;
 
    pipe_reference_init(&prsc->reference, 1);
-   list_inithead(&rsc->list);
+   util_range_init(&rsc->valid_buffer_range);
    prsc->screen = pscreen;
 
    rsc->bo = etna_screen_bo_from_handle(pscreen, handle, &level->stride);
@@ -512,18 +528,19 @@ etna_resource_from_handle(struct pipe_screen *pscreen,
    rsc->layout = modifier_to_layout(handle->modifier);
    rsc->halign = TEXTURE_HALIGN_FOUR;
 
-
    level->width = tmpl->width0;
    level->height = tmpl->height0;
+   level->depth = tmpl->depth0;
+   level->offset = handle->offset;
 
    /* Determine padding of the imported resource. */
    unsigned paddingX = 0, paddingY = 0;
    etna_layout_multiple(rsc->layout, screen->specs.pixel_pipes,
-                        VIV_FEATURE(screen, chipMinorFeatures1, TEXTURE_HALIGN),
+                        is_rs_align(screen, tmpl),
                         &paddingX, &paddingY, &rsc->halign);
 
-   if (!screen->specs.use_blt)
-      etna_adjust_rs_align(screen->specs.pixel_pipes, NULL, &paddingY);
+   if (!screen->specs.use_blt && rsc->layout == ETNA_LAYOUT_LINEAR)
+      paddingY = align(paddingY, ETNA_RS_HEIGHT_MASK + 1);
    level->padded_width = align(level->width, paddingX);
    level->padded_height = align(level->height, paddingY);
 
@@ -547,40 +564,21 @@ etna_resource_from_handle(struct pipe_screen *pscreen,
       goto fail;
    }
 
-   if (rsc->layout == ETNA_LAYOUT_LINEAR) {
-      /*
-       * Both sampler and pixel pipes can't handle linear, create a compatible
-       * base resource, where we can attach the imported buffer as an external
-       * resource.
-       */
-      struct pipe_resource tiled_templat = *tmpl;
-
-      /*
-       * Remove BIND_SCANOUT to avoid recursion, as etna_resource_create uses
-       * this function to import the scanout buffer and get a tiled resource.
-       */
-      tiled_templat.bind &= ~PIPE_BIND_SCANOUT;
-
-      ptiled = etna_resource_create(pscreen, &tiled_templat);
-      if (!ptiled)
-         goto fail;
-
-      etna_resource(ptiled)->external = prsc;
-
-      return ptiled;
-   }
+   mtx_init(&rsc->lock, mtx_recursive);
+   rsc->pending_ctx = _mesa_set_create(NULL, _mesa_hash_pointer,
+                                       _mesa_key_pointer_equal);
+   if (!rsc->pending_ctx)
+      goto fail;
 
    return prsc;
 
 fail:
    etna_resource_destroy(pscreen, prsc);
-   if (ptiled)
-      etna_resource_destroy(pscreen, ptiled);
 
    return NULL;
 }
 
-static boolean
+static bool
 etna_resource_get_handle(struct pipe_screen *pscreen,
                          struct pipe_context *pctx,
                          struct pipe_resource *prsc,
@@ -590,30 +588,24 @@ etna_resource_get_handle(struct pipe_screen *pscreen,
    /* Scanout is always attached to the base resource */
    struct renderonly_scanout *scanout = rsc->scanout;
 
-   /*
-    * External resources are preferred, so a import->export chain of
-    * render/sampler incompatible buffers yield the same handle.
-    */
-   if (rsc->external)
-      rsc = etna_resource(rsc->external);
-
    handle->stride = rsc->levels[0].stride;
+   handle->offset = rsc->levels[0].offset;
    handle->modifier = layout_to_modifier(rsc->layout);
 
    if (handle->type == WINSYS_HANDLE_TYPE_SHARED) {
       return etna_bo_get_name(rsc->bo, &handle->handle) == 0;
    } else if (handle->type == WINSYS_HANDLE_TYPE_KMS) {
       if (renderonly_get_handle(scanout, handle)) {
-         return TRUE;
+         return true;
       } else {
          handle->handle = etna_bo_handle(rsc->bo);
-         return TRUE;
+         return true;
       }
    } else if (handle->type == WINSYS_HANDLE_TYPE_FD) {
       handle->handle = etna_bo_dmabuf(rsc->bo);
-      return TRUE;
+      return true;
    } else {
-      return FALSE;
+      return false;
    }
 }
 
@@ -621,20 +613,78 @@ void
 etna_resource_used(struct etna_context *ctx, struct pipe_resource *prsc,
                    enum etna_resource_status status)
 {
+   struct pipe_resource *referenced = NULL;
    struct etna_resource *rsc;
 
    if (!prsc)
       return;
 
-   rsc = etna_resource(prsc);
-   rsc->status |= status;
+   mtx_lock(&ctx->lock);
 
-   /* TODO resources can actually be shared across contexts,
-    * so I'm not sure a single list-head will do the trick? */
-   debug_assert((rsc->pending_ctx == ctx) || !rsc->pending_ctx);
-   list_delinit(&rsc->list);
-   list_addtail(&rsc->list, &ctx->used_resources);
-   rsc->pending_ctx = ctx;
+   rsc = etna_resource(prsc);
+again:
+   mtx_lock(&rsc->lock);
+
+   set_foreach(rsc->pending_ctx, entry) {
+      struct etna_context *extctx = (struct etna_context *)entry->key;
+      struct pipe_context *pctx = &extctx->base;
+      bool need_flush = false;
+
+      if (mtx_trylock(&extctx->lock) != thrd_success) {
+         /*
+	  * The other context could be locked in etna_flush() and
+	  * stuck waiting for the resource lock, so release the
+	  * resource lock here, let etna_flush() finish, and try
+	  * again.
+	  */
+         mtx_unlock(&rsc->lock);
+         thrd_yield();
+         goto again;
+      }
+
+      set_foreach(extctx->used_resources_read, entry2) {
+         struct etna_resource *rsc2 = (struct etna_resource *)entry2->key;
+         if (ctx == extctx || rsc2 != rsc)
+            continue;
+
+         if (status & ETNA_PENDING_WRITE) {
+            need_flush = true;
+            break;
+         }
+      }
+
+      if (need_flush) {
+         pctx->flush(pctx, NULL, 0);
+         mtx_unlock(&extctx->lock);
+	 continue;
+      }
+
+      set_foreach(extctx->used_resources_write, entry2) {
+         struct etna_resource *rsc2 = (struct etna_resource *)entry2->key;
+         if (ctx == extctx || rsc2 != rsc)
+            continue;
+
+         need_flush = true;
+         break;
+      }
+
+      if (need_flush)
+         pctx->flush(pctx, NULL, 0);
+
+      mtx_unlock(&extctx->lock);
+   }
+
+   rsc->status = status;
+
+   if (!_mesa_set_search(rsc->pending_ctx, ctx)) {
+      pipe_resource_reference(&referenced, prsc);
+      _mesa_set_add((status & ETNA_PENDING_READ) ?
+                    ctx->used_resources_read : ctx->used_resources_write, rsc);
+      _mesa_set_add(rsc->pending_ctx, ctx);
+   }
+
+   mtx_unlock(&rsc->lock);
+   mtx_unlock(&ctx->lock);
 }
 
 bool

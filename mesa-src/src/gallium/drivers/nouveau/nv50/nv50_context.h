@@ -248,6 +248,7 @@ bool nv50_state_validate_3d(struct nv50_context *, uint32_t);
 
 /* nv50_surface.c */
 extern void nv50_clear(struct pipe_context *, unsigned buffers,
+                       const struct pipe_scissor_state *scissor_state,
                        const union pipe_color_union *color,
                        double depth, unsigned stencil);
 extern void nv50_init_surface_functions(struct nv50_context *);
@@ -256,6 +257,7 @@ extern void nv50_init_surface_functions(struct nv50_context *);
 void nv50_validate_textures(struct nv50_context *);
 void nv50_validate_samplers(struct nv50_context *);
 void nv50_upload_ms_info(struct nouveau_pushbuf *);
+void nv50_upload_tsc0(struct nv50_context *);
 
 struct pipe_sampler_view *
 nv50_create_texture_view(struct pipe_context *,
@@ -318,7 +320,7 @@ nv84_screen_get_video_param(struct pipe_screen *pscreen,
                             enum pipe_video_entrypoint entrypoint,
                             enum pipe_video_cap param);
 
-boolean
+bool
 nv84_screen_video_supported(struct pipe_screen *screen,
                             enum pipe_format format,
                             enum pipe_video_profile profile,

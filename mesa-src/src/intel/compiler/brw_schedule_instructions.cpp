@@ -323,7 +323,6 @@ schedule_node::set_latency_gen7(bool is_haswell)
       break;
 
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN4:
-   case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7:
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7:
    case VS_OPCODE_PULL_CONSTANT_LOAD:
@@ -368,50 +367,155 @@ schedule_node::set_latency_gen7(bool is_haswell)
       latency = 50;
       break;
 
-   case SHADER_OPCODE_UNTYPED_ATOMIC:
-   case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT:
-   case SHADER_OPCODE_TYPED_ATOMIC:
-      /* Test code:
-       *   mov(8)    g112<1>ud       0x00000000ud       { align1 WE_all 1Q };
-       *   mov(1)    g112.7<1>ud     g1.7<0,1,0>ud      { align1 WE_all };
-       *   mov(8)    g113<1>ud       0x00000000ud       { align1 WE_normal 1Q };
-       *   send(8)   g4<1>ud         g112<8,8,1>ud
-       *             data (38, 5, 6) mlen 2 rlen 1      { align1 WE_normal 1Q };
-       *
-       * Running it 100 times as fragment shader on a 128x128 quad
-       * gives an average latency of 13867 cycles per atomic op,
-       * standard deviation 3%.  Note that this is a rather
-       * pessimistic estimate, the actual latency in cases with few
-       * collisions between threads and favorable pipelining has been
-       * seen to be reduced by a factor of 100.
-       */
+   case VEC4_OPCODE_UNTYPED_ATOMIC:
+      /* See GEN7_DATAPORT_DC_UNTYPED_ATOMIC_OP */
       latency = 14000;
       break;
 
-   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
-   case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
-   case SHADER_OPCODE_TYPED_SURFACE_READ:
-   case SHADER_OPCODE_TYPED_SURFACE_WRITE:
-      /* Test code:
-       *   mov(8)    g112<1>UD       0x00000000UD       { align1 WE_all 1Q };
-       *   mov(1)    g112.7<1>UD     g1.7<0,1,0>UD      { align1 WE_all };
-       *   mov(8)    g113<1>UD       0x00000000UD       { align1 WE_normal 1Q };
-       *   send(8)   g4<1>UD         g112<8,8,1>UD
-       *             data (38, 6, 5) mlen 2 rlen 1      { align1 WE_normal 1Q };
-       *   .
-       *   . [repeats 8 times]
-       *   .
-       *   mov(8)    g112<1>UD       0x00000000UD       { align1 WE_all 1Q };
-       *   mov(1)    g112.7<1>UD     g1.7<0,1,0>UD      { align1 WE_all };
-       *   mov(8)    g113<1>UD       0x00000000UD       { align1 WE_normal 1Q };
-       *   send(8)   g4<1>UD         g112<8,8,1>UD
-       *             data (38, 6, 5) mlen 2 rlen 1      { align1 WE_normal 1Q };
-       *
-       * Running it 100 times as fragment shader on a 128x128 quad
-       * gives an average latency of 583 cycles per surface read,
-       * standard deviation 0.9%.
-       */
+   case VEC4_OPCODE_UNTYPED_SURFACE_READ:
+   case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
+      /* See also GEN7_DATAPORT_DC_UNTYPED_SURFACE_READ */
       latency = is_haswell ? 300 : 600;
+      break;
+
+   case SHADER_OPCODE_SEND:
+      switch (inst->sfid) {
+      case BRW_SFID_SAMPLER: {
+         unsigned msg_type = (inst->desc >> 12) & 0x1f;
+         switch (msg_type) {
+         case GEN5_SAMPLER_MESSAGE_SAMPLE_RESINFO:
+         case GEN6_SAMPLER_MESSAGE_SAMPLE_SAMPLEINFO:
+            /* See also SHADER_OPCODE_TXS */
+            latency = 100;
+            break;
+
+         default:
+            /* See also SHADER_OPCODE_TEX */
+            latency = 200;
+            break;
+         }
+         break;
+      }
+
+      case GEN6_SFID_DATAPORT_RENDER_CACHE:
+         switch ((inst->desc >> 14) & 0x1f) {
+         case GEN7_DATAPORT_RC_TYPED_SURFACE_WRITE:
+         case GEN7_DATAPORT_RC_TYPED_SURFACE_READ:
+            /* See also SHADER_OPCODE_TYPED_SURFACE_READ */
+            assert(!is_haswell);
+            latency = 600;
+            break;
+
+         case GEN7_DATAPORT_RC_TYPED_ATOMIC_OP:
+            /* See also SHADER_OPCODE_TYPED_ATOMIC */
+            assert(!is_haswell);
+            latency = 14000;
+            break;
+
+         case GEN6_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_WRITE:
+            /* completely fabricated number */
+            latency = 600;
+            break;
+
+         default:
+            unreachable("Unknown render cache message");
+         }
+         break;
+
+      case GEN7_SFID_DATAPORT_DATA_CACHE:
+         switch ((inst->desc >> 14) & 0x1f) {
+         case GEN7_DATAPORT_DC_DWORD_SCATTERED_READ:
+         case GEN6_DATAPORT_WRITE_MESSAGE_DWORD_SCATTERED_WRITE:
+         case HSW_DATAPORT_DC_PORT0_BYTE_SCATTERED_READ:
+         case HSW_DATAPORT_DC_PORT0_BYTE_SCATTERED_WRITE:
+            /* We have no data for this but assume it's roughly the same as
+             * untyped surface read/write.
+             */
+            latency = 300;
+            break;
+
+         case GEN7_DATAPORT_DC_UNTYPED_SURFACE_READ:
+         case GEN7_DATAPORT_DC_UNTYPED_SURFACE_WRITE:
+            /* Test code:
+             *   mov(8)    g112<1>UD       0x00000000UD       { align1 WE_all 1Q };
+             *   mov(1)    g112.7<1>UD     g1.7<0,1,0>UD      { align1 WE_all };
+             *   mov(8)    g113<1>UD       0x00000000UD       { align1 WE_normal 1Q };
+             *   send(8)   g4<1>UD         g112<8,8,1>UD
+             *             data (38, 6, 5) mlen 2 rlen 1      { align1 WE_normal 1Q };
+             *   .
+             *   . [repeats 8 times]
+             *   .
+             *   mov(8)    g112<1>UD       0x00000000UD       { align1 WE_all 1Q };
+             *   mov(1)    g112.7<1>UD     g1.7<0,1,0>UD      { align1 WE_all };
+             *   mov(8)    g113<1>UD       0x00000000UD       { align1 WE_normal 1Q };
+             *   send(8)   g4<1>UD         g112<8,8,1>UD
+             *             data (38, 6, 5) mlen 2 rlen 1      { align1 WE_normal 1Q };
+             *
+             * Running it 100 times as fragment shader on a 128x128 quad
+             * gives an average latency of 583 cycles per surface read,
+             * standard deviation 0.9%.
+             */
+            assert(!is_haswell);
+            latency = 600;
+            break;
+
+         case GEN7_DATAPORT_DC_UNTYPED_ATOMIC_OP:
+            /* Test code:
+             *   mov(8)    g112<1>ud       0x00000000ud       { align1 WE_all 1Q };
+             *   mov(1)    g112.7<1>ud     g1.7<0,1,0>ud      { align1 WE_all };
+             *   mov(8)    g113<1>ud       0x00000000ud       { align1 WE_normal 1Q };
+             *   send(8)   g4<1>ud         g112<8,8,1>ud
+             *             data (38, 5, 6) mlen 2 rlen 1      { align1 WE_normal 1Q };
+             *
+             * Running it 100 times as fragment shader on a 128x128 quad
+             * gives an average latency of 13867 cycles per atomic op,
+             * standard deviation 3%.  Note that this is a rather
+             * pessimistic estimate, the actual latency in cases with few
+             * collisions between threads and favorable pipelining has been
+             * seen to be reduced by a factor of 100.
+             */
+            assert(!is_haswell);
+            latency = 14000;
+            break;
+
+         default:
+            unreachable("Unknown data cache message");
+         }
+         break;
+
+      case HSW_SFID_DATAPORT_DATA_CACHE_1:
+         switch ((inst->desc >> 14) & 0x1f) {
+         case HSW_DATAPORT_DC_PORT1_UNTYPED_SURFACE_READ:
+         case HSW_DATAPORT_DC_PORT1_UNTYPED_SURFACE_WRITE:
+         case HSW_DATAPORT_DC_PORT1_TYPED_SURFACE_READ:
+         case HSW_DATAPORT_DC_PORT1_TYPED_SURFACE_WRITE:
+         case GEN8_DATAPORT_DC_PORT1_A64_UNTYPED_SURFACE_WRITE:
+         case GEN8_DATAPORT_DC_PORT1_A64_UNTYPED_SURFACE_READ:
+         case GEN8_DATAPORT_DC_PORT1_A64_SCATTERED_WRITE:
+         case GEN9_DATAPORT_DC_PORT1_A64_SCATTERED_READ:
+            /* See also GEN7_DATAPORT_DC_UNTYPED_SURFACE_READ */
+            latency = 300;
+            break;
+
+         case HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP:
+         case HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP_SIMD4X2:
+         case HSW_DATAPORT_DC_PORT1_TYPED_ATOMIC_OP_SIMD4X2:
+         case HSW_DATAPORT_DC_PORT1_TYPED_ATOMIC_OP:
+         case GEN9_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_FLOAT_OP:
+         case GEN8_DATAPORT_DC_PORT1_A64_UNTYPED_ATOMIC_OP:
+         case GEN9_DATAPORT_DC_PORT1_A64_UNTYPED_ATOMIC_FLOAT_OP:
+            /* See also GEN7_DATAPORT_DC_UNTYPED_ATOMIC_OP */
+            latency = 14000;
+            break;
+
+         default:
+            unreachable("Unknown data cache message");
+         }
+         break;
+
+      default:
+         unreachable("Unknown SFID");
+      }
       break;
 
    default:
@@ -429,16 +533,15 @@ schedule_node::set_latency_gen7(bool is_haswell)
 
 class instruction_scheduler {
 public:
-   instruction_scheduler(backend_shader *s, int grf_count,
-                         int hw_reg_count, int block_count,
-                         instruction_scheduler_mode mode)
+   instruction_scheduler(const backend_shader *s, int grf_count,
+                         unsigned hw_reg_count, int block_count,
+                         instruction_scheduler_mode mode):
+      bs(s)
    {
-      this->bs = s;
       this->mem_ctx = ralloc_context(NULL);
       this->grf_count = grf_count;
       this->hw_reg_count = hw_reg_count;
       this->instructions.make_empty();
-      this->instructions_to_schedule = 0;
       this->post_reg_alloc = (mode == SCHEDULE_POST);
       this->mode = mode;
       if (!post_reg_alloc) {
@@ -509,13 +612,12 @@ public:
    void *mem_ctx;
 
    bool post_reg_alloc;
-   int instructions_to_schedule;
    int grf_count;
-   int hw_reg_count;
+   unsigned hw_reg_count;
    int reg_pressure;
    int block_idx;
    exec_list instructions;
-   backend_shader *bs;
+   const backend_shader *bs;
 
    instruction_scheduler_mode mode;
 
@@ -565,14 +667,14 @@ public:
 class fs_instruction_scheduler : public instruction_scheduler
 {
 public:
-   fs_instruction_scheduler(fs_visitor *v, int grf_count, int hw_reg_count,
+   fs_instruction_scheduler(const fs_visitor *v, int grf_count, int hw_reg_count,
                             int block_count,
                             instruction_scheduler_mode mode);
    void calculate_deps();
-   bool is_compressed(fs_inst *inst);
+   bool is_compressed(const fs_inst *inst);
    schedule_node *choose_instruction_to_schedule();
    int issue_time(backend_instruction *inst);
-   fs_visitor *v;
+   const fs_visitor *v;
 
    void count_reads_remaining(backend_instruction *inst);
    void setup_liveness(cfg_t *cfg);
@@ -580,7 +682,7 @@ public:
    int get_register_pressure_benefit(backend_instruction *inst);
 };
 
-fs_instruction_scheduler::fs_instruction_scheduler(fs_visitor *v,
+fs_instruction_scheduler::fs_instruction_scheduler(const fs_visitor *v,
                                                    int grf_count, int hw_reg_count,
                                                    int block_count,
                                                    instruction_scheduler_mode mode)
@@ -626,21 +728,23 @@ fs_instruction_scheduler::count_reads_remaining(backend_instruction *be)
 void
 fs_instruction_scheduler::setup_liveness(cfg_t *cfg)
 {
+   const fs_live_variables &live = v->live_analysis.require();
+
    /* First, compute liveness on a per-GRF level using the in/out sets from
     * liveness calculation.
     */
    for (int block = 0; block < cfg->num_blocks; block++) {
-      for (int i = 0; i < v->live_intervals->num_vars; i++) {
-         if (BITSET_TEST(v->live_intervals->block_data[block].livein, i)) {
-            int vgrf = v->live_intervals->vgrf_from_var[i];
+      for (int i = 0; i < live.num_vars; i++) {
+         if (BITSET_TEST(live.block_data[block].livein, i)) {
+            int vgrf = live.vgrf_from_var[i];
             if (!BITSET_TEST(livein[block], vgrf)) {
                reg_pressure_in[block] += v->alloc.sizes[vgrf];
                BITSET_SET(livein[block], vgrf);
             }
          }
 
-         if (BITSET_TEST(v->live_intervals->block_data[block].liveout, i))
-            BITSET_SET(liveout[block], v->live_intervals->vgrf_from_var[i]);
+         if (BITSET_TEST(live.block_data[block].liveout, i))
+            BITSET_SET(liveout[block], live.vgrf_from_var[i]);
       }
    }
 
@@ -650,8 +754,8 @@ fs_instruction_scheduler::setup_liveness(cfg_t *cfg)
     */
    for (int block = 0; block < cfg->num_blocks - 1; block++) {
       for (int i = 0; i < grf_count; i++) {
-         if (v->virtual_grf_start[i] <= cfg->blocks[block]->end_ip &&
-             v->virtual_grf_end[i] >= cfg->blocks[block + 1]->start_ip) {
+         if (live.vgrf_start[i] <= cfg->blocks[block]->end_ip &&
+             live.vgrf_end[i] >= cfg->blocks[block + 1]->start_ip) {
             if (!BITSET_TEST(livein[block + 1], i)) {
                 reg_pressure_in[block + 1] += v->alloc.sizes[i];
                 BITSET_SET(livein[block + 1], i);
@@ -665,7 +769,7 @@ fs_instruction_scheduler::setup_liveness(cfg_t *cfg)
    int payload_last_use_ip[hw_reg_count];
    v->calculate_payload_ranges(hw_reg_count, payload_last_use_ip);
 
-   for (int i = 0; i < hw_reg_count; i++) {
+   for (unsigned i = 0; i < hw_reg_count; i++) {
       if (payload_last_use_ip[i] == -1)
          continue;
 
@@ -744,11 +848,11 @@ fs_instruction_scheduler::get_register_pressure_benefit(backend_instruction *be)
 class vec4_instruction_scheduler : public instruction_scheduler
 {
 public:
-   vec4_instruction_scheduler(vec4_visitor *v, int grf_count);
+   vec4_instruction_scheduler(const vec4_visitor *v, int grf_count);
    void calculate_deps();
    schedule_node *choose_instruction_to_schedule();
    int issue_time(backend_instruction *inst);
-   vec4_visitor *v;
+   const vec4_visitor *v;
 
    void count_reads_remaining(backend_instruction *inst);
    void setup_liveness(cfg_t *cfg);
@@ -756,7 +860,7 @@ public:
    int get_register_pressure_benefit(backend_instruction *inst);
 };
 
-vec4_instruction_scheduler::vec4_instruction_scheduler(vec4_visitor *v,
+vec4_instruction_scheduler::vec4_instruction_scheduler(const vec4_visitor *v,
                                                        int grf_count)
    : instruction_scheduler(v, grf_count, 0, 0, SCHEDULE_POST),
      v(v)
@@ -819,8 +923,6 @@ instruction_scheduler::add_insts_from_block(bblock_t *block)
 
       instructions.push_tail(n);
    }
-
-   this->instructions_to_schedule = block->end_ip - block->start_ip + 1;
 }
 
 /** Computation of the delay member of each node. */
@@ -961,7 +1063,7 @@ instruction_scheduler::add_barrier_deps(schedule_node *n)
  * actually writes 2 MRFs.
  */
 bool
-fs_instruction_scheduler::is_compressed(fs_inst *inst)
+fs_instruction_scheduler::is_compressed(const fs_inst *inst)
 {
    return inst->exec_size == 16;
 }
@@ -973,7 +1075,7 @@ fs_instruction_scheduler::calculate_deps()
     * After register allocation, reg_offsets are gone and we track individual
     * GRF registers.
     */
-   schedule_node *last_grf_write[grf_count * 16];
+   schedule_node **last_grf_write;
    schedule_node *last_mrf_write[BRW_MAX_MRF(v->devinfo->gen)];
    schedule_node *last_conditional_mod[8] = {};
    schedule_node *last_accumulator_write = NULL;
@@ -984,7 +1086,7 @@ fs_instruction_scheduler::calculate_deps()
     */
    schedule_node *last_fixed_grf_write = NULL;
 
-   memset(last_grf_write, 0, sizeof(last_grf_write));
+   last_grf_write = (schedule_node **)calloc(sizeof(schedule_node *), grf_count * 16);
    memset(last_mrf_write, 0, sizeof(last_mrf_write));
 
    /* top-to-bottom dependencies: RAW and WAW. */
@@ -1086,7 +1188,7 @@ fs_instruction_scheduler::calculate_deps()
       }
 
       if (inst->mlen > 0 && inst->base_mrf != -1) {
-         for (int i = 0; i < v->implied_mrf_writes(inst); i++) {
+         for (unsigned i = 0; i < inst->implied_mrf_writes(); i++) {
             add_dep(last_mrf_write[inst->base_mrf + i], n);
             last_mrf_write[inst->base_mrf + i] = n;
          }
@@ -1111,7 +1213,7 @@ fs_instruction_scheduler::calculate_deps()
    }
 
    /* bottom-to-top dependencies: WAR */
-   memset(last_grf_write, 0, sizeof(last_grf_write));
+   memset(last_grf_write, 0, sizeof(schedule_node *) * grf_count * 16);
    memset(last_mrf_write, 0, sizeof(last_mrf_write));
    memset(last_conditional_mod, 0, sizeof(last_conditional_mod));
    last_accumulator_write = NULL;
@@ -1209,7 +1311,7 @@ fs_instruction_scheduler::calculate_deps()
       }
 
       if (inst->mlen > 0 && inst->base_mrf != -1) {
-         for (int i = 0; i < v->implied_mrf_writes(inst); i++) {
+         for (unsigned i = 0; i < inst->implied_mrf_writes(); i++) {
             last_mrf_write[inst->base_mrf + i] = n;
          }
       }
@@ -1227,6 +1329,8 @@ fs_instruction_scheduler::calculate_deps()
          last_accumulator_write = n;
       }
    }
+
+   free(last_grf_write);
 }
 
 void
@@ -1310,7 +1414,7 @@ vec4_instruction_scheduler::calculate_deps()
       }
 
       if (inst->mlen > 0 && !inst->is_send_from_grf()) {
-         for (int i = 0; i < v->implied_mrf_writes(inst); i++) {
+         for (unsigned i = 0; i < inst->implied_mrf_writes(); i++) {
             add_dep(last_mrf_write[inst->base_mrf + i], n);
             last_mrf_write[inst->base_mrf + i] = n;
          }
@@ -1387,7 +1491,7 @@ vec4_instruction_scheduler::calculate_deps()
       }
 
       if (inst->mlen > 0 && !inst->is_send_from_grf()) {
-         for (int i = 0; i < v->implied_mrf_writes(inst); i++) {
+         for (unsigned i = 0; i < inst->implied_mrf_writes(); i++) {
             last_mrf_write[inst->base_mrf + i] = n;
          }
       }
@@ -1545,10 +1649,12 @@ vec4_instruction_scheduler::choose_instruction_to_schedule()
 }
 
 int
-fs_instruction_scheduler::issue_time(backend_instruction *inst)
+fs_instruction_scheduler::issue_time(backend_instruction *inst0)
 {
-   const unsigned overhead = v->bank_conflict_cycles((fs_inst *)inst);
-   if (is_compressed((fs_inst *)inst))
+   const fs_inst *inst = static_cast<fs_inst *>(inst0);
+   const unsigned overhead = v->grf_used && has_bank_conflict(v->devinfo, inst) ?
+      DIV_ROUND_UP(inst->dst.component_size(inst->exec_size), REG_SIZE) : 0;
+   if (is_compressed(inst))
       return 4 + overhead;
    else
       return 2 + overhead;
@@ -1566,6 +1672,8 @@ instruction_scheduler::schedule_instructions(bblock_t *block)
 {
    const struct gen_device_info *devinfo = bs->devinfo;
    int time = 0;
+   int instructions_to_schedule = block->end_ip - block->start_ip + 1;
+
    if (!post_reg_alloc)
       reg_pressure = reg_pressure_in[block->num];
    block_idx = block->num;
@@ -1654,24 +1762,6 @@ instruction_scheduler::schedule_instructions(bblock_t *block)
    }
 
    assert(instructions_to_schedule == 0);
-
-   block->cycle_count = time;
-}
-
-static unsigned get_cycle_count(cfg_t *cfg)
-{
-   unsigned count = 0, multiplier = 1;
-   foreach_block(block, cfg) {
-      if (block->start()->opcode == BRW_OPCODE_DO)
-         multiplier *= 10; /* assume that loops execute ~10 times */
-
-      count += block->cycle_count * multiplier;
-
-      if (block->end()->opcode == BRW_OPCODE_WHILE)
-         multiplier /= 10;
-   }
-
-   return count;
 }
 
 void
@@ -1713,16 +1803,11 @@ instruction_scheduler::run(cfg_t *cfg)
               post_reg_alloc);
       bs->dump_instructions();
    }
-
-   cfg->cycle_count = get_cycle_count(cfg);
 }
 
 void
 fs_visitor::schedule_instructions(instruction_scheduler_mode mode)
 {
-   if (mode != SCHEDULE_POST)
-      calculate_live_intervals();
-
    int grf_count;
    if (mode == SCHEDULE_POST)
       grf_count = grf_used;
@@ -1733,7 +1818,7 @@ fs_visitor::schedule_instructions(instruction_scheduler_mode mode)
                                   cfg->num_blocks, mode);
    sched.run(cfg);
 
-   invalidate_live_intervals();
+   invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
 }
 
 void
@@ -1742,5 +1827,5 @@ vec4_visitor::opt_schedule_instructions()
    vec4_instruction_scheduler sched(this, prog_data->total_grf);
    sched.run(cfg);
 
-   invalidate_live_intervals();
+   invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
 }

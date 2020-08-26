@@ -395,6 +395,11 @@ struct pipe_h264_enc_pic_control
 {
    unsigned enc_cabac_enable;
    unsigned enc_constraint_set_flags;
+   unsigned enc_frame_cropping_flag;
+   unsigned enc_frame_crop_left_offset;
+   unsigned enc_frame_crop_right_offset;
+   unsigned enc_frame_crop_top_offset;
+   unsigned enc_frame_crop_bottom_offset;
 };
 
 struct pipe_h264_enc_picture_desc
@@ -426,7 +431,7 @@ struct pipe_h264_enc_picture_desc
 
    bool not_referenced;
    bool enable_vui;
-   struct util_hash_table *frame_idx;
+   struct hash_table *frame_idx;
 
 };
 
@@ -508,7 +513,7 @@ struct pipe_h265_enc_picture_desc
    unsigned ref_idx_l0;
    unsigned ref_idx_l1;
    bool not_referenced;
-   struct util_hash_table *frame_idx;
+   struct hash_table *frame_idx;
 };
 
 struct pipe_h265_sps

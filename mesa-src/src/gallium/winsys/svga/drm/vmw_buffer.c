@@ -63,6 +63,7 @@ struct vmw_gmr_buffer
    struct vmw_region *region;
    void *map;
    unsigned map_flags;
+   unsigned map_count;
 };
 
 
@@ -90,6 +91,11 @@ static inline struct vmw_gmr_bufmgr *
 vmw_gmr_bufmgr(struct pb_manager *mgr)
 {
    assert(mgr);
+
+   /* Make sure our extra flags don't collide with pipebuffer's flags */
+   STATIC_ASSERT((VMW_BUFFER_USAGE_SHARED & PB_USAGE_ALL) == 0);
+   STATIC_ASSERT((VMW_BUFFER_USAGE_SYNC & PB_USAGE_ALL) == 0);
+
    return (struct vmw_gmr_bufmgr *)mgr;
 }
 
@@ -99,8 +105,12 @@ vmw_gmr_buffer_destroy(struct pb_buffer *_buf)
 {
    struct vmw_gmr_buffer *buf = vmw_gmr_buffer(_buf);
 
-   vmw_ioctl_region_unmap(buf->region);
-   
+   assert(buf->map_count == 0);
+   if (buf->map) {
+      assert(buf->mgr->vws->cache_maps);
+      vmw_ioctl_region_unmap(buf->region);
+   }
+
    vmw_ioctl_region_destroy(buf->region);
 
    FREE(buf);
@@ -109,7 +119,7 @@ vmw_gmr_buffer_destroy(struct pb_buffer *_buf)
 
 static void *
 vmw_gmr_buffer_map(struct pb_buffer *_buf,
-                   unsigned flags,
+                   enum pb_usage_flags flags,
                    void *flush_ctx)
 {
    struct vmw_gmr_buffer *buf = vmw_gmr_buffer(_buf);
@@ -121,7 +131,6 @@ vmw_gmr_buffer_map(struct pb_buffer *_buf,
    if (!buf->map)
       return NULL;
 
-
    if ((_buf->usage & VMW_BUFFER_USAGE_SYNC) &&
        !(flags & PB_USAGE_UNSYNCHRONIZED)) {
       ret = vmw_ioctl_syncforcpu(buf->region,
@@ -132,6 +141,7 @@ vmw_gmr_buffer_map(struct pb_buffer *_buf,
          return NULL;
    }
 
+   buf->map_count++;
    return buf->map;
 }
 
@@ -140,13 +150,19 @@ static void
 vmw_gmr_buffer_unmap(struct pb_buffer *_buf)
 {
    struct vmw_gmr_buffer *buf = vmw_gmr_buffer(_buf);
-   unsigned flags = buf->map_flags;
+   enum pb_usage_flags flags = buf->map_flags;
 
    if ((_buf->usage & VMW_BUFFER_USAGE_SYNC) &&
        !(flags & PB_USAGE_UNSYNCHRONIZED)) {
       vmw_ioctl_releasefromcpu(buf->region,
                                !(flags & PB_USAGE_CPU_WRITE),
                                FALSE);
+   }
+
+   assert(buf->map_count > 0);
+   if (!--buf->map_count && !buf->mgr->vws->cache_maps) {
+      vmw_ioctl_region_unmap(buf->region);
+      buf->map = NULL;
    }
 }
 
@@ -164,7 +180,7 @@ vmw_gmr_buffer_get_base_buffer(struct pb_buffer *buf,
 static enum pipe_error
 vmw_gmr_buffer_validate( struct pb_buffer *_buf, 
                          struct pb_validate *vl,
-                         unsigned flags )
+                         enum pb_usage_flags flags )
 {
    /* Always pinned */
    return PIPE_OK;
@@ -310,7 +326,7 @@ vmw_svga_winsys_buffer_wrap(struct pb_buffer *buffer)
    }
 
    buf->pb_buf = buffer;
-   buf->fbuf = debug_flush_buf_create(TRUE, VMW_DEBUG_FLUSH_STACK);
+   buf->fbuf = debug_flush_buf_create(FALSE, VMW_DEBUG_FLUSH_STACK);
    return buf;
 }
 
@@ -338,7 +354,7 @@ vmw_svga_winsys_buffer_destroy(struct svga_winsys_screen *sws,
 void *
 vmw_svga_winsys_buffer_map(struct svga_winsys_screen *sws,
                            struct svga_winsys_buffer *buf,
-                           unsigned flags)
+                           enum pipe_transfer_usage flags)
 {
    void *map;
 
@@ -346,7 +362,23 @@ vmw_svga_winsys_buffer_map(struct svga_winsys_screen *sws,
    if (flags & PIPE_TRANSFER_UNSYNCHRONIZED)
       flags &= ~PIPE_TRANSFER_DONTBLOCK;
 
-   map = pb_map(vmw_pb_buffer(buf), flags, NULL);
+   /* NOTE: we're passing PIPE_TRANSFER_x flags instead of
+    * PB_USAGE_x flags here.  We should probably fix that.
+    */
+   STATIC_ASSERT((unsigned) PB_USAGE_CPU_READ ==
+                 (unsigned) PIPE_TRANSFER_READ);
+   STATIC_ASSERT((unsigned) PB_USAGE_CPU_WRITE ==
+                 (unsigned) PIPE_TRANSFER_WRITE);
+   STATIC_ASSERT((unsigned) PB_USAGE_GPU_READ ==
+                 (unsigned) PIPE_TRANSFER_MAP_DIRECTLY);
+   STATIC_ASSERT((unsigned) PB_USAGE_DONTBLOCK ==
+                 (unsigned) PIPE_TRANSFER_DONTBLOCK);
+   STATIC_ASSERT((unsigned) PB_USAGE_UNSYNCHRONIZED ==
+                 (unsigned) PIPE_TRANSFER_UNSYNCHRONIZED);
+   STATIC_ASSERT((unsigned) PB_USAGE_PERSISTENT ==
+                 (unsigned) PIPE_TRANSFER_PERSISTENT);
+
+   map = pb_map(vmw_pb_buffer(buf), flags & PB_USAGE_ALL, NULL);
 
 #ifdef DEBUG
    if (map != NULL)

@@ -319,7 +319,8 @@
     <enum name="POINT_SIZE_ARRAY_BUFFER_BINDING_OES"	  value="0x8B9F"/>
 
     <function name="PointSizePointerOES" es1="1.0" desktop="false"
-              no_error="true">
+              no_error="true" marshal="async"
+              marshal_call_after="if (COMPAT) _mesa_glthread_AttribPointer(ctx, VERT_ATTRIB_POINT_SIZE, 1, type, stride, pointer);">
         <param name="type" type="GLenum"/>
         <param name="stride" type="GLsizei"/>
         <param name="pointer" type="const GLvoid *"/>
@@ -563,6 +564,12 @@
 
 <category name="GL_OES_vertex_half_float" number="38">
     <enum name="HALF_FLOAT_OES"                           value="0x8D61"/>
+</category>
+
+<category name="GL_AMD_compressed_ATC_texture" number="40">
+    <enum name="ATC_RGB_AMD"                              value="0x8C92"/>
+    <enum name="ATC_RGBA_EXPLICIT_ALPHA_AMD"              value="0x8C93"/>
+    <enum name="ATC_RGBA_INTERPOLATED_ALPHA_AMD"          value="0x87EE"/>
 </category>
 
 <!-- 41. GL_EXT_texture_filter_anisotropic -->
@@ -810,6 +817,8 @@
     <enum name="RG8_EXT"                                  value="0x822B"/>
 </category>
 
+<xi:include href="EXT_multisampled_render_to_texture.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+
 <!-- 111. GL_ANGLE_texture_compression_dxt -->
 <category name="GL_ANGLE_texture_compression_dxt" number="111">
     <enum name="COMPRESSED_RGBA_S3TC_DXT3_ANGLE"        value="0x83F2"/>
@@ -856,6 +865,12 @@
         <param name="id" type="GLuint"/>
         <param name="target" type="GLenum"/>
     </function>
+
+    <function name="GetInteger64vEXT" alias="GetInteger64v" es2="2.0">
+        <param name="pname" type="GLenum"/>
+        <param name="params" type="GLint64 *" output="true" variable_param="pname"/>
+    </function>
+
 </category>
 
 <!-- 151. GL_EXT_draw_buffers -->
@@ -1086,7 +1101,7 @@
     </function>
 
     <function name="DrawElementsInstancedBaseVertexEXT" alias="DrawElementsInstancedBaseVertex"
-              es2="3.0" exec="dynamic">
+              es2="3.0">
         <param name="mode" type="GLenum"/>
         <param name="count" type="GLsizei"/>
         <param name="type" type="GLenum"/>
@@ -1228,7 +1243,7 @@
     </function>
 
     <function name="DrawElementsInstancedBaseVertexOES" alias="DrawElementsInstancedBaseVertex"
-              es2="3.0" exec="dynamic">
+              es2="3.0">
         <param name="mode" type="GLenum"/>
         <param name="count" type="GLsizei"/>
         <param name="type" type="GLenum"/>
@@ -1271,6 +1286,24 @@
         <param name="programInterface" type="GLenum"/>
         <param name="name" type="const GLchar *"/>
         <return type="GLint"/>
+    </function>
+
+</category>
+
+<category name="GL_EXT_clip_control" number="290">
+
+    <enum name="LOWER_LEFT_EXT" value = "0x8CA1"/>
+    <enum name="UPPER_LEFT_EXT" value = "0x8CA2"/>
+
+    <enum name="NEGATIVE_ONE_TO_ONE_EXT" value = "0x935E"/>
+    <enum name="ZERO_TO_ONE_EXT" value = "0x935F"/>
+
+    <enum name="CLIP_ORIGIN_EXT" value = "0x935C"/>
+    <enum name="CLIP_DEPTH_MODE_EXT" value = "0x935D"/>
+
+    <function name="ClipControlEXT" no_error="true" es2="2.0" alias="ClipControl">
+        <param name="origin" type="GLenum"/>
+        <param name="depth" type="GLenum"/>
     </function>
 
 </category>
@@ -1431,7 +1464,7 @@
     <function name="DepthRangeArrayfvOES" es2="3.1" desktop="false">
         <param name="first" type="GLuint"/>
         <param name="count" type="GLsizei"/>
-        <param name="v" type="const GLfloat *"/>
+        <param name="v" type="const GLfloat *" count="(2 * count)"/>
     </function>
     <function name="DepthRangeIndexedfOES" es2="3.1" desktop="false">
         <param name="index" type="GLuint"/>
@@ -1457,6 +1490,34 @@
         <param name="numlevels" type="GLuint"/>
         <param name="minlayer" type="GLuint"/>
         <param name="numlayers" type="GLuint"/>
+   </function>
+</category>
+
+<category name="GL_EXT_texture_view" number="185">
+    <function name="TextureViewEXT" es2="3.1" alias="TextureView">
+        <param name="texture" type="GLuint"/>
+        <param name="target" type="GLenum"/>
+        <param name="origtexture" type="GLuint"/>
+        <param name="internalformat" type="GLenum"/>
+        <param name="minlevel" type="GLuint"/>
+        <param name="numlevels" type="GLuint"/>
+        <param name="minlayer" type="GLuint"/>
+        <param name="numlayers" type="GLuint"/>
+   </function>
+</category>
+
+<!-- 302. GL_MESA_framebuffer_flip_y -->
+<category name="GL_MESA_framebuffer_flip_y" number="302">
+   <enum name="GL_FRAMEBUFFER_FLIP_Y_MESA" value="0x8BBB"/>
+   <function name="FramebufferParameteriMESA" es2="3.0">
+       <param name="target" type="GLenum"/>
+       <param name="pname"  type="GLenum"/>
+       <param name="param"  type="GLint" />
+   </function>
+   <function name="GetFramebufferParameterivMESA" es2="3.0">
+       <param name="target" type="GLenum" />
+       <param name="pname"  type="GLenum" />
+       <param name="params" type="GLint *" output="true" />
    </function>
 </category>
 

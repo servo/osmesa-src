@@ -37,7 +37,7 @@
 
 
 #include "main/errors.h"
-#include "main/imports.h"
+
 #include "main/image.h"
 #include "main/bufferobj.h"
 #include "main/macros.h"
@@ -55,17 +55,26 @@
 #include "st_debug.h"
 #include "st_draw.h"
 #include "st_program.h"
+#include "st_util.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
+#include "util/u_cpu_detect.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_prim.h"
 #include "util/u_draw.h"
 #include "util/u_upload_mgr.h"
 #include "draw/draw_context.h"
 #include "cso_cache/cso_context.h"
 
+#if defined(PIPE_OS_LINUX) && !defined(ANDROID)
+#include <sched.h>
+#define HAVE_SCHED_GETCPU 1
+#else
+#define sched_getcpu() 0
+#define HAVE_SCHED_GETCPU 0
+#endif
 
 /**
  * Set the restart index.
@@ -76,11 +85,10 @@ setup_primitive_restart(struct gl_context *ctx, struct pipe_draw_info *info)
    if (ctx->Array._PrimitiveRestart) {
       unsigned index_size = info->index_size;
 
-      info->restart_index =
-         _mesa_primitive_restart_index(ctx, index_size);
+      info->restart_index = ctx->Array._RestartIndex[index_size - 1];
 
       /* Enable primitive restart only when the restart index can have an
-       * effect. This is required for correctness in radeonsi VI support.
+       * effect. This is required for correctness in radeonsi GFX8 support.
        * Other hardware may also benefit from taking a faster, non-restart path
        * when possible.
        */
@@ -122,12 +130,38 @@ prepare_draw(struct st_context *st, struct gl_context *ctx)
        st->gfx_shaders_may_be_dirty) {
       st_validate_state(st, ST_PIPELINE_RENDER);
    }
+
+   struct pipe_context *pipe = st->pipe;
+
+   /* Pin threads regularly to the same Zen CCX that the main thread is
+    * running on. The main thread can move between CCXs.
+    */
+   if (unlikely(HAVE_SCHED_GETCPU && /* Linux */
+                /* AMD Zen */
+                util_cpu_caps.nr_cpus != util_cpu_caps.cores_per_L3 &&
+                /* no glthread */
+                ctx->CurrentClientDispatch != ctx->MarshalExec &&
+                /* driver support */
+                pipe->set_context_param &&
+                /* do it occasionally */
+                ++st->pin_thread_counter % 512 == 0)) {
+      int cpu = sched_getcpu();
+      if (cpu >= 0) {
+         unsigned L3_cache = cpu / util_cpu_caps.cores_per_L3;
+
+         pipe->set_context_param(pipe,
+                                 PIPE_CONTEXT_PARAM_PIN_THREADS_TO_L3_CACHE,
+                                 L3_cache);
+      }
+   }
 }
 
 /**
  * This function gets plugged into the VBO module and is called when
  * we have something to render.
  * Basically, translate the information into the format expected by gallium.
+ *
+ * Try to keep this logic in sync with st_feedback_draw_vbo.
  */
 static void
 st_draw_vbo(struct gl_context *ctx,
@@ -137,9 +171,10 @@ st_draw_vbo(struct gl_context *ctx,
 	    GLboolean index_bounds_valid,
             GLuint min_index,
             GLuint max_index,
+            GLuint num_instances,
+            GLuint base_instance,
             struct gl_transform_feedback_object *tfb_vertcount,
-            unsigned stream,
-            struct gl_buffer_object *indirect)
+            unsigned stream)
 {
    struct st_context *st = st_context(ctx);
    struct pipe_draw_info info;
@@ -148,15 +183,14 @@ st_draw_vbo(struct gl_context *ctx,
 
    prepare_draw(st, ctx);
 
-   if (st->vertex_array_out_of_memory)
-      return;
-
    /* Initialize pipe_draw_info. */
    info.primitive_restart = false;
    info.vertices_per_patch = ctx->TessCtrlProgram.patch_vertices;
    info.indirect = NULL;
    info.count_from_stream_output = NULL;
    info.restart_index = 0;
+   info.start_instance = base_instance;
+   info.instance_count = num_instances;
 
    if (ib) {
       struct gl_buffer_object *bufobj = ib->obj;
@@ -167,11 +201,11 @@ st_draw_vbo(struct gl_context *ctx,
                                 nr_prims);
       }
 
-      info.index_size = ib->index_size;
+      info.index_size = 1 << ib->index_size_shift;
       info.min_index = min_index;
       info.max_index = max_index;
 
-      if (_mesa_is_bufferobj(bufobj)) {
+      if (bufobj) {
          /* indices are in a real VBO */
          info.has_user_indices = false;
          info.index.resource = st_buffer_object(bufobj)->buffer;
@@ -182,7 +216,7 @@ st_draw_vbo(struct gl_context *ctx,
          if (!info.index.resource)
             return;
 
-         start = pointer_to_offset(ib->ptr) / info.index_size;
+         start = pointer_to_offset(ib->ptr) >> ib->index_size_shift;
       } else {
          /* indices are in user space memory */
          info.has_user_indices = true;
@@ -203,8 +237,6 @@ st_draw_vbo(struct gl_context *ctx,
       }
    }
 
-   assert(!indirect);
-
    /* do actual drawing */
    for (i = 0; i < nr_prims; i++) {
       info.count = prims[i].count;
@@ -215,8 +247,6 @@ st_draw_vbo(struct gl_context *ctx,
 
       info.mode = translate_prim(ctx, prims[i].mode);
       info.start = start + prims[i].start;
-      info.start_instance = prims[i].base_instance;
-      info.instance_count = prims[i].num_instances;
       info.index_bias = prims[i].basevertex;
       info.drawid = prims[i].draw_id;
       if (!ib) {
@@ -255,9 +285,6 @@ st_indirect_draw_vbo(struct gl_context *ctx,
    assert(stride);
    prepare_draw(st, ctx);
 
-   if (st->vertex_array_out_of_memory)
-      return;
-
    memset(&indirect, 0, sizeof(indirect));
    util_draw_init_info(&info);
    info.start = 0; /* index offset / index size */
@@ -267,11 +294,11 @@ st_indirect_draw_vbo(struct gl_context *ctx,
       struct gl_buffer_object *bufobj = ib->obj;
 
       /* indices are always in a real VBO */
-      assert(_mesa_is_bufferobj(bufobj));
+      assert(bufobj);
 
-      info.index_size = ib->index_size;
+      info.index_size = 1 << ib->index_size_shift;
       info.index.resource = st_buffer_object(bufobj)->buffer;
-      info.start = pointer_to_offset(ib->ptr) / info.index_size;
+      info.start = pointer_to_offset(ib->ptr) >> ib->index_size_shift;
 
       /* Primitive restart is not handled by the VBO module in this case. */
       setup_primitive_restart(ctx, &info);

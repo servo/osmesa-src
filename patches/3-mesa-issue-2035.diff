@@ -1,5 +1,5 @@
---- a/mesa-src/src/gallium/state_trackers/osmesa/osmesa.c
-+++ b/mesa-src/src/gallium/state_trackers/osmesa/osmesa.c
+--- a/mesa-src/src/gallium/frontends/osmesa/osmesa.c
++++ b/mesa-src/src/gallium/frontends/osmesa/osmesa.c
 @@ -724,7 +730,11 @@ OSMesaDestroyContext(OSMesaContext osmesa)
  {
     if (osmesa) {

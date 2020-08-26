@@ -26,7 +26,6 @@
 #include "st_tgsi_lower_yuv.h"
 #include "tgsi/tgsi_transform.h"
 #include "tgsi/tgsi_scan.h"
-#include "tgsi/tgsi_dump.h"
 #include "util/u_debug.h"
 
 #include "util/bitscan.h"
@@ -192,10 +191,10 @@ emit_decls(struct tgsi_transform_context *tctx)
     */
 
    /* ITU-R BT.601 conversion */
-   emit_immed(tctx, 0, 1.164,  0.000,  1.596,  0.0);
-   emit_immed(tctx, 1, 1.164, -0.392, -0.813,  0.0);
-   emit_immed(tctx, 2, 1.164,  2.017,  0.000,  0.0);
-   emit_immed(tctx, 3, 0.0625, 0.500,  0.500,  1.0);
+   emit_immed(tctx, 0, 1.164f,  0.000f,  1.596f,  0.0f);
+   emit_immed(tctx, 1, 1.164f, -0.392f, -0.813f,  0.0f);
+   emit_immed(tctx, 2, 1.164f,  2.017f,  0.000f,  0.0f);
+   emit_immed(tctx, 3, 0.0625f, 0.500f,  0.500f,  1.0f);
 
    /*
     * Declare extra samplers / sampler-views:
@@ -269,31 +268,39 @@ yuv_to_rgb(struct tgsi_transform_context *tctx,
    tctx->emit_instruction(tctx, &inst);
 
    /* DP3 dst.x, tmpA, imm[0] */
-   inst = dp3_instruction();
-   reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_X);
-   reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
-   reg_src(&inst.Src[1], &ctx->imm[0], SWIZ(X, Y, Z, W));
-   tctx->emit_instruction(tctx, &inst);
+   if (dst->Register.WriteMask & TGSI_WRITEMASK_X) {
+      inst = dp3_instruction();
+      reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_X);
+      reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
+      reg_src(&inst.Src[1], &ctx->imm[0], SWIZ(X, Y, Z, W));
+      tctx->emit_instruction(tctx, &inst);
+   }
 
    /* DP3 dst.y, tmpA, imm[1] */
-   inst = dp3_instruction();
-   reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_Y);
-   reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
-   reg_src(&inst.Src[1], &ctx->imm[1], SWIZ(X, Y, Z, W));
-   tctx->emit_instruction(tctx, &inst);
+   if (dst->Register.WriteMask & TGSI_WRITEMASK_Y) {
+      inst = dp3_instruction();
+      reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_Y);
+      reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
+      reg_src(&inst.Src[1], &ctx->imm[1], SWIZ(X, Y, Z, W));
+      tctx->emit_instruction(tctx, &inst);
+   }
 
    /* DP3 dst.z, tmpA, imm[2] */
-   inst = dp3_instruction();
-   reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_Z);
-   reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
-   reg_src(&inst.Src[1], &ctx->imm[2], SWIZ(X, Y, Z, W));
-   tctx->emit_instruction(tctx, &inst);
+   if (dst->Register.WriteMask & TGSI_WRITEMASK_Z) {
+      inst = dp3_instruction();
+      reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_Z);
+      reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
+      reg_src(&inst.Src[1], &ctx->imm[2], SWIZ(X, Y, Z, W));
+      tctx->emit_instruction(tctx, &inst);
+   }
 
    /* MOV dst.w, imm[0].x */
-   inst = mov_instruction();
-   reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_W);
-   reg_src(&inst.Src[0], &ctx->imm[3], SWIZ(_, _, _, W));
-   tctx->emit_instruction(tctx, &inst);
+   if (dst->Register.WriteMask & TGSI_WRITEMASK_W) {
+      inst = mov_instruction();
+      reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_W);
+      reg_src(&inst.Src[0], &ctx->imm[3], SWIZ(_, _, _, W));
+      tctx->emit_instruction(tctx, &inst);
+   }
 }
 
 static void
@@ -434,7 +441,7 @@ st_tgsi_lower_yuv(const struct tgsi_token *tokens, unsigned free_slots,
    /* TODO better job of figuring out how many extra tokens we need..
     * this is a pain about tgsi_transform :-/
     */
-   newlen = tgsi_num_tokens(tokens) + 120;
+   newlen = tgsi_num_tokens(tokens) + 300;
    newtoks = tgsi_alloc_tokens(newlen);
    if (!newtoks)
       return NULL;

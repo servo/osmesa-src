@@ -63,7 +63,8 @@
  * reciprocal.  By breaking the operation down, constant reciprocals
  * can get constant folded.
  *
- * FDIV_TO_MUL_RCP only lowers single-precision floating point division;
+ * FDIV_TO_MUL_RCP lowers single-precision and half-precision
+ * floating point division;
  * DDIV_TO_MUL_RCP only lowers double-precision floating point division.
  * DIV_TO_MUL_RCP is a convenience macro that sets both flags.
  * INT_DIV_TO_MUL_RCP handles the integer case, converting to and from floating
@@ -123,6 +124,7 @@
 #include "ir.h"
 #include "ir_builder.h"
 #include "ir_optimization.h"
+#include "util/half_float.h"
 
 using namespace ir_builder;
 
@@ -169,8 +171,14 @@ private:
    void find_msb_to_float_cast(ir_expression *ir);
    void imul_high_to_mul(ir_expression *ir);
    void sqrt_to_abs_sqrt(ir_expression *ir);
+   void mul64_to_mul_and_mul_high(ir_expression *ir);
 
    ir_expression *_carry(operand a, operand b);
+
+   static ir_constant *_imm_fp(void *mem_ctx,
+                               const glsl_type *type,
+                               double f,
+                               unsigned vector_elements=1);
 };
 
 } /* anonymous namespace */
@@ -202,7 +210,7 @@ lower_instructions_visitor::sub_to_add_neg(ir_expression *ir)
 void
 lower_instructions_visitor::div_to_mul_rcp(ir_expression *ir)
 {
-   assert(ir->operands[1]->type->is_float() || ir->operands[1]->type->is_double());
+   assert(ir->operands[1]->type->is_float_16_32_64());
 
    /* New expression for the 1.0 / op1 */
    ir_rvalue *expr;
@@ -221,7 +229,7 @@ lower_instructions_visitor::div_to_mul_rcp(ir_expression *ir)
 void
 lower_instructions_visitor::int_div_to_mul_rcp(ir_expression *ir)
 {
-   assert(ir->operands[1]->type->is_integer());
+   assert(ir->operands[1]->type->is_integer_32());
 
    /* Be careful with integer division -- we need to do it as a
     * float and re-truncate, since rcp(n > 1) of an integer would
@@ -272,7 +280,7 @@ lower_instructions_visitor::int_div_to_mul_rcp(ir_expression *ir)
 void
 lower_instructions_visitor::exp_to_exp2(ir_expression *ir)
 {
-   ir_constant *log2_e = new(ir) ir_constant(float(M_LOG2E));
+   ir_constant *log2_e = _imm_fp(ir, ir->type, M_LOG2E);
 
    ir->operation = ir_unop_exp2;
    ir->init_num_operands();
@@ -303,7 +311,7 @@ lower_instructions_visitor::log_to_log2(ir_expression *ir)
    ir->init_num_operands();
    ir->operands[0] = new(ir) ir_expression(ir_unop_log2, ir->operands[0]->type,
 					   ir->operands[0], NULL);
-   ir->operands[1] = new(ir) ir_constant(float(1.0 / M_LOG2E));
+   ir->operands[1] = _imm_fp(ir, ir->operands[0]->type, 1.0 / M_LOG2E);
    this->progress = true;
 }
 
@@ -335,7 +343,7 @@ lower_instructions_visitor::mod_to_floor(ir_expression *ir)
    /* Don't generate new IR that would need to be lowered in an additional
     * pass.
     */
-   if ((lowering(FDIV_TO_MUL_RCP) && ir->type->is_float()) ||
+   if ((lowering(FDIV_TO_MUL_RCP) && ir->type->is_float_16_32()) ||
        (lowering(DDIV_TO_MUL_RCP) && ir->type->is_double()))
       div_to_mul_rcp(div_expr);
 
@@ -836,10 +844,11 @@ lower_instructions_visitor::sat_to_clamp(ir_expression *ir)
 
    ir->operation = ir_binop_min;
    ir->init_num_operands();
+
+   ir_constant *zero = _imm_fp(ir, ir->operands[0]->type, 0.0);
    ir->operands[0] = new(ir) ir_expression(ir_binop_max, ir->operands[0]->type,
-                                           ir->operands[0],
-                                           new(ir) ir_constant(0.0f));
-   ir->operands[1] = new(ir) ir_constant(1.0f);
+                                           ir->operands[0], zero);
+   ir->operands[1] = _imm_fp(ir, ir->operands[0]->type, 1.0);
 
    this->progress = true;
 }
@@ -1514,6 +1523,25 @@ lower_instructions_visitor::_carry(operand a, operand b)
       return carry(a, b);
 }
 
+ir_constant *
+lower_instructions_visitor::_imm_fp(void *mem_ctx,
+                                    const glsl_type *type,
+                                    double f,
+                                    unsigned vector_elements)
+{
+   switch (type->base_type) {
+   case GLSL_TYPE_FLOAT:
+      return new(mem_ctx) ir_constant((float) f, vector_elements);
+   case GLSL_TYPE_DOUBLE:
+      return new(mem_ctx) ir_constant((double) f, vector_elements);
+   case GLSL_TYPE_FLOAT16:
+      return new(mem_ctx) ir_constant(float16_t(f), vector_elements);
+   default:
+      assert(!"unknown float type for immediate");
+      return NULL;
+   }
+}
+
 void
 lower_instructions_visitor::imul_high_to_mul(ir_expression *ir)
 {
@@ -1666,6 +1694,66 @@ lower_instructions_visitor::sqrt_to_abs_sqrt(ir_expression *ir)
    this->progress = true;
 }
 
+void
+lower_instructions_visitor::mul64_to_mul_and_mul_high(ir_expression *ir)
+{
+   /* Lower 32x32-> 64 to
+    *    msb = imul_high(x_lo, y_lo)
+    *    lsb = mul(x_lo, y_lo)
+    */
+   const unsigned elements = ir->operands[0]->type->vector_elements;
+
+   const ir_expression_operation operation =
+      ir->type->base_type == GLSL_TYPE_UINT64 ? ir_unop_pack_uint_2x32
+                                              : ir_unop_pack_int_2x32;
+
+   const glsl_type *var_type = ir->type->base_type == GLSL_TYPE_UINT64
+                               ? glsl_type::uvec(elements)
+                               : glsl_type::ivec(elements);
+
+   const glsl_type *ret_type = ir->type->base_type == GLSL_TYPE_UINT64
+                               ? glsl_type::uvec2_type
+                               : glsl_type::ivec2_type;
+
+   ir_instruction &i = *base_ir;
+
+   ir_variable *msb =
+      new(ir) ir_variable(var_type, "msb", ir_var_temporary);
+   ir_variable *lsb =
+      new(ir) ir_variable(var_type, "lsb", ir_var_temporary);
+   ir_variable *x =
+      new(ir) ir_variable(var_type, "x", ir_var_temporary);
+   ir_variable *y =
+      new(ir) ir_variable(var_type, "y", ir_var_temporary);
+
+   i.insert_before(x);
+   i.insert_before(assign(x, ir->operands[0]));
+   i.insert_before(y);
+   i.insert_before(assign(y, ir->operands[1]));
+   i.insert_before(msb);
+   i.insert_before(lsb);
+
+   i.insert_before(assign(msb, imul_high(x, y)));
+   i.insert_before(assign(lsb, mul(x, y)));
+
+   ir_rvalue *result[4] = {NULL};
+   for (unsigned elem = 0; elem < elements; elem++) {
+      ir_rvalue *val = new(ir) ir_expression(ir_quadop_vector, ret_type,
+                                             swizzle(lsb, elem, 1),
+                                             swizzle(msb, elem, 1), NULL, NULL);
+      result[elem] = expr(operation, val);
+   }
+
+   ir->operation = ir_quadop_vector;
+   ir->init_num_operands();
+   ir->operands[0] = result[0];
+   ir->operands[1] = result[1];
+   ir->operands[2] = result[2];
+   ir->operands[3] = result[3];
+
+   this->progress = true;
+}
+
 ir_visitor_status
 lower_instructions_visitor::visit_leave(ir_expression *ir)
 {
@@ -1684,9 +1772,9 @@ lower_instructions_visitor::visit_leave(ir_expression *ir)
       break;
 
    case ir_binop_div:
-      if (ir->operands[1]->type->is_integer() && lowering(INT_DIV_TO_MUL_RCP))
+      if (ir->operands[1]->type->is_integer_32() && lowering(INT_DIV_TO_MUL_RCP))
 	 int_div_to_mul_rcp(ir);
-      else if ((ir->operands[1]->type->is_float() && lowering(FDIV_TO_MUL_RCP)) ||
+      else if ((ir->operands[1]->type->is_float_16_32() && lowering(FDIV_TO_MUL_RCP)) ||
                (ir->operands[1]->type->is_double() && lowering(DDIV_TO_MUL_RCP)))
 	 div_to_mul_rcp(ir);
       break;
@@ -1702,7 +1790,7 @@ lower_instructions_visitor::visit_leave(ir_expression *ir)
       break;
 
    case ir_binop_mod:
-      if (lowering(MOD_TO_FLOOR) && (ir->type->is_float() || ir->type->is_double()))
+      if (lowering(MOD_TO_FLOOR) && ir->type->is_float_16_32_64())
 	 mod_to_floor(ir);
       break;
 
@@ -1801,6 +1889,15 @@ lower_instructions_visitor::visit_leave(ir_expression *ir)
    case ir_binop_imul_high:
       if (lowering(IMUL_HIGH_TO_MUL))
          imul_high_to_mul(ir);
+      break;
+
+   case ir_binop_mul:
+      if (lowering(MUL64_TO_MUL_AND_MUL_HIGH) &&
+          (ir->type->base_type == GLSL_TYPE_INT64 ||
+           ir->type->base_type == GLSL_TYPE_UINT64) &&
+          (ir->operands[0]->type->base_type == GLSL_TYPE_INT ||
+           ir->operands[1]->type->base_type == GLSL_TYPE_UINT))
+         mul64_to_mul_and_mul_high(ir);
       break;
 
    case ir_unop_rsq:

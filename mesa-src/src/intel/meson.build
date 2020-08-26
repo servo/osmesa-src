@@ -21,13 +21,14 @@
 c_sse2_args = ['-msse2', '-mstackrealign']
 inc_intel = include_directories('.')
 
+subdir('genxml')
 subdir('blorp')
 subdir('dev')
-subdir('genxml')
 subdir('isl')
 subdir('common')
 subdir('compiler')
-if with_tools.contains('intel') or with_tools.contains('intel-ui')
+subdir('perf')
+if with_intel_tools
   subdir('tools')
 endif
 if with_intel_vk

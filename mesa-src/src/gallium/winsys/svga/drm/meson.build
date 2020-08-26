@@ -23,6 +23,7 @@ files_svgadrm = files(
   'vmw_buffer.c',
   'vmw_context.c',
   'vmw_fence.c',
+  'vmw_msg.c',
   'vmw_screen.c',
   'vmw_screen_dri.c',
   'vmw_screen_ioctl.c',
@@ -36,7 +37,8 @@ files_svgadrm = files(
 libsvgadrm = static_library(
   'svgadrm',
   files_svgadrm,
-  c_args : [c_vis_args, c_msvc_compat_args],
+  c_args : [c_msvc_compat_args],
+  gnu_symbol_visibility : 'hidden',
   include_directories : [
     inc_src, inc_include, inc_gallium, inc_gallium_aux,
     include_directories('../../../drivers/svga', '../../../drivers/svga/include'),

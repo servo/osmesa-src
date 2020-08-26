@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 """
 Contains a list of EGL functions to generate dispatch functions for.
 
@@ -196,8 +194,25 @@ EGL_FUNCTIONS = (
     # EGL_ANDROID_native_fence_sync
     _eglFunc("eglDupNativeFenceFDANDROID",           "display"),
 
+    # EGL_ANDROID_blob_cache
+    _eglFunc("eglSetBlobCacheFuncsANDROID",          "display"),
+
     # EGL_EXT_image_dma_buf_import_modifiers
     _eglFunc("eglQueryDmaBufFormatsEXT",             "display"),
     _eglFunc("eglQueryDmaBufModifiersEXT",           "display"),
+
+    # EGL_EXT_device_base
+    _eglFunc("eglQueryDeviceAttribEXT",              "device"),
+    _eglFunc("eglQueryDeviceStringEXT",              "device"),
+    _eglFunc("eglQueryDevicesEXT",                   "none"),
+    _eglFunc("eglQueryDisplayAttribEXT",             "display"),
+
+    # EGL_MESA_query_driver
+    _eglFunc("eglGetDisplayDriverName",              "display"),
+    _eglFunc("eglGetDisplayDriverConfig",            "display"),
+
+    # EGL_KHR_partial_update
+    _eglFunc("eglSetDamageRegionKHR",                "display"),
+
 )
 

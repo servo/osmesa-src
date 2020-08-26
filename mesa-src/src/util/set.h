@@ -47,6 +47,8 @@ struct set {
    bool (*key_equals_function)(const void *a, const void *b);
    uint32_t size;
    uint32_t rehash;
+   uint64_t size_magic;
+   uint64_t rehash_magic;
    uint32_t max_entries;
    uint32_t size_index;
    uint32_t entries;
@@ -65,6 +67,8 @@ void
 _mesa_set_destroy(struct set *set,
                   void (*delete_function)(struct set_entry *entry));
 void
+_mesa_set_resize(struct set *set, uint32_t entries);
+void
 _mesa_set_clear(struct set *set,
                 void (*delete_function)(struct set_entry *entry));
 
@@ -74,10 +78,22 @@ struct set_entry *
 _mesa_set_add_pre_hashed(struct set *set, uint32_t hash, const void *key);
 
 struct set_entry *
+_mesa_set_search_or_add(struct set *set, const void *key);
+struct set_entry *
+_mesa_set_search_or_add_pre_hashed(struct set *set, uint32_t hash,
+                                   const void *key);
+
+struct set_entry *
 _mesa_set_search(const struct set *set, const void *key);
 struct set_entry *
 _mesa_set_search_pre_hashed(const struct set *set, uint32_t hash,
                             const void *key);
+
+struct set_entry *
+_mesa_set_search_and_add(struct set *set, const void *key, bool *replaced);
+struct set_entry *
+_mesa_set_search_and_add_pre_hashed(struct set *set, uint32_t hash,
+                                    const void *key, bool *replaced);
 
 void
 _mesa_set_remove(struct set *set, struct set_entry *entry);
@@ -90,6 +106,12 @@ _mesa_set_next_entry(const struct set *set, struct set_entry *entry);
 struct set_entry *
 _mesa_set_random_entry(struct set *set,
                        int (*predicate)(struct set_entry *entry));
+
+struct set *
+_mesa_pointer_set_create(void *mem_ctx);
+
+bool
+_mesa_set_intersects(struct set *a, struct set *b);
 
 /**
  * This foreach function is safe against deletion, but not against

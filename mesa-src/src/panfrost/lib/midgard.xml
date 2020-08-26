@@ -1,0 +1,482 @@
+<panxml>
+
+  <enum name="Attribute Type">
+    <value name="1D" value="1"/>
+    <value name="1D POT Divisor" value="2"/>
+    <value name="1D Modulus" value="3"/>
+    <value name="1D NPOT Divisor" value="4"/>
+    <value name="Continuation" value="32"/>
+  </enum>
+
+  <enum name="Attribute Special">
+    <value name="Vertex ID" value="34"/>
+    <value name="Instance ID" value="36"/>
+    <value name="Frag Coord" value="37"/>
+    <value name="Front Facing" value="38"/>
+    <value name="Point Coord" value="97"/>
+  </enum>
+
+  <enum name="Channel">
+    <value name="R" value="0"/>
+    <value name="G" value="1"/>
+    <value name="B" value="2"/>
+    <value name="A" value="3"/>
+    <value name="0" value="4"/>
+    <value name="1" value="5"/>
+  </enum>
+
+  <enum name="Depth Source">
+    <value name="None" value="0"/>
+    <value name="Fixed function" value="2"/>
+    <value name="Shader" value="3"/>
+  </enum>
+ 
+  <enum name="Job Type">
+    <value name="Not started" value="0"/>
+    <value name="Null" value="1"/>
+    <value name="Write value" value="2"/>
+    <value name="Cache flush" value="3"/>
+    <value name="Compute" value="4"/>
+    <value name="Vertex" value="5"/>
+    <value name="Geometry" value="6"/>
+    <value name="Tiler" value="7"/>
+    <value name="Fused" value="8"/>
+    <value name="Fragment" value="9"/>
+  </enum>
+
+  <enum name="Draw Mode">
+    <value name="None" value="0"/>
+    <value name="Points" value="1"/>
+    <value name="Lines" value="2"/>
+    <value name="Line strip" value="4"/>
+    <value name="Line loop" value="6"/>
+    <value name="Triangles" value="8"/>
+    <value name="Triangle strip" value="10"/>
+    <value name="Triangle fan" value="12"/>
+    <value name="Polygon" value="13"/>
+    <value name="Quads" value="14"/>
+    <value name="Quad strip" value="15"/>
+  </enum>
+
+  <enum name="Exception Access">
+    <value name="None" value="0"/>
+    <value name="Execute" value="2"/>
+    <value name="Read" value="1"/>
+    <value name="Write" value="3"/>
+  </enum>
+
+  <enum name="Func">
+    <value name="Never" value="0"/>
+    <value name="Less" value="1"/>
+    <value name="Equal" value="2"/>
+    <value name="Lequal" value="3"/>
+    <value name="Greater" value="4"/>
+    <value name="Not Equal" value="5"/>
+    <value name="Gequal" value="6"/>
+    <value name="Always" value="7"/>
+  </enum>
+
+  <enum name="Format">
+    <value name="ETC2 RGB8" value="1"/>
+    <value name="ETC2 R11 UNORM" value="2"/>
+    <value name="ETC2 RGBA8" value="3"/>
+    <value name="ETC2 RG11 UNORM" value="4"/>
+    <value name="BC1 UNORM" value="7"/>
+    <value name="BC2 UNORM" value="8"/>
+    <value name="BC3 UNORM" value="9"/>
+    <value name="BC4 UNORM" value="10"/>
+    <value name="BC4 SNORM" value="11"/>
+    <value name="BC5 UNORM" value="12"/>
+    <value name="BC5 SNORM" value="13"/>
+    <value name="BC6H UF16" value="14"/>
+    <value name="BC6H SF16" value="15"/>
+    <value name="BC7 UNORM" value="16"/>
+    <value name="ETC2 R11 SNORM" value="17"/>
+    <value name="ETC2 RG11 SNORM" value="18"/>
+    <value name="ETC2 RGB8A1" value="19"/>
+    <value name="ASTC 3D LDR" value="20"/>
+    <value name="ASTC 3D HDR" value="21"/>
+    <value name="ASTC 2D LDR" value="22"/>
+    <value name="ASTC 2D HDR" value="23"/>
+    <value name="RGB565" value="64"/>
+    <value name="RGB5 X1 UNORM" value="65"/>
+    <value name="RGB5 A1 UNORM" value="66"/>
+    <value name="RGB10 A2 UNORM" value="67"/>
+    <value name="RGB10 A2 SNORM" value="69"/>
+    <value name="RGB10 A2UI" value="71"/>
+    <value name="RGB10 A2I" value="73"/>
+    <value name="RGB332 UNORM" value="75"/>
+    <value name="RGB233 UNORM" value="76"/>
+    <value name="Z24X8 UNORM" value="77"/>
+    <value name="R32 FIXED" value="81"/>
+    <value name="RG32 FIXED" value="82"/>
+    <value name="RGB32 FIXED" value="83"/>
+    <value name="RGBA32 FIXED" value="84"/>
+    <value name="R11F G11F B10F" value="89"/>
+    <value name="R9F G9F B9F E5F" value="91"/>
+    <value name="VARYING POS" value="94"/>
+    <value name="VARYING DISCARD" value="95"/>
+    <value name="R8 SNORM" value="99"/>
+    <value name="R16 SNORM" value="100"/>
+    <value name="R32 SNORM" value="101"/>
+    <value name="RG8 SNORM" value="107"/>
+    <value name="RG16 SNORM" value="108"/>
+    <value name="RG32 SNORM" value="109"/>
+    <value name="RGB8 SNORM" value="115"/>
+    <value name="RGB16 SNORM" value="116"/>
+    <value name="RGB32 SNORM" value="117"/>
+    <value name="RGBA8 SNORM" value="123"/>
+    <value name="RGBA16 SNORM" value="124"/>
+    <value name="RGBA32 SNORM" value="125"/>
+    <value name="R8UI" value="131"/>
+    <value name="R16UI" value="132"/>
+    <value name="R32UI" value="133"/>
+    <value name="RG8UI" value="139"/>
+    <value name="RG16UI" value="140"/>
+    <value name="RG32UI" value="141"/>
+    <value name="RGB8UI" value="147"/>
+    <value name="RGB16UI" value="148"/>
+    <value name="RGB32UI" value="149"/>
+    <value name="RGBA8UI" value="155"/>
+    <value name="RGBA16UI" value="156"/>
+    <value name="RGBA32UI" value="157"/>
+    <value name="R8 UNORM" value="163"/>
+    <value name="R16 UNORM" value="164"/>
+    <value name="R32 UNORM" value="165"/>
+    <value name="R32F" value="167"/>
+    <value name="RG8 UNORM" value="171"/>
+    <value name="RG16 UNORM" value="172"/>
+    <value name="RG32 UNORM" value="173"/>
+    <value name="RG32F" value="175"/>
+    <value name="RGB8 UNORM" value="179"/>
+    <value name="RGB16 UNORM" value="180"/>
+    <value name="RGB32 UNORM" value="181"/>
+    <value name="RGB32F" value="183"/>
+    <value name="RGBA4 UNORM" value="186"/>
+    <value name="RGBA8 UNORM" value="187"/>
+    <value name="RGBA16 UNORM" value="188"/>
+    <value name="RGBA32 UNORM" value="189"/>
+    <value name="RGBA32F" value="191"/>
+    <value name="R8I" value="195"/>
+    <value name="R16I" value="196"/>
+    <value name="R32I" value="197"/>
+    <value name="R16F" value="199"/>
+    <value name="RG8I" value="203"/>
+    <value name="RG16I" value="204"/>
+    <value name="RG32I" value="205"/>
+    <value name="RG16F" value="207"/>
+    <value name="RGB8I" value="211"/>
+    <value name="RGB16I" value="212"/>
+    <value name="RGB32I" value="213"/>
+    <value name="RGB16F" value="215"/>
+    <value name="RGBA8I" value="219"/>
+    <value name="RGBA16I" value="220"/>
+    <value name="RGBA32I" value="221"/>
+    <value name="RGBA16F" value="223"/>
+    <value name="RGBA4" value="232"/>
+    <value name="RGBA8 2" value="237"/>
+    <value name="RGB10 A2 2" value="238"/>
+  </enum>
+
+  <enum name="Block Format">
+    <!--- 16x16 block u-interleaved -->
+    <value name="Tiled" value="0"/>
+    <value name="Linear" value="2"/>
+    <value name="AFBC" value="3"/>
+  </enum>
+
+  <enum name="Mipmap Mode">
+    <value name="Nearest" value="0"/>
+    <value name="None" value="1"/>
+    <value name="Trilinear" value="3"/>
+  </enum>
+
+  <enum name="MSAA">
+    <value name="Single" value="0"/>
+    <!-- N samples, 1 surface, resolved -->
+    <value name="Average" value="1"/>
+    <!-- N samples, 1 surface, unresolved -->
+    <value name="Multiple" value="2"/>
+    <!-- N samples, N surfaces --> 
+    <value name="Layered" value="3"/>
+  </enum>
+
+  <enum name="Stencil Op">
+    <value name="Keep" value="0"/>
+    <value name="Replace" value="1"/>
+    <value name="Zero" value="2"/>
+    <value name="Invert" value="3"/>
+    <value name="Incr Wrap" value="4"/>
+    <value name="Decr Wrap" value="5"/>
+    <value name="Incr Sat" value="6"/>
+    <value name="Decr Sat" value="7"/>
+  </enum>
+
+  <enum name="Texture Dimension">
+    <value name="Cube" value="0"/>
+    <value name="1D" value="1"/>
+    <value name="2D" value="2"/>
+    <value name="3D" value="3"/>
+  </enum>
+
+  <enum name="Texture Layout">
+    <!--- 16x16 block u-interleaved -->
+    <value name="Tiled" value="1"/>
+    <value name="Linear" value="2"/>
+    <value name="AFBC" value="12"/>
+  </enum>
+
+  <enum name="Wrap Mode">
+    <value name="Repeat" value="8"/>
+    <value name="Clamp to Edge" value="9"/>
+    <value name="Clamp" value="10"/>
+    <value name="Clamp to Border" value="11"/>
+    <value name="Mirrored Repeat" value="12"/>
+    <value name="Mirrored Clamp to Edge" value="13"/>
+    <value name="Mirrored Clamp" value="14"/>
+    <value name="Mirrored Clamp to Border" value="15"/>
+  </enum>
+
+  <struct name="Attribute">
+    <field name="Buffer index" size="9" start="0" type="uint"/>
+    <field name="Unknown" size="1" start="9" type="bool" default="true"/>
+    <field name="Format" size="22" start="10" type="uint"/>
+    <field name="Offset" size="32" start="32" type="int"/>
+  </struct>
+
+  <struct name="Attribute Buffer">
+    <field name="Special" size="8" start="0" type="Attribute Special"/>
+    <field name="Type" size="6" start="0" type="Attribute Type" default="1D"/>
+    <field name="Pointer" size="50" start="6" type="address" modifier="shr(6)"/>
+    <field name="Stride" size="32" start="64" type="uint"/>
+    <field name="Size" size="32" start="96" type="uint"/>
+
+    <field name="Divisor R" size="5" start="56" type="uint"/>
+    <field name="Divisor P" size="3" start="61" type="uint"/>
+    <field name="Divisor E" size="1" start="61" type="uint"/>
+  </struct>
+
+  <struct name="Attribute Buffer Continuation NPOT">
+    <field name="Type" size="6" start="0:0" type="Attribute Type" default="Continuation"/>
+    <field name="Divisor Numerator" size="32" start="1:0" type="uint"/>
+    <field name="Divisor" size="32" start="3:0" type="uint"/>
+  </struct>
+
+  <struct name="Blend Equation" size="1">
+    <field name="RGB Mode" size="12" start="0" type="uint"/>
+    <field name="Alpha Mode" size="12" start="12" type="uint"/>
+    <field name="Color mask" size="4" start="28" type="uint" default="15"/>
+  </struct>
+
+  <struct name="Blend Flags" size="1">
+    <field name="Load destination" size="1" start="0" type="bool" default="false"/>
+    <field name="Midgard blend shader" size="1" start="1" type="bool" default="false"/>
+    <field name="Enable" size="1" start="9" type="bool" default="true"/>
+    <field name="sRGB" size="1" start="10" type="bool" default="false"/>
+    <field name="Dither disable" size="1" start="11" type="bool" default="false"/>
+  </struct>
+
+  <struct name="Midgard Sampler">
+    <field name="Magnify Nearest" size="1" start="0" type="bool" default="true"/>
+    <field name="Minify Nearest" size="1" start="1" type="bool" default="true"/>
+    <field name="Mipmap Mode" size="2" start="3" type="Mipmap Mode" default="Nearest"/>
+    <field name="Normalized Coordinates" size="1" start="5" type="bool" default="true"/>
+    <field name="LOD Bias" size="16" start="0:16" type="int" default="0"/>
+    <field name="Minimum LOD" size="16" start="1:0" type="uint" default="0"/>
+    <field name="Maximum LOD" size="16" start="1:16" type="uint" default="1"/>
+    <field name="Wrap Mode S" size="4" start="2:0" type="Wrap Mode" default="Clamp to Edge"/>
+    <field name="Wrap Mode T" size="4" start="2:4" type="Wrap Mode" default="Clamp to Edge"/>
+    <field name="Wrap Mode R" size="4" start="2:8" type="Wrap Mode" default="Clamp to Edge"/>
+    <field name="Compare Function" size="3" start="2:12" type="Func" default="Never"/>
+    <field name="Seamless Cube Map" size="1" start="2:15" type="bool" default="true"/>
+    <field name="Border Color R" size="32" start="4:0" type="float" default="0.0"/>
+    <field name="Border Color G" size="32" start="5:0" type="float" default="0.0"/>
+    <field name="Border Color B" size="32" start="6:0" type="float" default="0.0"/>
+    <field name="Border Color A" size="32" start="7:0" type="float" default="0.0"/>
+  </struct>
+
+  <struct name="Midgard Texture" size="8">
+    <field name="Width" size="16" start="0:0" type="uint" modifier="minus(1)"/>
+    <field name="Height" size="16" start="0:16" type="uint" modifier="minus(1)"/>
+    <field name="Depth" size="16" start="1:0" type="uint" modifier="minus(1)"/>
+    <field name="Array size" size="16" start="1:16" type="uint" modifier="minus(1)"/>
+    <field name="Format" size="22" start="2:0" type="uint"/>
+    <field name="Dimension" size="2" start="2:22" type="Texture Dimension"/>
+    <field name="Texel ordering" size="4" start="2:24" type="Texture Layout"/>
+    <field name="Unknown" size="1" start="2:28" type="bool" default="true"/>
+    <field name="Manual stride" size="1" start="2:29" type="bool" default="false"/>
+    <field name="Levels" size="8" start="3:24" type="uint"/>
+    <field name="Swizzle" size="12" start="4:0" type="uint"/>
+  </struct>
+
+  <struct name="Bifrost Sampler" size="8">
+    <field name="Type" size="4" start="0:0" type="uint" default="1"/>
+    <field name="Wrap Mode R" size="4" start="0:8" type="Wrap Mode" default="Clamp to Edge"/>
+    <field name="Wrap Mode T" size="4" start="0:12" type="Wrap Mode" default="Clamp to Edge"/>
+    <field name="Wrap Mode S" size="4" start="0:16" type="Wrap Mode" default="Clamp to Edge"/>
+    <field name="Seamless Cube Map" size="1" start="0:23" type="bool" default="true"/>
+    <field name="Normalized Coordinates" size="1" start="0:25" type="bool" default="true"/>
+    <field name="Minify Linear" size="1" start="0:27" type="bool" default="false"/>
+    <field name="Magnify Linear" size="1" start="0:28" type="bool" default="false"/>
+    <field name="Mipmap Mode" size="2" start="0:30" type="Mipmap Mode" default="Nearest"/>
+    <field name="Minimum LOD" size="13" start="1:0" type="uint" default="0"/>
+    <field name="Compare Function" size="3" start="1:13" type="Func" default="Never"/>
+    <field name="Maximum LOD" size="13" start="1:16" type="uint" default="0"/>
+    <field name="LOD bias" size="16" start="2:0" type="uint" default="0"/>
+  </struct>
+
+  <struct name="Bifrost Texture" size="8">
+    <field name="Type" size="4" start="0:0" type="uint" default="2"/>
+    <field name="Dimension" size="2" start="0:4" type="Texture Dimension"/>
+    <field name="Format" size="22" start="0:10" type="uint"/>
+    <field name="Width" size="16" start="1:0" type="uint" modifier="minus(1)"/>
+    <field name="Height" size="16" start="1:16" type="uint" modifier="minus(1)"/>
+    <field name="Swizzle" size="12" start="2:0" type="uint"/>
+    <field name="Texel ordering" size="4" start="2:12" type="Texture Layout"/>
+    <field name="Levels" size="5" start="2:16" type="uint"/>
+    <field name="Minimum LOD" size="13" start="3:0" type="uint" default="0"/>
+    <field name="Maximum LOD" size="13" start="3:16" type="uint" default="0"/>
+    <field name="Surfaces" size="64" start="4:0" type="address"/>
+  </struct>
+
+  <struct name="Midgard Properties" size="1">
+    <field name="Uniform buffer count" size="8" start="0" type="uint"/>
+    <field name="Depth source" size="2" start="8" type="Depth Source" default="None"/>
+    <field name="Early-z enable" size="1" start="10" type="bool" default="false"/>
+    <field name="Helper invocation enable" size="1" start="11" type="bool" default="false"/>
+    <field name="Reads depth/stencil" size="1" start="12" type="bool" default="false"/>
+    <field name="Writes globals" size="1" start="13" type="bool" default="false"/>
+    <field name="Reads tilebuffer" size="1" start="14" type="bool" default="false"/>
+    <field name="Work register count" size="5" start="16" type="uint"/>
+    <field name="Uniform count" size="5" start="21" type="uint"/>
+    <field name="Stencil from shader" size="1" start="28" type="bool"/>
+    <field name="Suppress Inf/NaN" size="1" start="29" type="bool"/>
+  </struct>
+
+  <struct name="Bifrost Properties" size="1">
+    <field name="Uniform buffer count" size="8" start="0" type="uint"/>
+    <!--- If set, disables registers [R16, R47] for full thread count -->
+    <field name="Full thread" size="1" start="13" type="bool" default="false"/>
+    <field name="Early-z enable" size="1" start="19" type="bool" default="false"/>
+    <field name="First ATEST" size="1" start="30" type="bool" default="false"/>
+    <!-- XXX: This is awful -->
+    <field name="Unknown" size="32" start="0" type="uint"/>
+  </struct>
+
+  <struct name="Preload" size="1">
+    <field name="Untyped" size="15" start="0" type="uint"/>
+    <field name="Uniform count" size="7" start="15" type="uint"/>
+  </struct>
+
+  <struct name="Preload Compute" size="1">
+    <field name="Local Invocation XY" size="1" start="7" type="bool"/>
+    <field name="Local Invocation Z" size="1" start="8" type="bool"/>
+    <field name="Work group X" size="1" start="9" type="bool"/>
+    <field name="Work group Y" size="1" start="10" type="bool"/>
+    <field name="Work group Z" size="1" start="11" type="bool"/>
+    <field name="Global Invocation X" size="1" start="12" type="bool"/>
+    <field name="Global Invocation Y" size="1" start="13" type="bool"/>
+    <field name="Global Invocation Z" size="1" start="14" type="bool"/>
+    <field name="Uniform count" size="7" start="15" type="uint"/>
+  </struct>
+
+  <struct name="Preload Vertex" size="1">
+    <field name="Vertex ID" size="1" start="13" type="bool"/>
+    <field name="Instance ID" size="1" start="14" type="bool"/>
+    <field name="Uniform count" size="7" start="15" type="uint"/>
+  </struct>
+
+  <struct name="Preload Fragment" size="1">
+    <field name="Unknown" size="1" start="7" type="bool" default="true"/>
+    <field name="Primitive ID" size="1" start="9" type="bool"/>
+    <field name="Front facing" size="1" start="10" type="bool"/>
+    <field name="Fragment position" size="1" start="11" type="bool"/>
+    <field name="Sample mask/ID" size="1" start="12" type="bool"/>
+    <field name="Uniform count" size="7" start="15" type="uint"/>
+  </struct>
+
+  <struct name="Shader" size="4">
+    <field name="Shader" size="64" start="0:0" type="address"/>
+    <field name="Sampler count" size="16" start="2:0" type="uint"/>
+    <field name="Texture count" size="16" start="2:16" type="uint"/>
+    <field name="Attribute count" size="16" start="3:0" type="uint"/>
+    <field name="Varying count" size="16" start="3:16" type="uint"/>
+  </struct>
+
+  <struct name="Multisample, Misc" size="1">
+    <field name="Sample mask" size="16" start="0" type="uint"/>
+    <field name="Multisample enable" size="1" start="16" type="bool"/>
+    <!-- TODO 17 -->
+    <field name="Evaluate per-sample" size="1" start="18" type="bool"/>
+    <field name="Unknown 1" size="1" start="19" type="bool"/>
+    <field name="Unknown 2" size="1" start="20" type="bool"/>
+    <field name="SFBD Load destination" size="1" start="21" type="bool"/>
+    <field name="SFBD Blend shader" size="1" start="22" type="bool"/>
+    <!-- TODO 23 -->
+    <field name="Depth function" size="3" start="24" type="Func"/>
+    <field name="Depth write mask" size="1" start="27" type="bool"/>
+    <field name="Near discard" size="1" start="28" type="bool"/>
+    <field name="Far discard" size="1" start="29" type="bool"/>
+    <!-- TODO: 30-31 -->
+  </struct>
+
+  <struct name="Stencil Mask, Misc" size="1">
+    <field name="Stencil mask front" size="8" start="0" type="uint"/>
+    <field name="Stencil mask back" size="8" start="8" type="uint"/>
+    <field name="Stencil enable" size="1" start="16" type="bool"/>
+    <field name="Alpha-to-coverage" size="1" start="17" type="bool"/>
+    <!-- TODO 18-19 -->
+    <field name="SFBD Write enable" size="1" start="20" type="bool"/>
+    <field name="Unknown 1" size="3" start="21" type="uint"/>
+    <field name="SFBD sRGB" size="1" start="24" type="bool"/>
+    <field name="SFBD Dither disable" size="1" start="25" type="bool"/>
+    <field name="Unknown 2" size="1" start="26" type="bool"/>
+    <field name="Depth Range 1" size="1" start="28" type="bool"/>
+    <field name="Depth Range 2" size="1" start="29" type="bool"/>
+    <field name="Single-sampled lines" size="1" start="30" type="bool"/>
+   <!-- TODO: 31 -->
+  </struct>
+
+  <struct name="Stencil">
+    <field name="Reference Value" size="8" start="0" type="uint"/>
+    <field name="Mask" size="8" start="8" type="uint" default="0xFF"/>
+    <field name="Compare Function" size="3" start="16" type="Func"/>
+    <field name="Stencil Fail" size="3" start="19" type="Stencil Op"/>
+    <field name="Depth Fail" size="3" start="22" type="Stencil Op"/>
+    <field name="Depth Pass" size="3" start="25" type="Stencil Op"/>
+  </struct>
+
+  <struct name="State" with_opaque="true">
+    <field name="Shader" size="128" start="0:0" type="Shader"/>
+    <field name="Properties" size="32" start="4:0" type="uint"/>
+    <field name="Depth units" size="32" start="5:0" type="float"/>
+    <field name="Depth factor" size="32" start="6:0" type="float"/>
+    <!-- TODO: word 7 -->
+    <field name="Multisample, Misc" size="32" start="8:0" type="Multisample, Misc"/>
+    <field name="Stencil Mask, Misc" size="32" start="9:0" type="Stencil Mask, Misc"/>
+    <field name="Stencil front" size="32" start="10:0" type="Stencil"/>
+    <field name="Stencil back" size="32" start="11:0" type="Stencil"/>
+    <field name="Preload" size="32" start="12:0" type="Preload"/>
+    <!--- TODO: word 13 -->
+    <field name="SFBD Blend" size="64" start="14:0" type="uint"/>
+  </struct>
+
+  <struct name="Uniform Buffer">
+    <field name="Entries" size="12" start="0" type="uint" modifier="minus(1)"/>
+    <field name="Pointer" size="52" start="12" type="address" modifier="shr(4)" element="16" count="Entries"/>
+  </struct>
+
+  <struct name="Viewport">
+    <field name="Minimum X" size="32" start="0:0" default="-INFINITY" type="float"/>
+    <field name="Minimum Y" size="32" start="1:0" default="-INFINITY" type="float"/>
+    <field name="Maximum X" size="32" start="2:0" default="+INFINITY" type="float"/>
+    <field name="Maximum Y" size="32" start="3:0" default="+INFINITY" type="float"/>
+    <field name="Minimum Z" size="32" start="4:0" default="0.0" type="float"/>
+    <field name="Maximum Z" size="32" start="5:0" default="1.0" type="float"/>
+    <field name="Scissor Minimum X" size="16" start="6:0" default="0" type="uint"/>
+    <field name="Scissor Minimum Y" size="16" start="6:16" default="0" type="uint"/>
+    <field name="Scissor Maximum X" size="16" start="7:0" type="uint"/>
+    <field name="Scissor Maximum Y" size="16" start="7:16" type="uint"/>
+  </struct>
+
+</panxml>

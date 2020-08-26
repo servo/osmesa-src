@@ -31,12 +31,10 @@
 
 #include "freedreno_context.h"
 
-#include "ir3_shader.h"
+#include "ir3/ir3_shader.h"
 
 struct fd5_context {
 	struct fd_context base;
-
-	struct fd_bo *vs_pvt_mem, *fs_pvt_mem;
 
 	/* This only needs to be 4 * num_of_pipes bytes (ie. 32 bytes).  We
 	 * could combine it with another allocation.
@@ -97,7 +95,7 @@ fd5_emit_flush(struct fd_context *ctx, struct fd_ringbuffer *ring)
 {
 	OUT_PKT7(ring, CP_EVENT_WRITE, 4);
 	OUT_RING(ring, CACHE_FLUSH_TS);
-	OUT_RELOCW(ring, fd5_context(ctx)->blit_mem, 0, 0, 0);  /* ADDR_LO/HI */
+	OUT_RELOC(ring, fd5_context(ctx)->blit_mem, 0, 0, 0);  /* ADDR_LO/HI */
 	OUT_RING(ring, 0x00000000);
 
 	OUT_WFI5(ring);

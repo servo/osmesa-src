@@ -44,14 +44,13 @@
 #include "builtin_functions.h"
 #include "opt_add_neg_to_sub.h"
 #include "main/mtypes.h"
+#include "program/program.h"
 
 class dead_variable_visitor : public ir_hierarchical_visitor {
 public:
    dead_variable_visitor()
    {
-      variables = _mesa_set_create(NULL,
-                                   _mesa_hash_pointer,
-                                   _mesa_key_pointer_equal);
+      variables = _mesa_pointer_set_create(NULL);
    }
 
    virtual ~dead_variable_visitor()
@@ -100,32 +99,21 @@ private:
 };
 
 static void
-init_gl_program(struct gl_program *prog, bool is_arb_asm)
+init_gl_program(struct gl_program *prog, bool is_arb_asm, gl_shader_stage stage)
 {
    prog->RefCount = 1;
    prog->Format = GL_PROGRAM_FORMAT_ASCII_ARB;
    prog->is_arb_asm = is_arb_asm;
+   prog->info.stage = stage;
 }
 
 static struct gl_program *
-new_program(UNUSED struct gl_context *ctx, GLenum target,
+new_program(UNUSED struct gl_context *ctx, gl_shader_stage stage,
             UNUSED GLuint id, bool is_arb_asm)
 {
-   switch (target) {
-   case GL_VERTEX_PROGRAM_ARB: /* == GL_VERTEX_PROGRAM_NV */
-   case GL_GEOMETRY_PROGRAM_NV:
-   case GL_TESS_CONTROL_PROGRAM_NV:
-   case GL_TESS_EVALUATION_PROGRAM_NV:
-   case GL_FRAGMENT_PROGRAM_ARB:
-   case GL_COMPUTE_PROGRAM_NV: {
-      struct gl_program *prog = rzalloc(NULL, struct gl_program);
-      init_gl_program(prog, is_arb_asm);
-      return prog;
-   }
-   default:
-      printf("bad target in new_program\n");
-      return NULL;
-   }
+   struct gl_program *prog = rzalloc(NULL, struct gl_program);
+   init_gl_program(prog, is_arb_asm, stage);
+   return prog;
 }
 
 static const struct standalone_options *options;
@@ -134,12 +122,15 @@ static void
 initialize_context(struct gl_context *ctx, gl_api api)
 {
    initialize_context_to_defaults(ctx, api);
+   _mesa_glsl_builtin_functions_init_or_ref();
 
    /* The standalone compiler needs to claim support for almost
     * everything in order to compile the built-in functions.
     */
    ctx->Const.GLSLVersion = options->glsl_version;
    ctx->Extensions.ARB_ES3_compatibility = true;
+   ctx->Extensions.ARB_ES3_1_compatibility = true;
+   ctx->Extensions.ARB_ES3_2_compatibility = true;
    ctx->Const.MaxComputeWorkGroupCount[0] = 65535;
    ctx->Const.MaxComputeWorkGroupCount[1] = 65535;
    ctx->Const.MaxComputeWorkGroupCount[2] = 65535;
@@ -267,6 +258,9 @@ initialize_context(struct gl_context *ctx, gl_api api)
       ctx->Const.MaxUniformBufferBindings = 84;
       ctx->Const.MaxVertexStreams = 4;
       ctx->Const.MaxTransformFeedbackBuffers = 4;
+      ctx->Const.MaxShaderStorageBufferBindings = 4;
+      ctx->Const.MaxShaderStorageBlockSize = 4096;
+      ctx->Const.MaxAtomicBufferBindings = 4;
 
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxAttribs = 16;
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxTextureImageUnits = 16;
@@ -402,11 +396,9 @@ compile_shader(struct gl_context *ctx, struct gl_shader *shader)
 
 extern "C" struct gl_shader_program *
 standalone_compile_shader(const struct standalone_options *_options,
-      unsigned num_files, char* const* files)
+      unsigned num_files, char* const* files, struct gl_context *ctx)
 {
    int status = EXIT_SUCCESS;
-   static struct gl_context local_ctx;
-   struct gl_context *ctx = &local_ctx;
    bool glsl_es = false;
 
    options = _options;
@@ -440,6 +432,17 @@ standalone_compile_shader(const struct standalone_options *_options,
       initialize_context(ctx, API_OPENGLES2);
    } else {
       initialize_context(ctx, options->glsl_version > 130 ? API_OPENGL_CORE : API_OPENGL_COMPAT);
+   }
+
+   if (options->lower_precision) {
+      for (unsigned i = MESA_SHADER_VERTEX; i <= MESA_SHADER_FRAGMENT; i++) {
+         struct gl_shader_compiler_options *options =
+            &ctx->Const.ShaderCompilerOptions[i];
+         options->LowerPrecisionFloat16 = true;
+         options->LowerPrecisionInt16 = true;
+         options->LowerPrecisionDerivatives = true;
+         options->LowerPrecisionConstants = true;
+      }
    }
 
    struct gl_shader_program *whole_program;
@@ -616,6 +619,5 @@ standalone_compiler_cleanup(struct gl_shader_program *whole_program)
    delete whole_program->FragDataIndexBindings;
 
    ralloc_free(whole_program);
-   _mesa_glsl_release_types();
-   _mesa_glsl_release_builtin_functions();
+   _mesa_glsl_builtin_functions_decref();
 }

@@ -36,14 +36,14 @@
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 
-#define ERROR(args...) debug_printf("ERROR: " args)
-#define WARN(args...) debug_printf("WARNING: " args)
-#define INFO(args...) debug_printf(args)
+#define ERROR(args...) _debug_printf("ERROR: " args)
+#define WARN(args...) _debug_printf("WARNING: " args)
+#define INFO(args...) _debug_printf(args)
 
 #define INFO_DBG(m, f, args...)          \
    do {                                  \
       if (m & NV50_IR_DEBUG_##f)         \
-         debug_printf(args);             \
+         _debug_printf(args);             \
    } while(0)
 
 #define FATAL(args...)          \
@@ -145,7 +145,7 @@ public:
 #define DLLIST_EMPTY(__list) ((__list)->next == (__list))
 
 #define DLLIST_FOR_EACH(list, it) \
-   for (DLList::Iterator (it) = (list)->iterator(); !(it).end(); (it).next())
+   for (DLList::Iterator it = (list)->iterator(); !(it).end(); (it).next())
 
 class DLList
 {
@@ -539,8 +539,11 @@ public:
       return data[i / 32] & (((1 << n) - 1) << (i % 32));
    }
 
-   // Find a range of size (<= 32) clear bits aligned to roundup_pow2(size).
-   int findFreeRange(unsigned int size) const;
+   // Find a range of count (<= 32) clear bits aligned to roundup_pow2(count).
+   int findFreeRange(unsigned int count, unsigned int max) const;
+   inline int findFreeRange(unsigned int count) const {
+      return findFreeRange(count, size);
+   }
 
    BitSet& operator|=(const BitSet&);
 

@@ -30,14 +30,15 @@
 #include <xcb/xcb.h>
 #include <xcb/dri3.h>
 #include <xcb/present.h>
+#include <xcb/xfixes.h>
 
 #include <X11/Xlib-xcb.h>
 
 #include "loader_dri3_helper.h"
 #include "util/macros.h"
-#include "drm_fourcc.h"
+#include "drm-uapi/drm_fourcc.h"
 
-/* From xmlpool/options.h, user exposed so should be stable */
+/* From driconf.h, user exposed so should be stable */
 #define DRI_CONF_VBLANK_NEVER 0
 #define DRI_CONF_VBLANK_DEF_INTERVAL_0 1
 #define DRI_CONF_VBLANK_DEF_INTERVAL_1 2
@@ -99,6 +100,32 @@ get_xcb_visualtype_for_depth(struct loader_dri3_drawable *draw, int depth)
    }
 
    return NULL;
+}
+
+/* Sets the adaptive sync window property state. */
+static void
+set_adaptive_sync_property(xcb_connection_t *conn, xcb_drawable_t drawable,
+                           uint32_t state)
+{
+   static char const name[] = "_VARIABLE_REFRESH";
+   xcb_intern_atom_cookie_t cookie;
+   xcb_intern_atom_reply_t* reply;
+   xcb_void_cookie_t check;
+
+   cookie = xcb_intern_atom(conn, 0, strlen(name), name);
+   reply = xcb_intern_atom_reply(conn, cookie, NULL);
+   if (reply == NULL)
+      return;
+
+   if (state)
+      check = xcb_change_property_checked(conn, XCB_PROP_MODE_REPLACE,
+                                          drawable, reply->atom,
+                                          XCB_ATOM_CARDINAL, 32, 1, &state);
+   else
+      check = xcb_delete_property_checked(conn, drawable, reply->atom);
+
+   xcb_discard_reply(conn, check.sequence);
+   free(reply);
 }
 
 /* Get red channel mask for given drawable at given depth. */
@@ -331,15 +358,29 @@ loader_dri3_drawable_init(xcb_connection_t *conn,
    draw->have_back = 0;
    draw->have_fake_front = 0;
    draw->first_init = true;
+   draw->adaptive_sync = false;
+   draw->adaptive_sync_active = false;
 
    draw->cur_blit_source = -1;
    draw->back_format = __DRI_IMAGE_FORMAT_NONE;
    mtx_init(&draw->mtx, mtx_plain);
    cnd_init(&draw->event_cnd);
 
-   if (draw->ext->config)
+   if (draw->ext->config) {
+      unsigned char adaptive_sync = 0;
+
       draw->ext->config->configQueryi(draw->dri_screen,
                                       "vblank_mode", &vblank_mode);
+
+      draw->ext->config->configQueryb(draw->dri_screen,
+                                      "adaptive_sync",
+                                      &adaptive_sync);
+
+      draw->adaptive_sync = adaptive_sync;
+   }
+
+   if (!draw->adaptive_sync)
+      set_adaptive_sync_property(conn, draw->drawable, false);
 
    switch (vblank_mode) {
    case DRI_CONF_VBLANK_NEVER:
@@ -486,7 +527,8 @@ dri3_handle_present_event(struct loader_dri3_drawable *draw,
 }
 
 static bool
-dri3_wait_for_event_locked(struct loader_dri3_drawable *draw)
+dri3_wait_for_event_locked(struct loader_dri3_drawable *draw,
+                           unsigned *full_sequence)
 {
    xcb_generic_event_t *ev;
    xcb_present_generic_event_t *ge;
@@ -496,6 +538,8 @@ dri3_wait_for_event_locked(struct loader_dri3_drawable *draw)
    /* Only have one thread waiting for events at a time */
    if (draw->has_event_waiter) {
       cnd_wait(&draw->event_cnd, &draw->mtx);
+      if (full_sequence)
+         *full_sequence = draw->last_special_event_sequence;
       /* Another thread has updated the protected info, so retest. */
       return true;
    } else {
@@ -509,6 +553,9 @@ dri3_wait_for_event_locked(struct loader_dri3_drawable *draw)
    }
    if (!ev)
       return false;
+   draw->last_special_event_sequence = ev->full_sequence;
+   if (full_sequence)
+      *full_sequence = ev->full_sequence;
    ge = (void *) ev;
    dri3_handle_present_event(draw, ge);
    return true;
@@ -531,22 +578,16 @@ loader_dri3_wait_for_msc(struct loader_dri3_drawable *draw,
                                                      target_msc,
                                                      divisor,
                                                      remainder);
-   xcb_generic_event_t *ev;
    unsigned full_sequence;
 
    mtx_lock(&draw->mtx);
-   xcb_flush(draw->conn);
 
    /* Wait for the event */
    do {
-      ev = xcb_wait_for_special_event(draw->conn, draw->special_event);
-      if (!ev) {
+      if (!dri3_wait_for_event_locked(draw, &full_sequence)) {
          mtx_unlock(&draw->mtx);
          return false;
       }
-
-      full_sequence = ev->full_sequence;
-      dri3_handle_present_event(draw, (void *) ev);
    } while (full_sequence != cookie.sequence || draw->notify_msc < target_msc);
 
    *ust = draw->notify_ust;
@@ -579,7 +620,7 @@ loader_dri3_wait_for_sbc(struct loader_dri3_drawable *draw,
       target_sbc = draw->send_sbc;
 
    while (draw->recv_sbc < target_sbc) {
-      if (!dri3_wait_for_event_locked(draw)) {
+      if (!dri3_wait_for_event_locked(draw, NULL)) {
          mtx_unlock(&draw->mtx);
          return 0;
       }
@@ -627,7 +668,7 @@ dri3_find_back(struct loader_dri3_drawable *draw)
             return id;
          }
       }
-      if (!dri3_wait_for_event_locked(draw)) {
+      if (!dri3_wait_for_event_locked(draw, NULL)) {
          mtx_unlock(&draw->mtx);
          return -1;
       }
@@ -723,7 +764,7 @@ loader_dri3_copy_sub_buffer(struct loader_dri3_drawable *draw,
 
    if (flush)
       flags |= __DRI2_FLUSH_CONTEXT;
-   loader_dri3_flush(draw, flags, __DRI2_THROTTLE_SWAPBUFFER);
+   loader_dri3_flush(draw, flags, __DRI2_THROTTLE_COPYSUBBUFFER);
 
    back = dri3_find_back_alloc(draw);
    if (!back)
@@ -777,7 +818,7 @@ loader_dri3_copy_drawable(struct loader_dri3_drawable *draw,
                           xcb_drawable_t dest,
                           xcb_drawable_t src)
 {
-   loader_dri3_flush(draw, __DRI2_FLUSH_DRAWABLE, 0);
+   loader_dri3_flush(draw, __DRI2_FLUSH_DRAWABLE, __DRI2_THROTTLE_COPYSUBBUFFER);
 
    dri3_fence_reset(draw->conn, dri3_fake_front_buffer(draw));
    dri3_copy_area(draw->conn,
@@ -868,6 +909,7 @@ int64_t
 loader_dri3_swap_buffers_msc(struct loader_dri3_drawable *draw,
                              int64_t target_msc, int64_t divisor,
                              int64_t remainder, unsigned flush_flags,
+                             const int *rects, int n_rects,
                              bool force_copy)
 {
    struct loader_dri3_buffer *back;
@@ -879,6 +921,12 @@ loader_dri3_swap_buffers_msc(struct loader_dri3_drawable *draw,
    back = dri3_find_back_alloc(draw);
 
    mtx_lock(&draw->mtx);
+
+   if (draw->adaptive_sync && !draw->adaptive_sync_active) {
+      set_adaptive_sync_property(draw->conn, draw->drawable, true);
+      draw->adaptive_sync_active = true;
+   }
+
    if (draw->is_different_gpu && back) {
       /* Update the linear buffer before presenting the pixmap */
       (void) loader_dri3_blit_image(draw,
@@ -960,12 +1008,29 @@ loader_dri3_swap_buffers_msc(struct loader_dri3_drawable *draw,
 #endif
       back->busy = 1;
       back->last_swap = draw->send_sbc;
+
+      xcb_xfixes_region_t region = 0;
+      xcb_rectangle_t xcb_rects[64];
+
+      if (n_rects > 0 && n_rects <= ARRAY_SIZE(xcb_rects)) {
+         for (int i = 0; i < n_rects; i++) {
+            const int *rect = &rects[i * 4];
+            xcb_rects[i].x = rect[0];
+            xcb_rects[i].y = draw->height - rect[1] - rect[3];
+            xcb_rects[i].width = rect[2];
+            xcb_rects[i].height = rect[3];
+         }
+
+         region = xcb_generate_id(draw->conn);
+         xcb_xfixes_create_region(draw->conn, region, n_rects, xcb_rects);
+      }
+
       xcb_present_pixmap(draw->conn,
                          draw->drawable,
                          back->pixmap,
                          (uint32_t) draw->send_sbc,
                          0,                                    /* valid */
-                         0,                                    /* update */
+                         region,                               /* update */
                          0,                                    /* x_off */
                          0,                                    /* y_off */
                          None,                                 /* target_crtc */
@@ -976,6 +1041,9 @@ loader_dri3_swap_buffers_msc(struct loader_dri3_drawable *draw,
                          divisor,
                          remainder, 0, NULL);
       ret = (int64_t) draw->send_sbc;
+
+      if (region)
+         xcb_xfixes_destroy_region(draw->conn, region);
 
       /* Schedule a server-side back-preserving blit if necessary.
        * This happens iff all conditions below are satisfied:
@@ -1073,7 +1141,11 @@ dri3_cpp_for_format(uint32_t format) {
    case  __DRI_IMAGE_FORMAT_ABGR2101010:
    case  __DRI_IMAGE_FORMAT_SARGB8:
    case  __DRI_IMAGE_FORMAT_SABGR8:
+   case  __DRI_IMAGE_FORMAT_SXRGB8:
       return 4;
+   case __DRI_IMAGE_FORMAT_XBGR16161616F:
+   case __DRI_IMAGE_FORMAT_ABGR16161616F:
+      return 8;
    case  __DRI_IMAGE_FORMAT_NONE:
    default:
       return 0;
@@ -1111,27 +1183,30 @@ dri3_linear_format_for_format(struct loader_dri3_drawable *draw, uint32_t format
 }
 
 /* the DRIimage createImage function takes __DRI_IMAGE_FORMAT codes, while
- * the createImageFromFds call takes __DRI_IMAGE_FOURCC codes. To avoid
+ * the createImageFromFds call takes DRM_FORMAT codes. To avoid
  * complete confusion, just deal in __DRI_IMAGE_FORMAT codes for now and
- * translate to __DRI_IMAGE_FOURCC codes in the call to createImageFromFds
+ * translate to DRM_FORMAT codes in the call to createImageFromFds
  */
 static int
 image_format_to_fourcc(int format)
 {
 
-   /* Convert from __DRI_IMAGE_FORMAT to __DRI_IMAGE_FOURCC (sigh) */
+   /* Convert from __DRI_IMAGE_FORMAT to DRM_FORMAT (sigh) */
    switch (format) {
    case __DRI_IMAGE_FORMAT_SARGB8: return __DRI_IMAGE_FOURCC_SARGB8888;
    case __DRI_IMAGE_FORMAT_SABGR8: return __DRI_IMAGE_FOURCC_SABGR8888;
-   case __DRI_IMAGE_FORMAT_RGB565: return __DRI_IMAGE_FOURCC_RGB565;
-   case __DRI_IMAGE_FORMAT_XRGB8888: return __DRI_IMAGE_FOURCC_XRGB8888;
-   case __DRI_IMAGE_FORMAT_ARGB8888: return __DRI_IMAGE_FOURCC_ARGB8888;
-   case __DRI_IMAGE_FORMAT_ABGR8888: return __DRI_IMAGE_FOURCC_ABGR8888;
-   case __DRI_IMAGE_FORMAT_XBGR8888: return __DRI_IMAGE_FOURCC_XBGR8888;
-   case __DRI_IMAGE_FORMAT_XRGB2101010: return __DRI_IMAGE_FOURCC_XRGB2101010;
-   case __DRI_IMAGE_FORMAT_ARGB2101010: return __DRI_IMAGE_FOURCC_ARGB2101010;
-   case __DRI_IMAGE_FORMAT_XBGR2101010: return __DRI_IMAGE_FOURCC_XBGR2101010;
-   case __DRI_IMAGE_FORMAT_ABGR2101010: return __DRI_IMAGE_FOURCC_ABGR2101010;
+   case __DRI_IMAGE_FORMAT_SXRGB8: return __DRI_IMAGE_FOURCC_SXRGB8888;
+   case __DRI_IMAGE_FORMAT_RGB565: return DRM_FORMAT_RGB565;
+   case __DRI_IMAGE_FORMAT_XRGB8888: return DRM_FORMAT_XRGB8888;
+   case __DRI_IMAGE_FORMAT_ARGB8888: return DRM_FORMAT_ARGB8888;
+   case __DRI_IMAGE_FORMAT_ABGR8888: return DRM_FORMAT_ABGR8888;
+   case __DRI_IMAGE_FORMAT_XBGR8888: return DRM_FORMAT_XBGR8888;
+   case __DRI_IMAGE_FORMAT_XRGB2101010: return DRM_FORMAT_XRGB2101010;
+   case __DRI_IMAGE_FORMAT_ARGB2101010: return DRM_FORMAT_ARGB2101010;
+   case __DRI_IMAGE_FORMAT_XBGR2101010: return DRM_FORMAT_XBGR2101010;
+   case __DRI_IMAGE_FORMAT_ABGR2101010: return DRM_FORMAT_ABGR2101010;
+   case __DRI_IMAGE_FORMAT_XBGR16161616F: return DRM_FORMAT_XBGR16161616F;
+   case __DRI_IMAGE_FORMAT_ABGR16161616F: return DRM_FORMAT_ABGR16161616F;
    }
    return 0;
 }
@@ -1273,12 +1348,20 @@ dri3_alloc_render_buffer(struct loader_dri3_drawable *draw, unsigned int format,
 
          free(mod_reply);
 
-         buffer->image = draw->ext->image->createImageWithModifiers(draw->dri_screen,
-                                                                    width, height,
-                                                                    format,
-                                                                    modifiers,
-                                                                    count,
-                                                                    buffer);
+         /* don't use createImageWithModifiers() if we have no
+          * modifiers, other things depend on the use flags when
+          * there are no modifiers to know that a buffer can be
+          * shared.
+          */
+         if (modifiers) {
+            buffer->image = draw->ext->image->createImageWithModifiers(draw->dri_screen,
+                                                                       width, height,
+                                                                       format,
+                                                                       modifiers,
+                                                                       count,
+                                                                       buffer);
+         }
+
          free(modifiers);
       }
 #endif
@@ -1332,6 +1415,8 @@ dri3_alloc_render_buffer(struct loader_dri3_drawable *draw, unsigned int format,
          assert(i == 0);
          image = pixmap_buffer;
       }
+
+      buffer_fds[i] = -1;
 
       ret = draw->ext->image->queryImage(image, __DRI_IMAGE_ATTRIB_FD,
                                          &buffer_fds[i]);
@@ -1405,7 +1490,8 @@ dri3_alloc_render_buffer(struct loader_dri3_drawable *draw, unsigned int format,
 
 no_buffer_attrib:
    do {
-      close(buffer_fds[i]);
+      if (buffer_fds[i] != -1)
+         close(buffer_fds[i]);
    } while (--i >= 0);
    draw->ext->image->destroyImage(pixmap_buffer);
 no_linear_buffer:
@@ -1509,6 +1595,7 @@ dri3_update_drawable(struct loader_dri3_drawable *draw)
             mtx_unlock(&draw->mtx);
             return false;
          }
+         free(error);
          draw->is_pixmap = true;
          xcb_unregister_for_special_event(draw->conn, draw->special_event);
          draw->special_event = NULL;
@@ -1781,7 +1868,9 @@ dri3_get_buffer(__DRIdrawable *driDrawable,
          if (!loader_dri3_blit_image(draw,
                                      new_buffer->image,
                                      buffer->image,
-                                     0, 0, draw->width, draw->height,
+                                     0, 0,
+                                     MIN2(buffer->width, new_buffer->width),
+                                     MIN2(buffer->height, new_buffer->height),
                                      0, 0, 0) &&
              !buffer->linear_buffer) {
             dri3_fence_reset(draw->conn, new_buffer);

@@ -37,11 +37,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <errno.h>
 #include "main/glheader.h"
-#include "main/imports.h"
 #include "main/mtypes.h"
 #include "main/framebuffer.h"
 #include "main/renderbuffer.h"
 #include "main/fbobject.h"
+#include "util/u_memory.h"
 #include "swrast/s_renderbuffer.h"
 
 #include "radeon_chipset.h"
@@ -62,27 +62,26 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* Radeon configuration
  */
-#include "util/xmlpool.h"
+#include "util/driconf.h"
 
 #define DRI_CONF_COMMAND_BUFFER_SIZE(def,min,max) \
 DRI_CONF_OPT_BEGIN_V(command_buffer_size,int,def, # min ":" # max ) \
-        DRI_CONF_DESC(en,"Size of command buffer (in KB)") \
-        DRI_CONF_DESC(de,"Grösse des Befehlspuffers (in KB)") \
+        DRI_CONF_DESC("Size of command buffer (in KB)") \
 DRI_CONF_OPT_END
 
 #define DRI_CONF_MAX_TEXTURE_UNITS(def,min,max) \
 DRI_CONF_OPT_BEGIN_V(texture_units,int,def, # min ":" # max ) \
-        DRI_CONF_DESC(en,"Number of texture units used") \
+        DRI_CONF_DESC("Number of texture units used") \
 DRI_CONF_OPT_END
 
 #define DRI_CONF_HYPERZ(def) \
 DRI_CONF_OPT_BEGIN_B(hyperz, def) \
-        DRI_CONF_DESC(en,"Use HyperZ to boost performance") \
+        DRI_CONF_DESC("Use HyperZ to boost performance") \
 DRI_CONF_OPT_END
 
 #define DRI_CONF_TCL_MODE(def) \
 DRI_CONF_OPT_BEGIN_V(tcl_mode,enum,def,"0:3") \
-        DRI_CONF_DESC_BEGIN(en,"TCL mode (Transformation, Clipping, Lighting)") \
+        DRI_CONF_DESC_BEGIN("TCL mode (Transformation, Clipping, Lighting)") \
                 DRI_CONF_ENUM(0,"Use software TCL pipeline") \
                 DRI_CONF_ENUM(1,"Use hardware TCL as first TCL pipeline stage") \
                 DRI_CONF_ENUM(2,"Bypass the TCL pipeline") \
@@ -92,12 +91,12 @@ DRI_CONF_OPT_END
 
 #define DRI_CONF_NO_NEG_LOD_BIAS(def) \
 DRI_CONF_OPT_BEGIN_B(no_neg_lod_bias, def) \
-        DRI_CONF_DESC(en,"Forbid negative texture LOD bias") \
+        DRI_CONF_DESC("Forbid negative texture LOD bias") \
 DRI_CONF_OPT_END
 
 #define DRI_CONF_DEF_MAX_ANISOTROPY(def,range) \
 DRI_CONF_OPT_BEGIN_V(def_max_anisotropy,float,def,range) \
-        DRI_CONF_DESC(en,"Initial maximum value for anisotropic texture filtering") \
+        DRI_CONF_DESC("Initial maximum value for anisotropic texture filtering") \
 DRI_CONF_OPT_END
 
 #if defined(RADEON_R100)	/* R100 */
@@ -127,7 +126,7 @@ DRI_CONF_END
 
 #define DRI_CONF_TEXTURE_BLEND_QUALITY(def,range) \
 DRI_CONF_OPT_BEGIN_V(texture_blend_quality,float,def,range) \
-       DRI_CONF_DESC(en,"Texture filtering quality vs. speed, AKA “brilinear” texture filtering") \
+       DRI_CONF_DESC("Texture filtering quality vs. speed, AKA “brilinear” texture filtering") \
 DRI_CONF_OPT_END
 
 static const __DRIconfigOptionsExtension radeon_config_options = {
@@ -696,11 +695,26 @@ radeonCreateBuffer( __DRIscreen *driScrnPriv,
     _mesa_initialize_window_framebuffer(&rfb->base, mesaVis);
 
     if (mesaVis->redBits == 5)
-        rgbFormat = _mesa_little_endian() ? MESA_FORMAT_B5G6R5_UNORM : MESA_FORMAT_R5G6B5_UNORM;
+        rgbFormat =
+#if UTIL_ARCH_LITTLE_ENDIAN
+           MESA_FORMAT_B5G6R5_UNORM;
+#else
+           MESA_FORMAT_R5G6B5_UNORM;
+#endif
     else if (mesaVis->alphaBits == 0)
-        rgbFormat = _mesa_little_endian() ? MESA_FORMAT_B8G8R8X8_UNORM : MESA_FORMAT_X8R8G8B8_UNORM;
+        rgbFormat =
+#if UTIL_ARCH_LITTLE_ENDIAN
+           MESA_FORMAT_B8G8R8X8_UNORM;
+#else
+           MESA_FORMAT_X8R8G8B8_UNORM;
+#endif
     else
-        rgbFormat = _mesa_little_endian() ? MESA_FORMAT_B8G8R8A8_UNORM : MESA_FORMAT_A8R8G8B8_UNORM;
+        rgbFormat =
+#if UTIL_ARCH_LITTLE_ENDIAN
+           MESA_FORMAT_B8G8R8A8_UNORM;
+#else
+           MESA_FORMAT_A8R8G8B8_UNORM;
+#endif
 
     /* front color renderbuffer */
     rfb->color_rb[0] = radeon_create_renderbuffer(rgbFormat, driDrawPriv);

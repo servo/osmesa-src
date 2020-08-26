@@ -33,6 +33,7 @@
  */
 
 #include "sp_context.h"
+#include "sp_screen.h"
 #include "sp_quad.h"
 #include "sp_quad_pipe.h"
 #include "sp_setup.h"
@@ -388,17 +389,6 @@ setup_sort_vertices(struct setup_context *setup,
 
       if (face & setup->cull_face)
 	 return FALSE;
-   }
-
-
-   /* Prepare pixel offset for rasterisation:
-    *  - pixel center (0.5, 0.5) for GL, or
-    *  - assume (0.0, 0.0) for other APIs.
-    */
-   if (setup->softpipe->rasterizer->half_pixel_center) {
-      setup->pixel_offset = 0.5f;
-   } else {
-      setup->pixel_offset = 0.0f;
    }
 
    return TRUE;
@@ -819,7 +809,8 @@ sp_setup_tri(struct setup_context *setup,
    print_vertex(setup, v2);
 #endif
 
-   if (setup->softpipe->no_rast || setup->softpipe->rasterizer->rasterizer_discard)
+   if (unlikely(sp_debug & SP_DBG_NO_RAST) ||
+       setup->softpipe->rasterizer->rasterizer_discard)
       return;
    
    det = calc_det(v0, v1, v2);
@@ -1104,7 +1095,8 @@ sp_setup_line(struct setup_context *setup,
    print_vertex(setup, v1);
 #endif
 
-   if (setup->softpipe->no_rast || setup->softpipe->rasterizer->rasterizer_discard)
+   if (unlikely(sp_debug & SP_DBG_NO_RAST) ||
+       setup->softpipe->rasterizer->rasterizer_discard)
       return;
 
    if (dx == 0 && dy == 0)
@@ -1251,7 +1243,8 @@ sp_setup_point(struct setup_context *setup,
 
    assert(sinfo->valid);
 
-   if (setup->softpipe->no_rast || setup->softpipe->rasterizer->rasterizer_discard)
+   if (unlikely(sp_debug & SP_DBG_NO_RAST) ||
+       setup->softpipe->rasterizer->rasterizer_discard)
       return;
 
    assert(setup->softpipe->reduced_prim == PIPE_PRIM_POINTS);
@@ -1474,6 +1467,16 @@ sp_setup_prepare(struct setup_context *setup)
                           cbuf->u.tex.last_layer - cbuf->u.tex.first_layer);
 
       }
+   }
+
+   /* Prepare pixel offset for rasterisation:
+    *  - pixel center (0.5, 0.5) for GL, or
+    *  - assume (0.0, 0.0) for other APIs.
+    */
+   if (setup->softpipe->rasterizer->half_pixel_center) {
+      setup->pixel_offset = 0.5f;
+   } else {
+      setup->pixel_offset = 0.0f;
    }
 
    setup->max_layer = max_layer;

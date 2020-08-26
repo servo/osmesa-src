@@ -55,7 +55,7 @@ public:
    void periodicMask(DataFile f, uint32_t lock, uint32_t unlock);
    void intersect(DataFile f, const RegisterSet *);
 
-   bool assign(int32_t& reg, DataFile f, unsigned int size);
+   bool assign(int32_t& reg, DataFile f, unsigned int size, unsigned int maxReg);
    void release(DataFile f, int32_t reg, unsigned int size);
    void occupy(DataFile f, int32_t reg, unsigned int size);
    void occupy(const Value *);
@@ -66,10 +66,8 @@ public:
 
    inline int getMaxAssigned(DataFile f) const { return fill[f]; }
 
-   inline unsigned int getFileSize(DataFile f, uint8_t regSize) const
+   inline unsigned int getFileSize(DataFile f) const
    {
-      if (restrictedGPR16Range && f == FILE_GPR && regSize == 2)
-         return (last[f] + 1) / 2;
       return last[f] + 1;
    }
 
@@ -162,9 +160,9 @@ RegisterSet::print(DataFile f) const
 }
 
 bool
-RegisterSet::assign(int32_t& reg, DataFile f, unsigned int size)
+RegisterSet::assign(int32_t& reg, DataFile f, unsigned int size, unsigned int maxReg)
 {
-   reg = bits[f].findFreeRange(size);
+   reg = bits[f].findFreeRange(size, maxReg);
    if (reg < 0)
       return false;
    fill[f] = MAX2(fill[f], (int32_t)(reg + size - 1));
@@ -261,6 +259,7 @@ private:
       bool insertConstraintMoves();
 
       void condenseDefs(Instruction *);
+      void condenseDefs(Instruction *, const int first, const int last);
       void condenseSrcs(Instruction *, const int first, const int last);
 
       void addHazard(Instruction *i, const ValueRef *src);
@@ -273,6 +272,9 @@ private:
       void texConstraintNVC0(TexInstruction *);
       void texConstraintNVE0(TexInstruction *);
       void texConstraintGM107(TexInstruction *);
+
+      bool isScalarTexGM107(TexInstruction *);
+      void handleScalarTexGM107(TexInstruction *);
 
       std::list<Instruction *> constrList;
 
@@ -293,10 +295,53 @@ private:
 
 typedef std::pair<Value *, Value *> ValuePair;
 
+class MergedDefs
+{
+private:
+   std::list<ValueDef *>& entry(Value *val) {
+      auto it = defs.find(val);
+
+      if (it == defs.end()) {
+         std::list<ValueDef *> &res = defs[val];
+         res = val->defs;
+         return res;
+      } else {
+         return (*it).second;
+      }
+   }
+
+   std::unordered_map<Value *, std::list<ValueDef *> > defs;
+
+public:
+   std::list<ValueDef *>& operator()(Value *val) {
+      return entry(val);
+   }
+
+   void add(Value *val, const std::list<ValueDef *> &vals) {
+      assert(val);
+      std::list<ValueDef *> &valdefs = entry(val);
+      valdefs.insert(valdefs.end(), vals.begin(), vals.end());
+   }
+
+   void removeDefsOfInstruction(Instruction *insn) {
+      for (int d = 0; insn->defExists(d); ++d) {
+         ValueDef *def = &insn->def(d);
+         defs.erase(def->get());
+         for (auto &p : defs)
+            p.second.remove(def);
+      }
+   }
+
+   void merge() {
+      for (auto &p : defs)
+         p.first->defs = p.second;
+   }
+};
+
 class SpillCodeInserter
 {
 public:
-   SpillCodeInserter(Function *fn) : func(fn), stackSize(0), stackBase(0) { }
+   SpillCodeInserter(Function *fn, MergedDefs &mergedDefs) : func(fn), mergedDefs(mergedDefs), stackSize(0), stackBase(0) { }
 
    bool run(const std::list<ValuePair>&);
 
@@ -306,6 +351,7 @@ public:
 
 private:
    Function *func;
+   MergedDefs &mergedDefs;
 
    struct SpillSlot
    {
@@ -622,8 +668,6 @@ RegAlloc::BuildIntervalsPass::collectLiveValues(BasicBlock *bb)
       // trickery to save a loop of OR'ing liveSets
       // aliasing works fine with BitSet::setOr
       for (Graph::EdgeIterator ei = bb->cfg.outgoing(); !ei.end(); ei.next()) {
-         if (ei.getType() == Graph::Edge::DUMMY)
-            continue;
          if (bbA) {
             bb->liveSet.setOr(&bbA->liveSet, &bbB->liveSet);
             bbA = bb;
@@ -708,7 +752,7 @@ RegAlloc::BuildIntervalsPass::visit(BasicBlock *bb)
 class GCRA
 {
 public:
-   GCRA(Function *, SpillCodeInserter&);
+   GCRA(Function *, SpillCodeInserter&, MergedDefs&);
    ~GCRA();
 
    bool allocateRegisters(ArrayList& insns);
@@ -745,6 +789,7 @@ private:
    public:
       uint32_t degree;
       uint16_t degreeLimit; // if deg < degLimit, node is trivially colourable
+      uint16_t maxReg;
       uint16_t colors;
 
       DataFile f;
@@ -800,7 +845,21 @@ private:
    Function *func;
    Program *prog;
 
-   static uint8_t relDegree[17][17];
+   struct RelDegree {
+      uint8_t data[17][17];
+
+      RelDegree() {
+         for (int i = 1; i <= 16; ++i)
+            for (int j = 1; j <= 16; ++j)
+               data[i][j] = j * ((i + j - 1) / j);
+      }
+
+      const uint8_t* operator[](std::size_t i) const {
+         return data[i];
+      }
+   };
+
+   static const RelDegree relDegree;
 
    RegisterSet regs;
 
@@ -810,9 +869,11 @@ private:
 
    SpillCodeInserter& spill;
    std::list<ValuePair> mustSpill;
+
+   MergedDefs &mergedDefs;
 };
 
-uint8_t GCRA::relDegree[17][17];
+const GCRA::RelDegree GCRA::relDegree;
 
 GCRA::RIG_Node::RIG_Node() : Node(NULL), next(this), prev(this)
 {
@@ -842,9 +903,11 @@ GCRA::printNodeInfo() const
 static bool
 isShortRegOp(Instruction *insn)
 {
-   // Immediates are always in src1. Every other situation can be resolved by
+   // Immediates are always in src1 (except zeroes, which end up getting
+   // replaced with a zero reg). Every other situation can be resolved by
    // using a long encoding.
-   return insn->srcExists(1) && insn->src(1).getFile() == FILE_IMMEDIATE;
+   return insn->srcExists(1) && insn->src(1).getFile() == FILE_IMMEDIATE &&
+      insn->getSrc(1)->reg.data.u64;
 }
 
 // Check if this LValue is ever used in an instruction that can't be encoded
@@ -880,12 +943,12 @@ GCRA::RIG_Node::init(const RegisterSet& regs, LValue *lval)
 
    weight = std::numeric_limits<float>::infinity();
    degree = 0;
-   int size = regs.getFileSize(f, lval->reg.size);
+   maxReg = regs.getFileSize(f);
    // On nv50, we lose a bit of gpr encoding when there's an embedded
    // immediate.
-   if (regs.restrictedGPR16Range && f == FILE_GPR && isShortRegVal(lval))
-      size /= 2;
-   degreeLimit = size;
+   if (regs.restrictedGPR16Range && f == FILE_GPR && (lval->reg.size == 2 || isShortRegVal(lval)))
+      maxReg /= 2;
+   degreeLimit = maxReg;
    degreeLimit -= relDegree[1][colors] - 1;
 
    livei.insert(lval->livei);
@@ -937,14 +1000,16 @@ GCRA::coalesceValues(Value *dst, Value *src, bool force)
             rep->id, rep->reg.data.id, val->id);
 
    // set join pointer of all values joined with val
-   for (Value::DefIterator def = val->defs.begin(); def != val->defs.end();
-        ++def)
-      (*def)->get()->join = rep;
+   const std::list<ValueDef *> &defs = mergedDefs(val);
+   for (ValueDef *def : defs)
+      def->get()->join = rep;
    assert(rep->join == rep && val->join == rep);
 
    // add val's definitions to rep and extend the live interval of its RIG node
-   rep->defs.insert(rep->defs.end(), val->defs.begin(), val->defs.end());
+   mergedDefs.add(rep, defs);
    nRep->livei.unify(nVal->livei);
+   nRep->degreeLimit = MIN2(nRep->degreeLimit, nVal->degreeLimit);
+   nRep->maxReg = MIN2(nRep->maxReg, nVal->maxReg);
    return true;
 }
 
@@ -969,6 +1034,8 @@ GCRA::coalesce(ArrayList& insns)
    case 0x110:
    case 0x120:
    case 0x130:
+   case 0x140:
+   case 0x160:
       ret = doCoalesce(insns, JOIN_MASK_UNION);
       break;
    default:
@@ -1142,17 +1209,13 @@ GCRA::RIG_Node::addRegPreference(RIG_Node *node)
    prefRegs.push_back(node);
 }
 
-GCRA::GCRA(Function *fn, SpillCodeInserter& spill) :
+GCRA::GCRA(Function *fn, SpillCodeInserter& spill, MergedDefs& mergedDefs) :
    func(fn),
    regs(fn->getProgram()->getTarget()),
-   spill(spill)
+   spill(spill),
+   mergedDefs(mergedDefs)
 {
    prog = func->getProgram();
-
-   // initialize relative degrees array - i takes away from j
-   for (int i = 1; i <= 16; ++i)
-      for (int j = 1; j <= 16; ++j)
-         relDegree[i][j] = j * ((i + j - 1) / j);
 }
 
 GCRA::~GCRA()
@@ -1245,10 +1308,8 @@ GCRA::calculateSpillWeights()
 
       if (!val->noSpill) {
          int rc = 0;
-         for (Value::DefIterator it = val->defs.begin();
-              it != val->defs.end();
-              ++it)
-            rc += (*it)->get()->refCount();
+         for (ValueDef *def : mergedDefs(val))
+            rc += def->get()->refCount();
 
          nodes[i].weight =
             (float)rc * (float)rc / (float)nodes[i].livei.extent();
@@ -1318,13 +1379,17 @@ GCRA::simplify()
       } else
       if (!DLLIST_EMPTY(&hi)) {
          RIG_Node *best = hi.next;
+         unsigned bestMaxReg = best->maxReg;
          float bestScore = best->weight / (float)best->degree;
-         // spill candidate
+         // Spill candidate. First go through the ones with the highest max
+         // register, then the ones with lower. That way the ones with the
+         // lowest requirement will be allocated first, since it's a stack.
          for (RIG_Node *it = best->next; it != &hi; it = it->next) {
             float score = it->weight / (float)it->degree;
-            if (score < bestScore) {
+            if (score < bestScore || it->maxReg > bestMaxReg) {
                best = it;
                bestScore = score;
+               bestMaxReg = it->maxReg;
             }
          }
          if (isinf(bestScore)) {
@@ -1345,17 +1410,17 @@ GCRA::checkInterference(const RIG_Node *node, Graph::EdgeIterator& ei)
 
    if (intf->reg < 0)
       return;
-   const LValue *vA = node->getValue();
-   const LValue *vB = intf->getValue();
+   LValue *vA = node->getValue();
+   LValue *vB = intf->getValue();
 
    const uint8_t intfMask = ((1 << intf->colors) - 1) << (intf->reg & 7);
 
    if (vA->compound | vB->compound) {
       // NOTE: this only works for >aligned< register tuples !
-      for (Value::DefCIterator D = vA->defs.begin(); D != vA->defs.end(); ++D) {
-      for (Value::DefCIterator d = vB->defs.begin(); d != vB->defs.end(); ++d) {
-         const LValue *vD = (*D)->get()->asLValue();
-         const LValue *vd = (*d)->get()->asLValue();
+      for (const ValueDef *D : mergedDefs(vA)) {
+      for (const ValueDef *d : mergedDefs(vB)) {
+         const LValue *vD = D->get()->asLValue();
+         const LValue *vd = d->get()->asLValue();
 
          if (!vD->livei.overlaps(vd->livei)) {
             INFO_DBG(prog->dbgFlags, REG_ALLOC, "(%%%i) X (%%%i): no overlap\n",
@@ -1425,7 +1490,7 @@ GCRA::selectRegisters()
       LValue *lval = node->getValue();
       if (prog->dbgFlags & NV50_IR_DEBUG_REG_ALLOC)
          regs.print(node->f);
-      bool ret = regs.assign(node->reg, node->f, node->colors);
+      bool ret = regs.assign(node->reg, node->f, node->colors, node->maxReg);
       if (ret) {
          INFO_DBG(prog->dbgFlags, REG_ALLOC, "assigned reg %i\n", node->reg);
          lval->compMask = node->getCompMask();
@@ -1524,6 +1589,7 @@ GCRA::allocateRegisters(ArrayList& insns)
       if (prog->dbgFlags & NV50_IR_DEBUG_REG_ALLOC)
          func->print();
    } else {
+      mergedDefs.merge();
       prog->maxGPR = std::max(prog->maxGPR, regs.getMaxAssigned(FILE_GPR));
    }
 
@@ -1549,14 +1615,10 @@ GCRA::cleanup(const bool success)
       if (lval->join == lval)
          continue;
 
-      if (success) {
+      if (success)
          lval->reg.data.id = lval->join->reg.data.id;
-      } else {
-         for (Value::DefIterator d = lval->defs.begin(); d != lval->defs.end();
-              ++d)
-            lval->join->defs.remove(*d);
+      else
          lval->join = lval;
-      }
    }
 
    if (success)
@@ -1749,7 +1811,8 @@ SpillCodeInserter::run(const std::list<ValuePair>& lst)
       // multiple destinations that all need to be spilled (like OP_SPLIT).
       unordered_set<Instruction *> to_del;
 
-      for (Value::DefIterator d = lval->defs.begin(); d != lval->defs.end();
+      std::list<ValueDef *> &defs = mergedDefs(lval);
+      for (Value::DefIterator d = defs.begin(); d != defs.end();
            ++d) {
          Value *slot = mem ?
             static_cast<Value *>(mem) : new_LValue(func, FILE_GPR);
@@ -1785,7 +1848,7 @@ SpillCodeInserter::run(const std::list<ValuePair>& lst)
 
          assert(defi);
          if (defi->isPseudo()) {
-            d = lval->defs.erase(d);
+            d = defs.erase(d);
             --d;
             if (slot->reg.file == FILE_MEMORY_LOCAL)
                to_del.insert(defi);
@@ -1797,8 +1860,10 @@ SpillCodeInserter::run(const std::list<ValuePair>& lst)
       }
 
       for (unordered_set<Instruction *>::const_iterator it = to_del.begin();
-           it != to_del.end(); ++it)
+           it != to_del.end(); ++it) {
+         mergedDefs.removeDefsOfInstruction(*it);
          delete_Instruction(func->getProgram(), *it);
+      }
    }
 
    // TODO: We're not trying to reuse old slots in a potential next iteration.
@@ -1826,13 +1891,14 @@ RegAlloc::exec()
 bool
 RegAlloc::execFunc()
 {
+   MergedDefs mergedDefs;
    InsertConstraintsPass insertConstr;
    PhiMovesPass insertPhiMoves;
    ArgumentMovesPass insertArgMoves;
    BuildIntervalsPass buildIntervals;
-   SpillCodeInserter insertSpills(func);
+   SpillCodeInserter insertSpills(func, mergedDefs);
 
-   GCRA gcra(func, insertSpills);
+   GCRA gcra(func, insertSpills, mergedDefs);
 
    unsigned int i, retries;
    bool ret;
@@ -2048,24 +2114,35 @@ RegAlloc::InsertConstraintsPass::addHazard(Instruction *i, const ValueRef *src)
 void
 RegAlloc::InsertConstraintsPass::condenseDefs(Instruction *insn)
 {
-   uint8_t size = 0;
    int n;
-   for (n = 0; insn->defExists(n) && insn->def(n).getFile() == FILE_GPR; ++n)
-      size += insn->getDef(n)->reg.size;
-   if (n < 2)
+   for (n = 0; insn->defExists(n) && insn->def(n).getFile() == FILE_GPR; ++n);
+   condenseDefs(insn, 0, n - 1);
+}
+
+void
+RegAlloc::InsertConstraintsPass::condenseDefs(Instruction *insn,
+                                              const int a, const int b)
+{
+   uint8_t size = 0;
+   if (a >= b)
       return;
+   for (int s = a; s <= b; ++s)
+      size += insn->getDef(s)->reg.size;
+   if (!size)
+      return;
+
    LValue *lval = new_LValue(func, FILE_GPR);
    lval->reg.size = size;
 
    Instruction *split = new_Instruction(func, OP_SPLIT, typeOfSize(size));
    split->setSrc(0, lval);
-   for (int d = 0; d < n; ++d) {
-      split->setDef(d, insn->getDef(d));
+   for (int d = a; d <= b; ++d) {
+      split->setDef(d - a, insn->getDef(d));
       insn->setDef(d, NULL);
    }
-   insn->setDef(0, lval);
+   insn->setDef(a, lval);
 
-   for (int k = 1, d = n; insn->defExists(d); ++d, ++k) {
+   for (int k = a + 1, d = b + 1; insn->defExists(d); ++d, ++k) {
       insn->setDef(k, insn->getDef(d));
       insn->setDef(d, NULL);
    }
@@ -2075,6 +2152,7 @@ RegAlloc::InsertConstraintsPass::condenseDefs(Instruction *insn)
    insn->bb->insertAfter(insn, split);
    constrList.push_back(split);
 }
+
 void
 RegAlloc::InsertConstraintsPass::condenseSrcs(Instruction *insn,
                                               const int a, const int b)
@@ -2106,6 +2184,159 @@ RegAlloc::InsertConstraintsPass::condenseSrcs(Instruction *insn,
    constrList.push_back(merge);
 }
 
+bool
+RegAlloc::InsertConstraintsPass::isScalarTexGM107(TexInstruction *tex)
+{
+   if (tex->tex.sIndirectSrc >= 0 ||
+       tex->tex.rIndirectSrc >= 0 ||
+       tex->tex.derivAll)
+      return false;
+
+   if (tex->tex.mask == 5 || tex->tex.mask == 6)
+      return false;
+
+   switch (tex->op) {
+   case OP_TEX:
+   case OP_TXF:
+   case OP_TXG:
+   case OP_TXL:
+      break;
+   default:
+      return false;
+   }
+
+   // legal variants:
+   // TEXS.1D.LZ
+   // TEXS.2D
+   // TEXS.2D.LZ
+   // TEXS.2D.LL
+   // TEXS.2D.DC
+   // TEXS.2D.LL.DC
+   // TEXS.2D.LZ.DC
+   // TEXS.A2D
+   // TEXS.A2D.LZ
+   // TEXS.A2D.LZ.DC
+   // TEXS.3D
+   // TEXS.3D.LZ
+   // TEXS.CUBE
+   // TEXS.CUBE.LL
+
+   // TLDS.1D.LZ
+   // TLDS.1D.LL
+   // TLDS.2D.LZ
+   // TLSD.2D.LZ.AOFFI
+   // TLDS.2D.LZ.MZ
+   // TLDS.2D.LL
+   // TLDS.2D.LL.AOFFI
+   // TLDS.A2D.LZ
+   // TLDS.3D.LZ
+
+   // TLD4S: all 2D/RECT variants and only offset
+
+   switch (tex->op) {
+   case OP_TEX:
+      if (tex->tex.useOffsets)
+         return false;
+
+      switch (tex->tex.target.getEnum()) {
+      case TEX_TARGET_1D:
+      case TEX_TARGET_2D_ARRAY_SHADOW:
+         return tex->tex.levelZero;
+      case TEX_TARGET_CUBE:
+         return !tex->tex.levelZero;
+      case TEX_TARGET_2D:
+      case TEX_TARGET_2D_ARRAY:
+      case TEX_TARGET_2D_SHADOW:
+      case TEX_TARGET_3D:
+      case TEX_TARGET_RECT:
+      case TEX_TARGET_RECT_SHADOW:
+         return true;
+      default:
+         return false;
+      }
+
+   case OP_TXL:
+      if (tex->tex.useOffsets)
+         return false;
+
+      switch (tex->tex.target.getEnum()) {
+      case TEX_TARGET_2D:
+      case TEX_TARGET_2D_SHADOW:
+      case TEX_TARGET_RECT:
+      case TEX_TARGET_RECT_SHADOW:
+      case TEX_TARGET_CUBE:
+         return true;
+      default:
+         return false;
+      }
+
+   case OP_TXF:
+      switch (tex->tex.target.getEnum()) {
+      case TEX_TARGET_1D:
+         return !tex->tex.useOffsets;
+      case TEX_TARGET_2D:
+      case TEX_TARGET_RECT:
+         return true;
+      case TEX_TARGET_2D_ARRAY:
+      case TEX_TARGET_2D_MS:
+      case TEX_TARGET_3D:
+         return !tex->tex.useOffsets && tex->tex.levelZero;
+      default:
+         return false;
+      }
+
+   case OP_TXG:
+      if (tex->tex.useOffsets > 1)
+         return false;
+      if (tex->tex.mask != 0x3 && tex->tex.mask != 0xf)
+         return false;
+
+      switch (tex->tex.target.getEnum()) {
+      case TEX_TARGET_2D:
+      case TEX_TARGET_2D_MS:
+      case TEX_TARGET_2D_SHADOW:
+      case TEX_TARGET_RECT:
+      case TEX_TARGET_RECT_SHADOW:
+         return true;
+      default:
+         return false;
+      }
+
+   default:
+      return false;
+   }
+}
+
+void
+RegAlloc::InsertConstraintsPass::handleScalarTexGM107(TexInstruction *tex)
+{
+   int defCount = tex->defCount(0xff);
+   int srcCount = tex->srcCount(0xff);
+
+   tex->tex.scalar = true;
+
+   // 1. handle defs
+   if (defCount > 3)
+      condenseDefs(tex, 2, 3);
+   if (defCount > 1)
+      condenseDefs(tex, 0, 1);
+
+   // 2. handle srcs
+   // special case for TXF.A2D
+   if (tex->op == OP_TXF && tex->tex.target == TEX_TARGET_2D_ARRAY) {
+      assert(srcCount >= 3);
+      condenseSrcs(tex, 1, 2);
+   } else {
+      if (srcCount > 3)
+         condenseSrcs(tex, 2, 3);
+      // only if we have more than 2 sources
+      if (srcCount > 2)
+         condenseSrcs(tex, 0, 1);
+   }
+
+   assert(!tex->defExists(2) && !tex->srcExists(2));
+}
+
 void
 RegAlloc::InsertConstraintsPass::texConstraintGM107(TexInstruction *tex)
 {
@@ -2113,7 +2344,26 @@ RegAlloc::InsertConstraintsPass::texConstraintGM107(TexInstruction *tex)
 
    if (isTextureOp(tex->op))
       textureMask(tex);
-   condenseDefs(tex);
+
+   if (targ->getChipset() < NVISA_GV100_CHIPSET) {
+      if (isScalarTexGM107(tex)) {
+         handleScalarTexGM107(tex);
+         return;
+      }
+
+      assert(!tex->tex.scalar);
+      condenseDefs(tex);
+   } else {
+      if (isTextureOp(tex->op)) {
+         int defCount = tex->defCount(0xff);
+         if (defCount > 3)
+            condenseDefs(tex, 2, 3);
+         if (defCount > 1)
+            condenseDefs(tex, 0, 1);
+      } else {
+         condenseDefs(tex);
+      }
+   }
 
    if (isSurfaceOp(tex->op)) {
       int s = tex->tex.target.getDim() +
@@ -2149,9 +2399,19 @@ RegAlloc::InsertConstraintsPass::texConstraintGM107(TexInstruction *tex)
             if (!tex->tex.target.isArray() && tex->tex.useOffsets)
                s++;
          }
-         n = tex->srcCount(0xff) - s;
+         n = tex->srcCount(0xff, true) - s;
+         // TODO: Is this necessary? Perhaps just has to be aligned to the
+         // level that the first arg is, not necessarily to 4. This
+         // requirement has not been rigorously verified, as it has been on
+         // Kepler.
+         if (n > 0 && n < 3) {
+            if (tex->srcExists(n + s)) // move potential predicate out of the way
+               tex->moveSources(n + s, 3 - n);
+            while (n < 3)
+               tex->setSrc(s + n++, new_LValue(func, FILE_GPR));
+         }
       } else {
-         s = tex->srcCount(0xff);
+         s = tex->srcCount(0xff, true);
          n = 0;
       }
 
@@ -2174,14 +2434,18 @@ RegAlloc::InsertConstraintsPass::texConstraintNVE0(TexInstruction *tex)
    } else
    if (isTextureOp(tex->op)) {
       int n = tex->srcCount(0xff, true);
-      if (n > 4) {
-         condenseSrcs(tex, 0, 3);
-         if (n > 5) // NOTE: first call modified positions already
-            condenseSrcs(tex, 4 - (4 - 1), n - 1 - (4 - 1));
-      } else
-      if (n > 1) {
-         condenseSrcs(tex, 0, n - 1);
+      int s = n > 4 ? 4 : n;
+      if (n > 4 && n < 7) {
+         if (tex->srcExists(n)) // move potential predicate out of the way
+            tex->moveSources(n, 7 - n);
+
+         while (n < 7)
+            tex->setSrc(n++, new_LValue(func, FILE_GPR));
       }
+      if (s > 1)
+         condenseSrcs(tex, 0, s - 1);
+      if (n > 4)
+         condenseSrcs(tex, 1, n - s);
    }
 }
 
@@ -2281,6 +2545,8 @@ RegAlloc::InsertConstraintsPass::visit(BasicBlock *bb)
          case 0x110:
          case 0x120:
          case 0x130:
+         case 0x140:
+         case 0x160:
             texConstraintGM107(tex);
             break;
          default:
@@ -2318,6 +2584,7 @@ RegAlloc::InsertConstraintsPass::insertConstraintMove(Instruction *cst, int s)
    assert(cst->getSrc(s)->defs.size() == 1); // still SSA
 
    Instruction *defi = cst->getSrc(s)->defs.front()->getInsn();
+
    bool imm = defi->op == OP_MOV &&
       defi->src(0).getFile() == FILE_IMMEDIATE;
    bool load = defi->op == OP_LOAD &&

@@ -116,8 +116,6 @@ do_optimization(struct exec_list *ir, const char *optimization,
    } else if (sscanf(optimization, "lower_instructions ( %d ) ",
                      &int_0) == 1) {
       return lower_instructions(ir, int_0);
-   } else if (strcmp(optimization, "lower_noise") == 0) {
-      return lower_noise(ir);
    } else if (sscanf(optimization, "lower_variable_index_to_cond_assign "
                      "( %d , %d , %d , %d ) ", &int_0, &int_1, &int_2,
                      &int_3) == 4) {
@@ -166,6 +164,7 @@ int test_optpass(int argc, char **argv)
    int loop = 0;
    int shader_type = GL_VERTEX_SHADER;
    int quiet = 0;
+   int error;
 
    const struct option optpass_opts[] = {
       { "input-ir", no_argument, &input_format_ir, 1 },
@@ -264,9 +263,11 @@ int test_optpass(int argc, char **argv)
       printf("--\n");
    }
 
+   error = state->error;
+
    ralloc_free(state);
    ralloc_free(shader);
 
-   return state->error;
+   return error;
 }
 

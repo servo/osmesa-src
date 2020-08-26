@@ -1,5 +1,5 @@
 
-#include "state_tracker/graw.h"
+#include "frontend/graw.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
@@ -11,7 +11,7 @@
 #include "util/u_debug.h"
 #include "util/u_debug_image.h"
 #include "util/u_draw_quad.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 

@@ -129,6 +129,8 @@ typedef enum gl_state_index_ {
     * currently active advanced blending equation, or zero if disabled.
     */
    STATE_ADVANCED_BLENDING_MODE,
+   STATE_ALPHA_REF,        /* alpha-test reference value */
+   STATE_CLIP_INTERNAL,    /* similar to STATE_CLIPPLANE, but in clip-space */
    STATE_INTERNAL_DRIVER	/* first available state index for drivers (must be last) */
 } gl_state_index;
 
@@ -137,6 +139,8 @@ extern void
 _mesa_load_state_parameters(struct gl_context *ctx,
                             struct gl_program_parameter_list *paramList);
 
+extern unsigned
+_mesa_program_state_value_size(const gl_state_index16 state[STATE_LENGTH]);
 
 extern GLbitfield
 _mesa_program_state_flags(const gl_state_index16 state[STATE_LENGTH]);

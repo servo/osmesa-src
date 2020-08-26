@@ -97,7 +97,7 @@ handle_mem_write(void *user_data, uint64_t phys_addr,
 }
 
 static void
-handle_ring_write(void *user_data, enum gen_engine engine,
+handle_ring_write(void *user_data, enum drm_i915_gem_engine_class engine,
                   const void *ring_data, uint32_t ring_data_len)
 {
    struct aub_file *file = (struct aub_file *) user_data;
@@ -126,7 +126,7 @@ handle_info(void *user_data, int pci_id, const char *app_name)
    file->pci_id = pci_id;
    snprintf(file->app_name, sizeof(app_name), "%s", app_name);
 
-   if (!gen_get_device_info(file->pci_id, &file->devinfo)) {
+   if (!gen_get_device_info_from_pci_id(file->pci_id, &file->devinfo)) {
       fprintf(stderr, "can't find device information: pci_id=0x%x\n", file->pci_id);
       exit(EXIT_FAILURE);
    }
@@ -221,13 +221,13 @@ update_mem_for_exec(struct aub_mem *mem, struct aub_file *file, int exec_idx)
 
 #include <epoxy/gl.h>
 
-#include "imgui.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_memory_editor.h"
 #include "imgui_impl_gtk3.h"
 #include "imgui_impl_opengl3.h"
 
 #include "aubinator_viewer.h"
 #include "aubinator_viewer_urb.h"
-#include "imgui_memory_editor.h"
 
 struct window {
    struct list_head link; /* link in the global list of windows */
@@ -323,6 +323,8 @@ static struct Context {
    struct window registers_window;
 } context;
 
+thread_local ImGuiContext* __MesaImGui;
+
 static int
 map_key(int k)
 {
@@ -378,7 +380,7 @@ new_shader_window(struct aub_mem *mem, uint64_t address, const char *desc)
    struct shader_window *window = xtzalloc(*window);
 
    snprintf(window->base.name, sizeof(window->base.name),
-            "%s (0x%lx)##%p", desc, address, window);
+            "%s (0x%" PRIx64 ")##%p", desc, address, window);
 
    list_inithead(&window->base.parent_link);
    window->base.position = ImVec2(-1, -1);
@@ -387,16 +389,14 @@ new_shader_window(struct aub_mem *mem, uint64_t address, const char *desc)
    window->base.display = display_shader_window;
    window->base.destroy = destroy_shader_window;
 
-   struct gen_batch_decode_bo shader_bo;
-   if (mem->pml4)
-      shader_bo = aub_mem_get_ppgtt_bo(mem, address);
-   else
-      shader_bo = aub_mem_get_ggtt_bo(mem, address);
-
+   struct gen_batch_decode_bo shader_bo =
+      aub_mem_get_ppgtt_bo(mem, address);
    if (shader_bo.map) {
       FILE *f = open_memstream(&window->shader, &window->shader_size);
       if (f) {
-         gen_disasm_disassemble(context.file->disasm, shader_bo.map, 0, f);
+         gen_disasm_disassemble(context.file->disasm,
+                                (const uint8_t *) shader_bo.map +
+                                (address - shader_bo.addr), 0, f);
          fclose(f);
       }
    }
@@ -443,7 +443,7 @@ new_urb_window(struct aub_viewer_decode_ctx *decode_ctx, uint64_t address)
    struct urb_window *window = xtzalloc(*window);
 
    snprintf(window->base.name, sizeof(window->base.name),
-            "URB view (0x%lx)##%p", address, window);
+            "URB view (0x%" PRIx64 ")##%p", address, window);
 
    list_inithead(&window->base.parent_link);
    window->base.position = ImVec2(-1, -1);
@@ -495,7 +495,7 @@ display_edit_window(struct window *win)
                                   window->address);
       ImGui::EndChild();
    } else {
-      ImGui::Text("Memory view at 0x%lx not available", window->address);
+      ImGui::Text("Memory view at 0x%" PRIx64 " not available", window->address);
    }
 }
 
@@ -515,7 +515,7 @@ new_edit_window(struct aub_mem *mem, uint64_t address, uint32_t len)
    struct edit_window *window = xtzalloc(*window);
 
    snprintf(window->base.name, sizeof(window->base.name),
-            "Editing aub at 0x%lx##%p", address, window);
+            "Editing aub at 0x%" PRIx64 "##%p", address, window);
 
    list_inithead(&window->base.parent_link);
    window->base.position = ImVec2(-1, -1);
@@ -577,7 +577,7 @@ display_pml4_level(struct aub_mem *mem, uint64_t table_addr, uint64_t table_virt
          uint64_t entry_virt_addr = table_virt_addr + e * addr_increment;
          if (!available)
             continue;
-         ImGui::Text("Entry%03i - phys_addr=0x%lx - virt_addr=0x%lx",
+         ImGui::Text("Entry%03i - phys_addr=0x%" PRIx64 " - virt_addr=0x%" PRIx64,
                      e, table[e], entry_virt_addr);
       }
    } else {
@@ -587,7 +587,7 @@ display_pml4_level(struct aub_mem *mem, uint64_t table_addr, uint64_t table_virt
          if (available &&
              ImGui::TreeNodeEx(&table[e],
                                available ? ImGuiTreeNodeFlags_Framed : 0,
-                               "Entry%03i - phys_addr=0x%lx - virt_addr=0x%lx",
+                               "Entry%03i - phys_addr=0x%" PRIx64 " - virt_addr=0x%" PRIx64,
                                e, table[e], entry_virt_addr)) {
             display_pml4_level(mem, table[e] & ~0xffful, entry_virt_addr, level -1);
             ImGui::TreePop();
@@ -601,7 +601,7 @@ display_pml4_window(struct window *win)
 {
    struct pml4_window *window = (struct pml4_window *) win;
 
-   ImGui::Text("pml4: %lx", window->mem->pml4);
+   ImGui::Text("pml4: %" PRIx64, window->mem->pml4);
    ImGui::BeginChild(ImGui::GetID("##block"));
    display_pml4_level(window->mem, window->mem->pml4, 0, 4);
    ImGui::EndChild();
@@ -673,11 +673,11 @@ batch_edit_address(void *user_data, uint64_t address, uint32_t len)
 }
 
 static struct gen_batch_decode_bo
-batch_get_bo(void *user_data, uint64_t address)
+batch_get_bo(void *user_data, bool ppgtt, uint64_t address)
 {
    struct batch_window *window = (struct batch_window *) user_data;
 
-   if (window->uses_ppgtt)
+   if (window->uses_ppgtt && ppgtt)
       return aub_mem_get_ppgtt_bo(&window->mem, address);
    else
       return aub_mem_get_ggtt_bo(&window->mem, address);
@@ -695,18 +695,19 @@ update_batch_window(struct batch_window *window, bool reset, int exec_idx)
 }
 
 static void
-display_batch_ring_write(void *user_data, enum gen_engine engine,
+display_batch_ring_write(void *user_data, enum drm_i915_gem_engine_class engine,
                          const void *data, uint32_t data_len)
 {
    struct batch_window *window = (struct batch_window *) user_data;
 
    window->uses_ppgtt = false;
 
-   aub_viewer_render_batch(&window->decode_ctx, data, data_len, 0);
+   aub_viewer_render_batch(&window->decode_ctx, data, data_len, 0, false);
 }
 
 static void
-display_batch_execlist_write(void *user_data, enum gen_engine engine,
+display_batch_execlist_write(void *user_data,
+                             enum drm_i915_gem_engine_class engine,
                              uint64_t context_descriptor)
 {
    struct batch_window *window = (struct batch_window *) user_data;
@@ -722,19 +723,21 @@ display_batch_execlist_write(void *user_data, enum gen_engine engine,
    uint32_t ring_buffer_head = context_img[5];
    uint32_t ring_buffer_tail = context_img[7];
    uint32_t ring_buffer_start = context_img[9];
+   uint32_t ring_buffer_length = (context_img[11] & 0x1ff000) + 4096;
 
    window->mem.pml4 = (uint64_t)context_img[49] << 32 | context_img[51];
 
    struct gen_batch_decode_bo ring_bo =
       aub_mem_get_ggtt_bo(&window->mem, ring_buffer_start);
    assert(ring_bo.size > 0);
-   void *commands = (uint8_t *)ring_bo.map + (ring_buffer_start - ring_bo.addr);
+   void *commands = (uint8_t *)ring_bo.map + (ring_buffer_start - ring_bo.addr) + ring_buffer_head;
 
    window->uses_ppgtt = true;
 
+   window->decode_ctx.engine = engine;
    aub_viewer_render_batch(&window->decode_ctx, commands,
-                           ring_buffer_tail - ring_buffer_head,
-                           ring_buffer_start);
+                           MIN2(ring_buffer_tail - ring_buffer_head, ring_buffer_length),
+                           ring_buffer_start + ring_buffer_head, true);
 }
 
 static void
@@ -992,6 +995,7 @@ display_aubfile_window(struct window *win)
    ImGui::ColorEdit3("error", (float *)&cfg->error_color, cflags); ImGui::SameLine();
    ImGui::ColorEdit3("highlight", (float *)&cfg->highlight_color, cflags); ImGui::SameLine();
    ImGui::ColorEdit3("dwords", (float *)&cfg->dwords_color, cflags); ImGui::SameLine();
+   ImGui::ColorEdit3("booleans", (float *)&cfg->boolean_color, cflags); ImGui::SameLine();
 
    if (ImGui::Button("Commands list") || has_ctrl_key('c')) { show_commands_window(); } ImGui::SameLine();
    if (ImGui::Button("Registers list") || has_ctrl_key('r')) { show_register_window(); } ImGui::SameLine();
@@ -1004,7 +1008,7 @@ display_aubfile_window(struct window *win)
    ImGui::Text("Execbufs          %u", context.file->n_execs);
    ImGui::Text("PCI ID:           0x%x", context.file->pci_id);
    ImGui::Text("Application name: %s", context.file->app_name);
-   ImGui::Text(gen_get_device_name(context.file->pci_id));
+   ImGui::Text("%s", gen_get_device_name(context.file->pci_id));
 
    ImGui::SetNextWindowContentWidth(500);
    if (ImGui::BeginPopupModal("Help", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -1026,7 +1030,7 @@ display_aubfile_window(struct window *win)
       align += ImGui::GetStyle().WindowPadding.x + 10;
 
       for (uint32_t i = 0; i < ARRAY_SIZE(texts); i += 2) {
-         ImGui::Text(texts[i]); ImGui::SameLine(align); ImGui::Text(texts[i + 1]);
+         ImGui::Text("%s", texts[i]); ImGui::SameLine(align); ImGui::Text("%s", texts[i + 1]);
       }
 
       if (ImGui::Button("Done") || ImGui::IsKeyPressed(ImGuiKey_Escape))
@@ -1081,7 +1085,7 @@ display_windows(void)
          window->destroy(window);
    }
 
-   list_for_each_entry(struct window, window, &context.windows, link) {
+   list_for_each_entry_safe(struct window, window, &context.windows, link) {
       ImGui::SetNextWindowPos(window->position, ImGuiCond_FirstUseEver);
       ImGui::SetNextWindowSize(window->size, ImGuiCond_FirstUseEver);
       if (ImGui::Begin(window->name, &window->opened)) {

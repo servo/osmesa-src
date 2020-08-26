@@ -109,18 +109,18 @@ analyze_boolean_resolves_block(nir_block *block)
          uint8_t resolve_status;
          nir_alu_instr *alu = nir_instr_as_alu(instr);
          switch (alu->op) {
-         case nir_op_ball_fequal2:
-         case nir_op_ball_iequal2:
-         case nir_op_ball_fequal3:
-         case nir_op_ball_iequal3:
-         case nir_op_ball_fequal4:
-         case nir_op_ball_iequal4:
-         case nir_op_bany_fnequal2:
-         case nir_op_bany_inequal2:
-         case nir_op_bany_fnequal3:
-         case nir_op_bany_inequal3:
-         case nir_op_bany_fnequal4:
-         case nir_op_bany_inequal4:
+         case nir_op_b32all_fequal2:
+         case nir_op_b32all_iequal2:
+         case nir_op_b32all_fequal3:
+         case nir_op_b32all_iequal3:
+         case nir_op_b32all_fequal4:
+         case nir_op_b32all_iequal4:
+         case nir_op_b32any_fnequal2:
+         case nir_op_b32any_inequal2:
+         case nir_op_b32any_fnequal3:
+         case nir_op_b32any_inequal3:
+         case nir_op_b32any_fnequal4:
+         case nir_op_b32any_inequal4:
             /* These are only implemented by the vec4 backend and its
              * implementation emits resolved booleans.  At some point in the
              * future, this may change and we'll have to remove some of the
@@ -129,7 +129,7 @@ analyze_boolean_resolves_block(nir_block *block)
             resolve_status = BRW_NIR_BOOLEAN_NO_RESOLVE;
             break;
 
-         case nir_op_imov:
+         case nir_op_mov:
          case nir_op_inot:
             /* This is a single-source instruction.  Just copy the resolve
              * status from the source.
@@ -137,11 +137,19 @@ analyze_boolean_resolves_block(nir_block *block)
             resolve_status = get_resolve_status_for_src(&alu->src[0].src);
             break;
 
+         case nir_op_b32csel:
          case nir_op_iand:
          case nir_op_ior:
          case nir_op_ixor: {
-            uint8_t src0_status = get_resolve_status_for_src(&alu->src[0].src);
-            uint8_t src1_status = get_resolve_status_for_src(&alu->src[1].src);
+            const unsigned first = alu->op == nir_op_b32csel ? 1 : 0;
+            uint8_t src0_status = get_resolve_status_for_src(&alu->src[first + 0].src);
+            uint8_t src1_status = get_resolve_status_for_src(&alu->src[first + 1].src);
+
+            /* src0 of a bcsel is evaluated as a Boolean with the expectation
+             * that it has already been resolved.  Mark it as such.
+             */
+            if (alu->op == nir_op_b32csel)
+               src_mark_needs_resolve(&alu->src[0].src, NULL);
 
             if (src0_status == src1_status) {
                resolve_status = src0_status;
@@ -225,7 +233,7 @@ analyze_boolean_resolves_block(nir_block *block)
           * have to worry about resolving them.
           */
          instr->pass_flags &= ~BRW_NIR_BOOLEAN_MASK;
-         if (load->value.u32[0] == NIR_TRUE || load->value.u32[0] == NIR_FALSE) {
+         if (load->value[0].u32 == NIR_TRUE || load->value[0].u32 == NIR_FALSE) {
             instr->pass_flags |= BRW_NIR_BOOLEAN_NO_RESOLVE;
          } else {
             instr->pass_flags |= BRW_NIR_NON_BOOLEAN;

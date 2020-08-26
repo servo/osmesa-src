@@ -6,7 +6,7 @@
 
 #include "pipe/p_defines.h"
 
-#include <drm.h>
+#include "drm-uapi/drm.h"
 #include <nouveau.h>
 
 #ifndef NV04_PFIFO_MAX_PACKET_LEN
@@ -43,6 +43,13 @@ PUSH_DATAp(struct nouveau_pushbuf *push, const void *data, uint32_t size)
 {
    memcpy(push->cur, data, size * 4);
    push->cur += size;
+}
+
+static inline void
+PUSH_DATAb(struct nouveau_pushbuf *push, const void *data, uint32_t size)
+{
+   memcpy(push->cur, data, size);
+   push->cur += DIV_ROUND_UP(size, 4);
 }
 
 static inline void

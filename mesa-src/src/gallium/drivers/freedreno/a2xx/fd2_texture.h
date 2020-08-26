@@ -37,7 +37,7 @@
 
 struct fd2_sampler_stateobj {
 	struct pipe_sampler_state base;
-	uint32_t tex0, tex3, tex4, tex5;
+	uint32_t tex0, tex3, tex4;
 };
 
 static inline struct fd2_sampler_stateobj *
@@ -48,8 +48,7 @@ fd2_sampler_stateobj(struct pipe_sampler_state *samp)
 
 struct fd2_pipe_sampler_view {
 	struct pipe_sampler_view base;
-	enum a2xx_sq_surfaceformat fmt;
-	uint32_t tex0, tex2, tex3;
+	uint32_t tex0, tex1, tex2, tex3, tex4, tex5;
 };
 
 static inline struct fd2_pipe_sampler_view *

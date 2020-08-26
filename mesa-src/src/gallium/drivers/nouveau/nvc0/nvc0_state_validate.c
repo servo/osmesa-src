@@ -1,4 +1,4 @@
-
+#include "util/format/u_format.h"
 #include "util/u_framebuffer.h"
 #include "util/u_math.h"
 #include "util/u_viewport.h"
@@ -391,6 +391,7 @@ static void
 nvc0_validate_viewport(struct nvc0_context *nvc0)
 {
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+   uint16_t class_3d = nvc0->screen->base.class_3d;
    int x, y, w, h, i;
    float zmin, zmax;
 
@@ -431,6 +432,14 @@ nvc0_validate_viewport(struct nvc0_context *nvc0)
       BEGIN_NVC0(push, NVC0_3D(DEPTH_RANGE_NEAR(i)), 2);
       PUSH_DATAf(push, zmin);
       PUSH_DATAf(push, zmax);
+
+      if (class_3d >= GM200_3D_CLASS) {
+         BEGIN_NVC0(push, NVC0_3D(VIEWPORT_SWIZZLE(i)), 1);
+         PUSH_DATA (push, vp->swizzle_x << 0 |
+                          vp->swizzle_y << 4 |
+                          vp->swizzle_z << 8 |
+                          vp->swizzle_w << 12);
+      }
    }
    nvc0->viewports_dirty = 0;
 }
@@ -644,7 +653,7 @@ nvc0_validate_buffers(struct nvc0_context *nvc0)
             PUSH_DATA (push, nvc0->buffers[s][i].buffer_size);
             PUSH_DATA (push, 0);
             BCTX_REFN(nvc0->bufctx_3d, 3D_BUF, res, RDWR);
-            util_range_add(&res->valid_buffer_range,
+            util_range_add(&res->base, &res->valid_buffer_range,
                            nvc0->buffers[s][i].buffer_offset,
                            nvc0->buffers[s][i].buffer_offset +
                            nvc0->buffers[s][i].buffer_size);
@@ -831,20 +840,6 @@ nvc0_validate_fbread(struct nvc0_context *nvc0)
       pipe_sampler_view_reference(&nvc0->fbtexture, NULL);
    nvc0->fbtexture = new_view;
 
-   if (screen->default_tsc->id < 0) {
-      struct nv50_tsc_entry *tsc = nv50_tsc_entry(screen->default_tsc);
-      tsc->id = nvc0_screen_tsc_alloc(screen, tsc);
-      nvc0->base.push_data(&nvc0->base, screen->txc, 65536 + tsc->id * 32,
-                           NV_VRAM_DOMAIN(&screen->base), 32, tsc->tsc);
-      screen->tsc.lock[tsc->id / 32] |= 1 << (tsc->id % 32);
-
-      IMMED_NVC0(push, NVC0_3D(TSC_FLUSH), 0);
-      if (screen->base.class_3d < NVE4_3D_CLASS) {
-         BEGIN_NVC0(push, NVC0_3D(BIND_TSC2(0)), 1);
-         PUSH_DATA (push, (tsc->id << 12) | 1);
-      }
-   }
-
    if (new_view) {
       struct nv50_tic_entry *tic = nv50_tic_entry(new_view);
       assert(tic->id < 0);
@@ -860,7 +855,7 @@ nvc0_validate_fbread(struct nvc0_context *nvc0)
          PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(4));
          BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + 1);
          PUSH_DATA (push, NVC0_CB_AUX_FB_TEX_INFO);
-         PUSH_DATA (push, (screen->default_tsc->id << 20) | tic->id);
+         PUSH_DATA (push, (0 << 20) | tic->id);
       } else {
          BEGIN_NVC0(push, NVC0_3D(BIND_TIC2(0)), 1);
          PUSH_DATA (push, (tic->id << 9) | 1);

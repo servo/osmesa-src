@@ -28,6 +28,7 @@
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
+#include "drm-uapi/drm_fourcc.h"
 #include "main/glheader.h"
 #include "main/context.h"
 #include "main/framebuffer.h"
@@ -39,7 +40,8 @@
 #include "swrast/s_renderbuffer.h"
 
 #include "utils.h"
-#include "util/xmlpool.h"
+#include "util/driconf.h"
+#include "util/u_memory.h"
 
 static const __DRIconfigOptionsExtension i915_config_options = {
    .base = { __DRI_CONFIG_OPTIONS, 1 },
@@ -51,14 +53,14 @@ DRI_CONF_BEGIN
        * DRI_CONF_BO_REUSE_ALL
        */
       DRI_CONF_OPT_BEGIN_V(bo_reuse, enum, 1, "0:1")
-	 DRI_CONF_DESC_BEGIN(en, "Buffer object reuse")
+	 DRI_CONF_DESC_BEGIN("Buffer object reuse")
 	    DRI_CONF_ENUM(0, "Disable buffer object reuse")
 	    DRI_CONF_ENUM(1, "Enable reuse of all sizes of buffer objects")
 	 DRI_CONF_DESC_END
       DRI_CONF_OPT_END
 
       DRI_CONF_OPT_BEGIN_B(fragment_shader, "true")
-	 DRI_CONF_DESC(en, "Enable limited ARB_fragment_shader support on 915/945.")
+	 DRI_CONF_DESC("Enable limited ARB_fragment_shader support on 915/945.")
       DRI_CONF_OPT_END
 
    DRI_CONF_SECTION_END
@@ -73,11 +75,11 @@ DRI_CONF_BEGIN
       DRI_CONF_DISABLE_BLEND_FUNC_EXTENDED("false")
 
       DRI_CONF_OPT_BEGIN_B(stub_occlusion_query, "false")
-	 DRI_CONF_DESC(en, "Enable stub ARB_occlusion_query support on 915/945.")
+	 DRI_CONF_DESC("Enable stub ARB_occlusion_query support on 915/945.")
       DRI_CONF_OPT_END
 
       DRI_CONF_OPT_BEGIN_B(shader_precompile, "true")
-	 DRI_CONF_DESC(en, "Perform code generation at shader link time.")
+	 DRI_CONF_DESC("Perform code generation at shader link time.")
       DRI_CONF_OPT_END
    DRI_CONF_SECTION_END
 DRI_CONF_END
@@ -93,7 +95,7 @@ DRI_CONF_END
 #include "intel_tex.h"
 #include "intel_regions.h"
 
-#include "i915_drm.h"
+#include "drm-uapi/i915_drm.h"
 
 /**
  * For debugging purposes, this returns a time in seconds.
@@ -178,45 +180,45 @@ static const struct __DRI2flushExtensionRec intelFlushExtension = {
 };
 
 static struct intel_image_format intel_image_formats[] = {
-   { __DRI_IMAGE_FOURCC_ARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
+   { DRM_FORMAT_ARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
 
    { __DRI_IMAGE_FOURCC_SARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_SARGB8, 4 } } },
 
-   { __DRI_IMAGE_FOURCC_XRGB8888, __DRI_IMAGE_COMPONENTS_RGB, 1,
+   { DRM_FORMAT_XRGB8888, __DRI_IMAGE_COMPONENTS_RGB, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB8888, 4 }, } },
 
-   { __DRI_IMAGE_FOURCC_YUV410, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
+   { DRM_FORMAT_YUV410, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 1, 2, 2, __DRI_IMAGE_FORMAT_R8, 1 },
        { 2, 2, 2, __DRI_IMAGE_FORMAT_R8, 1 } } },
 
-   { __DRI_IMAGE_FOURCC_YUV411, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
+   { DRM_FORMAT_YUV411, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 1, 2, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 2, 2, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
 
-   { __DRI_IMAGE_FOURCC_YUV420, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
+   { DRM_FORMAT_YUV420, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 1, 1, 1, __DRI_IMAGE_FORMAT_R8, 1 },
        { 2, 1, 1, __DRI_IMAGE_FORMAT_R8, 1 } } },
 
-   { __DRI_IMAGE_FOURCC_YUV422, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
+   { DRM_FORMAT_YUV422, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 1, 1, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 2, 1, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
 
-   { __DRI_IMAGE_FOURCC_YUV444, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
+   { DRM_FORMAT_YUV444, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 1, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 2, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
 
-   { __DRI_IMAGE_FOURCC_NV12, __DRI_IMAGE_COMPONENTS_Y_UV, 2,
+   { DRM_FORMAT_NV12, __DRI_IMAGE_COMPONENTS_Y_UV, 2,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 1, 1, 1, __DRI_IMAGE_FORMAT_GR88, 2 } } },
 
-   { __DRI_IMAGE_FOURCC_NV16, __DRI_IMAGE_COMPONENTS_Y_UV, 2,
+   { DRM_FORMAT_NV16, __DRI_IMAGE_COMPONENTS_Y_UV, 2,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 1, 1, 0, __DRI_IMAGE_FORMAT_GR88, 2 } } },
 
@@ -228,10 +230,10 @@ static struct intel_image_format intel_image_formats[] = {
     * V into A.  This lets the texture sampler interpolate the Y
     * components correctly when sampling from plane 0, and interpolate
     * U and V correctly when sampling from plane 1. */
-   { __DRI_IMAGE_FOURCC_YUYV, __DRI_IMAGE_COMPONENTS_Y_XUXV, 2,
+   { DRM_FORMAT_YUYV, __DRI_IMAGE_COMPONENTS_Y_XUXV, 2,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88, 2 },
        { 0, 1, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
-   { __DRI_IMAGE_FOURCC_UYVY, __DRI_IMAGE_COMPONENTS_Y_UXVX, 2,
+   { DRM_FORMAT_UYVY, __DRI_IMAGE_COMPONENTS_Y_UXVX, 2,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88, 2 },
        { 0, 1, 0, __DRI_IMAGE_FORMAT_ABGR8888, 4 } } }
 };
@@ -1020,30 +1022,6 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
    return true;
 }
 
-static bool
-intel_detect_swizzling(struct intel_screen *screen)
-{
-   drm_intel_bo *buffer;
-   unsigned long flags = 0;
-   unsigned long aligned_pitch;
-   uint32_t tiling = I915_TILING_X;
-   uint32_t swizzle_mode = 0;
-
-   buffer = drm_intel_bo_alloc_tiled(screen->bufmgr, "swizzle test",
-				     64, 64, 4,
-				     &tiling, &aligned_pitch, flags);
-   if (buffer == NULL)
-      return false;
-
-   drm_intel_bo_get_tiling(buffer, &tiling, &swizzle_mode);
-   drm_intel_bo_unreference(buffer);
-
-   if (swizzle_mode == I915_BIT_6_SWIZZLE_NONE)
-      return false;
-   else
-      return true;
-}
-
 static __DRIconfig**
 intel_screen_make_configs(__DRIscreen *dri_screen)
 {
@@ -1199,8 +1177,6 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    } else {
       intelScreen->gen = 2;
    }
-
-   intelScreen->hw_has_swizzling = intel_detect_swizzling(intelScreen);
 
    set_max_gl_versions(intelScreen);
 

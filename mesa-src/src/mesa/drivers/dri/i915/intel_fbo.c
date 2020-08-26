@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2006 VMware, Inc.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,12 +22,11 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 
 #include "main/enums.h"
-#include "main/imports.h"
 #include "main/macros.h"
 #include "main/mtypes.h"
 #include "main/fbobject.h"
@@ -37,6 +36,7 @@
 #include "main/teximage.h"
 #include "main/image.h"
 
+#include "util/u_memory.h"
 #include "swrast/swrast.h"
 #include "drivers/common/meta.h"
 
@@ -536,11 +536,11 @@ intel_finish_render_texture(struct gl_context * ctx, struct gl_renderbuffer *rb)
 #define fbo_incomplete(fb, ...) do {                                          \
       static GLuint msg_id = 0;                                               \
       if (unlikely(ctx->Const.ContextFlags & GL_CONTEXT_FLAG_DEBUG_BIT)) {    \
-         _mesa_gl_debug(ctx, &msg_id,                                         \
-                        MESA_DEBUG_SOURCE_API,                                \
-                        MESA_DEBUG_TYPE_OTHER,                                \
-                        MESA_DEBUG_SEVERITY_MEDIUM,                           \
-                        __VA_ARGS__);                                         \
+         _mesa_gl_debugf(ctx, &msg_id,                                        \
+                         MESA_DEBUG_SOURCE_API,                               \
+                         MESA_DEBUG_TYPE_OTHER,                               \
+                         MESA_DEBUG_SEVERITY_MEDIUM,                          \
+                         __VA_ARGS__);                                        \
       }                                                                       \
       DBG(__VA_ARGS__);                                                       \
       fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;                               \

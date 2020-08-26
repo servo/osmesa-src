@@ -34,6 +34,7 @@
  * offline compile GLSL code and examine the resulting GLSL IR.
  */
 
+#include "main/mtypes.h"
 #include "standalone.h"
 
 static struct standalone_options options;
@@ -45,6 +46,7 @@ const struct option compiler_opts[] = {
    { "dump-builder", no_argument, &options.dump_builder, 1 },
    { "link",     no_argument, &options.do_link,  1 },
    { "just-log", no_argument, &options.just_log, 1 },
+   { "lower-precision", no_argument, &options.lower_precision, 1 },
    { "version",  required_argument, NULL, 'v' },
    { NULL, 0, NULL, 0 }
 };
@@ -91,8 +93,10 @@ main(int argc, char * const* argv)
       usage_fail(argv[0]);
 
    struct gl_shader_program *whole_program;
+   static struct gl_context local_ctx;
 
-   whole_program = standalone_compile_shader(&options, argc - optind, &argv[optind]);
+   whole_program = standalone_compile_shader(&options, argc - optind,
+                                             &argv[optind], &local_ctx);
 
    if (!whole_program)
       usage_fail(argv[0]);

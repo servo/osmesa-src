@@ -30,13 +30,20 @@
 #include "etnaviv_internal.h"
 #include "etnaviv_tiling.h"
 #include "pipe/p_state.h"
+#include "util/format/u_format.h"
 #include "util/list.h"
+#include "util/set.h"
+#include "util/u_helpers.h"
+#include "util/u_range.h"
 
+struct etna_context;
 struct pipe_screen;
+struct util_dynarray;
 
 struct etna_resource_level {
    unsigned width, padded_width; /* in pixels */
    unsigned height, padded_height; /* in samples */
+   unsigned depth;
    unsigned offset; /* offset into memory area */
    uint32_t stride; /* row stride */
    uint32_t layer_stride; /* layer stride */
@@ -45,8 +52,14 @@ struct etna_resource_level {
    uint32_t ts_offset;
    uint32_t ts_layer_stride;
    uint32_t ts_size;
-   uint32_t clear_value; /* clear value of resource level (mainly for TS) */
+   uint64_t clear_value; /* clear value of resource level (mainly for TS) */
    bool ts_valid;
+   uint8_t ts_mode;
+   int8_t ts_compress_fmt; /* COLOR_COMPRESSION_FORMAT_* (-1 = disable) */
+
+   /* keep track if we have done some per block patching */
+   bool patched;
+   struct util_dynarray *patch_offsets;
 };
 
 /* status of queued up but not flushed reads and write operations.
@@ -73,20 +86,18 @@ struct etna_resource {
 
    struct etna_resource_level levels[ETNA_NUM_LOD];
 
-   /* When we are rendering to a texture, we need a differently tiled resource */
+   /* buffer range that has been initialized */
+   struct util_range valid_buffer_range;
+
+   /* for when TE doesn't support the base layout */
    struct pipe_resource *texture;
-   /*
-    * If imported resources have an render/sampler incompatible tiling, we keep
-    * them as an external resource, which is blitted as needed.
-    */
-   struct pipe_resource *external;
+   /* for when PE doesn't support the base layout */
+   struct pipe_resource *render;
 
    enum etna_resource_status status;
 
-   /* resources accessed by queued but not flushed draws are tracked
-    * in the used_resources list. */
-   struct list_head list;
-   struct etna_context *pending_ctx;
+   mtx_t lock; /* Lock to protect pending_ctx */
+   struct set *pending_ctx;
 };
 
 /* returns TRUE if a is newer than b */
@@ -121,6 +132,17 @@ etna_resource_sampler_only(const struct pipe_resource *pres)
    return (pres->bind & (PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET |
                          PIPE_BIND_DEPTH_STENCIL | PIPE_BIND_BLENDABLE)) ==
           PIPE_BIND_SAMPLER_VIEW;
+}
+
+static inline bool
+etna_resource_hw_tileable(bool use_blt, const struct pipe_resource *pres)
+{
+   if (use_blt)
+      return true;
+
+   /* RS can only tile 16bpp or 32bpp formats */
+   return util_format_get_blocksize(pres->format) == 2 ||
+          util_format_get_blocksize(pres->format) == 4;
 }
 
 static inline struct etna_resource *

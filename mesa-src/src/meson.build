@@ -18,24 +18,24 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-inc_common = include_directories(
-  '../include', '.', 'mapi', 'mesa', 'gallium/include', 'gallium/auxiliary')
 inc_mesa = include_directories('mesa')
 inc_mapi = include_directories('mapi')
 inc_src = include_directories('.')
 inc_gallium = include_directories('gallium/include')
 inc_gallium_aux = include_directories('gallium/auxiliary')
 inc_amd_common = include_directories('amd/common')
+inc_amd_common_llvm = include_directories('amd/llvm')
 
 libglsl_util = static_library(
   'glsl_util',
   files(
-    'mesa/main/extensions_table.c', 'mesa/main/imports.c',
-    'mesa/program/prog_parameter.c', 'mesa/program/symbol_table.c',
+    'mesa/main/extensions_table.c',
+    'mesa/program/prog_parameter.c',
+    'mesa/program/symbol_table.c',
     'mesa/program/dummy_errors.c',
   ),
-  include_directories : [inc_common],
-  c_args : [c_vis_args],
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
+  gnu_symbol_visibility : 'hidden',
   build_by_default : false,
 )
 
@@ -43,23 +43,52 @@ sha1_h = custom_target(
   'git_sha1.h',
   output : 'git_sha1.h',
   command : [prog_python, git_sha1_gen_py, '--output', '@OUTPUT@'],
-  build_always : true, # commit sha1 can change without having touched these files
+  build_by_default : true,
+  build_always_stale : true, # commit sha1 can change without having touched these files
 )
 
 subdir('gtest')
+if cc.get_id() == 'msvc'
+  subdir('getopt')
+else
+  idep_getopt = null_dep
+endif
+subdir('android_stub')
 subdir('util')
 subdir('mapi')
 # TODO: opengl
 subdir('compiler')
-subdir('egl/wayland/wayland-drm')
-subdir('vulkan')
+if with_tools.contains('drm-shim')
+  subdir('drm-shim')
+endif
+if with_imgui
+  subdir('imgui')
+endif
+if with_platform_wayland
+  subdir('egl/wayland/wayland-drm')
+endif
+if with_any_vk
+  subdir('vulkan')
+endif
 if with_gallium_radeonsi or with_amd_vk
   subdir('amd')
 endif
 if with_gallium_vc4 or with_gallium_v3d
   subdir('broadcom')
 endif
-if with_dri_i965 or with_intel_vk
+if with_gallium_etnaviv
+  subdir('etnaviv')
+endif
+if with_gallium_freedreno or with_freedreno_vk
+  subdir('freedreno')
+endif
+if with_gallium_panfrost or with_gallium_lima
+  subdir('panfrost')
+endif
+if with_gallium_virgl
+  subdir('virtio')
+endif
+if with_dri_i965 or with_intel_vk or with_gallium_iris
   subdir('intel')
 endif
 subdir('mesa')
@@ -67,7 +96,7 @@ subdir('loader')
 if with_platform_haiku
   subdir('hgl')
 endif
-if with_glx != 'disabled'
+if with_glx == 'dri'
   subdir('glx')
 endif
 if with_gbm
@@ -89,22 +118,12 @@ endif
 
 # This must be after at least mesa, glx, and gallium, since libgl will be
 # defined in one of those subdirs depending on the glx provider.
-if with_glx != 'disabled'
-  # If using glvnd the pkg-config header should not point to GL_mesa, it should
-  # point to GL. glvnd is only available on unix like platforms so adding -l
-  # should be safe here
-  # TODO: in the glvnd case glvnd itself should really be providing this.
-  if with_glvnd
-    _gl = '-L${libdir} -lGL'
-  else
-    _gl = libgl
-  endif
-
+if with_glx != 'disabled' and not with_glvnd
   pkg.generate(
     name : 'gl',
     description : 'Mesa OpenGL Library',
     version : meson.project_version(),
-    libraries : _gl,
+    libraries : libgl,
     libraries_private : gl_priv_libs,
     requires_private : gl_priv_reqs,
     variables : ['glx_tls=yes'],

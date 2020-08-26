@@ -25,6 +25,7 @@
 #define UTIL_FUTEX_H
 
 #if defined(HAVE_LINUX_FUTEX_H)
+#define UTIL_FUTEX_SUPPORTED 1
 
 #include <limits.h>
 #include <stdint.h>
@@ -51,6 +52,62 @@ static inline int futex_wait(uint32_t *addr, int32_t value, const struct timespe
                     FUTEX_BITSET_MATCH_ANY);
 }
 
+#elif defined(__FreeBSD__)
+#define UTIL_FUTEX_SUPPORTED 1
+
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/umtx.h>
+#include <sys/time.h>
+
+static inline int futex_wake(uint32_t *addr, int count)
+{
+   assert(count == (int)(uint32_t)count); /* Check that bits weren't discarded */
+   return _umtx_op(addr, UMTX_OP_WAKE, (uint32_t)count, NULL, NULL) == -1 ? errno : 0;
+}
+
+static inline int futex_wait(uint32_t *addr, int32_t value, struct timespec *timeout)
+{
+   void *uaddr = NULL, *uaddr2 = NULL;
+   struct _umtx_time tmo = {
+      ._flags = UMTX_ABSTIME,
+      ._clockid = CLOCK_MONOTONIC
+   };
+
+   assert(value == (int)(uint32_t)value); /* Check that bits weren't discarded */
+
+   if (timeout != NULL) {
+      tmo._timeout = *timeout;
+      uaddr = (void *)(uintptr_t)sizeof(tmo);
+      uaddr2 = (void *)&tmo;
+   }
+
+   return _umtx_op(addr, UMTX_OP_WAIT_UINT, (uint32_t)value, uaddr, uaddr2) == -1 ? errno : 0;
+}
+
+#elif defined(__OpenBSD__)
+#define UTIL_FUTEX_SUPPORTED 1
+
+#include <sys/time.h>
+#include <sys/futex.h>
+
+static inline int futex_wake(uint32_t *addr, int count)
+{
+   return futex(addr, FUTEX_WAKE, count, NULL, NULL);
+}
+
+static inline int futex_wait(uint32_t *addr, int32_t value, const struct timespec *timeout)
+{
+   struct timespec tsrel, tsnow;
+   clock_gettime(CLOCK_MONOTONIC, &tsnow); 
+   timespecsub(timeout, &tsrel, &tsrel);
+   return futex(addr, FUTEX_WAIT, value, &tsrel, NULL);
+}
+
+#else
+#define UTIL_FUTEX_SUPPORTED 0
 #endif
 
 #endif /* UTIL_FUTEX_H */

@@ -2,7 +2,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "translate/translate.h"
 
 #include "nvc0/nvc0_context.h"
@@ -71,9 +71,13 @@ nvc0_vertex_configure_translate(struct nvc0_context *nvc0, int32_t index_bias)
 
       if (likely(vb->is_user_buffer))
          map = (const uint8_t *)vb->buffer.user;
-      else
+      else {
+         if (!vb->buffer.resource)
+            continue;
+
          map = nouveau_resource_map_offset(&nvc0->base,
             nv04_resource(vb->buffer.resource), vb->buffer_offset, NOUVEAU_BO_RD);
+      }
 
       if (index_bias && !unlikely(nvc0->vertex->instance_bufs & (1 << i)))
          map += (intptr_t)index_bias * vb->stride;
@@ -224,7 +228,11 @@ nvc0_push_setup_vertex_array(struct nvc0_context *nvc0, const unsigned count)
    BEGIN_NVC0(push, NVC0_3D(VERTEX_ARRAY_START_HIGH(0)), 2);
    PUSH_DATAh(push, va);
    PUSH_DATA (push, va);
-   BEGIN_NVC0(push, NVC0_3D(VERTEX_ARRAY_LIMIT_HIGH(0)), 2);
+
+   if (nvc0->screen->eng3d->oclass < TU102_3D_CLASS)
+      BEGIN_NVC0(push, NVC0_3D(VERTEX_ARRAY_LIMIT_HIGH(0)), 2);
+   else
+      BEGIN_NVC0(push, SUBC_3D(TU102_3D_VERTEX_ARRAY_LIMIT_HIGH(0)), 2);
    PUSH_DATAh(push, va + size - 1);
    PUSH_DATA (push, va + size - 1);
 
@@ -466,6 +474,83 @@ nvc0_prim_gl(unsigned prim)
    }
 }
 
+typedef struct {
+   uint32_t count;
+   uint32_t primCount;
+   uint32_t first;
+   uint32_t baseInstance;
+} DrawArraysIndirectCommand;
+
+typedef struct {
+   uint32_t count;
+   uint32_t primCount;
+   uint32_t firstIndex;
+   int32_t  baseVertex;
+   uint32_t baseInstance;
+} DrawElementsIndirectCommand;
+
+void
+nvc0_push_vbo_indirect(struct nvc0_context *nvc0, const struct pipe_draw_info *info)
+{
+   /* The strategy here is to just read the commands from the indirect buffer
+    * and do the draws. This is suboptimal, but will only happen in the case
+    * that conversion is required for FIXED or DOUBLE inputs.
+    */
+   struct nvc0_screen *screen = nvc0->screen;
+   struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+   struct nv04_resource *buf = nv04_resource(info->indirect->buffer);
+   struct nv04_resource *buf_count = nv04_resource(info->indirect->indirect_draw_count);
+   unsigned i;
+
+   unsigned draw_count = info->indirect->draw_count;
+   if (buf_count) {
+      uint32_t *count = nouveau_resource_map_offset(
+            &nvc0->base, buf_count, info->indirect->indirect_draw_count_offset,
+            NOUVEAU_BO_RD);
+      draw_count = *count;
+   }
+
+   uint8_t *buf_data = nouveau_resource_map_offset(
+            &nvc0->base, buf, info->indirect->offset, NOUVEAU_BO_RD);
+   struct pipe_draw_info single = *info;
+   single.indirect = NULL;
+   for (i = 0; i < draw_count; i++, buf_data += info->indirect->stride) {
+      if (info->index_size) {
+         DrawElementsIndirectCommand *cmd = (void *)buf_data;
+         single.start = info->start + cmd->firstIndex;
+         single.count = cmd->count;
+         single.start_instance = cmd->baseInstance;
+         single.instance_count = cmd->primCount;
+         single.index_bias = cmd->baseVertex;
+      } else {
+         DrawArraysIndirectCommand *cmd = (void *)buf_data;
+         single.start = cmd->first;
+         single.count = cmd->count;
+         single.start_instance = cmd->baseInstance;
+         single.instance_count = cmd->primCount;
+      }
+
+      if (nvc0->vertprog->vp.need_draw_parameters) {
+         PUSH_SPACE(push, 9);
+         BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
+         PUSH_DATA (push, NVC0_CB_AUX_SIZE);
+         PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(0));
+         PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(0));
+         BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + 3);
+         PUSH_DATA (push, NVC0_CB_AUX_DRAW_INFO);
+         PUSH_DATA (push, single.index_bias);
+         PUSH_DATA (push, single.start_instance);
+         PUSH_DATA (push, single.drawid + i);
+      }
+
+      nvc0_push_vbo(nvc0, &single);
+   }
+
+   nouveau_resource_unmap(buf);
+   if (buf_count)
+      nouveau_resource_unmap(buf_count);
+}
+
 void
 nvc0_push_vbo(struct nvc0_context *nvc0, const struct pipe_draw_info *info)
 {
@@ -690,7 +775,11 @@ nvc0_push_upload_vertex_ids(struct push_context *ctx,
    PUSH_DATA (push, NVC0_3D_VERTEX_ARRAY_FETCH_ENABLE | index_size);
    PUSH_DATAh(push, va);
    PUSH_DATA (push, va);
-   BEGIN_NVC0(push, NVC0_3D(VERTEX_ARRAY_LIMIT_HIGH(1)), 2);
+
+   if (nvc0->screen->eng3d->oclass < TU102_3D_CLASS)
+      BEGIN_NVC0(push, NVC0_3D(VERTEX_ARRAY_LIMIT_HIGH(1)), 2);
+   else
+      BEGIN_NVC0(push, SUBC_3D(TU102_3D_VERTEX_ARRAY_LIMIT_HIGH(1)), 2);
    PUSH_DATAh(push, va + info->count * index_size - 1);
    PUSH_DATA (push, va + info->count * index_size - 1);
 

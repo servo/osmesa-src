@@ -65,14 +65,27 @@ void WakeAllThreads(SWR_CONTEXT* pContext)
 /// @param pCreateInfo - pointer to creation info.
 HANDLE SwrCreateContext(SWR_CREATECONTEXT_INFO* pCreateInfo)
 {
-    RDTSC_RESET();
-    RDTSC_INIT(0);
-
     void* pContextMem = AlignedMalloc(sizeof(SWR_CONTEXT), KNOB_SIMD_WIDTH * 4);
     memset(pContextMem, 0, sizeof(SWR_CONTEXT));
     SWR_CONTEXT* pContext = new (pContextMem) SWR_CONTEXT();
 
     pContext->privateStateSize = pCreateInfo->privateStateSize;
+
+    // initialize callback functions
+    pContext->pfnLoadTile                = pCreateInfo->pfnLoadTile;
+    pContext->pfnStoreTile               = pCreateInfo->pfnStoreTile;
+    pContext->pfnTranslateGfxptrForRead  = pCreateInfo->pfnTranslateGfxptrForRead;
+    pContext->pfnTranslateGfxptrForWrite = pCreateInfo->pfnTranslateGfxptrForWrite;
+    pContext->pfnMakeGfxPtr              = pCreateInfo->pfnMakeGfxPtr;
+    pContext->pfnCreateMemoryContext     = pCreateInfo->pfnCreateMemoryContext;
+    pContext->pfnDestroyMemoryContext    = pCreateInfo->pfnDestroyMemoryContext;
+    pContext->pfnUpdateSoWriteOffset     = pCreateInfo->pfnUpdateSoWriteOffset;
+    pContext->pfnUpdateStats             = pCreateInfo->pfnUpdateStats;
+    pContext->pfnUpdateStatsFE           = pCreateInfo->pfnUpdateStatsFE;
+    pContext->pfnUpdateStreamOut         = pCreateInfo->pfnUpdateStreamOut;
+
+
+    pContext->hExternalMemory = pCreateInfo->hExternalMemory;
 
     pContext->MAX_DRAWS_IN_FLIGHT = KNOB_MAX_DRAWS_IN_FLIGHT;
     if (pCreateInfo->MAX_DRAWS_IN_FLIGHT != 0)
@@ -129,8 +142,8 @@ HANDLE SwrCreateContext(SWR_CREATECONTEXT_INFO* pCreateInfo)
         pContext->workerPrivateState = *pCreateInfo->pWorkerPrivateState;
     }
 
-    memset(&pContext->WaitLock, 0, sizeof(pContext->WaitLock));
-    memset(&pContext->FifosNotEmpty, 0, sizeof(pContext->FifosNotEmpty));
+    memset((void*)&pContext->WaitLock, 0, sizeof(pContext->WaitLock));
+    memset((void*)&pContext->FifosNotEmpty, 0, sizeof(pContext->FifosNotEmpty));
     new (&pContext->WaitLock) std::mutex();
     new (&pContext->FifosNotEmpty) std::condition_variable();
 
@@ -157,6 +170,12 @@ HANDLE SwrCreateContext(SWR_CREATECONTEXT_INFO* pCreateInfo)
         ArchRast::CreateThreadContext(ArchRast::AR_THREAD::API);
 #endif
 
+#if defined(KNOB_ENABLE_RDTSC)
+    pContext->pBucketMgr = new BucketManager(pCreateInfo->contextName);
+    RDTSC_RESET(pContext->pBucketMgr);
+    RDTSC_INIT(pContext->pBucketMgr, 0);
+#endif
+
     // Allocate scratch space for workers.
     ///@note We could lazily allocate this but its rather small amount of memory.
     for (uint32_t i = 0; i < pContext->NumWorkerThreads; ++i)
@@ -166,19 +185,24 @@ HANDLE SwrCreateContext(SWR_CREATECONTEXT_INFO* pCreateInfo)
             pContext->threadPool.pThreadData ? pContext->threadPool.pThreadData[i].numaId : 0;
         pContext->ppScratch[i] = (uint8_t*)VirtualAllocExNuma(GetCurrentProcess(),
                                                               nullptr,
-                                                              32 * sizeof(KILOBYTE),
+                                                              KNOB_WORKER_SCRATCH_SPACE_SIZE,
                                                               MEM_RESERVE | MEM_COMMIT,
                                                               PAGE_READWRITE,
                                                               numaNode);
 #else
         pContext->ppScratch[i] =
-            (uint8_t*)AlignedMalloc(32 * sizeof(KILOBYTE), KNOB_SIMD_WIDTH * 4);
+            (uint8_t*)AlignedMalloc(KNOB_WORKER_SCRATCH_SPACE_SIZE, KNOB_SIMD_WIDTH * 4);
 #endif
 
 #if defined(KNOB_ENABLE_AR)
         // Initialize worker thread context for ArchRast.
         pContext->pArContext[i] = ArchRast::CreateThreadContext(ArchRast::AR_THREAD::WORKER);
+
+        SWR_WORKER_DATA* pWorkerData = (SWR_WORKER_DATA*)pContext->threadPool.pThreadData[i].pWorkerPrivateData;
+        pWorkerData->hArContext = pContext->pArContext[i];
 #endif
+
+
     }
 
 #if defined(KNOB_ENABLE_AR)
@@ -192,18 +216,9 @@ HANDLE SwrCreateContext(SWR_CREATECONTEXT_INFO* pCreateInfo)
     // initialize hot tile manager
     pContext->pHotTileMgr = new HotTileMgr();
 
-    // initialize callback functions
-    pContext->pfnLoadTile            = pCreateInfo->pfnLoadTile;
-    pContext->pfnStoreTile           = pCreateInfo->pfnStoreTile;
-    pContext->pfnClearTile           = pCreateInfo->pfnClearTile;
-    pContext->pfnUpdateSoWriteOffset = pCreateInfo->pfnUpdateSoWriteOffset;
-    pContext->pfnUpdateStats         = pCreateInfo->pfnUpdateStats;
-    pContext->pfnUpdateStatsFE       = pCreateInfo->pfnUpdateStatsFE;
-
-
     // pass pointer to bucket manager back to caller
 #ifdef KNOB_ENABLE_RDTSC
-    pCreateInfo->pBucketMgr = &gBucketMgr;
+    pCreateInfo->pBucketMgr = pContext->pBucketMgr;
 #endif
 
     pCreateInfo->contextSaveSize = sizeof(API_STATE);
@@ -215,7 +230,7 @@ HANDLE SwrCreateContext(SWR_CREATECONTEXT_INFO* pCreateInfo)
 
 void CopyState(DRAW_STATE& dst, const DRAW_STATE& src)
 {
-    memcpy(&dst.state, &src.state, sizeof(API_STATE));
+    memcpy((void*)&dst.state, (void*)&src.state, sizeof(API_STATE));
 }
 
 template <bool IsDraw>
@@ -249,9 +264,7 @@ void QueueWork(SWR_CONTEXT* pContext)
 
     if (pContext->threadInfo.SINGLE_THREADED)
     {
-        // flush denormals to 0
-        uint32_t mxcsr = _mm_getcsr();
-        _mm_setcsr(mxcsr | _MM_FLUSH_ZERO_ON | _MM_DENORMALS_ZERO_ON);
+        uint32_t mxcsr = SetOptimalVectorCSR();
 
         if (IsDraw)
         {
@@ -273,13 +286,13 @@ void QueueWork(SWR_CONTEXT* pContext)
         }
 
         // restore csr
-        _mm_setcsr(mxcsr);
+        RestoreVectorCSR(mxcsr);
     }
     else
     {
-        RDTSC_BEGIN(APIDrawWakeAllThreads, pDC->drawId);
+        RDTSC_BEGIN(pContext->pBucketMgr, APIDrawWakeAllThreads, pDC->drawId);
         WakeAllThreads(pContext);
-        RDTSC_END(APIDrawWakeAllThreads, 1);
+        RDTSC_END(pContext->pBucketMgr, APIDrawWakeAllThreads, 1);
     }
 
     // Set current draw context to NULL so that next state call forces a new draw context to be
@@ -300,7 +313,7 @@ INLINE void QueueDispatch(SWR_CONTEXT* pContext)
 
 DRAW_CONTEXT* GetDrawContext(SWR_CONTEXT* pContext, bool isSplitDraw = false)
 {
-    RDTSC_BEGIN(APIGetDrawContext, 0);
+    RDTSC_BEGIN(pContext->pBucketMgr, APIGetDrawContext, 0);
     // If current draw context is null then need to obtain a new draw context to use from ring.
     if (pContext->pCurDrawContext == nullptr)
     {
@@ -389,7 +402,7 @@ DRAW_CONTEXT* GetDrawContext(SWR_CONTEXT* pContext, bool isSplitDraw = false)
         SWR_ASSERT(isSplitDraw == false, "Split draw should only be used when obtaining a new DC");
     }
 
-    RDTSC_END(APIGetDrawContext, 0);
+    RDTSC_END(pContext->pBucketMgr, APIGetDrawContext, 0);
     return pContext->pCurDrawContext;
 }
 
@@ -441,6 +454,10 @@ void SwrDestroyContext(HANDLE hContext)
 #endif
     }
 
+#if defined(KNOB_ENABLE_RDTSC)
+    delete pContext->pBucketMgr;
+#endif
+
     delete[] pContext->ppScratch;
     AlignedFree(pContext->pStats);
 
@@ -461,7 +478,7 @@ void SWR_API SwrSaveState(HANDLE hContext, void* pOutputStateBlock, size_t memSi
 {
     SWR_CONTEXT* pContext = GetContext(hContext);
     auto         pSrc     = GetDrawState(pContext);
-    SWR_ASSERT(pOutputStateBlock && memSize >= sizeof(*pSrc));
+    assert(pOutputStateBlock && memSize >= sizeof(*pSrc));
 
     memcpy(pOutputStateBlock, pSrc, sizeof(*pSrc));
 }
@@ -470,9 +487,9 @@ void SWR_API SwrRestoreState(HANDLE hContext, const void* pStateBlock, size_t me
 {
     SWR_CONTEXT* pContext = GetContext(hContext);
     auto         pDst     = GetDrawState(pContext);
-    SWR_ASSERT(pStateBlock && memSize >= sizeof(*pDst));
+    assert(pStateBlock && memSize >= sizeof(*pDst));
 
-    memcpy(pDst, pStateBlock, sizeof(*pDst));
+    memcpy((void*)pDst, (void*)pStateBlock, sizeof(*pDst));
 }
 
 void SetupDefaultState(SWR_CONTEXT* pContext)
@@ -498,7 +515,7 @@ void SWR_API SwrSync(HANDLE            hContext,
     SWR_CONTEXT*  pContext = GetContext(hContext);
     DRAW_CONTEXT* pDC      = GetDrawContext(pContext);
 
-    RDTSC_BEGIN(APISync, 0);
+    RDTSC_BEGIN(pContext->pBucketMgr, APISync, 0);
 
     pDC->FeWork.type    = SYNC;
     pDC->FeWork.pfnWork = ProcessSync;
@@ -514,7 +531,7 @@ void SWR_API SwrSync(HANDLE            hContext,
     // enqueue
     QueueDraw(pContext);
 
-    RDTSC_END(APISync, 1);
+    RDTSC_END(pContext->pBucketMgr, APISync, 1);
 }
 
 void SwrStallBE(HANDLE hContext)
@@ -529,28 +546,28 @@ void SwrWaitForIdle(HANDLE hContext)
 {
     SWR_CONTEXT* pContext = GetContext(hContext);
 
-    RDTSC_BEGIN(APIWaitForIdle, 0);
+    RDTSC_BEGIN(pContext->pBucketMgr, APIWaitForIdle, 0);
 
     while (!pContext->dcRing.IsEmpty())
     {
         _mm_pause();
     }
 
-    RDTSC_END(APIWaitForIdle, 1);
+    RDTSC_END(pContext->pBucketMgr, APIWaitForIdle, 1);
 }
 
 void SwrWaitForIdleFE(HANDLE hContext)
 {
     SWR_CONTEXT* pContext = GetContext(hContext);
 
-    RDTSC_BEGIN(APIWaitForIdle, 0);
+    RDTSC_BEGIN(pContext->pBucketMgr, APIWaitForIdle, 0);
 
     while (pContext->drawsOutstandingFE > 0)
     {
         _mm_pause();
     }
 
-    RDTSC_END(APIWaitForIdle, 1);
+    RDTSC_END(pContext->pBucketMgr, APIWaitForIdle, 1);
 }
 
 void SwrSetVertexBuffers(HANDLE                         hContext,
@@ -600,9 +617,17 @@ void SwrSetSoBuffers(HANDLE hContext, SWR_STREAMOUT_BUFFER* pSoBuffer, uint32_t 
 {
     API_STATE* pState = GetDrawState(GetContext(hContext));
 
-    SWR_ASSERT((slot < 4), "There are only 4 SO buffer slots [0, 3]\nSlot requested: %d", slot);
+    SWR_ASSERT((slot < MAX_SO_STREAMS), "There are only 4 SO buffer slots [0, 3]\nSlot requested: %d", slot);
 
-    pState->soBuffer[slot] = *pSoBuffer;
+    // remember buffer status in case of future resume StreamOut
+    if ((pState->soBuffer[slot].pBuffer != 0) && (pSoBuffer->pBuffer == 0))
+	pState->soPausedBuffer[slot] = pState->soBuffer[slot];
+
+    // resume
+    if (pState->soPausedBuffer[slot].pBuffer == pSoBuffer->pBuffer)
+	pState->soBuffer[slot] = pState->soPausedBuffer[slot];
+    else
+        pState->soBuffer[slot] = *pSoBuffer;
 }
 
 void SwrSetVertexFunc(HANDLE hContext, PFN_VERTEX_FUNC pfnVertexFunc)
@@ -634,15 +659,15 @@ void SwrSetCsFunc(HANDLE      hContext,
                   PFN_CS_FUNC pfnCsFunc,
                   uint32_t    totalThreadsInGroup,
                   uint32_t    totalSpillFillSize,
-                  uint32_t    scratchSpaceSizePerInstance,
-                  uint32_t    numInstances)
+                  uint32_t    scratchSpaceSizePerWarp,
+                  uint32_t    numWarps)
 {
-    API_STATE* pState                = GetDrawState(GetContext(hContext));
-    pState->pfnCsFunc                = pfnCsFunc;
-    pState->totalThreadsInGroup      = totalThreadsInGroup;
-    pState->totalSpillFillSize       = totalSpillFillSize;
-    pState->scratchSpaceSize         = scratchSpaceSizePerInstance;
-    pState->scratchSpaceNumInstances = numInstances;
+    API_STATE* pState               = GetDrawState(GetContext(hContext));
+    pState->pfnCsFunc               = pfnCsFunc;
+    pState->totalThreadsInGroup     = totalThreadsInGroup;
+    pState->totalSpillFillSize      = totalSpillFillSize;
+    pState->scratchSpaceSizePerWarp = scratchSpaceSizePerWarp;
+    pState->scratchSpaceNumWarps    = numWarps;
 }
 
 void SwrSetTsState(HANDLE hContext, SWR_TS_STATE* pState)
@@ -723,7 +748,7 @@ void SwrSetRastState(HANDLE hContext, const SWR_RASTSTATE* pRastState)
     SWR_CONTEXT* pContext = GetContext(hContext);
     API_STATE*   pState   = GetDrawState(pContext);
 
-    memcpy(&pState->rastState, pRastState, sizeof(SWR_RASTSTATE));
+    memcpy((void*)&pState->rastState, (void*)pRastState, sizeof(SWR_RASTSTATE));
 }
 
 void SwrSetViewports(HANDLE                       hContext,
@@ -739,8 +764,6 @@ void SwrSetViewports(HANDLE                       hContext,
     memcpy(&pState->vp[0], pViewports, sizeof(SWR_VIEWPORT) * numViewports);
     // @todo Faster to copy portions of the SOA or just copy all of it?
     memcpy(&pState->vpMatrices, pMatrices, sizeof(SWR_VIEWPORT_MATRICES));
-
-    updateGuardbands(pState);
 }
 
 void SwrSetScissorRects(HANDLE hContext, uint32_t numScissors, const SWR_RECT* pScissors)
@@ -906,8 +929,8 @@ void SetupPipeline(DRAW_CONTEXT* pDC)
     };
 
 
-    // Disable clipper if viewport transform is disabled
-    if (pState->state.frontendState.vpTransformDisable)
+    // Disable clipper if viewport transform is disabled or if clipper is disabled
+    if (pState->state.frontendState.vpTransformDisable || !pState->state.rastState.clipEnable)
     {
         pState->pfnProcessPrims = pfnBinner;
 #if USE_SIMD16_FRONTEND
@@ -1049,6 +1072,9 @@ void SetupPipeline(DRAW_CONTEXT* pDC)
         // set up pass-through quantize if depth isn't enabled
         pState->state.pfnQuantizeDepth = QuantizeDepth<R32_FLOAT>;
     }
+
+    // Generate guardbands
+    updateGuardbands(&pState->state);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1171,7 +1197,7 @@ void DrawInstanced(HANDLE             hContext,
     SWR_CONTEXT*  pContext = GetContext(hContext);
     DRAW_CONTEXT* pDC      = GetDrawContext(pContext);
 
-    RDTSC_BEGIN(APIDraw, pDC->drawId);
+    RDTSC_BEGIN(pContext->pBucketMgr, APIDraw, pDC->drawId);
 
     uint32_t maxVertsPerDraw = MaxVertsPerDraw(pDC, numVertices, topology);
     uint32_t primsPerDraw    = GetNumPrims(topology, maxVertsPerDraw);
@@ -1199,7 +1225,7 @@ void DrawInstanced(HANDLE             hContext,
         uint32_t numVertsForDraw =
             (remainingVerts < maxVertsPerDraw) ? remainingVerts : maxVertsPerDraw;
 
-        bool          isSplitDraw = (draw > 0) ? true : false;
+        bool          isSplitDraw = (draw > 0) ? !KNOB_DISABLE_SPLIT_DRAW : false;
         DRAW_CONTEXT* pDC         = GetDrawContext(pContext, isSplitDraw);
         InitDraw(pDC, isSplitDraw);
 
@@ -1242,7 +1268,7 @@ void DrawInstanced(HANDLE             hContext,
     pDC                                   = GetDrawContext(pContext);
     pDC->pState->state.rastState.cullMode = oldCullMode;
 
-    RDTSC_END(APIDraw, numVertices * numInstances);
+    RDTSC_END(pContext->pBucketMgr, APIDraw, numVertices * numInstances);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1306,7 +1332,7 @@ void DrawIndexedInstance(HANDLE             hContext,
     DRAW_CONTEXT* pDC      = GetDrawContext(pContext);
     API_STATE*    pState   = &pDC->pState->state;
 
-    RDTSC_BEGIN(APIDrawIndexed, pDC->drawId);
+    RDTSC_BEGIN(pContext->pBucketMgr, APIDrawIndexed, pDC->drawId);
 
     uint32_t maxIndicesPerDraw = MaxVertsPerDraw(pDC, numIndices, topology);
     uint32_t primsPerDraw      = GetNumPrims(topology, maxIndicesPerDraw);
@@ -1353,7 +1379,7 @@ void DrawIndexedInstance(HANDLE             hContext,
             (remainingIndices < maxIndicesPerDraw) ? remainingIndices : maxIndicesPerDraw;
 
         // When breaking up draw, we need to obtain new draw context for each iteration.
-        bool isSplitDraw = (draw > 0) ? true : false;
+        bool isSplitDraw = (draw > 0) ? !KNOB_DISABLE_SPLIT_DRAW : false;
 
         pDC = GetDrawContext(pContext, isSplitDraw);
         InitDraw(pDC, isSplitDraw);
@@ -1402,7 +1428,7 @@ void DrawIndexedInstance(HANDLE             hContext,
     pDC                                   = GetDrawContext(pContext);
     pDC->pState->state.rastState.cullMode = oldCullMode;
 
-    RDTSC_END(APIDrawIndexed, numIndices * numInstances);
+    RDTSC_END(pContext->pBucketMgr, APIDrawIndexed, numIndices * numInstances);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1518,7 +1544,9 @@ void SWR_API SwrDiscardRect(HANDLE hContext, uint32_t attachmentMask, const SWR_
 void SwrDispatch(HANDLE   hContext,
                  uint32_t threadGroupCountX,
                  uint32_t threadGroupCountY,
-                 uint32_t threadGroupCountZ)
+                 uint32_t threadGroupCountZ
+
+)
 {
     if (KNOB_TOSS_DRAW)
     {
@@ -1528,7 +1556,7 @@ void SwrDispatch(HANDLE   hContext,
     SWR_CONTEXT*  pContext = GetContext(hContext);
     DRAW_CONTEXT* pDC      = GetDrawContext(pContext);
 
-    RDTSC_BEGIN(APIDispatch, pDC->drawId);
+    RDTSC_BEGIN(pContext->pBucketMgr, APIDispatch, pDC->drawId);
     AR_API_EVENT(
         DispatchEvent(pDC->drawId, threadGroupCountX, threadGroupCountY, threadGroupCountZ));
     pDC->isCompute = true; // This is a compute context.
@@ -1539,13 +1567,17 @@ void SwrDispatch(HANDLE   hContext,
     pTaskData->threadGroupCountY = threadGroupCountY;
     pTaskData->threadGroupCountZ = threadGroupCountZ;
 
+    pTaskData->enableThreadDispatch = false;
+
     uint32_t totalThreadGroups = threadGroupCountX * threadGroupCountY * threadGroupCountZ;
     uint32_t dcIndex           = pDC->drawId % pContext->MAX_DRAWS_IN_FLIGHT;
     pDC->pDispatch             = &pContext->pDispatchQueueArray[dcIndex];
     pDC->pDispatch->initialize(totalThreadGroups, pTaskData, &ProcessComputeBE);
 
     QueueDispatch(pContext);
-    RDTSC_END(APIDispatch, threadGroupCountX * threadGroupCountY * threadGroupCountZ);
+    RDTSC_END(pContext->pBucketMgr,
+              APIDispatch,
+              threadGroupCountX * threadGroupCountY * threadGroupCountZ);
 }
 
 // Deswizzles, converts and stores current contents of the hot tiles to surface
@@ -1563,7 +1595,7 @@ void SWR_API SwrStoreTiles(HANDLE          hContext,
     SWR_CONTEXT*  pContext = GetContext(hContext);
     DRAW_CONTEXT* pDC      = GetDrawContext(pContext);
 
-    RDTSC_BEGIN(APIStoreTiles, pDC->drawId);
+    RDTSC_BEGIN(pContext->pBucketMgr, APIStoreTiles, pDC->drawId);
 
     pDC->FeWork.type                               = STORETILES;
     pDC->FeWork.pfnWork                            = ProcessStoreTiles;
@@ -1577,7 +1609,7 @@ void SWR_API SwrStoreTiles(HANDLE          hContext,
 
     AR_API_EVENT(SwrStoreTilesEvent(pDC->drawId));
 
-    RDTSC_END(APIStoreTiles, 1);
+    RDTSC_END(pContext->pBucketMgr, APIStoreTiles, 1);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1605,7 +1637,7 @@ void SWR_API SwrClearRenderTarget(HANDLE          hContext,
     SWR_CONTEXT*  pContext = GetContext(hContext);
     DRAW_CONTEXT* pDC      = GetDrawContext(pContext);
 
-    RDTSC_BEGIN(APIClearRenderTarget, pDC->drawId);
+    RDTSC_BEGIN(pContext->pBucketMgr, APIClearRenderTarget, pDC->drawId);
 
     pDC->FeWork.type            = CLEAR;
     pDC->FeWork.pfnWork         = ProcessClear;
@@ -1623,7 +1655,7 @@ void SWR_API SwrClearRenderTarget(HANDLE          hContext,
     // enqueue draw
     QueueDraw(pContext);
 
-    RDTSC_END(APIClearRenderTarget, 1);
+    RDTSC_END(pContext->pBucketMgr, APIClearRenderTarget, 1);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1696,7 +1728,7 @@ void SWR_API SwrEndFrame(HANDLE hContext)
     DRAW_CONTEXT* pDC      = GetDrawContext(pContext);
     (void)pDC; // var used
 
-    RDTSC_ENDFRAME();
+    RDTSC_ENDFRAME(pContext->pBucketMgr);
     AR_API_EVENT(FrameEndEvent(pContext->frameCount, pDC->drawId));
 
     pContext->frameCount++;
@@ -1767,7 +1799,4 @@ void SwrGetInterface(SWR_INTERFACE& out_funcs)
     out_funcs.pfnSwrEnableStatsBE          = SwrEnableStatsBE;
     out_funcs.pfnSwrEndFrame               = SwrEndFrame;
     out_funcs.pfnSwrInit                   = SwrInit;
-    out_funcs.pfnSwrLoadHotTile = SwrLoadHotTile;
-    out_funcs.pfnSwrStoreHotTileToSurface = SwrStoreHotTileToSurface;
-    out_funcs.pfnSwrStoreHotTileClear = SwrStoreHotTileClear;
 }

@@ -92,7 +92,6 @@ files_libmesa_common = files(
   'main/colortab.h',
   'main/compute.c',
   'main/compute.h',
-  'main/compiler.h',
   'main/condrender.c',
   'main/condrender.h',
   'main/config.h',
@@ -115,6 +114,8 @@ files_libmesa_common = files(
   'main/depth.h',
   'main/dlist.c',
   'main/dlist.h',
+  'main/draw.c',
+  'main/draw.h',
   'main/drawpix.c',
   'main/drawpix.h',
   'main/drawtex.c',
@@ -165,6 +166,11 @@ files_libmesa_common = files(
   'main/glspirv.h',
   'main/glthread.c',
   'main/glthread.h',
+  'main/glthread_bufferobj.c',
+  'main/glthread_draw.c',
+  'main/glthread_marshal.h',
+  'main/glthread_shaderobj.c',
+  'main/glthread_varray.c',
   'main/glheader.h',
   'main/hash.c',
   'main/hash.h',
@@ -174,21 +180,16 @@ files_libmesa_common = files(
   'main/histogram.h',
   'main/image.c',
   'main/image.h',
-  'main/imports.c',
-  'main/imports.h',
+  'main/mesa_private.h',
   'main/light.c',
   'main/light.h',
   'main/lines.c',
   'main/lines.h',
   'main/macros.h',
-  'main/marshal.c',
-  'main/marshal.h',
   'main/matrix.c',
   'main/matrix.h',
   'main/mipmap.c',
   'main/mipmap.h',
-  'main/mm.c',
-  'main/mm.h',
   'main/menums.h',
   'main/mtypes.h',
   'main/multisample.c',
@@ -247,6 +248,8 @@ files_libmesa_common = files(
   'main/shader_query.cpp',
   'main/shared.c',
   'main/shared.h',
+  'main/spirv_extensions.c',
+  'main/spirv_extensions.h',
   'main/state.c',
   'main/state.h',
   'main/stencil.c',
@@ -330,12 +333,12 @@ files_libmesa_common = files(
   'vbo/vbo_attrib_tmp.h',
   'vbo/vbo_context.c',
   'vbo/vbo_exec_api.c',
-  'vbo/vbo_exec_array.c',
   'vbo/vbo_exec.c',
   'vbo/vbo_exec_draw.c',
   'vbo/vbo_exec_eval.c',
   'vbo/vbo_exec.h',
   'vbo/vbo.h',
+  'vbo/vbo_init_tmp.h',
   'vbo/vbo_minmax_index.c',
   'vbo/vbo_noop.c',
   'vbo/vbo_noop.h',
@@ -345,6 +348,7 @@ files_libmesa_common = files(
   'vbo/vbo_save_draw.c',
   'vbo/vbo_save.h',
   'vbo/vbo_save_loopback.c',
+  'vbo/vbo_util.h',
   'x86/common_x86.c',
 )
 
@@ -487,7 +491,6 @@ files_libmesa_gallium = files(
   'state_tracker/st_atom_sampler.c',
   'state_tracker/st_atom_scissor.c',
   'state_tracker/st_atom_shader.c',
-  'state_tracker/st_atom_shader.h',
   'state_tracker/st_atom_stipple.c',
   'state_tracker/st_atom_storagebuf.c',
   'state_tracker/st_atom_tess.c',
@@ -527,6 +530,8 @@ files_libmesa_gallium = files(
   'state_tracker/st_cb_msaa.h',
   'state_tracker/st_cb_perfmon.c',
   'state_tracker/st_cb_perfmon.h',
+  'state_tracker/st_cb_perfquery.c',
+  'state_tracker/st_cb_perfquery.h',
   'state_tracker/st_cb_program.c',
   'state_tracker/st_cb_program.h',
   'state_tracker/st_cb_queryobj.c',
@@ -565,6 +570,8 @@ files_libmesa_gallium = files(
   'state_tracker/st_gen_mipmap.c',
   'state_tracker/st_gen_mipmap.h',
   'state_tracker/st_gl_api.h',
+  'state_tracker/st_glsl_to_ir.cpp',
+  'state_tracker/st_glsl_to_ir.h',
   'state_tracker/st_glsl_to_nir.cpp',
   'state_tracker/st_glsl_to_tgsi.cpp',
   'state_tracker/st_glsl_to_tgsi.h',
@@ -574,16 +581,14 @@ files_libmesa_gallium = files(
   'state_tracker/st_glsl_to_tgsi_private.h',
   'state_tracker/st_glsl_to_tgsi_temprename.cpp',
   'state_tracker/st_glsl_to_tgsi_temprename.h',
-  'state_tracker/st_glsl_types.cpp',
-  'state_tracker/st_glsl_types.h',
   'state_tracker/st_manager.c',
   'state_tracker/st_manager.h',
   'state_tracker/st_mesa_to_tgsi.c',
   'state_tracker/st_mesa_to_tgsi.h',
   'state_tracker/st_nir.h',
+  'state_tracker/st_nir_builtins.c',
   'state_tracker/st_nir_lower_builtin.c',
   'state_tracker/st_nir_lower_tex_src_plane.c',
-  'state_tracker/st_nir_lower_uniforms_to_ubo.c',
   'state_tracker/st_pbo.c',
   'state_tracker/st_pbo.h',
   'state_tracker/st_program.c',
@@ -596,27 +601,14 @@ files_libmesa_gallium = files(
   'state_tracker/st_shader_cache.h',
   'state_tracker/st_texture.c',
   'state_tracker/st_texture.h',
+  'state_tracker/st_tgsi_lower_depth_clamp.c',
+  'state_tracker/st_tgsi_lower_depth_clamp.h',
   'state_tracker/st_tgsi_lower_yuv.c',
   'state_tracker/st_tgsi_lower_yuv.h',
+  'state_tracker/st_util.h',
   'state_tracker/st_vdpau.c',
   'state_tracker/st_vdpau.h',
 )
-
-matypes_h = []
-if with_asm_arch == 'x86' or with_asm_arch == 'x86_64'
-  gen_matypes = executable(
-    'gen_matypes',
-    'x86/gen_matypes.c',
-    c_args : [c_vis_args, c_msvc_compat_args],
-    include_directories : inc_common,
-  )
-  matypes_h = custom_target(
-    'matypes.h',
-    output : 'matypes.h',
-    command : [gen_matypes],
-    capture : true,
-  )
-endif
 
 inc_libmesa_asm = []
 if with_asm_arch == 'x86'
@@ -699,12 +691,14 @@ files_libmesa_common += [
   main_enums_c,
   format_fallback_c,
   get_hash_h,
-  main_marshal_generated_c,
   main_marshal_generated_h,
   main_dispatch_h,
   ir_expression_operation_h,
   main_remap_helper_h,
-  matypes_h,
+  sha1_h,
+] + main_marshal_generated_c
+files_libmesa_gallium += [
+  ir_expression_operation_h,
   sha1_h,
 ]
 
@@ -712,31 +706,57 @@ if with_sse41
   libmesa_sse41 = static_library(
     'mesa_sse41',
     files('main/streaming-load-memcpy.c', 'main/sse_minmax.c'),
-    c_args : [c_vis_args, c_msvc_compat_args, sse41_args],
-    include_directories : inc_common,
+    c_args : [c_msvc_compat_args, sse41_args],
+    include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
+    gnu_symbol_visibility : 'hidden',
   )
 else
   libmesa_sse41 = []
 endif
 
+_mesa_windows_args = []
+if with_platform_windows
+  _mesa_windows_args += [
+    '-D_GDI32_',    # prevent gl* being declared __declspec(dllimport) in MS headers
+    '-DBUILD_GL32'  # declare gl* as __declspec(dllexport) in Mesa headers
+  ]
+  if not with_shared_glapi
+    # prevent _glapi_* from being declared __declspec(dllimport)
+    _mesa_windows_args += '-D_GLAPI_NO_EXPORTS'
+  endif
+endif
+
+libmesa_common = static_library(
+  'mesa_common',
+  files_libmesa_common,
+  c_args : [c_msvc_compat_args, _mesa_windows_args],
+  cpp_args : [cpp_msvc_compat_args, _mesa_windows_args],
+  gnu_symbol_visibility : 'hidden',
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_libmesa_asm, include_directories('main')],
+  dependencies : idep_nir_headers,
+  build_by_default : false,
+)
+
 libmesa_classic = static_library(
   'mesa_classic',
-  [files_libmesa_common, files_libmesa_classic],
-  c_args : [c_vis_args, c_msvc_compat_args],
-  cpp_args : [cpp_vis_args, cpp_msvc_compat_args],
-  include_directories : [inc_common, inc_libmesa_asm, include_directories('main')],
-  link_with : [libglsl, libmesa_sse41],
+  files_libmesa_classic,
+  c_args : [c_msvc_compat_args],
+  cpp_args : [cpp_msvc_compat_args],
+  gnu_symbol_visibility : 'hidden',
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_libmesa_asm, include_directories('main')],
+  link_with : [libmesa_common, libglsl, libmesa_sse41],
   dependencies : idep_nir_headers,
   build_by_default : false,
 )
 
 libmesa_gallium = static_library(
   'mesa_gallium',
-  [files_libmesa_common, files_libmesa_gallium],
-  c_args : [c_vis_args, c_msvc_compat_args],
-  cpp_args : [cpp_vis_args, cpp_msvc_compat_args],
-  include_directories : [inc_common, inc_libmesa_asm, include_directories('main')],
-  link_with : [libglsl, libmesa_sse41],
+  files_libmesa_gallium,
+  c_args : [c_msvc_compat_args, _mesa_windows_args],
+  cpp_args : [cpp_msvc_compat_args, _mesa_windows_args],
+  gnu_symbol_visibility : 'hidden',
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_libmesa_asm, include_directories('main')],
+  link_with : [libmesa_common, libglsl, libmesa_sse41],
   dependencies : [idep_nir_headers, dep_vdpau],
   build_by_default : false,
 )

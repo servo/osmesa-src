@@ -50,7 +50,7 @@ extern "C" {
 #define UTIL_QUEUE_INIT_RESIZE_IF_FULL            (1 << 1)
 #define UTIL_QUEUE_INIT_SET_FULL_THREAD_AFFINITY  (1 << 2)
 
-#if defined(__GNUC__) && defined(HAVE_LINUX_FUTEX_H)
+#if UTIL_FUTEX_SUPPORTED
 #define UTIL_QUEUE_FENCE_FUTEX
 #else
 #define UTIL_QUEUE_FENCE_STANDARD
@@ -193,6 +193,7 @@ typedef void (*util_queue_execute_func)(void *job, int thread_index);
 
 struct util_queue_job {
    void *job;
+   size_t job_size;
    struct util_queue_fence *fence;
    util_queue_execute_func execute;
    util_queue_execute_func cleanup;
@@ -201,17 +202,18 @@ struct util_queue_job {
 /* Put this into your context. */
 struct util_queue {
    char name[14]; /* 13 characters = the thread name without the index */
-   mtx_t finish_lock; /* only for util_queue_finish */
+   mtx_t finish_lock; /* for util_queue_finish and protects threads/num_threads */
    mtx_t lock;
    cnd_t has_queued_cond;
    cnd_t has_space_cond;
    thrd_t *threads;
    unsigned flags;
    int num_queued;
-   unsigned num_threads;
-   int kill_threads;
+   unsigned max_threads;
+   unsigned num_threads; /* decreasing this number will terminate threads */
    int max_jobs;
    int write_idx, read_idx; /* ring buffer pointers */
+   size_t total_jobs_size;  /* memory use of all jobs in the queue */
    struct util_queue_job *jobs;
 
    /* for cleanup at exit(), protected by exit_mutex */
@@ -230,11 +232,19 @@ void util_queue_add_job(struct util_queue *queue,
                         void *job,
                         struct util_queue_fence *fence,
                         util_queue_execute_func execute,
-                        util_queue_execute_func cleanup);
+                        util_queue_execute_func cleanup,
+                        const size_t job_size);
 void util_queue_drop_job(struct util_queue *queue,
                          struct util_queue_fence *fence);
 
 void util_queue_finish(struct util_queue *queue);
+
+/* Adjust the number of active threads. The new number of threads can't be
+ * greater than the initial number of threads at the creation of the queue,
+ * and it can't be less than 1.
+ */
+void
+util_queue_adjust_num_threads(struct util_queue *queue, unsigned num_threads);
 
 int64_t util_queue_get_thread_time_nano(struct util_queue *queue,
                                         unsigned thread_index);

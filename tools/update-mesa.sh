@@ -37,3 +37,4 @@ rm -rf mesa-tmp
 patch -i patches/1.diff -p1
 patch -i patches/2-mesa-issue-2034.diff -p1
 patch -i patches/3-mesa-issue-2035.diff -p1
+patch -i patches/4-mesa-issue-1020.diff -p1

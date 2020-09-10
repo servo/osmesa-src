@@ -1,0 +1,5 @@
+[host_machine]
+system = 'darwin'
+cpu_family = 'x86_64'
+cpu = 'i686'
+endian = 'little'

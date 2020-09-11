@@ -3,15 +3,29 @@ use std::process::Command;
 use std::{env, fs};
 
 fn main() {
-    let src = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let build_folder = dst.join("mesa");
-    let _ = fs::create_dir(&build_folder);
+    let cargo_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let src = cargo_dir.join("mesa-src");
+    let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("mesa");
+    let _ = fs::create_dir(&dst);
 
-    if !build_folder.join("build.ninja").exists() {
-        run(Command::new("meson")
-            .current_dir(&build_folder)
-            .arg(&src.join("mesa-src"))
+    if !dst.join("build.ninja").exists() {
+        let mut cmd = Command::new("meson");
+        match env::var_os("CARGO_CFG_TARGET_VENDOR")
+            .unwrap()
+            .into_string()
+            .unwrap()
+            .as_str()
+        {
+            "apple" => {
+                cmd
+                    .arg("--cross-file")
+                    .arg(cargo_dir.join("crossfiles").join("darwin.meson"));
+            }
+            _ => {}
+        }
+        run(cmd
+            .current_dir(&dst)
+            .arg(&src)
             .arg("-Dplatforms=")
             .arg("-Ddri3=disabled")
             .arg("-Dglx-direct=false")
@@ -26,7 +40,7 @@ fn main() {
             .arg("-Dglx=disabled"));
     }
 
-    run(Command::new("ninja").current_dir(&build_folder));
+    run(Command::new("ninja").current_dir(&dst));
 }
 
 fn run(cmd: &mut Command) {

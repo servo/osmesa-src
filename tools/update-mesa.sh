@@ -33,8 +33,9 @@ tar -xvf mesa-tmp/build/meson-dist/mesa-${VERSION}.tar.xz
 mv mesa-${VERSION} mesa-src
 rm -rf mesa-tmp
 
-# apply local patches necessary for Servo
+# apply local patches necessary for Servo or wrench cross-compilation
 patch -i patches/1.diff -p1
 patch -i patches/2-mesa-issue-2034.diff -p1
 patch -i patches/3-mesa-issue-2035.diff -p1
 patch -i patches/4-mesa-issue-1020.diff -p1
+patch -i patches/5.diff -p1

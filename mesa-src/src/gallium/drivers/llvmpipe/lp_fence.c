@@ -131,7 +131,7 @@ lp_fence_timedwait(struct lp_fence *f, uint64_t timeout)
    struct timespec ts;
    int ret;
 
-   timespec_get(&ts, TIME_UTC);
+   clock_gettime(CLOCK_REALTIME, &ts);
 
    ts.tv_nsec += timeout % 1000000000L;
    ts.tv_sec += timeout / 1000000000L;

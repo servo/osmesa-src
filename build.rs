@@ -11,21 +11,10 @@ fn main() {
     if !dst.join("build.ninja").exists() {
         let mut cmd = Command::new("meson");
 
-        if env::var_os("HOST") != env::var_os("TARGET") {
-            let cross_file = match env::var_os("CARGO_CFG_TARGET_VENDOR")
-                .unwrap()
-                .into_string()
-                .unwrap()
-                .as_str()
-            {
-                "apple" => Some("darwin.meson"),
-                _ => None,
-            };
-            if let Some(cross_file) = cross_file {
-                cmd
-                    .arg("--cross-file")
-                    .arg(cargo_dir.join("crossfiles").join(cross_file));
-            }
+        if let Some(cross_path) = env::var_os("MESON_CROSSFILE") {
+            cmd
+                .arg("--cross-file")
+                .arg(cross_path);
         }
 
         run(cmd
@@ -42,7 +31,8 @@ fn main() {
             .arg("-Dosmesa=gallium")
             .arg("-Degl=disabled")
             .arg("-Dgbm=disabled")
-            .arg("-Dglx=disabled"));
+            .arg("-Dglx=disabled")
+            .arg("-Dllvm=enabled"));
     }
 
     run(Command::new("ninja").current_dir(&dst));

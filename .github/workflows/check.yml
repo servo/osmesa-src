@@ -1,11 +1,12 @@
 name: check
 
-push:
-  branches: ['master']
-pull_request:
-  branches: ["**"]
-merge_group:
-  types: [checks_requested]
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: ["**"]
+  merge_group:
+    types: [checks_requested]
 
 jobs:
   build:

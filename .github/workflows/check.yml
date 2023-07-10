@@ -19,21 +19,19 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
-    - uses: actions-rs/cargo@v1
-
     - name: Select Rust channel
       uses: actions-rs/toolchain@v1
       with:
           toolchain: ${{ matrix.channel }}
-
     - name: Update packages
       run: |
         sudo apt-get update -q
         sudo apt-get install python3-pip python3-setuptools -y
         pip3 install mako meson ninja
-
-    - name: Check
-      run: cargo test --all-features
+    - uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --all-features
 
 
   build_result:

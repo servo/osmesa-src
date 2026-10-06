@@ -24,7 +24,7 @@
  *
  **************************************************************************/
 
-#if defined(DEBUG)
+#if MESA_DEBUG
 
 /**
  * If the GALLIUM_REFCNT_LOG env var is defined as a filename, gallium
@@ -37,14 +37,14 @@
 
 #include <stdio.h>
 
+#include "util/simple_mtx.h"
 #include "util/u_debug.h"
 #include "util/u_debug_refcnt.h"
 #include "util/u_debug_stack.h"
 #include "util/u_debug_symbol.h"
 #include "util/u_string.h"
 #include "util/u_hash_table.h"
-#include "os/os_thread.h"
-#include "pipe/p_config.h"
+#include "util/u_thread.h"
 
 int debug_refcnt_state;
 
@@ -53,12 +53,8 @@ static FILE *stream;
 /* TODO: maybe move this serial machinery to a stand-alone module and
  * expose it?
  */
-#ifdef PIPE_OS_WINDOWS
-static mtx_t serials_mutex;
-#else
-static mtx_t serials_mutex = _MTX_INITIALIZER_NP;
-#endif
 
+static simple_mtx_t serials_mutex = SIMPLE_MTX_INITIALIZER;
 static struct hash_table *serials_hash;
 static unsigned serials_last;
 
@@ -66,21 +62,13 @@ static unsigned serials_last;
 /**
  * Return a small integer serial number for the given pointer.
  */
-static boolean
+static bool
 debug_serial(void *p, unsigned *pserial)
 {
    unsigned serial;
-   boolean found = TRUE;
-#ifdef PIPE_OS_WINDOWS
-   static boolean first = TRUE;
+   bool found = true;
 
-   if (first) {
-      (void) mtx_init(&serials_mutex, mtx_plain);
-      first = FALSE;
-   }
-#endif
-
-   mtx_lock(&serials_mutex);
+   simple_mtx_lock(&serials_mutex);
    if (!serials_hash)
       serials_hash = util_hash_table_create_ptr_keys();
 
@@ -96,9 +84,9 @@ debug_serial(void *p, unsigned *pserial)
       }
 
       _mesa_hash_table_insert(serials_hash, p, (void *) (uintptr_t) serial);
-      found = FALSE;
+      found = false;
    }
-   mtx_unlock(&serials_mutex);
+   simple_mtx_unlock(&serials_mutex);
 
    *pserial = serial;
 
@@ -112,13 +100,13 @@ debug_serial(void *p, unsigned *pserial)
 static void
 debug_serial_delete(void *p)
 {
-   mtx_lock(&serials_mutex);
+   simple_mtx_lock(&serials_mutex);
    _mesa_hash_table_remove_key(serials_hash, p);
-   mtx_unlock(&serials_mutex);
+   simple_mtx_unlock(&serials_mutex);
 }
 
 
-#if defined(PIPE_OS_WINDOWS)
+#if DETECT_OS_WINDOWS
 #define STACK_LEN 60
 #else
 #define STACK_LEN 64
@@ -162,7 +150,7 @@ debug_reference_slowpath(const struct pipe_reference *p,
       unsigned i;
       unsigned refcnt = p->count;
       unsigned serial;
-      boolean existing = debug_serial((void *) p, &serial);
+      bool existing = debug_serial((void *) p, &serial);
 
       debug_backtrace_capture(frames, 1, STACK_LEN);
 
@@ -175,10 +163,12 @@ debug_reference_slowpath(const struct pipe_reference *p,
          /* this is here to provide a gradual change even if we don't see
           * the initialization
           */
-         for (i = 1; i <= refcnt - change; ++i) {
-            fprintf(stream, "<%s> %p %u AddRef %u\n", buf, (void *) p,
-                    serial, i);
-            debug_backtrace_print(stream, frames, STACK_LEN);
+         if (refcnt <= 10) {
+            for (i = 1; i <= refcnt - change; ++i) {
+               fprintf(stream, "<%s> %p %u AddRef %u\n", buf, (void *) p,
+                  serial, i);
+               debug_backtrace_print(stream, frames, STACK_LEN);
+            }
          }
       }
 
@@ -198,4 +188,4 @@ debug_reference_slowpath(const struct pipe_reference *p,
    }
 }
 
-#endif /* DEBUG */
+#endif /* MESA_DEBUG */

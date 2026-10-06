@@ -19,7 +19,7 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- * 
+ *
  * Authors:
  *    Mike Blumenkrantz <michael.blumenkrantz@gmail.com>
  */
@@ -48,62 +48,55 @@
  */
 
 static bool
-lower_fragcolor_instr(nir_intrinsic_instr *instr, nir_builder *b)
+lower_fragcolor_intrin(nir_builder *b, nir_intrinsic_instr *instr, void *data)
 {
+   unsigned *max_draw_buffers = data;
+
    nir_variable *out;
    if (instr->intrinsic != nir_intrinsic_store_deref)
       return false;
 
-   out = nir_deref_instr_get_variable(nir_src_as_deref(instr->src[0]));
+   out = nir_intrinsic_get_var(instr, 0);
    if (out->data.location != FRAG_RESULT_COLOR || out->data.mode != nir_var_shader_out)
       return false;
    b->cursor = nir_after_instr(&instr->instr);
 
-   nir_ssa_def *frag_color = nir_load_var(b, out);
+   nir_def *frag_color = instr->src[1].ssa;
    ralloc_free(out->name);
-   out->name = ralloc_strdup(out, "gl_FragData[0]");
+
+   const char *name = out->data.index == 0 ? "gl_FragData[0]" : "gl_SecondaryFragDataEXT[0]";
+   const char *name_tmpl = out->data.index == 0 ? "gl_FragData[%u]" : "gl_SecondaryFragDataEXT[%u]";
+
+   out->name = ralloc_strdup(out, name);
 
    /* translate gl_FragColor -> gl_FragData since this is already handled */
    out->data.location = FRAG_RESULT_DATA0;
    nir_component_mask_t writemask = nir_intrinsic_write_mask(instr);
+   b->shader->info.outputs_written &= ~BITFIELD64_BIT(FRAG_RESULT_COLOR);
+   b->shader->info.outputs_written |= BITFIELD64_BIT(FRAG_RESULT_DATA0);
 
-   for (unsigned i = 1; i < 8; i++) {
-      char name[16];
-      snprintf(name, sizeof(name), "gl_FragData[%u]", i);
+   for (unsigned i = 1; i < *max_draw_buffers; i++) {
+      char name[28];
+      snprintf(name, sizeof(name), name_tmpl, i);
       nir_variable *out_color = nir_variable_create(b->shader, nir_var_shader_out,
-                                                   glsl_vec4_type(),
-                                                   name);
+                                                    out->type, name);
       out_color->data.location = FRAG_RESULT_DATA0 + i;
-      out_color->data.driver_location = i;
+      out_color->data.location_frac = out->data.location_frac;
+      out_color->data.driver_location = b->shader->num_outputs++;
       out_color->data.index = out->data.index;
       nir_store_var(b, out_color, frag_color, writemask);
+      b->shader->info.outputs_written |= BITFIELD64_BIT(FRAG_RESULT_DATA0 + i);
    }
    return true;
 }
 
 bool
-nir_lower_fragcolor(nir_shader *shader)
+nir_lower_fragcolor(nir_shader *shader, unsigned max_draw_buffers)
 {
-   bool progress = false;
-
    if (shader->info.stage != MESA_SHADER_FRAGMENT)
       return false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         nir_builder builder;
-         nir_builder_init(&builder, function->impl);
-         nir_foreach_block(block, function->impl) {
-            nir_foreach_instr_safe(instr, block) {
-               if (instr->type == nir_instr_type_intrinsic)
-                  progress |= lower_fragcolor_instr(nir_instr_as_intrinsic(instr),
-                                                    &builder);
-            }
-         }
-
-         nir_metadata_preserve(function->impl, nir_metadata_block_index | nir_metadata_dominance);
-      }
-   }
-
-   return progress;
+   return nir_shader_intrinsics_pass(shader, lower_fragcolor_intrin,
+                                     nir_metadata_control_flow,
+                                     &max_draw_buffers);
 }

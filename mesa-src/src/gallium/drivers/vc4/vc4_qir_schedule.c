@@ -73,7 +73,7 @@ struct schedule_state {
 enum direction { F, R };
 
 /**
- * Marks a dependency between two intructions, that \p after must appear after
+ * Marks a dependency between two instructions, that \p after must appear after
  * \p before.
  *
  * Our dependencies are tracked as a DAG.  Since we're scheduling bottom-up,
@@ -96,7 +96,7 @@ add_dep(enum direction dir,
                 after = t;
         }
 
-        dag_add_edge(&after->dag, &before->dag, NULL);
+        dag_add_edge(&after->dag, &before->dag, 0);
 }
 
 static void

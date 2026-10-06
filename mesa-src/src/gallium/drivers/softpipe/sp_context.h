@@ -39,13 +39,7 @@
 #include "sp_quad_pipe.h"
 #include "sp_setup.h"
 
-
-/** Do polygon stipple in the draw module? */
-#define DO_PSTIPPLE_IN_DRAW_MODULE 0
-
-/** Do polygon stipple with the util module? */
-#define DO_PSTIPPLE_IN_HELPER_MODULE 1
-
+#include "tgsi/tgsi_exec.h"
 
 struct softpipe_vbuf_render;
 struct draw_context;
@@ -80,7 +74,6 @@ struct softpipe_context {
    struct pipe_clip_state clip;
    struct pipe_resource *constants[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
    struct pipe_framebuffer_state framebuffer;
-   struct pipe_poly_stipple poly_stipple;
    struct pipe_scissor_state scissors[PIPE_MAX_VIEWPORTS];
    struct pipe_sampler_view *sampler_views[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_SAMPLER_VIEWS];
 
@@ -113,11 +106,10 @@ struct softpipe_context {
    unsigned active_query_count;
 
    /** Mapped vertex buffers */
-   ubyte *mapped_vbuffer[PIPE_MAX_ATTRIBS];
+   uint8_t *mapped_vbuffer[PIPE_MAX_ATTRIBS];
 
    /** Mapped constant buffers */
-   const void *mapped_constants[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
-   unsigned const_buffer_size[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
+   struct tgsi_exec_consts_info mapped_constants[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
 
    /** Vertex format */
    struct sp_setup_info setup_info;
@@ -153,19 +145,11 @@ struct softpipe_context {
    enum pipe_render_cond_flag render_cond_mode;
    bool render_cond_cond;
 
-   /** Polygon stipple items */
-   struct {
-      struct pipe_resource *texture;
-      struct pipe_sampler_state *sampler;
-      struct pipe_sampler_view *sampler_view;
-   } pstipple;
-
    /** Software quad rendering pipeline */
    struct {
       struct quad_stage *shade;
       struct quad_stage *depth_test;
       struct quad_stage *blend;
-      struct quad_stage *pstipple;
       struct quad_stage *first; /**< points to one of the above stages */
    } quad;
 
@@ -189,7 +173,7 @@ struct softpipe_context {
 
    struct blitter_context *blitter;
 
-   boolean dirty_render_cache;
+   bool dirty_render_cache;
 
    struct softpipe_tile_cache *cbuf_cache[PIPE_MAX_COLOR_BUFS];
    struct softpipe_tile_cache *zsbuf_cache;
@@ -204,8 +188,6 @@ struct softpipe_context {
     * of sp_sampler_view?
     */
    struct softpipe_tex_tile_cache *tex_cache[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_SAMPLER_VIEWS];
-
-   struct pipe_debug_callback debug;
 };
 
 

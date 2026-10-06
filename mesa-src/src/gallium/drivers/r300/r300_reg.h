@@ -1,27 +1,7 @@
-/**************************************************************************
-
-Copyright (C) 2004-2005 Nicolai Haehnle et al.
-
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of this software and associated documentation files (the "Software"),
-to deal in the Software without restriction, including without limitation
-on the rights to use, copy, modify, merge, publish, distribute, sub
-license, and/or sell copies of the Software, and to permit persons to whom
-the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice (including the next
-paragraph) shall be included in all copies or substantial portions of the
-Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
-THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
-DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-**************************************************************************/
+/*
+ * Copyright 2004-2005 Nicolai Haehnle et al.
+ * SPDX-License-Identifier: MIT
+ */
 
 /* *INDENT-OFF* */
 
@@ -305,7 +285,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define R300_VAP_PSC_SGN_NORM_CNTL                0x21dc
 #   define SGN_NORM_ZERO                                    0
 #   define SGN_NORM_ZERO_CLAMP_MINUS_ONE                    1
-#   define SGN_NORM_NO_ZERO                                 2
+#   define SGN_NORM_NO_ZERO                                 2U
 #   define R300_SGN_NORM_NO_ZERO (SGN_NORM_NO_ZERO | \
         (SGN_NORM_NO_ZERO << 2) | (SGN_NORM_NO_ZERO << 4) | \
         (SGN_NORM_NO_ZERO << 6) | (SGN_NORM_NO_ZERO << 8) | \
@@ -323,7 +303,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * In immediate mode, the pattern is always set to xyzw. In vertex array
  * mode, the swizzling pattern is e.g. used to set zw components in texture
- * coordinates with only tweo components.
+ * coordinates with only two components.
  */
 #define R300_VAP_PROG_STREAM_CNTL_EXT_0                 0x21e0
 #       define R300_SWIZZLE0_SHIFT                      0
@@ -540,7 +520,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * position takes place.
  *
  * Most likely this is used to ignore rest of the program in cases
- * where group of verts arent visible. For some reason this "section"
+ * where group of verts aren't visible. For some reason this "section"
  * is sometimes accepted other instruction that have no relationship with
  * position calculations.
  */
@@ -822,8 +802,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R500_RS_COL_PTR(x)		        ((x) << 24)
 #       define R500_RS_COL_FMT(x)                       ((x) << 27)
 /* gap */
-#define R500_RS_IP_OFFSET_DIS 				(0 << 31)
-#define R500_RS_IP_OFFSET_EN 				(1 << 31)
+#define R500_RS_IP_OFFSET_DIS 				(0U << 31)
+#define R500_RS_IP_OFFSET_EN 				(1U << 31)
 
 /* gap */
 
@@ -856,7 +836,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R500_TX_WEIGHT_PAIR               (1<<22)
 #	define R500_TX_PHASE_SHIFT               (23)
 #	define R500_TX_DIRECTION_HORIZONTAL	 (0<<27)
-#	define R500_TX_DIRECTION_VERITCAL	 (1<<27)
+#	define R500_TX_DIRECTION_VERTICAL	 (1<<27)
 
 #define R500_SU_TEX_WRAP_PS3		    0x4114
 
@@ -1148,7 +1128,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_GA_POLY_MODE_BACK_PTYPE_TRI    (2 << 7)
 /* reserved */
 
-/* Specifies the rouding mode for geometry & color SPFP to FP conversions. */
+/* Specifies the rounding mode for geometry & color SPFP to FP conversions. */
 #define R300_GA_ROUND_MODE                            0x428c
 #	define R300_GA_ROUND_MODE_GEOMETRY_ROUND_TRUNC   (0 << 0)
 #	define R300_GA_ROUND_MODE_GEOMETRY_ROUND_NEAREST (1 << 0)
@@ -1197,7 +1177,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * My guess is that there are two bits for each zbias primitive
  * (FILL, LINE, POINT).
  *  One to enable depth test and one for depth write.
- * Yet this doesnt explain why depth writes work ...
+ * Yet this doesn't explain why depth writes work ...
  */
 #define R300_SU_POLY_OFFSET_ENABLE	       0x42B4
 #	define R300_FRONT_ENABLE	       (1 << 0)
@@ -1842,7 +1822,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #      define R400_SRC_ADDR_EXT_BIT         (1 << 19)
 #      define R400_DST_ADDR_EXT_BIT         (1 << 20)
 
-/* Output format from the unfied shader */
+/* Output format from the unified shader */
 #define R300_US_OUT_FMT_0                   0x46A4
 #	define R300_US_OUT_FMT_C4_8         (0 << 0)
 #	define R300_US_OUT_FMT_C4_10        (1 << 0)
@@ -1900,7 +1880,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  *  - CMPH: If ARG2 > 0.5, return ARG0, else return ARG1
  *  - CMP: If ARG2 < 0, return ARG1, else return ARG0
  *  - FLR: use FRC+MAD
- *  - XPD: use MAD+MAD
  *  - SGE, SLT: use MAD+CMP
  *  - RSQ: use ABS modifier for argument
  *  - Use OUTC_REPL_ALPHA to write results of an alpha-only operation
@@ -2078,7 +2057,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_ALU_OUTC_MOD_DIV8           (6 << R300_ALU_OUTC_MOD_SHIFT)
 
 #       define R300_ALU_OUTC_CLAMP              (1 << 30)
-#       define R300_ALU_INSERT_NOP              (1 << 31)
+#       define R300_ALU_INSERT_NOP              (1U << 31)
 
 #define R300_US_ALU_ALPHA_INST_0                 0x49C0
 #       define R300_ALU_ARGA_SRC0C_X            0
@@ -2311,7 +2290,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_DISCARD_SRC_PIXELS_SRC_COLOR_1     (5 << 3)
 #       define R300_DISCARD_SRC_PIXELS_SRC_ALPHA_COLOR_1     (6 << 3)
 #       define R500_SRC_ALPHA_0_NO_READ                (1 << 30)
-#       define R500_SRC_ALPHA_1_NO_READ                (1 << 31)
+#       define R500_SRC_ALPHA_1_NO_READ                (1U << 31)
 
 /* the following are shared between CBLEND and ABLEND */
 #       define R300_FCN_MASK                         (3  << 12)
@@ -2666,8 +2645,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R500_CONTIGUOUS_6XAA_SAMPLES_DISABLE          (1 << 17)
 #	define R500_PEQ_PACKING_DISABLE                      (0 << 18)
 #	define R500_PEQ_PACKING_ENABLE                       (1 << 18)
-#	define R500_COVERED_PTR_MASKING_DISABLE              (0 << 18)
-#	define R500_COVERED_PTR_MASKING_ENABLE               (1 << 18)
+#	define R500_COVERED_PTR_MASKING_DISABLE              (0 << 19)
+#	define R500_COVERED_PTR_MASKING_ENABLE               (1 << 19)
 
 
 /* gap */
@@ -3300,7 +3279,8 @@ enum {
 #   define R500_US_CODE_RANGE_ADDR(x)			((x) << 0)
 #   define R500_US_CODE_RANGE_SIZE(x)			((x) << 16)
 #define R500_US_CONFIG					0x4600
-#   define R500_ZERO_TIMES_ANYTHING_EQUALS_ZERO		(1 << 1)
+#   define R500_ZERO_TIMES_ANYTHING_EQUALS_ZERO_DEFAULT	(0 << 1)
+#   define R500_ZERO_TIMES_ANYTHING_EQUALS_ZERO_LEGACY	(1 << 1)
 #define R500_US_FC_ADDR_0				0xa000
 #   define R500_FC_BOOL_ADDR(x)				((x) << 0)
 #   define R500_FC_INT_ADDR(x)				((x) << 8)
@@ -3310,7 +3290,7 @@ enum {
 #   define R500_FC_KBOOL(x)				(x)
 #define R500_US_FC_CTRL					0x4624
 #   define R500_FC_TEST_EN				(1 << 30)
-#   define R500_FC_FULL_FC_EN				(1 << 31)
+#   define R500_FC_FULL_FC_EN				(1U << 31)
 #define R500_US_FC_INST_0				0x9800
 #   define R500_FC_OP_JUMP				(0 << 0)
 #   define R500_FC_OP_LOOP				(1 << 0)
@@ -3489,7 +3469,7 @@ enum {
 #define R300_PACKET3_INDX_BUFFER            0x00003300
 #    define R300_INDX_BUFFER_DST_SHIFT          0
 #    define R300_INDX_BUFFER_SKIP_SHIFT         16
-#    define R300_INDX_BUFFER_ONE_REG_WR		(1<<31)
+#    define R300_INDX_BUFFER_ONE_REG_WR		(1U << 31)
 
 /* Same as R300_PACKET3_3D_DRAW_VBUF but without VAP_VTX_FMT */
 #define R300_PACKET3_3D_DRAW_VBUF_2         0x00003400
@@ -3498,7 +3478,7 @@ enum {
 /* Same as R300_PACKET3_3D_DRAW_INDX but without VAP_VTX_FMT */
 #define R300_PACKET3_3D_DRAW_INDX_2         0x00003600
 
-/* Clears a portion of hierachical Z RAM
+/* Clears a portion of hierarchical Z RAM
  * 3 dword parameters
  * 0. START
  * 1. COUNT: 13:0 (max is 0x3FFF)

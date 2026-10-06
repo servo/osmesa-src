@@ -31,44 +31,24 @@
 #include "entry.h"
 #include "u_current.h"
 #include "util/u_endian.h"
+#include "util/u_thread.h"
 
 #define _U_STRINGIFY(x) #x
 #define U_STRINGIFY(x) _U_STRINGIFY(x)
 
-/* define macros for use by assembly dispatchers */
-#define ENTRY_CURRENT_TABLE U_STRINGIFY(u_current_table)
-
-/* in bridge mode, mapi is a user of glapi */
-#ifdef MAPI_MODE_BRIDGE
-#define ENTRY_CURRENT_TABLE_GET "_glapi_get_dispatch"
-#else
-#define ENTRY_CURRENT_TABLE_GET U_STRINGIFY(u_current_get_table_internal)
-#endif
-
-#if defined(USE_X86_ASM) && defined(__GNUC__)
-#   ifdef USE_ELF_TLS
-#      include "entry_x86_tls.h"
-#   else                 
-#      include "entry_x86_tsd.h"
-#   endif
-#elif defined(USE_X86_64_ASM) && defined(__GNUC__) && defined(USE_ELF_TLS)
-#   include "entry_x86-64_tls.h"
-#elif defined(USE_PPC64LE_ASM) && defined(__GNUC__) && UTIL_ARCH_LITTLE_ENDIAN
-#   ifdef USE_ELF_TLS
-#      include "entry_ppc64le_tls.h"
-#   else
-#      include "entry_ppc64le_tsd.h"
-#   endif
+/* REALLY_INITIAL_EXEC implies __GLIBC__ */
+#if defined(USE_X86_ASM) && defined(REALLY_INITIAL_EXEC)
+#include "entry_x86_tls.h"
+#elif defined(USE_X86_64_ASM) && defined(REALLY_INITIAL_EXEC)
+#include "entry_x86-64_tls.h"
+#elif defined(USE_PPC64LE_ASM) && UTIL_ARCH_LITTLE_ENDIAN && defined(REALLY_INITIAL_EXEC)
+#include "entry_ppc64le_tls.h"
 #else
 
 static inline const struct _glapi_table *
 entry_current_get(void)
 {
-#ifdef MAPI_MODE_BRIDGE
    return GET_DISPATCH();
-#else
-   return u_current_get_table();
-#endif
 }
 
 /* C version of the public entries */
@@ -91,17 +71,10 @@ entry_get_public(int slot)
    return public_entries[slot];
 }
 
-mapi_func
-entry_generate(int slot)
-{
-   return NULL;
-}
-
-void
-entry_patch(mapi_func entry, int slot)
-{
-}
-
 #endif /* MAPI_MODE_BRIDGE */
+
+#if defined(_WIN32) && defined(_WINDOWS_)
+#error "Should not include <windows.h> here"
+#endif
 
 #endif /* asm */

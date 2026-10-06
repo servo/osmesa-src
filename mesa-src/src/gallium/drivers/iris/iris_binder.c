@@ -36,7 +36,7 @@
  * binding table entries are full 32-bit pointers.)
  *
  * To handle this, we split a 4GB region of VMA into two memory zones.
- * IRIS_MEMZONE_BINDER is a small region at the bottom able to hold a few
+ * IRIS_MEMZONE_BINDER is a 1GB region at the bottom able to hold a few
  * binder BOs.  IRIS_MEMZONE_SURFACE contains the rest of the 4GB, and is
  * always at a higher address than the binders.  This allows us to program
  * Surface State Base Address to the binder BO's address, and offset the
@@ -53,15 +53,10 @@
 #include "iris_bufmgr.h"
 #include "iris_context.h"
 
-#define BTP_ALIGNMENT 32
-
-/* Avoid using offset 0, tools consider it NULL */
-#define INIT_INSERT_POINT BTP_ALIGNMENT
-
 static bool
 binder_has_space(struct iris_binder *binder, unsigned size)
 {
-   return binder->insert_point + size <= IRIS_BINDER_SIZE;
+   return binder->insert_point + size <= binder->size;
 }
 
 static void
@@ -71,25 +66,15 @@ binder_realloc(struct iris_context *ice)
    struct iris_bufmgr *bufmgr = screen->bufmgr;
    struct iris_binder *binder = &ice->state.binder;
 
-   uint64_t next_address = IRIS_MEMZONE_BINDER_START;
-
-   if (binder->bo) {
-      /* Place the new binder just after the old binder, unless we've hit the
-       * end of the memory zone...then wrap around to the start again.
-       */
-      next_address = binder->bo->gtt_offset + IRIS_BINDER_SIZE;
-      if (next_address >= IRIS_MEMZONE_SURFACE_START)
-         next_address = IRIS_MEMZONE_BINDER_START;
-
+   if (binder->bo)
       iris_bo_unreference(binder->bo);
-   }
 
-
-   binder->bo =
-      iris_bo_alloc(bufmgr, "binder", IRIS_BINDER_SIZE, IRIS_MEMZONE_BINDER);
-   binder->bo->gtt_offset = next_address;
+   binder->bo = iris_bo_alloc(bufmgr, "binder", binder->size, binder->alignment,
+                              IRIS_MEMZONE_BINDER, BO_ALLOC_PLAIN);
    binder->map = iris_bo_map(NULL, binder->bo, MAP_WRITE);
-   binder->insert_point = INIT_INSERT_POINT;
+
+   /* Avoid using offset 0 - tools consider it NULL. */
+   binder->insert_point = binder->alignment;
 
    /* Allocating a new binder requires changing Surface State Base Address,
     * which also invalidates all our previous binding tables - each entry
@@ -97,6 +82,11 @@ binder_realloc(struct iris_context *ice)
     *
     * We do this here so that iris_binder_reserve_3d correctly gets a new
     * larger total_size when making the updated reservation.
+    *
+    * Gfx11+ simply updates the binding table pool address instead, which
+    * means the old binding table's contents are still valid.  Nevertheless,
+    * it still lives in the old BO, so we'd at least need to copy it to the
+    * new one.  Instead, we just flag it dirty and re-emit it anyway.
     */
    ice->state.dirty |= IRIS_DIRTY_RENDER_BUFFER;
    ice->state.stage_dirty |= IRIS_ALL_STAGE_DIRTY_BINDINGS;
@@ -107,7 +97,8 @@ binder_insert(struct iris_binder *binder, unsigned size)
 {
    uint32_t offset = binder->insert_point;
 
-   binder->insert_point = align(binder->insert_point + size, BTP_ALIGNMENT);
+   binder->insert_point =
+      align(binder->insert_point + size, binder->alignment);
 
    return offset;
 }
@@ -129,6 +120,23 @@ iris_binder_reserve(struct iris_context *ice,
 }
 
 /**
+ * Reserve and record binder space for generation shader (FS stage only).
+ */
+void
+iris_binder_reserve_gen(struct iris_context *ice)
+{
+   struct iris_binder *binder = &ice->state.binder;
+
+   binder->bt_offset[MESA_SHADER_FRAGMENT] =
+      iris_binder_reserve(ice, sizeof(uint32_t));
+
+   iris_record_state_size(ice->state.sizes,
+                          binder->bo->address +
+                          binder->bt_offset[MESA_SHADER_FRAGMENT],
+                          sizeof(uint32_t));
+}
+
+/**
  * Reserve and record binder space for 3D pipeline shader stages.
  *
  * Note that you must actually populate the new binding tables after
@@ -144,7 +152,7 @@ iris_binder_reserve_3d(struct iris_context *ice)
 
    /* If nothing is dirty, skip all this. */
    if (!(ice->state.dirty & IRIS_DIRTY_RENDER_BUFFER) &&
-       !(ice->state.stage_dirty & IRIS_ALL_STAGE_DIRTY_BINDINGS))
+       !(ice->state.stage_dirty & IRIS_ALL_STAGE_DIRTY_BINDINGS_FOR_RENDER))
       return;
 
    /* Get the binding table sizes for each stage */
@@ -153,7 +161,7 @@ iris_binder_reserve_3d(struct iris_context *ice)
          continue;
 
       /* Round up the size so our next table has an aligned starting offset */
-      sizes[stage] = align(shaders[stage]->bt.size_bytes, BTP_ALIGNMENT);
+      sizes[stage] = align(shaders[stage]->bt.size_bytes, binder->alignment);
    }
 
    /* Make space for the new binding tables...this may take two tries. */
@@ -164,7 +172,7 @@ iris_binder_reserve_3d(struct iris_context *ice)
             total_size += sizes[stage];
       }
 
-      assert(total_size < IRIS_BINDER_SIZE);
+      assert(total_size < binder->size);
 
       if (total_size == 0)
          return;
@@ -186,7 +194,7 @@ iris_binder_reserve_3d(struct iris_context *ice)
       if (ice->state.stage_dirty & (IRIS_STAGE_DIRTY_BINDINGS_VS << stage)) {
          binder->bt_offset[stage] = sizes[stage] > 0 ? offset : 0;
          iris_record_state_size(ice->state.sizes,
-                                binder->bo->gtt_offset + offset, sizes[stage]);
+                                binder->bo->address + offset, sizes[stage]);
          offset += sizes[stage];
       }
    }
@@ -213,7 +221,31 @@ iris_binder_reserve_compute(struct iris_context *ice)
 void
 iris_init_binder(struct iris_context *ice)
 {
+   struct iris_screen *screen = (void *) ice->ctx.screen;
+   const struct intel_device_info *devinfo = screen->devinfo;
+
    memset(&ice->state.binder, 0, sizeof(struct iris_binder));
+
+   /* We use different binding table pointer formats on various generations.
+    *
+    * - The 20:5 format gives us an alignment of 32B and max size of 1024kB.
+    * - The 18:8 format gives us an alignment of 256B and max size of 512kB.
+    * - The 15:5 format gives us an alignment of 32B and max size of 64kB.
+    *
+    * XeHP and later use the 20:5 format.  Icelake and Tigerlake use 18:8
+    * in iris, but can use 15:5 if desired,  Older platforms require 15:5.
+    */
+   if (devinfo->verx10 >= 125) {
+      ice->state.binder.alignment = 32;
+      ice->state.binder.size = 1024 * 1024;
+   } else if (devinfo->ver >= 11) {
+      ice->state.binder.alignment = 256;
+      ice->state.binder.size = 512 * 1024;
+   } else {
+      ice->state.binder.alignment = 32;
+      ice->state.binder.size = 64 * 1024;
+   }
+
    binder_realloc(ice);
 }
 

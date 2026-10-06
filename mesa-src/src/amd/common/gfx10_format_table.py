@@ -1,31 +1,11 @@
 #
 # Copyright 2017 Advanced Micro Devices, Inc.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# on the rights to use, copy, modify, merge, publish, distribute, sub
-# license, and/or sell copies of the Software, and to permit persons to whom
-# the Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice (including the next
-# paragraph) shall be included in all copies or substantial portions of the
-# Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: MIT
 #
 """
-Script that generates the mapping from Gallium PIPE_FORMAT_xxx to gfx10
-IMG_FORMAT_xxx enums.
+Script that generates the mapping from Gallium PIPE_FORMAT_xxx to GFX10_FORMAT_xxx enums.
 """
-
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import json
 import mako.template
@@ -96,6 +76,9 @@ HARDCODED = {
 
     'PIPE_FORMAT_BPTC_RGBA_UNORM': hardcoded_format('BC7_UNORM'),
     'PIPE_FORMAT_BPTC_SRGBA': hardcoded_format('BC7_SRGB'),
+
+    'PIPE_FORMAT_R64_UINT': hardcoded_format('32_32_UINT'),
+    'PIPE_FORMAT_R64_SINT': hardcoded_format('32_32_SINT'),
 }
 
 
@@ -103,16 +86,19 @@ HARDCODED = {
 # Main script
 
 header_template = mako.template.Template("""\
+% if header:
 // DO NOT EDIT -- AUTOMATICALLY GENERATED
 
 #include "gfx10_format_table.h"
 #include "amdgfxregs.h"
 
+% endif
+
 #define FMT(_img_format, ...) \
-   { .img_format = V_008F0C_IMG_FORMAT_##_img_format, \
+   { .img_format = V_008F0C_${gfx.upper()}_FORMAT_##_img_format, \
      ##__VA_ARGS__ }
 
-const struct gfx10_format gfx10_format_table[PIPE_FORMAT_COUNT] = {
+const struct gfx10_format ${gfx}_format_table[PIPE_FORMAT_COUNT] = {
 % for pipe_format, args in formats:
  % if args is not None:
   [${pipe_format}] = FMT(${args}),
@@ -120,6 +106,8 @@ const struct gfx10_format gfx10_format_table[PIPE_FORMAT_COUNT] = {
 /* ${pipe_format} is not supported */
  % endif
 % endfor
+
+#undef FMT
 };
 """)
 
@@ -127,7 +115,7 @@ class Gfx10Format(object):
     RE_plain_channel = re.compile(r'X?([0-9]+)')
 
     def __init__(self, enum_entry):
-        self.img_format = enum_entry.name[11:]
+        self.img_format = enum_entry.name[13:]
         self.flags = getattr(enum_entry, 'flags', [])
 
         code = self.img_format.split('_')
@@ -188,6 +176,7 @@ class Gfx10FormatMapping(object):
                         num_format = 'UNORM'
                     else:
                         num_format = 'USCALED'
+                        extra_flags.append('buffers_only')
                 elif chan_type == SIGNED:
                     if chan_pure:
                         num_format = 'SINT'
@@ -199,6 +188,7 @@ class Gfx10FormatMapping(object):
                         num_format = 'SNORM'
                     else:
                         num_format = 'SSCALED'
+                        extra_flags.append('buffers_only')
                 elif chan_type == FLOAT:
                     num_format = 'FLOAT'
 
@@ -248,17 +238,7 @@ class Gfx10FormatMapping(object):
 
         return None
 
-
-if __name__ == '__main__':
-    pipe_formats = parse(sys.argv[1])
-
-    with open(sys.argv[2], 'r') as filp:
-        db = RegisterDatabase.from_json(json.load(filp))
-
-    gfx10_formats = [Gfx10Format(entry) for entry in db.enum('IMG_FORMAT').entries]
-
-    mapping = Gfx10FormatMapping(pipe_formats, gfx10_formats)
-
+def pipe_formats_to_formats(pipe_formats, mapping):
     formats = []
     for fmt in pipe_formats:
         if fmt.name in HARDCODED:
@@ -274,4 +254,25 @@ if __name__ == '__main__':
             args = None
         formats.append((fmt.name, args))
 
-    print(header_template.render(formats=formats))
+    return formats
+
+if __name__ == '__main__':
+    pipe_formats = parse(sys.argv[1])
+
+    # gfx10
+    with open(sys.argv[2], 'r') as filp:
+        db = RegisterDatabase.from_json(json.load(filp))
+
+    gfx10_formats = [Gfx10Format(entry) for entry in db.enum('GFX10_FORMAT').entries]
+    mapping = Gfx10FormatMapping(pipe_formats, gfx10_formats)
+    formats = pipe_formats_to_formats(pipe_formats, mapping)
+    print(header_template.render(header=True, gfx='gfx10', formats=formats))
+
+    # gfx11
+    with open(sys.argv[3], 'r') as filp:
+        db = RegisterDatabase.from_json(json.load(filp))
+
+    gfx11_formats = [Gfx10Format(entry) for entry in db.enum('GFX11_FORMAT').entries]
+    mapping = Gfx10FormatMapping(pipe_formats, gfx11_formats)
+    formats = pipe_formats_to_formats(pipe_formats, mapping)
+    print(header_template.render(header=False, gfx='gfx11', formats=formats))

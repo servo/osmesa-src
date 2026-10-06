@@ -28,66 +28,60 @@
 #ifndef H_ETNAVIV_SCREEN
 #define H_ETNAVIV_SCREEN
 
+#include "etna_core_info.h"
 #include "etnaviv_internal.h"
 #include "etnaviv_perfmon.h"
 
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "pipe/p_screen.h"
 #include "renderonly/renderonly.h"
 #include "util/set.h"
 #include "util/slab.h"
 #include "util/u_dynarray.h"
 #include "util/u_helpers.h"
+#include "util/u_queue.h"
 #include "compiler/nir/nir.h"
 
 struct etna_bo;
 
-/* Enum with indices for each of the feature words */
-enum viv_features_word {
-   viv_chipFeatures = 0,
-   viv_chipMinorFeatures0 = 1,
-   viv_chipMinorFeatures1 = 2,
-   viv_chipMinorFeatures2 = 3,
-   viv_chipMinorFeatures3 = 4,
-   viv_chipMinorFeatures4 = 5,
-   viv_chipMinorFeatures5 = 6,
-   viv_chipMinorFeatures6 = 7,
-   VIV_FEATURES_WORD_COUNT /* Must be last */
-};
-
-/** Convenience macro to probe features from state.xml.h:
- * VIV_FEATURE(chipFeatures, FAST_CLEAR)
- * VIV_FEATURE(chipMinorFeatures1, AUTO_DISABLE)
- */
-#define VIV_FEATURE(screen, word, feature) \
-   ((screen->features[viv_ ## word] & (word ## _ ## feature)) != 0)
-
 struct etna_screen {
    struct pipe_screen base;
 
-   int refcnt;
-   void *winsys_priv;
-
    struct etna_device *dev;
    struct etna_gpu *gpu;
+   struct etna_gpu *npu;
    struct etna_pipe *pipe;
+   struct etna_pipe *pipe_nn;
    struct etna_perfmon *perfmon;
    struct renderonly *ro;
 
    struct util_dynarray supported_pm_queries;
    struct slab_parent_pool transfer_pool;
 
-   uint32_t model;
-   uint32_t revision;
-   uint32_t features[VIV_FEATURES_WORD_COUNT];
+   struct etna_core_info *info;
 
    struct etna_specs specs;
 
    uint32_t drm_version;
 
    struct etna_compiler *compiler;
-   nir_shader_compiler_options options;
+   struct util_queue shader_compiler_queue;
+
+   /* dummy BO available to user that don't care about the content */
+   struct etna_bo *dummy_bo;
+
+   /* dummy render target for GPUs that can't fully disable the color pipe */
+   struct etna_reloc dummy_rt_reloc;
+
+   /* dummy texture descriptor */
+   struct etna_reloc dummy_desc_reloc;
 };
+
+static inline bool
+VIV_FEATURE(const struct etna_screen *screen, enum etna_feature feature)
+{
+   return etna_core_has_feature(screen->info, feature);
+}
 
 static inline struct etna_screen *
 etna_screen(struct pipe_screen *pscreen)
@@ -97,10 +91,26 @@ etna_screen(struct pipe_screen *pscreen)
 
 struct etna_bo *
 etna_screen_bo_from_handle(struct pipe_screen *pscreen,
-                           struct winsys_handle *whandle, unsigned *out_stride);
+                           struct winsys_handle *whandle);
 
 struct pipe_screen *
 etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
-                   struct renderonly *ro);
+                   struct etna_gpu *npu, struct renderonly *ro);
+
+static inline size_t
+etna_screen_get_tile_size(struct etna_screen *screen, uint8_t ts_mode,
+                          bool is_msaa)
+{
+   if (!VIV_FEATURE(screen, ETNA_FEATURE_CACHE128B256BPERLINE)) {
+      if (VIV_FEATURE(screen, ETNA_FEATURE_SMALL_MSAA) && is_msaa)
+         return 256;
+      return 64;
+   }
+
+   if (ts_mode == TS_MODE_256B)
+      return 256;
+   else
+      return 128;
+}
 
 #endif

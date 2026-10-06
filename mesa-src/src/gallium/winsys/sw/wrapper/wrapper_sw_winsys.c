@@ -26,7 +26,7 @@
 
 #include "wrapper_sw_winsys.h"
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_state.h"
 
 #include "frontend/sw_winsys.h"
@@ -105,8 +105,8 @@ wsw_dt_get_stride(struct wrapper_sw_displaytarget *wdt, unsigned *stride)
    struct pipe_transfer *tr;
    void *map;
 
-   map = pipe_transfer_map(pipe, tex, 0, 0,
-                           PIPE_TRANSFER_READ_WRITE,
+   map = pipe_texture_map(pipe, tex, 0, 0,
+                           PIPE_MAP_READ_WRITE,
                            0, 0, wdt->tex->width0, wdt->tex->height0, &tr);
    if (!map)
       return false;
@@ -114,7 +114,7 @@ wsw_dt_get_stride(struct wrapper_sw_displaytarget *wdt, unsigned *stride)
    *stride = tr->stride;
    wdt->stride = tr->stride;
 
-   pipe->transfer_unmap(pipe, tr);
+   pipe->texture_unmap(pipe, tr);
 
    return true;
 }
@@ -221,8 +221,8 @@ wsw_dt_map(struct sw_winsys *ws,
 
       assert(!wdt->transfer);
 
-      ptr = pipe_transfer_map(pipe, tex, 0, 0,
-                              PIPE_TRANSFER_READ_WRITE,
+      ptr = pipe_texture_map(pipe, tex, 0, 0,
+                              PIPE_MAP_READ_WRITE,
                               0, 0, wdt->tex->width0, wdt->tex->height0, &tr);
       if (!ptr)
         goto err;
@@ -239,7 +239,7 @@ wsw_dt_map(struct sw_winsys *ws,
    return wdt->ptr;
 
 err:
-   pipe->transfer_unmap(pipe, tr);
+   pipe->texture_unmap(pipe, tr);
    return NULL;
 }
 
@@ -257,7 +257,7 @@ wsw_dt_unmap(struct sw_winsys *ws,
    if (wdt->map_count)
       return;
 
-   pipe->transfer_unmap(pipe, wdt->transfer);
+   pipe->texture_unmap(pipe, wdt->transfer);
    pipe->flush(pipe, NULL, 0);
    wdt->transfer = NULL;
 }
@@ -306,7 +306,7 @@ wrapper_sw_winsys_wrap_pipe_screen(struct pipe_screen *screen)
    if (!wsw->pipe)
       goto err_free;
 
-   if(screen->get_param(screen, PIPE_CAP_NPOT_TEXTURES))
+   if(screen->caps.npot_textures)
       wsw->target = PIPE_TEXTURE_2D;
    else
       wsw->target = PIPE_TEXTURE_RECT;

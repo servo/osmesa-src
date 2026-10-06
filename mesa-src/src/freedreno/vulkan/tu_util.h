@@ -9,8 +9,9 @@
 #ifndef TU_UTIL_H
 #define TU_UTIL_H
 
-#include <assert.h>
-#include <stdint.h>
+#include <atomic>
+
+#include "tu_common.h"
 
 #include "util/macros.h"
 #include "util/u_math.h"
@@ -18,37 +19,128 @@
 #include "util/format/u_format_zs.h"
 #include "compiler/shader_enums.h"
 
-#include "adreno_common.xml.h"
-#include "adreno_pm4.xml.h"
-#include "a6xx.xml.h"
+#include "vk_util.h"
 
-#include <vulkan/vulkan.h>
+/*
+ * Returns if the specified TU_DEBUG flag is set. The value returned by this macro
+ * can change at runtime if TU_DEBUG_FILE is used. Therefore, the value should
+ * be cached in a local scope if it needs to be coherent across multiple usages.
+ */
+#define TU_DEBUG(name) unlikely(tu_env.debug.load(std::memory_order_acquire) & TU_DEBUG_##name)
 
-static inline gl_shader_stage
-vk_to_mesa_shader_stage(VkShaderStageFlagBits vk_stage)
+/*
+ * Same as TU_DEBUG, but only uses the environment variable's value rather
+ * than TU_DEBUG_FILE. This is useful for flags that should not be changed
+ * at runtime or when a flag has different behavior depending on whether it
+ * is set in TU_DEBUG or TU_DEBUG_FILE.
+ */
+#define TU_DEBUG_ENV(name) unlikely(tu_env.env_debug & TU_DEBUG_##name)
+
+enum tu_debug_flags
 {
-   assert(__builtin_popcount(vk_stage) == 1);
-   return util_logbase2(vk_stage);
-}
+   TU_DEBUG_STARTUP = 1 << 0,
+   TU_DEBUG_NIR = 1 << 1,
+   TU_DEBUG_NOBIN = 1 << 3,
+   TU_DEBUG_SYSMEM = 1 << 4,
+   TU_DEBUG_FORCEBIN = 1 << 5,
+   TU_DEBUG_NOUBWC = 1 << 6,
+   TU_DEBUG_NOMULTIPOS = 1 << 7,
+   TU_DEBUG_NOLRZ = 1 << 8,
+   TU_DEBUG_PERFC = 1 << 9,
+   TU_DEBUG_FLUSHALL = 1 << 10,
+   TU_DEBUG_SYNCDRAW = 1 << 11,
+   TU_DEBUG_PUSH_CONSTS_PER_STAGE = 1 << 12,
+   TU_DEBUG_GMEM = 1 << 13,
+   TU_DEBUG_RAST_ORDER = 1 << 14,
+   TU_DEBUG_UNALIGNED_STORE = 1 << 15,
+   TU_DEBUG_LAYOUT = 1 << 16,
+   TU_DEBUG_LOG_SKIP_GMEM_OPS = 1 << 17,
+   TU_DEBUG_PERF = 1 << 18,
+   TU_DEBUG_NOLRZFC = 1 << 19,
+   TU_DEBUG_DYNAMIC = 1 << 20,
+   TU_DEBUG_BOS = 1 << 21,
+   TU_DEBUG_3D_LOAD = 1 << 22,
+   TU_DEBUG_FDM = 1 << 23,
+   TU_DEBUG_NOCONFORM = 1 << 24,
+   TU_DEBUG_RD = 1 << 25,
+   TU_DEBUG_HIPRIO = 1 << 26,
+   TU_DEBUG_NO_CONCURRENT_RESOLVES = 1 << 27,
+   TU_DEBUG_NO_CONCURRENT_UNRESOLVES = 1 << 28,
+   TU_DEBUG_DUMPAS = 1 << 29,
+};
 
-static inline VkShaderStageFlagBits
-mesa_to_vk_shader_stage(gl_shader_stage mesa_stage)
-{
-   return 1 << mesa_stage;
-}
+struct tu_env {
+    std::atomic<uint32_t> debug;
+    uint32_t env_debug;
+};
+
+extern struct tu_env tu_env;
+
+/*
+ * Note: tu_env_init() must be called before using the TU_DEBUG* macro.
+ */
+void
+tu_env_init(void);
+
+/* Whenever we generate an error, pass it through this function. Useful for
+ * debugging, where we can break on it. Only call at error site, not when
+ * propagating errors. Might be useful to plug in a stack trace here.
+ */
+
+VkResult
+__vk_startup_errorf(struct tu_instance *instance,
+                    VkResult error,
+                    const char *file,
+                    int line,
+                    const char *format,
+                    ...) PRINTFLIKE(5, 6);
+
+/* Prints startup errors if TU_DEBUG=startup is set or on a debug driver
+ * build.
+ */
+#define vk_startup_errorf(instance, error, format, ...) \
+   __vk_startup_errorf(instance, error, \
+                       __FILE__, __LINE__, format, ##__VA_ARGS__)
+
+void
+__tu_finishme(const char *file, int line, const char *format, ...)
+   PRINTFLIKE(3, 4);
+
+/**
+ * Print a FINISHME message, including its source location.
+ */
+#define tu_finishme(format, ...)                                             \
+   do {                                                                      \
+      static bool reported = false;                                          \
+      if (!reported) {                                                       \
+         __tu_finishme(__FILE__, __LINE__, format, ##__VA_ARGS__);           \
+         reported = true;                                                    \
+      }                                                                      \
+   } while (0)
+
+#define tu_stub()                                                            \
+   do {                                                                      \
+      tu_finishme("stub %s", __func__);                                      \
+   } while (0)
+
+void
+tu_framebuffer_tiling_config(struct tu_framebuffer *fb,
+                             const struct tu_device *device,
+                             const struct tu_render_pass *pass);
 
 #define TU_STAGE_MASK ((1 << MESA_SHADER_STAGES) - 1)
 
 #define tu_foreach_stage(stage, stage_bits)                                  \
    for (gl_shader_stage stage,                                               \
-        __tmp = (gl_shader_stage)((stage_bits) &TU_STAGE_MASK);              \
-        stage = __builtin_ffs(__tmp) - 1, __tmp; __tmp &= ~(1 << (stage)))
+        __tmp = (gl_shader_stage) ((stage_bits) &TU_STAGE_MASK);             \
+        stage = (gl_shader_stage) (__builtin_ffs(__tmp) - 1), __tmp;         \
+        __tmp = (gl_shader_stage) (__tmp & ~(1 << (stage))))
 
 static inline enum a3xx_msaa_samples
-tu_msaa_samples(VkSampleCountFlagBits samples)
+tu_msaa_samples(uint32_t samples)
 {
    assert(__builtin_popcount(samples) == 1);
-   return util_logbase2(samples);
+   return (enum a3xx_msaa_samples) util_logbase2(samples);
 }
 
 static inline uint32_t
@@ -62,20 +154,20 @@ tu6_stage2opcode(gl_shader_stage stage)
 static inline enum a6xx_state_block
 tu6_stage2texsb(gl_shader_stage stage)
 {
-   return SB6_VS_TEX + stage;
+   return (enum a6xx_state_block) (SB6_VS_TEX + stage);
 }
 
 static inline enum a6xx_state_block
 tu6_stage2shadersb(gl_shader_stage stage)
 {
-   return SB6_VS_SHADER + stage;
+   return (enum a6xx_state_block) (SB6_VS_SHADER + stage);
 }
 
 static inline enum a3xx_rop_code
 tu6_rop(VkLogicOp op)
 {
    /* note: hw enum matches the VK enum, but with the 4 bits reversed */
-   static const uint8_t lookup[] = {
+   static const enum a3xx_rop_code lookup[] = {
       [VK_LOGIC_OP_CLEAR]           = ROP_CLEAR,
       [VK_LOGIC_OP_AND]             = ROP_AND,
       [VK_LOGIC_OP_AND_REVERSE]     = ROP_AND_REVERSE,
@@ -97,10 +189,30 @@ tu6_rop(VkLogicOp op)
    return lookup[op];
 }
 
+static inline bool
+tu6_primtype_line(enum pc_di_primtype type)
+{
+    switch(type) {
+    case DI_PT_LINELIST:
+    case DI_PT_LINESTRIP:
+    case DI_PT_LINE_ADJ:
+    case DI_PT_LINESTRIP_ADJ:
+       return true;
+    default:
+       return false;
+    }
+}
+
+static inline bool
+tu6_primtype_patches(enum pc_di_primtype type)
+{
+   return type >= DI_PT_PATCHES0 && type <= DI_PT_PATCHES31;
+}
+
 static inline enum pc_di_primtype
 tu6_primtype(VkPrimitiveTopology topology)
 {
-   static const uint8_t lookup[] = {
+   static const enum pc_di_primtype lookup[] = {
       [VK_PRIMITIVE_TOPOLOGY_POINT_LIST]                    = DI_PT_POINTLIST,
       [VK_PRIMITIVE_TOPOLOGY_LINE_LIST]                     = DI_PT_LINELIST,
       [VK_PRIMITIVE_TOPOLOGY_LINE_STRIP]                    = DI_PT_LINESTRIP,
@@ -133,7 +245,7 @@ tu6_stencil_op(VkStencilOp op)
 static inline enum adreno_rb_blend_factor
 tu6_blend_factor(VkBlendFactor factor)
 {
-   static const uint8_t lookup[] = {
+   static const enum adreno_rb_blend_factor lookup[] = {
       [VK_BLEND_FACTOR_ZERO]                    = FACTOR_ZERO,
       [VK_BLEND_FACTOR_ONE]                     = FACTOR_ONE,
       [VK_BLEND_FACTOR_SRC_COLOR]               = FACTOR_SRC_COLOR,
@@ -156,6 +268,20 @@ tu6_blend_factor(VkBlendFactor factor)
    };
    assert(factor < ARRAY_SIZE(lookup));
    return lookup[factor];
+}
+
+static inline bool
+tu_blend_factor_is_dual_src(VkBlendFactor factor)
+{
+   switch (factor) {
+   case VK_BLEND_FACTOR_SRC1_COLOR:
+   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR:
+   case VK_BLEND_FACTOR_SRC1_ALPHA:
+   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA:
+      return true;
+   default:
+      return false;
+   }
 }
 
 static inline enum a3xx_rb_blend_opcode
@@ -186,7 +312,7 @@ tu6_tex_type(VkImageViewType type, bool storage)
 static inline enum a6xx_tex_clamp
 tu6_tex_wrap(VkSamplerAddressMode address_mode)
 {
-   uint8_t lookup[] = {
+   static const enum a6xx_tex_clamp lookup[] = {
       [VK_SAMPLER_ADDRESS_MODE_REPEAT]                = A6XX_TEX_REPEAT,
       [VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT]       = A6XX_TEX_MIRROR_REPEAT,
       [VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE]         = A6XX_TEX_CLAMP_TO_EDGE,
@@ -233,7 +359,7 @@ tu6_pipe2depth(VkFormat format)
    case VK_FORMAT_S8_UINT:
       return DEPTH6_32;
    default:
-      return ~0;
+      return DEPTH6_NONE;
    }
 }
 
@@ -253,7 +379,7 @@ tu6_polygon_mode(VkPolygonMode mode)
 }
 
 struct bcolor_entry {
-   uint32_t fp32[4];
+   alignas(128) uint32_t fp32[4];
    uint64_t ui16;
    uint64_t si16;
    uint64_t fp16;
@@ -267,7 +393,8 @@ struct bcolor_entry {
    uint32_t z24; /* also s8? */
    uint64_t srgb;
    uint8_t  __pad1[56];
-} __attribute__((aligned(128)));
+};
+static_assert(alignof(struct bcolor_entry) == 128, "");
 
 /* vulkan does not want clamping of integer clear values, differs from u_format
  * see spec for VkClearColorValue
@@ -318,10 +445,23 @@ tu6_pack_border_color(struct bcolor_entry *bcolor, const VkClearColorValue *val,
    PACK_F(ui8, r8g8b8a8_unorm);
    PACK_F(si8, r8g8b8a8_snorm);
    PACK_F(rgb10a2, r10g10b10a2_unorm);
-   util_format_x8z24_unorm_pack_z_float((uint8_t*) &bcolor->z24,
+   util_format_z24x8_unorm_pack_z_float((uint8_t*) &bcolor->z24,
                                         0, val->float32, 0, 1, 1);
    PACK_F(srgb, r16g16b16a16_float); /* TODO: clamp? */
 #undef PACK_F
 }
+
+void
+tu_dbg_log_gmem_load_store_skips(struct tu_device *device);
+
+#define perf_debug(device, fmt, ...) do {                               \
+   if (TU_DEBUG(PERF))                                                  \
+      mesa_log(MESA_LOG_WARN, (MESA_LOG_TAG), (fmt), ##__VA_ARGS__);    \
+} while(0)
+
+#define sizeof_field(s, field) sizeof(((s *) NULL)->field)
+
+#define offsetof_arr(s, field, idx)                                          \
+   (offsetof(s, field) + sizeof_field(s, field[0]) * (idx))
 
 #endif /* TU_UTIL_H */

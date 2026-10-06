@@ -84,41 +84,41 @@ add_printf_test(struct gallivm_state *gallivm)
 }
 
 
-PIPE_ALIGN_STACK
-static boolean
+UTIL_ALIGN_STACK
+static bool
 test_printf(unsigned verbose, FILE *fp,
             const struct printf_test_case *testcase)
 {
-   LLVMContextRef context;
+   lp_context_ref context;
    struct gallivm_state *gallivm;
    LLVMValueRef test;
    test_printf_t test_printf_func;
-   boolean success = TRUE;
+   bool success = true;
 
-   context = LLVMContextCreate();
-   gallivm = gallivm_create("test_module", context, NULL);
+   lp_context_create(&context);
+   gallivm = gallivm_create("test_module", &context, NULL);
 
    test = add_printf_test(gallivm);
 
    gallivm_compile_module(gallivm);
 
-   test_printf_func = (test_printf_t) gallivm_jit_function(gallivm, test);
+   test_printf_func = (test_printf_t) gallivm_jit_function(gallivm, test, "test_printf");
 
    gallivm_free_ir(gallivm);
 
    test_printf_func(0);
 
    gallivm_destroy(gallivm);
-   LLVMContextDispose(context);
+   lp_context_destroy(&context);
 
    return success;
 }
 
 
-boolean
+bool
 test_all(unsigned verbose, FILE *fp)
 {
-   boolean success = TRUE;
+   bool success = true;
 
    test_printf(verbose, fp, NULL);
 
@@ -126,7 +126,7 @@ test_all(unsigned verbose, FILE *fp)
 }
 
 
-boolean
+bool
 test_some(unsigned verbose, FILE *fp,
           unsigned long n)
 {
@@ -134,9 +134,9 @@ test_some(unsigned verbose, FILE *fp,
 }
 
 
-boolean
+bool
 test_single(unsigned verbose, FILE *fp)
 {
    printf("no test_single()");
-   return TRUE;
+   return true;
 }

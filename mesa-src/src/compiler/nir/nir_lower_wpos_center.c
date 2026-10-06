@@ -24,92 +24,44 @@
 
 #include "nir.h"
 #include "nir_builder.h"
-#include "program/prog_instruction.h"
 
 /**
- * This pass adds <0.5, 0.5> to all uses of gl_FragCoord.
+ * This pass adds sample position to gl_FragCoord, intended for Vulkan drivers
+ * on hardware which provides an integer pixel center. Vulkan mandates that the
+ * pixel center must be half-integer, and also that the coordinate system's
+ * origin must be upper left. This means that there's no need for a uniform - we
+ * can always just add a constant. In the case that sample shading is enabled,
+ * Vulkan expects FragCoord to include sample positions.
  *
  * Run before nir_lower_io().
  *
  * For a more full featured pass, consider using nir_lower_wpos_ytransform(),
  * which can handle pixel center integer / half integer, and origin lower
  * left / upper left transformations.
- *
- * This simple pass is primarily intended for use by Vulkan drivers on
- * hardware which provides an integer pixel center.  Vulkan mandates that
- * the pixel center must be half-integer, and also that the coordinate
- * system's origin must be upper left.  This means that there's no need
- * for a uniform - we can always just add a constant. In the case that
- * sample shading is enabled, Vulkan expects FragCoord to include sample
- * positions.
  */
 
-static void
-update_fragcoord(nir_builder *b, nir_intrinsic_instr *intr,
-                 const bool for_sample_shading)
+static bool
+lower_wpos_center_instr(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
-   nir_ssa_def *wpos = &intr->dest.ssa;
+   if (intr->intrinsic != nir_intrinsic_load_frag_coord)
+      return false;
 
-   assert(intr->dest.is_ssa);
-
+   nir_def *wpos = &intr->def;
    b->cursor = nir_after_instr(&intr->instr);
 
-   if (!for_sample_shading) {
-      wpos = nir_fadd(b, wpos, nir_imm_vec4(b, 0.5f, 0.5f, 0.0f, 0.0f));
-   } else {
-      nir_ssa_def *spos = nir_load_sample_pos(b);
+   nir_def *spos = nir_load_sample_pos_or_center(b);
+   wpos = nir_fadd(b, wpos, nir_pad_vector_imm_int(b, spos, 0, 4));
 
-      wpos = nir_fadd(b, wpos,
-                      nir_vec4(b,
-                               nir_channel(b, spos, 0),
-                               nir_channel(b, spos, 1),
-                               nir_imm_float(b, 0.0f),
-                               nir_imm_float(b, 0.0f)));
-   }
-
-   nir_ssa_def_rewrite_uses_after(&intr->dest.ssa, nir_src_for_ssa(wpos),
-                                  wpos->parent_instr);
-}
-
-static bool
-lower_wpos_center_block(nir_builder *b, nir_block *block,
-                        const bool for_sample_shading)
-{
-   bool progress = false;
-
-   nir_foreach_instr(instr, block) {
-      if (instr->type == nir_instr_type_intrinsic) {
-         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-         if (intr->intrinsic == nir_intrinsic_load_frag_coord) {
-            update_fragcoord(b, intr, for_sample_shading);
-            progress = true;
-         }
-      }
-   }
-
-   return progress;
+   nir_def_rewrite_uses_after(&intr->def, wpos, wpos->parent_instr);
+   return true;
 }
 
 bool
-nir_lower_wpos_center(nir_shader *shader, const bool for_sample_shading)
+nir_lower_wpos_center(nir_shader *shader)
 {
-   bool progress = false;
-   nir_builder b;
-
    assert(shader->info.stage == MESA_SHADER_FRAGMENT);
 
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         nir_builder_init(&b, function->impl);
-
-         nir_foreach_block(block, function->impl) {
-            progress = lower_wpos_center_block(&b, block, for_sample_shading) ||
-                       progress;
-         }
-         nir_metadata_preserve(function->impl, nir_metadata_block_index |
-                                               nir_metadata_dominance);
-      }
-   }
-
-   return progress;
+   return nir_shader_intrinsics_pass(shader, lower_wpos_center_instr,
+                                     nir_metadata_control_flow,
+                                     NULL);
 }

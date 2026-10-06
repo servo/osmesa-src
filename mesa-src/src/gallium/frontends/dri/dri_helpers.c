@@ -26,10 +26,11 @@
 #include "pipe/p_screen.h"
 #include "state_tracker/st_texture.h"
 #include "state_tracker/st_context.h"
-#include "state_tracker/st_cb_fbo.h"
 #include "main/texobj.h"
+#include "util/libsync.h"
 
 #include "dri_helpers.h"
+#include "loader_dri_helper.h"
 
 static bool
 dri2_is_opencl_interop_loaded_locked(struct dri_screen *screen)
@@ -76,48 +77,58 @@ struct dri2_fence {
    void *cl_event;
 };
 
-static unsigned dri2_fence_get_caps(__DRIscreen *_screen)
+unsigned
+dri_fence_get_caps(struct dri_screen *driscreen)
 {
-   struct dri_screen *driscreen = dri_screen(_screen);
    struct pipe_screen *screen = driscreen->base.screen;
    unsigned caps = 0;
 
-   if (screen->get_param(screen, PIPE_CAP_NATIVE_FENCE_FD))
+   if (screen->caps.native_fence_fd)
       caps |= __DRI_FENCE_CAP_NATIVE_FD;
 
    return caps;
 }
 
-static void *
-dri2_create_fence(__DRIcontext *_ctx)
+void *
+dri_create_fence(struct dri_context *ctx)
 {
-   struct st_context_iface *stapi = dri_context(_ctx)->st;
+   struct st_context *st = ctx->st;
    struct dri2_fence *fence = CALLOC_STRUCT(dri2_fence);
 
    if (!fence)
       return NULL;
 
-   stapi->flush(stapi, 0, &fence->pipe_fence, NULL, NULL);
+   /* Wait for glthread to finish because we can't use pipe_context from
+    * multiple threads.
+    */
+   _mesa_glthread_finish(st->ctx);
+
+   st_context_flush(st, 0, &fence->pipe_fence, NULL, NULL);
 
    if (!fence->pipe_fence) {
       FREE(fence);
       return NULL;
    }
 
-   fence->driscreen = dri_screen(_ctx->driScreenPriv);
+   fence->driscreen = ctx->screen;
    return fence;
 }
 
-static void *
-dri2_create_fence_fd(__DRIcontext *_ctx, int fd)
+void *
+dri_create_fence_fd(struct dri_context *dri_ctx, int fd)
 {
-   struct st_context_iface *stapi = dri_context(_ctx)->st;
-   struct pipe_context *ctx = stapi->pipe;
+   struct st_context *st = dri_ctx->st;
+   struct pipe_context *ctx = st->pipe;
    struct dri2_fence *fence = CALLOC_STRUCT(dri2_fence);
+
+   /* Wait for glthread to finish because we can't use pipe_context from
+    * multiple threads.
+    */
+   _mesa_glthread_finish(st->ctx);
 
    if (fd == -1) {
       /* exporting driver created fence, flush: */
-      stapi->flush(stapi, ST_FLUSH_FENCE_FD, &fence->pipe_fence, NULL, NULL);
+      st_context_flush(st, ST_FLUSH_FENCE_FD, &fence->pipe_fence, NULL, NULL);
    } else {
       /* importing a foreign fence fd: */
       ctx->create_fence_fd(ctx, &fence->pipe_fence, fd, PIPE_FD_TYPE_NATIVE_SYNC);
@@ -127,24 +138,22 @@ dri2_create_fence_fd(__DRIcontext *_ctx, int fd)
       return NULL;
    }
 
-   fence->driscreen = dri_screen(_ctx->driScreenPriv);
+   fence->driscreen = dri_ctx->screen;
    return fence;
 }
 
-static int
-dri2_get_fence_fd(__DRIscreen *_screen, void *_fence)
+int
+dri_get_fence_fd(struct dri_screen *driscreen, void *_fence)
 {
-   struct dri_screen *driscreen = dri_screen(_screen);
    struct pipe_screen *screen = driscreen->base.screen;
    struct dri2_fence *fence = (struct dri2_fence*)_fence;
 
    return screen->fence_get_fd(screen, fence->pipe_fence);
 }
 
-static void *
-dri2_get_fence_from_cl_event(__DRIscreen *_screen, intptr_t cl_event)
+void *
+dri_get_fence_from_cl_event(struct dri_screen *driscreen, intptr_t cl_event)
 {
-   struct dri_screen *driscreen = dri_screen(_screen);
    struct dri2_fence *fence;
 
    if (!dri2_load_opencl_interop(driscreen))
@@ -165,10 +174,9 @@ dri2_get_fence_from_cl_event(__DRIscreen *_screen, intptr_t cl_event)
    return fence;
 }
 
-static void
-dri2_destroy_fence(__DRIscreen *_screen, void *_fence)
+void
+dri_destroy_fence(struct dri_screen *driscreen, void *_fence)
 {
-   struct dri_screen *driscreen = dri_screen(_screen);
    struct pipe_screen *screen = driscreen->base.screen;
    struct dri2_fence *fence = (struct dri2_fence*)_fence;
 
@@ -182,8 +190,8 @@ dri2_destroy_fence(__DRIscreen *_screen, void *_fence)
    FREE(fence);
 }
 
-static GLboolean
-dri2_client_wait_sync(__DRIcontext *_ctx, void *_fence, unsigned flags,
+GLboolean
+dri_client_wait_sync(struct dri_context *_ctx, void *_fence, unsigned flags,
                       uint64_t timeout)
 {
    struct dri2_fence *fence = (struct dri2_fence*)_fence;
@@ -209,10 +217,11 @@ dri2_client_wait_sync(__DRIcontext *_ctx, void *_fence, unsigned flags,
    }
 }
 
-static void
-dri2_server_wait_sync(__DRIcontext *_ctx, void *_fence, unsigned flags)
+void
+dri_server_wait_sync(struct dri_context *_ctx, void *_fence, unsigned flags)
 {
-   struct pipe_context *ctx = dri_context(_ctx)->st->pipe;
+   struct st_context *st = _ctx->st;
+   struct pipe_context *ctx = st->pipe;
    struct dri2_fence *fence = (struct dri2_fence*)_fence;
 
    /* We might be called here with a NULL fence as a result of WaitSyncKHR
@@ -221,6 +230,11 @@ dri2_server_wait_sync(__DRIcontext *_ctx, void *_fence, unsigned flags)
    if (!fence)
       return;
 
+   /* Wait for glthread to finish because we can't use pipe_context from
+    * multiple threads.
+    */
+   _mesa_glthread_finish(st->ctx);
+
    if (ctx->fence_server_sync)
       ctx->fence_server_sync(ctx, fence->pipe_fence);
 }
@@ -228,40 +242,30 @@ dri2_server_wait_sync(__DRIcontext *_ctx, void *_fence, unsigned flags)
 const __DRI2fenceExtension dri2FenceExtension = {
    .base = { __DRI2_FENCE, 2 },
 
-   .create_fence = dri2_create_fence,
-   .get_fence_from_cl_event = dri2_get_fence_from_cl_event,
-   .destroy_fence = dri2_destroy_fence,
-   .client_wait_sync = dri2_client_wait_sync,
-   .server_wait_sync = dri2_server_wait_sync,
-   .get_capabilities = dri2_fence_get_caps,
-   .create_fence_fd = dri2_create_fence_fd,
-   .get_fence_fd = dri2_get_fence_fd,
+   .create_fence = dri_create_fence,
+   .get_fence_from_cl_event = dri_get_fence_from_cl_event,
+   .destroy_fence = dri_destroy_fence,
+   .client_wait_sync = dri_client_wait_sync,
+   .server_wait_sync = dri_server_wait_sync,
+   .get_capabilities = dri_fence_get_caps,
+   .create_fence_fd = dri_create_fence_fd,
+   .get_fence_fd = dri_get_fence_fd,
 };
 
-__DRIimage *
-dri2_lookup_egl_image(struct dri_screen *screen, void *handle)
-{
-   const __DRIimageLookupExtension *loader = screen->sPriv->dri2.image;
-   __DRIimage *img;
-
-   if (!loader->lookupEGLImage)
-      return NULL;
-
-   img = loader->lookupEGLImage(screen->sPriv,
-				handle, screen->sPriv->loaderPrivate);
-
-   return img;
-}
-
-__DRIimage *
-dri2_create_image_from_renderbuffer2(__DRIcontext *context,
+struct dri_image *
+dri_create_image_from_renderbuffer(struct dri_context *dri_ctx,
 				     int renderbuffer, void *loaderPrivate,
                                      unsigned *error)
 {
-   struct gl_context *ctx = ((struct st_context *)dri_context(context)->st)->ctx;
+   struct st_context *st = dri_ctx->st;
+   struct gl_context *ctx = st->ctx;
+   struct pipe_context *p_ctx = st->pipe;
    struct gl_renderbuffer *rb;
    struct pipe_resource *tex;
-   __DRIimage *img;
+   struct dri_image *img;
+
+   /* Wait for glthread to finish to get up-to-date GL object lookups. */
+   _mesa_glthread_finish(st->ctx);
 
    /* Section 3.9 (EGLImage Specification and Management) of the EGL 1.5
     * specification says:
@@ -282,63 +286,81 @@ dri2_create_image_from_renderbuffer2(__DRIcontext *context,
       return NULL;
    }
 
-   tex = st_get_renderbuffer_resource(rb);
+   tex = rb->texture;
    if (!tex) {
       *error = __DRI_IMAGE_ERROR_BAD_PARAMETER;
       return NULL;
    }
 
-   img = CALLOC_STRUCT(__DRIimageRec);
+   img = CALLOC_STRUCT(dri_image);
    if (!img) {
       *error = __DRI_IMAGE_ERROR_BAD_ALLOC;
       return NULL;
    }
 
-   img->dri_format = driGLFormatToImageFormat(rb->Format);
+   img->dri_format = tex->format;
+   img->internal_format = rb->InternalFormat;
    img->loader_private = loaderPrivate;
+   img->screen = dri_ctx->screen;
+   img->in_fence_fd = -1;
 
    pipe_resource_reference(&img->texture, tex);
 
+   /* If the resource supports EGL_MESA_image_dma_buf_export, make sure that
+    * it's in a shareable state. Do this now while we still have the access to
+    * the context.
+    */
+   if (dri2_get_mapping_by_format(img->dri_format)) {
+      p_ctx->flush_resource(p_ctx, tex);
+      st_context_flush(st, 0, NULL, NULL, NULL);
+   }
+
+   ctx->Shared->HasExternallySharedImages = true;
    *error = __DRI_IMAGE_ERROR_SUCCESS;
    return img;
 }
 
-__DRIimage *
-dri2_create_image_from_renderbuffer(__DRIcontext *context,
-				    int renderbuffer, void *loaderPrivate)
-{
-   unsigned error;
-   return dri2_create_image_from_renderbuffer2(context, renderbuffer,
-                                               loaderPrivate, &error);
-}
-
 void
-dri2_destroy_image(__DRIimage *img)
+dri2_destroy_image(struct dri_image *img)
 {
+   const __DRIimageLoaderExtension *imgLoader = img->screen->image.loader;
+   const __DRIdri2LoaderExtension *dri2Loader = img->screen->dri2.loader;
+
+   if (imgLoader && imgLoader->base.version >= 4 &&
+         imgLoader->destroyLoaderImageState) {
+      imgLoader->destroyLoaderImageState(img->loader_private);
+   } else if (dri2Loader && dri2Loader->base.version >= 5 &&
+         dri2Loader->destroyLoaderImageState) {
+      dri2Loader->destroyLoaderImageState(img->loader_private);
+   }
+
    pipe_resource_reference(&img->texture, NULL);
+
+   if (img->in_fence_fd != -1)
+      close(img->in_fence_fd);
+
    FREE(img);
 }
 
 
-__DRIimage *
-dri2_create_from_texture(__DRIcontext *context, int target, unsigned texture,
+struct dri_image *
+dri2_create_from_texture(struct dri_context *dri_ctx, int target, unsigned texture,
                          int depth, int level, unsigned *error,
                          void *loaderPrivate)
 {
-   __DRIimage *img;
-   struct gl_context *ctx = ((struct st_context *)dri_context(context)->st)->ctx;
+   struct dri_image *img;
+   struct st_context *st = dri_ctx->st;
+   struct gl_context *ctx = st->ctx;
+   struct pipe_context *p_ctx = st->pipe;
    struct gl_texture_object *obj;
-   struct pipe_resource *tex;
+   struct gl_texture_image *glimg;
    GLuint face = 0;
+
+   /* Wait for glthread to finish to get up-to-date GL object lookups. */
+   _mesa_glthread_finish(st->ctx);
 
    obj = _mesa_lookup_texture(ctx, texture);
    if (!obj || obj->Target != target) {
-      *error = __DRI_IMAGE_ERROR_BAD_PARAMETER;
-      return NULL;
-   }
-
-   tex = st_get_texobj_resource(obj);
-   if (!tex) {
       *error = __DRI_IMAGE_ERROR_BAD_PARAMETER;
       return NULL;
    }
@@ -352,17 +374,23 @@ dri2_create_from_texture(__DRIcontext *context, int target, unsigned texture,
       return NULL;
    }
 
-   if (level < obj->BaseLevel || level > obj->_MaxLevel) {
+   if (level < obj->Attrib.BaseLevel || level > obj->_MaxLevel) {
       *error = __DRI_IMAGE_ERROR_BAD_MATCH;
       return NULL;
    }
 
-   if (target == GL_TEXTURE_3D && obj->Image[face][level]->Depth < depth) {
+   glimg = obj->Image[face][level];
+   if (!glimg || !glimg->pt) {
+      *error = __DRI_IMAGE_ERROR_BAD_PARAMETER;
+      return NULL;
+   }
+
+   if (target == GL_TEXTURE_3D && glimg->Depth < depth) {
       *error = __DRI_IMAGE_ERROR_BAD_MATCH;
       return NULL;
    }
 
-   img = CALLOC_STRUCT(__DRIimageRec);
+   img = CALLOC_STRUCT(dri_image);
    if (!img) {
       *error = __DRI_IMAGE_ERROR_BAD_ALLOC;
       return NULL;
@@ -370,12 +398,25 @@ dri2_create_from_texture(__DRIcontext *context, int target, unsigned texture,
 
    img->level = level;
    img->layer = depth;
-   img->dri_format = driGLFormatToImageFormat(obj->Image[face][level]->TexFormat);
+   img->in_fence_fd = -1;
+   img->dri_format = glimg->pt->format;
+   img->internal_format = glimg->InternalFormat;
 
    img->loader_private = loaderPrivate;
+   img->screen = dri_ctx->screen;
 
-   pipe_resource_reference(&img->texture, tex);
+   pipe_resource_reference(&img->texture, glimg->pt);
 
+   /* If the resource supports EGL_MESA_image_dma_buf_export, make sure that
+    * it's in a shareable state. Do this now while we still have the access to
+    * the context.
+    */
+   if (dri2_get_mapping_by_format(img->dri_format)) {
+      p_ctx->flush_resource(p_ctx, glimg->pt);
+      st_context_flush(st, 0, NULL, NULL, NULL);
+   }
+
+   ctx->Shared->HasExternallySharedImages = true;
    *error = __DRI_IMAGE_ERROR_SUCCESS;
    return img;
 }
@@ -383,137 +424,188 @@ dri2_create_from_texture(__DRIcontext *context, int target, unsigned texture,
 static const struct dri2_format_mapping dri2_format_table[] = {
       { DRM_FORMAT_ABGR16161616F, __DRI_IMAGE_FORMAT_ABGR16161616F,
         __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_R16G16B16A16_FLOAT, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR16161616F, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR16161616F } } },
       { DRM_FORMAT_XBGR16161616F, __DRI_IMAGE_FORMAT_XBGR16161616F,
         __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_R16G16B16X16_FLOAT, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR16161616F, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR16161616F } } },
+      { DRM_FORMAT_ABGR16161616, __DRI_IMAGE_FORMAT_ABGR16161616,
+        __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_R16G16B16A16_UNORM, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR16161616 } } },
+      { DRM_FORMAT_XBGR16161616, __DRI_IMAGE_FORMAT_XBGR16161616,
+        __DRI_IMAGE_COMPONENTS_RGB,      PIPE_FORMAT_R16G16B16X16_UNORM, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR16161616 } } },
       { DRM_FORMAT_ARGB2101010,   __DRI_IMAGE_FORMAT_ARGB2101010,
         __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_B10G10R10A2_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB2101010, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB2101010 } } },
       { DRM_FORMAT_XRGB2101010,   __DRI_IMAGE_FORMAT_XRGB2101010,
         __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_B10G10R10X2_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB2101010, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB2101010 } } },
       { DRM_FORMAT_ABGR2101010,   __DRI_IMAGE_FORMAT_ABGR2101010,
         __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_R10G10B10A2_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR2101010, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR2101010 } } },
       { DRM_FORMAT_XBGR2101010,   __DRI_IMAGE_FORMAT_XBGR2101010,
         __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_R10G10B10X2_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR2101010, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR2101010 } } },
       { DRM_FORMAT_ARGB8888,      __DRI_IMAGE_FORMAT_ARGB8888,
         __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_BGRA8888_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB8888 } } },
       { DRM_FORMAT_ABGR8888,      __DRI_IMAGE_FORMAT_ABGR8888,
         __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_RGBA8888_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR8888, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR8888 } } },
       { __DRI_IMAGE_FOURCC_SARGB8888,     __DRI_IMAGE_FORMAT_SARGB8,
         __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_BGRA8888_SRGB, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_SARGB8, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_SARGB8 } } },
       { DRM_FORMAT_XRGB8888,      __DRI_IMAGE_FORMAT_XRGB8888,
         __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_BGRX8888_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB8888, 4 }, } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB8888 } } },
       { DRM_FORMAT_XBGR8888,      __DRI_IMAGE_FORMAT_XBGR8888,
         __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_RGBX8888_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR8888, 4 }, } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR8888 } } },
       { DRM_FORMAT_ARGB1555,      __DRI_IMAGE_FORMAT_ARGB1555,
         __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_B5G5R5A1_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB1555, 2 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB1555 } } },
+      { DRM_FORMAT_ABGR1555,      __DRI_IMAGE_FORMAT_ABGR1555,
+        __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_R5G5B5A1_UNORM, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR1555 } } },
+      { DRM_FORMAT_ARGB4444,      __DRI_IMAGE_FORMAT_ARGB4444,
+        __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_B4G4R4A4_UNORM, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB4444 } } },
+      { DRM_FORMAT_ABGR4444,      __DRI_IMAGE_FORMAT_ABGR4444,
+        __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_R4G4B4A4_UNORM, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR4444 } } },
       { DRM_FORMAT_RGB565,        __DRI_IMAGE_FORMAT_RGB565,
         __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_B5G6R5_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_RGB565, 2 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_RGB565 } } },
       { DRM_FORMAT_R8,            __DRI_IMAGE_FORMAT_R8,
         __DRI_IMAGE_COMPONENTS_R,         PIPE_FORMAT_R8_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 }, } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_R16,           __DRI_IMAGE_FORMAT_R16,
         __DRI_IMAGE_COMPONENTS_R,         PIPE_FORMAT_R16_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16, 1 }, } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 } } },
       { DRM_FORMAT_GR88,          __DRI_IMAGE_FORMAT_GR88,
         __DRI_IMAGE_COMPONENTS_RG,        PIPE_FORMAT_RG88_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88, 2 }, } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88 } } },
       { DRM_FORMAT_GR1616,        __DRI_IMAGE_FORMAT_GR1616,
         __DRI_IMAGE_COMPONENTS_RG,        PIPE_FORMAT_RG1616_UNORM, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR1616, 2 }, } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR1616 } } },
 
       { DRM_FORMAT_YUV410, __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 2, 2, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 2, 2, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 2, 2, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 2, 2, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_YUV411, __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 2, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 2, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 2, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 2, 0, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_YUV420,        __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 1, 1, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 1, 1, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 1, 1, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_YUV422,        __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 1, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 1, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 1, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 1, 0, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_YUV444,        __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 0, 0, __DRI_IMAGE_FORMAT_R8 } } },
 
       { DRM_FORMAT_YVU410,        __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 2, 2, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 2, 2, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 2, 2, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 2, 2, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_YVU411,        __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 2, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 2, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 2, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 2, 0, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_YVU420,        __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 1, 1, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 1, 1, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 1, 1, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_YVU422,        __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 1, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 1, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 1, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 1, 0, __DRI_IMAGE_FORMAT_R8 } } },
       { DRM_FORMAT_YVU444,        __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_IYUV, 3,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 2, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 2, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 0, 0, __DRI_IMAGE_FORMAT_R8 } } },
 
       { DRM_FORMAT_NV12,          __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_NV12, 2,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR88, 2 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR88 } } },
+      { DRM_FORMAT_NV21,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_NV21, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR88 } } },
+
+      /* 10 bit 4:2:0 and 4:2:2 formats; the components
+         are tightly packed, so the planes don't correspond
+         to any native DRI format */
+      { DRM_FORMAT_NV15,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_NV15, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_NONE },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_NONE } } },
+      { DRM_FORMAT_NV20,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_NV20, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_NONE },
+          { 1, 1, 0, __DRI_IMAGE_FORMAT_NONE } } },
 
       { DRM_FORMAT_P010,          __DRI_IMAGE_FORMAT_NONE,
-        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_P016, 2,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16, 2 },
-          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR1616, 4 } } },
+        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_P010, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR1616 } } },
       { DRM_FORMAT_P012,          __DRI_IMAGE_FORMAT_NONE,
-        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_P016, 2,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16, 2 },
-          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR1616, 4 } } },
+        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_P012, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR1616 } } },
       { DRM_FORMAT_P016,          __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_P016, 2,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16, 2 },
-          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR1616, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR1616 } } },
+      { DRM_FORMAT_P030,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_P030, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_GR1616 } } },
 
       { DRM_FORMAT_NV16,          __DRI_IMAGE_FORMAT_NONE,
-        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_NV12, 2,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
-          { 1, 1, 0, __DRI_IMAGE_FORMAT_GR88, 2 } } },
+        __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_NV16, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
+          { 1, 1, 0, __DRI_IMAGE_FORMAT_GR88 } } },
 
       { DRM_FORMAT_AYUV,      __DRI_IMAGE_FORMAT_ABGR8888,
         __DRI_IMAGE_COMPONENTS_AYUV,      PIPE_FORMAT_AYUV, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR8888, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR8888 } } },
       { DRM_FORMAT_XYUV8888,      __DRI_IMAGE_FORMAT_XBGR8888,
         __DRI_IMAGE_COMPONENTS_XYUV,      PIPE_FORMAT_XYUV, 1,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR8888, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR8888 } } },
+
+      { DRM_FORMAT_Y410,          __DRI_IMAGE_FORMAT_ABGR2101010,
+        __DRI_IMAGE_COMPONENTS_AYUV,      PIPE_FORMAT_Y410, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR2101010 } } },
+
+      /* Y412 is an unusual format.  It has the same layout as Y416 (i.e.,
+       * 16-bits of physical storage per channel), but the low 4 bits of each
+       * component are unused padding.  The writer is supposed to write zeros
+       * to these bits.
+       */
+      { DRM_FORMAT_Y412,          __DRI_IMAGE_FORMAT_ABGR16161616,
+        __DRI_IMAGE_COMPONENTS_AYUV,      PIPE_FORMAT_Y412, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR16161616 } } },
+      { DRM_FORMAT_Y416,          __DRI_IMAGE_FORMAT_ABGR16161616,
+        __DRI_IMAGE_COMPONENTS_AYUV,      PIPE_FORMAT_Y416, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR16161616 } } },
 
       /* For YUYV and UYVY buffers, we set up two overlapping DRI images
        * and treat them as planar buffers in the compositors.
@@ -525,12 +617,41 @@ static const struct dri2_format_mapping dri2_format_table[] = {
        * U and V correctly when sampling from plane 1. */
       { DRM_FORMAT_YUYV,          __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_XUXV,    PIPE_FORMAT_YUYV, 2,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88, 2 },
-          { 0, 1, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88 },
+          { 0, 1, 0, __DRI_IMAGE_FORMAT_ARGB8888 } } },
+      { DRM_FORMAT_YVYU,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_XUXV,    PIPE_FORMAT_YVYU, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88 },
+          { 0, 1, 0, __DRI_IMAGE_FORMAT_ARGB8888 } } },
       { DRM_FORMAT_UYVY,          __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_UXVX,    PIPE_FORMAT_UYVY, 2,
-        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88, 2 },
-          { 0, 1, 0, __DRI_IMAGE_FORMAT_ABGR8888, 4 } } }
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88 },
+          { 0, 1, 0, __DRI_IMAGE_FORMAT_ABGR8888 } } },
+      { DRM_FORMAT_VYUY,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_UXVX,    PIPE_FORMAT_VYUY, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88 },
+          { 0, 1, 0, __DRI_IMAGE_FORMAT_ABGR8888 } } },
+
+      /* The Y21x formats work in a similar fashion to the YUYV and UYVY
+       * formats.
+       */
+      { DRM_FORMAT_Y210,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_XUXV,    PIPE_FORMAT_Y210, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR1616 },
+          { 0, 1, 0, __DRI_IMAGE_FORMAT_ABGR16161616 } } },
+      /* Y212 is an unusual format.  It has the same layout as Y216 (i.e.,
+       * 16-bits of physical storage per channel), but the low 4 bits of each
+       * component are unused padding.  The writer is supposed to write zeros
+       * to these bits.
+       */
+      { DRM_FORMAT_Y212,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_XUXV,    PIPE_FORMAT_Y212, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR1616 },
+          { 0, 1, 0, __DRI_IMAGE_FORMAT_ABGR16161616 } } },
+      { DRM_FORMAT_Y216,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_XUXV,    PIPE_FORMAT_Y216, 2,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR1616 },
+          { 0, 1, 0, __DRI_IMAGE_FORMAT_ABGR16161616 } } },
 };
 
 const struct dri2_format_mapping *
@@ -547,6 +668,9 @@ dri2_get_mapping_by_fourcc(int fourcc)
 const struct dri2_format_mapping *
 dri2_get_mapping_by_format(int format)
 {
+   if (format == __DRI_IMAGE_FORMAT_NONE)
+      return NULL;
+
    for (unsigned i = 0; i < ARRAY_SIZE(dri2_format_table); i++) {
       if (dri2_format_table[i].dri_format == format)
          return &dri2_format_table[i];
@@ -566,12 +690,34 @@ dri2_get_pipe_format_for_dri_format(int format)
    return PIPE_FORMAT_NONE;
 }
 
-boolean
+static enum pipe_format
+alt_pipe_format(enum pipe_format yuv_fmt)
+{
+   switch(yuv_fmt) {
+   case PIPE_FORMAT_NV12:
+      return PIPE_FORMAT_R8_G8B8_420_UNORM;
+   case PIPE_FORMAT_NV16:
+      return PIPE_FORMAT_R8_G8B8_422_UNORM;
+   case PIPE_FORMAT_NV21:
+      return PIPE_FORMAT_R8_B8G8_420_UNORM;
+   case PIPE_FORMAT_NV15:
+      return PIPE_FORMAT_R10_G10B10_420_UNORM;
+   case PIPE_FORMAT_NV20:
+      return PIPE_FORMAT_R10_G10B10_422_UNORM;
+   default:
+      return yuv_fmt;
+   }
+}
+
+bool
 dri2_yuv_dma_buf_supported(struct dri_screen *screen,
                            const struct dri2_format_mapping *map)
 {
    struct pipe_screen *pscreen = screen->base.screen;
 
+   if (pscreen->is_format_supported(pscreen, alt_pipe_format(map->pipe_format),
+                                    screen->target, 0, 0, PIPE_BIND_SAMPLER_VIEW))
+      return true;
    for (unsigned i = 0; i < map->nplanes; i++) {
       if (!pscreen->is_format_supported(pscreen,
             dri2_get_pipe_format_for_dri_format(map->planes[i].dri_format),
@@ -581,11 +727,10 @@ dri2_yuv_dma_buf_supported(struct dri_screen *screen,
    return true;
 }
 
-boolean
-dri2_query_dma_buf_formats(__DRIscreen *_screen, int max, int *formats,
+bool
+dri_query_dma_buf_formats(struct dri_screen *screen, int max, int *formats,
                            int *count)
 {
-   struct dri_screen *screen = dri_screen(_screen);
    struct pipe_screen *pscreen = screen->base.screen;
    int i, j;
 
@@ -594,8 +739,7 @@ dri2_query_dma_buf_formats(__DRIscreen *_screen, int max, int *formats,
       const struct dri2_format_mapping *map = &dri2_format_table[i];
 
       /* The sRGB format is not a real FourCC as defined by drm_fourcc.h, so we
-       * must not leak it out to clients.
-       */
+       * must not leak it out to clients. */
       if (dri2_format_table[i].dri_fourcc == __DRI_IMAGE_FOURCC_SARGB8888)
          continue;
 
@@ -615,4 +759,58 @@ dri2_query_dma_buf_formats(__DRIscreen *_screen, int max, int *formats,
    return true;
 }
 
+
+struct dri_image *
+dri_create_image_with_modifiers(struct dri_screen *screen,
+                                 uint32_t width, uint32_t height,
+                                 uint32_t dri_format, uint32_t dri_usage,
+                                 const uint64_t *modifiers,
+                                 unsigned int modifiers_count,
+                                 void *loaderPrivate)
+{
+   if (modifiers && modifiers_count > 0) {
+      bool has_valid_modifier = false;
+      int i;
+
+      /* It's acceptable to create an image with INVALID modifier in the list,
+       * but it cannot be on the only modifier (since it will certainly fail
+       * later). While we could easily catch this after modifier creation, doing
+       * the check here is a convenient debug check likely pointing at whatever
+       * interface the client is using to build its modifier list.
+       */
+      for (i = 0; i < modifiers_count; i++) {
+         if (modifiers[i] != DRM_FORMAT_MOD_INVALID) {
+            has_valid_modifier = true;
+            break;
+         }
+      }
+      if (!has_valid_modifier)
+         return NULL;
+   }
+
+   return dri_create_image(screen, width, height, dri_format,
+                           modifiers, modifiers_count, dri_usage,
+                           loaderPrivate);
+}
+
+void
+dri_image_fence_sync(struct dri_context *ctx, struct dri_image *img)
+{
+   struct pipe_context *pipe = ctx->st->pipe;
+   struct pipe_fence_handle *fence;
+   int fd = img->in_fence_fd;
+
+   if (fd == -1)
+      return;
+
+   validate_fence_fd(fd);
+
+   img->in_fence_fd = -1;
+
+   pipe->create_fence_fd(pipe, &fence, fd, PIPE_FD_TYPE_NATIVE_SYNC);
+   pipe->fence_server_sync(pipe, fence);
+   pipe->screen->fence_reference(pipe->screen, &fence, NULL);
+
+   close(fd);
+}
 /* vim: set sw=3 ts=8 sts=3 expandtab: */

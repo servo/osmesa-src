@@ -28,11 +28,11 @@
 #ifndef LP_BLD_BLEND_H
 #define LP_BLD_BLEND_H
 
-
+#include "pipe/p_defines.h"
 #include "gallivm/lp_bld.h"
 #include "gallivm/lp_bld_init.h"
  
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 
 
 struct pipe_blend_state;
@@ -43,15 +43,15 @@ struct lp_build_mask_context;
 
 LLVMValueRef
 lp_build_blend(struct lp_build_context *bld,
-               unsigned func,
-               unsigned factor_src,
-               unsigned factor_dst,
+               enum pipe_blend_func func,
+               enum pipe_blendfactor factor_src,
+               enum pipe_blendfactor factor_dst,
                LLVMValueRef src,
                LLVMValueRef dst,
                LLVMValueRef src_factor,
                LLVMValueRef dst_factor,
-               boolean not_alpha_dependent,
-               boolean optimise_only);
+               bool not_alpha_dependent,
+               bool optimise_only);
 
 
 LLVMValueRef
@@ -80,31 +80,31 @@ lp_build_blend_aos(struct gallivm_state *gallivm,
  */
 LLVMValueRef
 lp_build_logicop(LLVMBuilderRef builder,
-                 unsigned logicop_func,
+                 enum pipe_logicop logicop_func,
                  LLVMValueRef src,
                  LLVMValueRef dst);
 
 
 LLVMValueRef
 lp_build_blend_func(struct lp_build_context *bld,
-                    unsigned func,
+                    enum pipe_blend_func func,
                     LLVMValueRef term1,
                     LLVMValueRef term2);
 
 
-boolean
-lp_build_blend_func_reverse(unsigned rgb_func,
-                            unsigned alpha_func);
+bool
+lp_build_blend_func_reverse(enum pipe_blend_func rgb_func,
+                            enum pipe_blend_func alpha_func);
 
-
-boolean
-lp_build_blend_func_commutative(unsigned func);
+bool
+lp_build_blend_func_commutative(enum pipe_blend_func func);
 
 void
 lp_build_alpha_to_coverage(struct gallivm_state *gallivm,
                            struct lp_type type,
                            struct lp_build_mask_context *mask,
                            LLVMValueRef alpha,
-                           boolean do_branch);
+                           bool dither,
+                           bool do_branch);
 
 #endif /* !LP_BLD_BLEND_H */

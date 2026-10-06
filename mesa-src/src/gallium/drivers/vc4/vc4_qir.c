@@ -753,9 +753,9 @@ const char *
 qir_get_stage_name(enum qstage stage)
 {
         static const char *names[] = {
-                [QSTAGE_FRAG] = "FS",
-                [QSTAGE_VERT] = "VS",
-                [QSTAGE_COORD] = "CS",
+                [QSTAGE_FRAG] = "MESA_SHADER_FRAGMENT",
+                [QSTAGE_VERT] = "MESA_SHADER_VERTEX",
+                [QSTAGE_COORD] = "MESA_SHADER_COORD",
         };
 
         return names[stage];
@@ -808,7 +808,6 @@ qir_SF(struct vc4_compile *c, struct qreg src)
             !c->defs[src.index] ||
             last_inst != c->defs[src.index]) {
                 last_inst = qir_MOV_dest(c, qir_reg(QFILE_NULL, 0), src);
-                last_inst = (struct qinst *)c->cur_block->instructions.prev;
         }
         last_inst->sf = true;
 }

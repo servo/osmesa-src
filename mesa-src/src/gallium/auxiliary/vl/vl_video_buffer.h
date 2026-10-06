@@ -41,7 +41,6 @@
 struct vl_video_buffer
 {
    struct pipe_video_buffer base;
-   unsigned                 num_planes;
    struct pipe_resource     *resources[VL_NUM_COMPONENTS];
    struct pipe_sampler_view *sampler_view_planes[VL_NUM_COMPONENTS];
    struct pipe_sampler_view *sampler_view_components[VL_NUM_COMPONENTS];
@@ -54,14 +53,16 @@ vl_video_buffer_adjust_size(unsigned *width, unsigned *height, unsigned plane,
                             bool interlaced)
 {
    if (interlaced) {
-      *height /= 2;
+      *height = align(*height, 2) / 2;
    }
    if (plane > 0) {
       if (chroma_format == PIPE_VIDEO_CHROMA_FORMAT_420) {
-         *width /= 2;
-         *height /= 2;
+         *width = align(*width, 2) / 2;
+         *height = align(*height, 2) / 2;
       } else if (chroma_format == PIPE_VIDEO_CHROMA_FORMAT_422) {
-         *width /= 2;
+         *width = align(*width, 2) / 2;
+      } else if (chroma_format == PIPE_VIDEO_CHROMA_FORMAT_440) {
+         *height = align(*height, 2) / 2;
       }
    }
 }
@@ -119,7 +120,11 @@ vl_video_buffer_template(struct pipe_resource *templ,
                          const struct pipe_video_buffer *templat,
                          enum pipe_format resource_format,
                          unsigned depth, unsigned array_size,
-                         unsigned usage, unsigned plane);
+                         unsigned usage, unsigned plane,
+                         enum pipe_video_chroma_format chroma_format);
+
+void
+vl_video_buffer_destroy(struct pipe_video_buffer *buffer);
 
 /**
  * creates a video buffer, can be used as a standard implementation for pipe->create_video_buffer
@@ -135,7 +140,8 @@ struct pipe_video_buffer *
 vl_video_buffer_create_ex(struct pipe_context *pipe,
                           const struct pipe_video_buffer *templat,
                           const enum pipe_format resource_formats[VL_NUM_COMPONENTS],
-                          unsigned depth, unsigned array_size, unsigned usage);
+                          unsigned depth, unsigned array_size, unsigned usage,
+                          enum pipe_video_chroma_format chroma_format);
 
 /**
  * even more extended create function, provide the pipe_resource for each plane
@@ -148,6 +154,8 @@ vl_video_buffer_create_ex2(struct pipe_context *pipe,
 /* Create pipe_video_buffer by using resource_create with planar formats. */
 struct pipe_video_buffer *
 vl_video_buffer_create_as_resource(struct pipe_context *pipe,
-                                   const struct pipe_video_buffer *tmpl);
+                                   const struct pipe_video_buffer *tmpl,
+                                   const uint64_t *modifiers,
+                                   int modifiers_count);
 
 #endif /* vl_video_buffer_h */

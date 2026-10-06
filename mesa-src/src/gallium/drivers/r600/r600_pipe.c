@@ -1,36 +1,19 @@
 /*
  * Copyright 2010 Jerome Glisse <glisse@freedesktop.org>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
+
 #include "r600_pipe.h"
 #include "r600_public.h"
 #include "r600_isa.h"
+#include "r600_sfn.h"
 #include "evergreen_compute.h"
 #include "r600d.h"
-
-#include "sb/sb_public.h"
 
 #include <errno.h>
 #include "pipe/p_shader_tokens.h"
 #include "util/u_debug.h"
+#include "util/u_endian.h"
 #include "util/u_memory.h"
 #include "util/u_screen.h"
 #include "util/u_simple_shaders.h"
@@ -46,17 +29,7 @@ static const struct debug_named_value r600_debug_options[] = {
 	/* features */
 	{ "nocpdma", DBG_NO_CP_DMA, "Disable CP DMA" },
 
-	/* shader backend */
-	{ "nosb", DBG_NO_SB, "Disable sb backend for graphics shaders" },
-	{ "sbcl", DBG_SB_CS, "Enable sb backend for compute shaders" },
-	{ "sbdry", DBG_SB_DRY_RUN, "Don't use optimized bytecode (just print the dumps)" },
-	{ "sbstat", DBG_SB_STAT, "Print optimization statistics for shaders" },
-	{ "sbdump", DBG_SB_DUMP, "Print IR dumps after some optimization passes" },
-	{ "sbnofallback", DBG_SB_NO_FALLBACK, "Abort on errors instead of fallback" },
-	{ "sbdisasm", DBG_SB_DISASM, "Use sb disassembler for shader dumps" },
-	{ "sbsafemath", DBG_SB_SAFEMATH, "Disable unsafe math optimizations" },
-
-	DEBUG_NAMED_VALUE_END /* must be last */
+        DEBUG_NAMED_VALUE_END /* must be last */
 };
 
 /*
@@ -70,9 +43,7 @@ static void r600_destroy_context(struct pipe_context *context)
 
 	r600_isa_destroy(rctx->isa);
 
-	r600_sb_context_destroy(rctx->sb_context);
-
-	for (sh = 0; sh < (rctx->b.chip_class < EVERGREEN ? R600_NUM_HW_STAGES : EG_NUM_HW_STAGES); sh++) {
+	for (sh = 0; sh < (rctx->b.gfx_level < EVERGREEN ? R600_NUM_HW_STAGES : EG_NUM_HW_STAGES); sh++) {
 		r600_resource_reference(&rctx->scratch_buffers[sh].buffer, NULL);
 	}
 	r600_resource_reference(&rctx->dummy_cmask, NULL);
@@ -81,7 +52,7 @@ static void r600_destroy_context(struct pipe_context *context)
 	if (rctx->append_fence)
 		pipe_resource_reference((struct pipe_resource**)&rctx->append_fence, NULL);
 	for (sh = 0; sh < PIPE_SHADER_TYPES; sh++) {
-		rctx->b.b.set_constant_buffer(&rctx->b.b, sh, R600_BUFFER_INFO_CONST_BUFFER, NULL);
+		rctx->b.b.set_constant_buffer(&rctx->b.b, sh, R600_BUFFER_INFO_CONST_BUFFER, false, NULL);
 		free(rctx->driver_consts[sh].constants);
 	}
 
@@ -113,14 +84,12 @@ static void r600_destroy_context(struct pipe_context *context)
 
 	for (sh = 0; sh < PIPE_SHADER_TYPES; ++sh)
 		for (i = 0; i < PIPE_MAX_CONSTANT_BUFFERS; ++i)
-			rctx->b.b.set_constant_buffer(context, sh, i, NULL);
+			rctx->b.b.set_constant_buffer(context, sh, i, false, NULL);
 
 	if (rctx->blitter) {
 		util_blitter_destroy(rctx->blitter);
 	}
-	if (rctx->allocator_fetch_shader) {
-		u_suballocator_destroy(rctx->allocator_fetch_shader);
-	}
+	u_suballocator_destroy(&rctx->allocator_fetch_shader);
 
 	r600_release_command_buffer(&rctx->start_cs_cmd);
 
@@ -131,6 +100,16 @@ static void r600_destroy_context(struct pipe_context *context)
 	r600_resource_reference(&rctx->trace_buf, NULL);
 	r600_resource_reference(&rctx->last_trace_buf, NULL);
 	radeon_clear_saved_cs(&rctx->last_gfx);
+
+	switch (rctx->b.gfx_level) {
+	case EVERGREEN:
+	case CAYMAN:
+		for (i = 0; i < EG_MAX_ATOMIC_BUFFERS; ++i)
+			pipe_resource_reference(&rctx->atomic_buffer_state.buffer[i].buffer, NULL);
+		break;
+	default:
+		break;
+	}
 
 	FREE(rctx);
 }
@@ -159,7 +138,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 
 	r600_init_blit_functions(rctx);
 
-	if (rscreen->b.info.has_hw_decode) {
+	if (rscreen->b.info.ip[AMD_IP_UVD].num_queues) {
 		rctx->b.b.create_video_codec = r600_uvd_create_decoder;
 		rctx->b.b.create_video_buffer = r600_video_buffer_create;
 	} else {
@@ -171,13 +150,13 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 		rctx->is_debug = true;
 	r600_init_common_state_functions(rctx);
 
-	switch (rctx->b.chip_class) {
+	switch (rctx->b.gfx_level) {
 	case R600:
 	case R700:
 		r600_init_state_functions(rctx);
 		r600_init_atom_start_cs(rctx);
 		rctx->custom_dsa_flush = r600_create_db_flush_dsa(rctx);
-		rctx->custom_blend_resolve = rctx->b.chip_class == R700 ? r700_create_resolve_blend(rctx)
+		rctx->custom_blend_resolve = rctx->b.gfx_level == R700 ? r700_create_resolve_blend(rctx)
 								      : r600_create_resolve_blend(rctx);
 		rctx->custom_blend_decompress = r600_create_decompress_blend(rctx);
 		rctx->has_vertex_cache = !(rctx->b.family == CHIP_RV610 ||
@@ -207,22 +186,19 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 							 PIPE_USAGE_DEFAULT, 32);
 		break;
 	default:
-		R600_ERR("Unsupported chip class %d.\n", rctx->b.chip_class);
+		R600_ERR("Unsupported gfx level %d.\n", rctx->b.gfx_level);
 		goto fail;
 	}
 
-	rctx->b.gfx.cs = ws->cs_create(rctx->b.ctx, RING_GFX,
-				       r600_context_gfx_flush, rctx, false);
+	ws->cs_create(&rctx->b.gfx.cs, rctx->b.ctx, AMD_IP_GFX,
+                      r600_context_gfx_flush, rctx);
 	rctx->b.gfx.flush = r600_context_gfx_flush;
 
-	rctx->allocator_fetch_shader =
-		u_suballocator_create(&rctx->b.b, 64 * 1024,
-				      0, PIPE_USAGE_DEFAULT, 0, FALSE);
-	if (!rctx->allocator_fetch_shader)
-		goto fail;
+	u_suballocator_init(&rctx->allocator_fetch_shader, &rctx->b.b, 64 * 1024,
+                            0, PIPE_USAGE_DEFAULT, 0, false);
 
 	rctx->isa = calloc(1, sizeof(struct r600_isa));
-	if (!rctx->isa || r600_isa_init(rctx, rctx->isa))
+	if (!rctx->isa || r600_isa_init(rctx->b.gfx_level, rctx->isa))
 		goto fail;
 
 	if (rscreen->b.debug_flags & DBG_FORCE_DMA)
@@ -249,297 +225,9 @@ fail:
 	return NULL;
 }
 
-static bool is_nir_enabled(struct r600_common_screen *screen) {
-   return (screen->debug_flags & DBG_NIR &&
-       screen->family >= CHIP_CEDAR &&
-       screen->family < CHIP_CAYMAN);
-}
-
 /*
  * pipe_screen
  */
-
-static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
-{
-	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
-	enum radeon_family family = rscreen->b.family;
-
-	switch (param) {
-	/* Supported features (boolean caps). */
-	case PIPE_CAP_NPOT_TEXTURES:
-	case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
-	case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
-	case PIPE_CAP_ANISOTROPIC_FILTER:
-	case PIPE_CAP_POINT_SPRITE:
-	case PIPE_CAP_OCCLUSION_QUERY:
-	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-	case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
-	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
-	case PIPE_CAP_TEXTURE_SWIZZLE:
-	case PIPE_CAP_DEPTH_CLIP_DISABLE:
-	case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
-	case PIPE_CAP_SHADER_STENCIL_EXPORT:
-	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
-	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
-	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
-	case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
-	case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
-	case PIPE_CAP_VERTEX_SHADER_SATURATE:
-	case PIPE_CAP_SEAMLESS_CUBE_MAP:
-	case PIPE_CAP_PRIMITIVE_RESTART:
-	case PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX:
-	case PIPE_CAP_CONDITIONAL_RENDER:
-	case PIPE_CAP_TEXTURE_BARRIER:
-	case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
-	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
-	case PIPE_CAP_TGSI_INSTANCEID:
-	case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
-	case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
-	case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-	case PIPE_CAP_START_INSTANCE:
-	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
-	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
-	case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
-	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
-	case PIPE_CAP_TEXTURE_MULTISAMPLE:
-	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
-	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
-	case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
-	case PIPE_CAP_SAMPLE_SHADING:
-	case PIPE_CAP_CLIP_HALFZ:
-	case PIPE_CAP_POLYGON_OFFSET_CLAMP:
-	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
-	case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
-	case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
-	case PIPE_CAP_TGSI_TXQS:
-	case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
-	case PIPE_CAP_INVALIDATE_BUFFER:
-	case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
-	case PIPE_CAP_QUERY_MEMORY_INFO:
-	case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
-	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
-	case PIPE_CAP_CLEAR_TEXTURE:
-	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
-	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
-	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
-	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
-        case PIPE_CAP_NIR_ATOMICS_AS_DEREF:
-		return 1;
-
-	case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
-		/* Optimal number for good TexSubImage performance on Polaris10. */
-		return 64 * 1024 * 1024;
-
-	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
-		return rscreen->b.info.drm_minor >= 43;
-
-	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
-		return !R600_BIG_ENDIAN && rscreen->b.info.has_userptr;
-
-	case PIPE_CAP_COMPUTE:
-		return rscreen->b.chip_class > R700;
-
-	case PIPE_CAP_TGSI_TEXCOORD:
-		return 1;
-
-	case PIPE_CAP_NIR_IMAGES_AS_DEREF:
-	case PIPE_CAP_FAKE_SW_MSAA:
-		return 0;
-
-	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
-		return MIN2(rscreen->b.info.max_alloc_size, INT_MAX);
-
-        case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
-                return R600_MAP_BUFFER_ALIGNMENT;
-
-	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
-		return 256;
-
-	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
-		return 1;
-
-	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		if (family >= CHIP_CEDAR)
-		   return 430;
-		/* pre-evergreen geom shaders need newer kernel */
-		if (rscreen->b.info.drm_minor >= 37)
-		   return 330;
-		return 140;
-
-	case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
-		return 140;
-
-	/* Supported except the original R600. */
-	case PIPE_CAP_INDEP_BLEND_ENABLE:
-	case PIPE_CAP_INDEP_BLEND_FUNC:
-		/* R600 doesn't support per-MRT blends */
-		return family == CHIP_R600 ? 0 : 1;
-
-	/* Supported on Evergreen. */
-	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
-	case PIPE_CAP_CUBE_MAP_ARRAY:
-	case PIPE_CAP_TEXTURE_GATHER_SM5:
-	case PIPE_CAP_TEXTURE_QUERY_LOD:
-	case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
-	case PIPE_CAP_SAMPLER_VIEW_TARGET:
-	case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
-	case PIPE_CAP_TGSI_CLOCK:
-	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
-	case PIPE_CAP_QUERY_BUFFER_OBJECT:
-		return family >= CHIP_CEDAR ? 1 : 0;
-	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
-		return family >= CHIP_CEDAR ? 4 : 0;
-	case PIPE_CAP_DRAW_INDIRECT:
-		/* kernel command checker support is also required */
-		return family >= CHIP_CEDAR && rscreen->b.info.drm_minor >= 41;
-
-	case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
-		return family >= CHIP_CEDAR ? 0 : 1;
-
-	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
-		return 8;
-
-	case PIPE_CAP_MAX_GS_INVOCATIONS:
-		return 32;
-
-	/* shader buffer objects */
-	case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
-		return 1 << 27;
-	case PIPE_CAP_MAX_COMBINED_SHADER_BUFFERS:
-		return 8;
-
-	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
-		return 0;
-
-	case PIPE_CAP_DOUBLES:
-		if (rscreen->b.family == CHIP_ARUBA ||
-		    rscreen->b.family == CHIP_CAYMAN ||
-		    rscreen->b.family == CHIP_CYPRESS ||
-		    rscreen->b.family == CHIP_HEMLOCK)
-			return 1;
-		return 0;
-	case PIPE_CAP_CULL_DISTANCE:
-		return 1;
-
-	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
-		if (family >= CHIP_CEDAR)
-			return 256;
-		return 0;
-
-	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
-		if (family >= CHIP_CEDAR)
-			return 30;
-		else
-			return 0;
-	/* Stream output. */
-	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-		return rscreen->b.has_streamout ? 4 : 0;
-	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-	case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
-		return rscreen->b.has_streamout ? 1 : 0;
-	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
-	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-		return 32*4;
-
-	/* Geometry shader output. */
-	case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
-		return 1024;
-	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
-		return 16384;
-	case PIPE_CAP_MAX_VERTEX_STREAMS:
-		return family >= CHIP_CEDAR ? 4 : 1;
-
-	case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
-		/* Should be 2047, but 2048 is a requirement for GL 4.4 */
-		return 2048;
-
-	/* Texturing. */
-	case PIPE_CAP_MAX_TEXTURE_2D_SIZE:
-		if (family >= CHIP_CEDAR)
-			return 16384;
-		else
-			return 8192;
-	case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-		if (family >= CHIP_CEDAR)
-			return 15;
-		else
-			return 14;
-	case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
-		/* textures support 8192, but layered rendering supports 2048 */
-		return 12;
-	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-		/* textures support 8192, but layered rendering supports 2048 */
-		return 2048;
-
-	/* Render targets. */
-	case PIPE_CAP_MAX_RENDER_TARGETS:
-		/* XXX some r6xx are buggy and can only do 4 */
-		return 8;
-
-	case PIPE_CAP_MAX_VIEWPORTS:
-		return R600_MAX_VIEWPORTS;
-	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
-	case PIPE_CAP_RASTERIZER_SUBPIXEL_BITS:
-		return 8;
-
-	/* Timer queries, present when the clock frequency is non zero. */
-	case PIPE_CAP_QUERY_TIME_ELAPSED:
-		return rscreen->b.info.clock_crystal_freq != 0;
-	case PIPE_CAP_QUERY_TIMESTAMP:
-		return rscreen->b.info.drm_minor >= 20 &&
-		       rscreen->b.info.clock_crystal_freq != 0;
-
-	case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
-	case PIPE_CAP_MIN_TEXEL_OFFSET:
-		return -8;
-
-	case PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET:
-	case PIPE_CAP_MAX_TEXEL_OFFSET:
-		return 7;
-
-	case PIPE_CAP_MAX_VARYINGS:
-		return 32;
-
-	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
-		return PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600;
-	case PIPE_CAP_ENDIANNESS:
-		return PIPE_ENDIAN_LITTLE;
-
-	case PIPE_CAP_VENDOR_ID:
-		return ATI_VENDOR_ID;
-	case PIPE_CAP_DEVICE_ID:
-		return rscreen->b.info.pci_id;
-	case PIPE_CAP_ACCELERATED:
-		return 1;
-	case PIPE_CAP_VIDEO_MEMORY:
-		return rscreen->b.info.vram_size >> 20;
-	case PIPE_CAP_UMA:
-		return 0;
-	case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
-		return rscreen->b.chip_class >= R700;
-	case PIPE_CAP_PCI_GROUP:
-		return rscreen->b.info.pci_domain;
-	case PIPE_CAP_PCI_BUS:
-		return rscreen->b.info.pci_bus;
-	case PIPE_CAP_PCI_DEVICE:
-		return rscreen->b.info.pci_dev;
-	case PIPE_CAP_PCI_FUNCTION:
-		return rscreen->b.info.pci_func;
-
-	case PIPE_CAP_MAX_COMBINED_HW_ATOMIC_COUNTERS:
-		if (rscreen->b.family >= CHIP_CEDAR && rscreen->has_atomics)
-			return 8;
-		return 0;
-	case PIPE_CAP_MAX_COMBINED_HW_ATOMIC_COUNTER_BUFFERS:
-		if (rscreen->b.family >= CHIP_CEDAR && rscreen->has_atomics)
-			return EG_MAX_ATOMIC_BUFFERS;
-		return 0;
-
-	default:
-		return u_pipe_screen_get_param_defaults(pscreen, param);
-	}
-}
 
 static int r600_get_shader_param(struct pipe_screen* pscreen,
 				 enum pipe_shader_type shader,
@@ -553,18 +241,13 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_VERTEX:
 		break;
 	case PIPE_SHADER_GEOMETRY:
-		if (rscreen->b.family >= CHIP_CEDAR)
-			break;
-		/* pre-evergreen geom shaders need newer kernel */
-		if (rscreen->b.info.drm_minor >= 37)
-			break;
-		return 0;
+		break;
 	case PIPE_SHADER_TESS_CTRL:
 	case PIPE_SHADER_TESS_EVAL:
 	case PIPE_SHADER_COMPUTE:
 		if (rscreen->b.family >= CHIP_CEDAR)
 			break;
-		/* fallthrough */
+		FALLTHROUGH;
 	default:
 		return 0;
 	}
@@ -583,12 +266,10 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 		return shader == PIPE_SHADER_FRAGMENT ? 8 : 32;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 256; /* Max native temporaries. */
-	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+	case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
 		if (shader == PIPE_SHADER_COMPUTE) {
 			uint64_t max_const_buffer_size;
-			enum pipe_shader_ir ir_type = is_nir_enabled(&rscreen->b) ?
-				PIPE_SHADER_IR_NIR: PIPE_SHADER_IR_TGSI;
-			pscreen->get_compute_param(pscreen, ir_type,
+			pscreen->get_compute_param(pscreen, PIPE_SHADER_IR_NIR,
 						   PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE,
 						   &max_const_buffer_size);
 			return MIN2(max_const_buffer_size, INT_MAX);
@@ -598,12 +279,10 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 		}
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return R600_MAX_USER_CONST_BUFFERS;
-	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
+	case PIPE_SHADER_CAP_CONT_SUPPORTED:
 		return 1;
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
 		return 1;
-	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
-	case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
 		return 1;
@@ -611,6 +290,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_INT64_ATOMICS:
 	case PIPE_SHADER_CAP_FP16:
         case PIPE_SHADER_CAP_FP16_DERIVATIVES:
+	case PIPE_SHADER_CAP_FP16_CONST_BUFFERS:
         case PIPE_SHADER_CAP_INT16:
         case PIPE_SHADER_CAP_GLSL_16BIT_CONSTS:
 		return 0;
@@ -620,34 +300,13 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 	case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
 		return 16;
-	case PIPE_SHADER_CAP_PREFERRED_IR:
-		if (is_nir_enabled(&rscreen->b))
-			return PIPE_SHADER_IR_NIR;
-		return PIPE_SHADER_IR_TGSI;
 	case PIPE_SHADER_CAP_SUPPORTED_IRS: {
 		int ir = 0;
 		if (shader == PIPE_SHADER_COMPUTE)
 			ir = 1 << PIPE_SHADER_IR_NATIVE;
-		if (rscreen->b.family >= CHIP_CEDAR) {
-			ir |= 1 << PIPE_SHADER_IR_TGSI;
-			if (is_nir_enabled(&rscreen->b))
-				ir |= 1 << PIPE_SHADER_IR_NIR;
-		}
+		ir |= 1 << PIPE_SHADER_IR_NIR;
 		return ir;
 	}
-	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
-		if (rscreen->b.family == CHIP_ARUBA ||
-		    rscreen->b.family == CHIP_CAYMAN ||
-		    rscreen->b.family == CHIP_CYPRESS ||
-		    rscreen->b.family == CHIP_HEMLOCK)
-			return 1;
-		return 0;
-	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
-	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
-	case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
-	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
-		return 0;
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 		if (rscreen->b.family >= CHIP_CEDAR &&
@@ -665,14 +324,232 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 			return EG_MAX_ATOMIC_BUFFERS;
 		}
 		return 0;
-	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-		/* due to a bug in the shader compiler, some loops hang
-		 * if they are not unrolled, see:
-		 *    https://bugs.freedesktop.org/show_bug.cgi?id=86720
-		 */
-		return 255;
 	}
 	return 0;
+}
+
+static void r600_init_screen_caps(struct r600_screen *rscreen)
+{
+	struct pipe_caps *caps = (struct pipe_caps *)&rscreen->b.b.caps;
+
+	u_init_pipe_screen_caps(&rscreen->b.b, 1);
+
+	enum radeon_family family = rscreen->b.family;
+
+	/* Supported features (boolean caps). */
+	caps->npot_textures = true;
+	caps->mixed_framebuffer_sizes = true;
+	caps->mixed_color_depth_bits = true;
+	caps->anisotropic_filter = true;
+	caps->occlusion_query = true;
+	caps->texture_mirror_clamp = true;
+	caps->texture_mirror_clamp_to_edge = true;
+	caps->blend_equation_separate = true;
+	caps->texture_swizzle = true;
+	caps->depth_clip_disable = true;
+	caps->depth_clip_disable_separate = true;
+	caps->shader_stencil_export = true;
+	caps->vertex_element_instance_divisor = true;
+	caps->fs_coord_origin_upper_left = true;
+	caps->fs_coord_pixel_center_half_integer = true;
+	caps->fragment_shader_texture_lod = true;
+	caps->fragment_shader_derivatives = true;
+	caps->seamless_cube_map = true;
+	caps->primitive_restart = true;
+	caps->primitive_restart_fixed_index = true;
+	caps->conditional_render = true;
+	caps->texture_barrier = true;
+	caps->vertex_color_unclamped = true;
+	caps->quads_follow_provoking_vertex_convention = true;
+	caps->vs_instanceid = true;
+	caps->start_instance = true;
+	caps->max_dual_source_render_targets = true;
+	caps->texture_buffer_objects = true;
+	caps->query_pipeline_statistics = true;
+	caps->texture_multisample = true;
+	caps->vs_window_space_position = true;
+	caps->vs_layer_viewport = true;
+	caps->sample_shading = true;
+	caps->memobj = true;
+	caps->clip_halfz = true;
+	caps->polygon_offset_clamp = true;
+	caps->conditional_render_inverted = true;
+	caps->texture_float_linear = true;
+	caps->texture_half_float_linear = true;
+	caps->texture_query_samples = true;
+	caps->copy_between_compressed_and_plain_formats = true;
+	caps->invalidate_buffer = true;
+	caps->surface_reinterpret_blocks = true;
+	caps->query_memory_info = true;
+	caps->framebuffer_no_attachment = true;
+	caps->polygon_offset_units_unscaled = true;
+	caps->legacy_math_rules = true;
+	caps->can_bind_const_buffer_as_vertex = true;
+	caps->allow_mapped_buffers_during_execution = true;
+	caps->robust_buffer_access_behavior = true;
+
+	caps->vertex_input_alignment = PIPE_VERTEX_INPUT_ALIGNMENT_4BYTE;
+
+	caps->nir_atomics_as_deref = true;
+	caps->gl_spirv = true;
+
+	caps->texture_transfer_modes = PIPE_TEXTURE_TRANSFER_BLIT;
+
+	caps->shareable_shaders = false;
+
+	/* Optimal number for good TexSubImage performance on Polaris10. */
+	caps->max_texture_upload_memory_budget = 64 * 1024 * 1024;
+
+	caps->device_reset_status_query = true;
+
+	caps->resource_from_user_memory =
+		!UTIL_ARCH_BIG_ENDIAN && rscreen->b.info.has_userptr;
+
+	caps->compute = rscreen->b.gfx_level > R700;
+
+	caps->tgsi_texcoord = true;
+
+	caps->nir_images_as_deref = false;
+	caps->fake_sw_msaa = false;
+
+	caps->max_texel_buffer_elements =
+		MIN2(rscreen->b.info.max_heap_size_kb * 1024ull / 4, INT_MAX);
+
+	caps->min_map_buffer_alignment = R600_MAP_BUFFER_ALIGNMENT;
+
+	caps->constant_buffer_offset_alignment = 256;
+
+	caps->texture_buffer_offset_alignment = 4;
+	caps->glsl_feature_level_compatibility =
+	caps->glsl_feature_level = family >= CHIP_CEDAR ? 450 : 330;
+
+	/* Supported except the original R600. */
+	caps->indep_blend_enable =
+	caps->indep_blend_func = family != CHIP_R600; /* R600 doesn't support per-MRT blends */
+
+	/* Supported on Evergreen. */
+	caps->seamless_cube_map_per_texture =
+	caps->cube_map_array =
+	caps->texture_gather_sm5 =
+	caps->texture_query_lod =
+	caps->fs_fine_derivative =
+	caps->sampler_view_target =
+	caps->shader_pack_half_float =
+	caps->shader_clock =
+	caps->shader_array_components =
+	caps->query_buffer_object =
+	caps->image_store_formatted =
+	caps->alpha_to_coverage_dither_control = family >= CHIP_CEDAR;
+	caps->max_texture_gather_components = family >= CHIP_CEDAR ? 4 : 0;
+	/* kernel command checker support is also required */
+	caps->draw_indirect = family >= CHIP_CEDAR;
+
+	caps->buffer_sampler_view_rgba_only = family < CHIP_CEDAR;
+
+	caps->max_combined_shader_output_resources = 8;
+
+	caps->max_gs_invocations = 32;
+
+	/* shader buffer objects */
+	caps->max_shader_buffer_size = 1 << 27;
+	caps->max_combined_shader_buffers = 8;
+
+	caps->int64 =
+	caps->doubles =
+		rscreen->b.family == CHIP_ARUBA ||
+		rscreen->b.family == CHIP_CAYMAN ||
+		rscreen->b.family == CHIP_CYPRESS ||
+		rscreen->b.family == CHIP_HEMLOCK ||
+		rscreen->b.family >= CHIP_CEDAR;
+
+	caps->two_sided_color = false;
+	caps->cull_distance = true;
+
+	caps->shader_buffer_offset_alignment = family >= CHIP_CEDAR ?  256 : 0;
+
+	caps->max_shader_patch_varyings = family >= CHIP_CEDAR ? 30 : 0;
+
+	/* Stream output. */
+	caps->max_stream_output_buffers = rscreen->b.has_streamout ? 4 : 0;
+	caps->stream_output_pause_resume =
+	caps->stream_output_interleave_buffers = rscreen->b.has_streamout;
+	caps->max_stream_output_separate_components =
+	caps->max_stream_output_interleaved_components = 32*4;
+
+	/* Geometry shader output. */
+	caps->max_geometry_output_vertices = 1024;
+	caps->max_geometry_total_output_components = 16384;
+	caps->max_vertex_streams = family >= CHIP_CEDAR ? 4 : 1;
+
+	/* Should be 2047, but 2048 is a requirement for GL 4.4 */
+	caps->max_vertex_attrib_stride = 2048;
+
+	/* Texturing. */
+	caps->max_texture_2d_size = family >= CHIP_CEDAR ? 16384 : 8192;
+	caps->max_texture_cube_levels = family >= CHIP_CEDAR ? 15 : 14;
+	/* textures support 8192, but layered rendering supports 2048 */
+	caps->max_texture_3d_levels = 12;
+	/* textures support 8192, but layered rendering supports 2048 */
+	caps->max_texture_array_layers = 2048;
+
+	/* Render targets. */
+	caps->max_render_targets = 8; /* XXX some r6xx are buggy and can only do 4 */
+
+	caps->max_viewports = R600_MAX_VIEWPORTS;
+	caps->viewport_subpixel_bits =
+	caps->rasterizer_subpixel_bits = 8;
+
+	/* Timer queries, present when the clock frequency is non zero. */
+	caps->query_time_elapsed =
+	caps->query_timestamp = rscreen->b.info.clock_crystal_freq != 0;
+
+	/* Conversion to nanos from cycles per millisecond */
+	caps->timer_resolution = DIV_ROUND_UP(1000000, rscreen->b.info.clock_crystal_freq);
+
+	caps->min_texture_gather_offset =
+	caps->min_texel_offset = -8;
+
+	caps->max_texture_gather_offset =
+	caps->max_texel_offset = 7;
+
+	caps->max_varyings = 32;
+
+	caps->texture_border_color_quirk = PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600;
+	caps->endianness = PIPE_ENDIAN_LITTLE;
+
+	caps->vendor_id = ATI_VENDOR_ID;
+	caps->device_id = rscreen->b.info.pci_id;
+	caps->video_memory = rscreen->b.info.vram_size_kb >> 10;
+	caps->uma = false;
+	caps->multisample_z_resolve = rscreen->b.gfx_level >= R700;
+	caps->pci_group = rscreen->b.info.pci.domain;
+	caps->pci_bus = rscreen->b.info.pci.bus;
+	caps->pci_device = rscreen->b.info.pci.dev;
+	caps->pci_function = rscreen->b.info.pci.func;
+
+	caps->max_combined_hw_atomic_counters =
+		rscreen->b.family >= CHIP_CEDAR && rscreen->has_atomics ? 8 : 0;
+
+	caps->max_combined_hw_atomic_counter_buffers =
+		rscreen->b.family >= CHIP_CEDAR && rscreen->has_atomics ?
+		EG_MAX_ATOMIC_BUFFERS : 0;
+
+	caps->validate_all_dirty_states = true;
+
+	caps->min_line_width =
+	caps->min_line_width_aa =
+	caps->min_point_size =
+	caps->min_point_size_aa = 1;
+
+	caps->point_size_granularity =
+	caps->line_width_granularity = 0.1;
+
+	caps->max_line_width =
+	caps->max_line_width_aa =
+	caps->max_point_size =
+	caps->max_point_size_aa = 8191.0f;
+	caps->max_texture_anisotropy = 16.0f;
+	caps->max_texture_lod_bias = 16.0f;
 }
 
 static void r600_destroy_screen(struct pipe_screen* pscreen)
@@ -714,7 +591,6 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
 	/* Set functions first. */
 	rscreen->b.b.context_create = r600_create_context;
 	rscreen->b.b.destroy = r600_destroy_screen;
-	rscreen->b.b.get_param = r600_get_param;
 	rscreen->b.b.get_shader_param = r600_get_shader_param;
 	rscreen->b.b.resource_create = r600_resource_create;
 
@@ -723,18 +599,18 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
 		return NULL;
 	}
 
-	if (rscreen->b.info.chip_class >= EVERGREEN) {
+	if (rscreen->b.info.gfx_level >= EVERGREEN) {
 		rscreen->b.b.is_format_supported = evergreen_is_format_supported;
 	} else {
 		rscreen->b.b.is_format_supported = r600_is_format_supported;
 	}
 
 	rscreen->b.debug_flags |= debug_get_flags_option("R600_DEBUG", r600_debug_options, 0);
-	if (debug_get_bool_option("R600_DEBUG_COMPUTE", FALSE))
+	if (debug_get_bool_option("R600_DEBUG_COMPUTE", false))
 		rscreen->b.debug_flags |= DBG_COMPUTE;
-	if (debug_get_bool_option("R600_DUMP_SHADERS", FALSE))
+	if (debug_get_bool_option("R600_DUMP_SHADERS", false))
 		rscreen->b.debug_flags |= DBG_ALL_SHADERS | DBG_FS;
-	if (!debug_get_bool_option("R600_HYPERZ", TRUE))
+	if (!debug_get_bool_option("R600_HYPERZ", true))
 		rscreen->b.debug_flags |= DBG_NO_HYPERZ;
 
 	if (rscreen->b.family == CHIP_UNKNOWN) {
@@ -743,49 +619,29 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
 		return NULL;
 	}
 
-	/* Figure out streamout kernel support. */
-	switch (rscreen->b.chip_class) {
-	case R600:
-		if (rscreen->b.family < CHIP_RS780) {
-			rscreen->b.has_streamout = rscreen->b.info.drm_minor >= 14;
-		} else {
-			rscreen->b.has_streamout = rscreen->b.info.drm_minor >= 23;
-		}
-		break;
-	case R700:
-		rscreen->b.has_streamout = rscreen->b.info.drm_minor >= 17;
-		break;
-	case EVERGREEN:
-	case CAYMAN:
-		rscreen->b.has_streamout = rscreen->b.info.drm_minor >= 14;
-		break;
-	default:
-		rscreen->b.has_streamout = FALSE;
-		break;
-	}
+	rscreen->b.b.finalize_nir = r600_finalize_nir;
+
+	rscreen->b.has_streamout = true;
+
+	rscreen->has_msaa = true;
 
 	/* MSAA support. */
-	switch (rscreen->b.chip_class) {
+	switch (rscreen->b.gfx_level) {
 	case R600:
 	case R700:
-		rscreen->has_msaa = rscreen->b.info.drm_minor >= 22;
 		rscreen->has_compressed_msaa_texturing = false;
 		break;
 	case EVERGREEN:
-		rscreen->has_msaa = rscreen->b.info.drm_minor >= 19;
-		rscreen->has_compressed_msaa_texturing = rscreen->b.info.drm_minor >= 24;
+		rscreen->has_compressed_msaa_texturing = true;
 		break;
 	case CAYMAN:
-		rscreen->has_msaa = rscreen->b.info.drm_minor >= 19;
 		rscreen->has_compressed_msaa_texturing = true;
 		break;
 	default:
-		rscreen->has_msaa = FALSE;
 		rscreen->has_compressed_msaa_texturing = false;
 	}
 
-	rscreen->b.has_cp_dma = rscreen->b.info.drm_minor >= 27 &&
-			      !(rscreen->b.debug_flags & DBG_NO_CP_DMA);
+	rscreen->b.has_cp_dma = !(rscreen->b.debug_flags & DBG_NO_CP_DMA);
 
 	rscreen->b.barrier_flags.cp_to_L2 =
 		R600_CONTEXT_INV_VERTEX_CACHE |
@@ -795,10 +651,13 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
 
 	rscreen->global_pool = compute_memory_pool_new(rscreen);
 
+	rscreen->has_atomics = true;
+
+	r600_init_screen_caps(rscreen);
+
 	/* Create the auxiliary context. This must be done last. */
 	rscreen->b.aux_context = rscreen->b.b.context_create(&rscreen->b.b, NULL, 0);
 
-	rscreen->has_atomics = rscreen->b.info.drm_minor >= 44;
 #if 0 /* This is for testing whether aux_context and buffer clearing work correctly. */
 	struct pipe_resource templ = {};
 
@@ -811,7 +670,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
 	templ.usage = PIPE_USAGE_DEFAULT;
 
 	struct r600_resource *res = r600_resource(rscreen->screen.resource_create(&rscreen->screen, &templ));
-	unsigned char *map = ws->buffer_map(res->buf, NULL, PIPE_TRANSFER_WRITE);
+	unsigned char *map = ws->buffer_map(res->buf, NULL, PIPE_MAP_WRITE);
 
 	memset(map, 0, 256);
 

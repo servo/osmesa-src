@@ -35,34 +35,40 @@
 #include "cso_cache.h"
 
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 extern "C" {
 #endif
 
-struct cso_context;
-struct u_vbuf;
+struct cso_context {
+   struct pipe_context *pipe;
+
+   /* This is equal to either pipe_context::draw_vbo or u_vbuf_draw_vbo. */
+   pipe_draw_func draw_vbo;
+};
 
 #define CSO_NO_USER_VERTEX_BUFFERS (1 << 0)
 #define CSO_NO_64B_VERTEX_BUFFERS  (1 << 1)
+#define CSO_NO_VBUF  (1 << 2)
 
-struct cso_context *cso_create_context(struct pipe_context *pipe,
-                                       unsigned flags);
-void cso_destroy_context( struct cso_context *cso );
-struct pipe_context *cso_get_pipe_context(struct cso_context *cso);
+struct cso_context *
+cso_create_context(struct pipe_context *pipe, unsigned flags);
 
+void
+cso_unbind_context(struct cso_context *ctx);
 
-enum pipe_error cso_set_blend( struct cso_context *cso,
-                               const struct pipe_blend_state *blend );
+void
+cso_destroy_context(struct cso_context *cso);
 
+enum pipe_error
+cso_set_blend(struct cso_context *cso, const struct pipe_blend_state *blend);
 
-enum pipe_error cso_set_depth_stencil_alpha( struct cso_context *cso,
-                                             const struct pipe_depth_stencil_alpha_state *dsa );
+enum pipe_error
+cso_set_depth_stencil_alpha(struct cso_context *cso,
+                            const struct pipe_depth_stencil_alpha_state *dsa);
 
-
-
-enum pipe_error cso_set_rasterizer( struct cso_context *cso,
-                                    const struct pipe_rasterizer_state *rasterizer );
-
+enum pipe_error
+cso_set_rasterizer(struct cso_context *cso,
+                   const struct pipe_rasterizer_state *rasterizer);
 
 void
 cso_set_samplers(struct cso_context *cso,
@@ -83,18 +89,29 @@ cso_single_sampler_done(struct cso_context *cso,
                         enum pipe_shader_type shader_stage);
 
 
-enum pipe_error cso_set_vertex_elements(struct cso_context *ctx,
-                                        const struct cso_velems_state *velems);
+enum pipe_error
+cso_set_vertex_elements(struct cso_context *ctx,
+                        const struct cso_velems_state *velems);
 
 void cso_set_vertex_buffers(struct cso_context *ctx,
-                            unsigned start_slot, unsigned count,
+                            unsigned count,
+                            bool take_ownership,
                             const struct pipe_vertex_buffer *buffers);
 
 void cso_set_stream_outputs(struct cso_context *ctx,
                             unsigned num_targets,
                             struct pipe_stream_output_target **targets,
-                            const unsigned *offsets);
+                            const unsigned *offsets,
+                            enum mesa_prim output_prim);
 
+
+enum cso_unbind_flags {
+   CSO_UNBIND_FS_SAMPLERVIEWS = (1 << 0),
+   CSO_UNBIND_FS_SAMPLERVIEW0 = (1 << 1),
+   CSO_UNBIND_FS_IMAGE0 = (1 << 2),
+   CSO_UNBIND_VS_CONSTANTS = (1 << 3),
+   CSO_UNBIND_FS_CONSTANTS = (1 << 4),
+};
 
 /*
  * We don't provide shader caching in CSO.  Most of the time the api provides
@@ -111,37 +128,39 @@ void cso_set_tesseval_shader_handle(struct cso_context *ctx, void *handle);
 void cso_set_compute_shader_handle(struct cso_context *ctx, void *handle);
 
 
-void cso_set_framebuffer(struct cso_context *cso,
-                         const struct pipe_framebuffer_state *fb);
+void
+cso_set_framebuffer(struct cso_context *cso,
+                    const struct pipe_framebuffer_state *fb);
 
+void
+cso_set_viewport(struct cso_context *cso,
+                 const struct pipe_viewport_state *vp);
 
-void cso_set_viewport(struct cso_context *cso,
-                      const struct pipe_viewport_state *vp);
-void cso_set_viewport_dims(struct cso_context *ctx,
-                           float width, float height, boolean invert);
+void
+cso_set_viewport_dims(struct cso_context *ctx,
+                      float width, float height, bool invert);
 
+void
+cso_set_sample_mask(struct cso_context *cso, unsigned stencil_mask);
 
-void cso_set_blend_color(struct cso_context *cso,
-                         const struct pipe_blend_color *bc);
+void
+cso_set_min_samples(struct cso_context *cso, unsigned min_samples);
 
-void cso_set_sample_mask(struct cso_context *cso, unsigned stencil_mask);
+void
+cso_set_stencil_ref(struct cso_context *cso,
+                    const struct pipe_stencil_ref sr);
 
-void cso_set_min_samples(struct cso_context *cso, unsigned min_samples);
+void
+cso_set_render_condition(struct cso_context *cso,
+                         struct pipe_query *query,
+                         bool condition,
+                         enum pipe_render_cond_flag mode);
 
-void cso_set_stencil_ref(struct cso_context *cso,
-                         const struct pipe_stencil_ref *sr);
-
-void cso_set_render_condition(struct cso_context *cso,
-                              struct pipe_query *query,
-                              boolean condition,
-                              enum pipe_render_cond_flag mode);
-
-
-#define CSO_BIT_AUX_VERTEX_BUFFER_SLOT    0x1
+/* gap */
 #define CSO_BIT_BLEND                     0x2
 #define CSO_BIT_DEPTH_STENCIL_ALPHA       0x4
 #define CSO_BIT_FRAGMENT_SAMPLERS         0x8
-#define CSO_BIT_FRAGMENT_SAMPLER_VIEWS   0x10
+/* gap */
 #define CSO_BIT_FRAGMENT_SHADER          0x20
 #define CSO_BIT_FRAMEBUFFER              0x40
 #define CSO_BIT_GEOMETRY_SHADER          0x80
@@ -157,7 +176,6 @@ void cso_set_render_condition(struct cso_context *cso,
 #define CSO_BIT_VERTEX_SHADER         0x20000
 #define CSO_BIT_VIEWPORT              0x40000
 #define CSO_BIT_PAUSE_QUERIES         0x80000
-#define CSO_BIT_FRAGMENT_IMAGE0      0x100000
 
 #define CSO_BITS_ALL_SHADERS (CSO_BIT_VERTEX_SHADER | \
                               CSO_BIT_FRAGMENT_SHADER | \
@@ -165,69 +183,65 @@ void cso_set_render_condition(struct cso_context *cso,
                               CSO_BIT_TESSCTRL_SHADER | \
                               CSO_BIT_TESSEVAL_SHADER)
 
-void cso_save_state(struct cso_context *cso, unsigned state_mask);
-void cso_restore_state(struct cso_context *cso);
-
-
-/* sampler view state */
+#define CSO_BIT_COMPUTE_SHADER   (1<<0)
+#define CSO_BIT_COMPUTE_SAMPLERS (1<<1)
 
 void
-cso_set_sampler_views(struct cso_context *cso,
-                      enum pipe_shader_type shader_stage,
-                      unsigned count,
-                      struct pipe_sampler_view **views);
-
-
-/* shader images */
+cso_save_state(struct cso_context *cso, unsigned state_mask);
 
 void
-cso_set_shader_images(struct cso_context *cso,
-                      enum pipe_shader_type shader_stage,
-                      unsigned start, unsigned count,
-                      struct pipe_image_view *views);
+cso_restore_state(struct cso_context *cso, unsigned unbind);
 
+void
+cso_save_compute_state(struct cso_context *cso, unsigned state_mask);
 
-/* constant buffers */
+void
+cso_restore_compute_state(struct cso_context *cso);
 
-void cso_set_constant_buffer(struct cso_context *cso,
-                             enum pipe_shader_type shader_stage,
-                             unsigned index, struct pipe_constant_buffer *cb);
-void cso_set_constant_buffer_resource(struct cso_context *cso,
-                                      enum pipe_shader_type shader_stage,
-                                      unsigned index,
-                                      struct pipe_resource *buffer);
-void cso_set_constant_user_buffer(struct cso_context *cso,
-                                  enum pipe_shader_type shader_stage,
-                                  unsigned index, void *ptr, unsigned size);
-void cso_save_constant_buffer_slot0(struct cso_context *cso,
-                                    enum pipe_shader_type shader_stage);
-void cso_restore_constant_buffer_slot0(struct cso_context *cso,
-                                       enum pipe_shader_type shader_stage);
 
 /* Optimized version. */
 void
 cso_set_vertex_buffers_and_elements(struct cso_context *ctx,
                                     const struct cso_velems_state *velems,
                                     unsigned vb_count,
-                                    unsigned unbind_trailing_vb_count,
-                                    const struct pipe_vertex_buffer *vbuffers,
-                                    bool uses_user_vertex_buffers);
-
-/* drawing */
+                                    bool uses_user_vertex_buffers,
+                                    const struct pipe_vertex_buffer *vbuffers);
 
 void
+cso_draw_arrays_instanced(struct cso_context *cso, unsigned mode,
+                          unsigned start, unsigned count,
+                          unsigned start_instance, unsigned instance_count);
+
+void
+cso_draw_arrays(struct cso_context *cso, unsigned mode, unsigned start, unsigned count);
+
+/* Inline functions. */
+
+static ALWAYS_INLINE void
 cso_draw_vbo(struct cso_context *cso,
-             const struct pipe_draw_info *info);
+             const struct pipe_draw_info *info,
+             unsigned drawid_offset,
+             const struct pipe_draw_indirect_info *indirect,
+             const struct pipe_draw_start_count_bias *draws,
+             unsigned num_draws)
+{
+   /* We can't have both indirect drawing and SO-vertex-count drawing */
+   assert(!indirect ||
+          indirect->buffer == NULL ||
+          indirect->count_from_stream_output == NULL);
 
-void
-cso_draw_arrays_instanced(struct cso_context *cso, uint mode,
-                          uint start, uint count,
-                          uint start_instance, uint instance_count);
+   /* We can't have SO-vertex-count drawing with an index buffer */
+   assert(info->index_size == 0 ||
+          !indirect ||
+          indirect->count_from_stream_output == NULL);
 
-void
-cso_draw_arrays(struct cso_context *cso, uint mode, uint start, uint count);
+   /* Indirect only uses indirect->draw_count, not num_draws. */
+   assert(!indirect || num_draws == 1);
 
-#ifdef	__cplusplus
+   cso->draw_vbo(cso->pipe, info, drawid_offset, indirect, draws, num_draws);
+}
+
+#ifdef __cplusplus
 }
 #endif
 

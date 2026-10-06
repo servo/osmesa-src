@@ -1,35 +1,26 @@
 /*
  * Copyright 2010 Jerome Glisse <glisse@freedesktop.org>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
+
 #ifndef R600_ASM_H
 #define R600_ASM_H
 
-#include "r600_pipe.h"
+#include "util/format/u_format.h"
+#include "util/list.h"
+#include "amd_family.h"
 #include "r600_isa.h"
-#include "tgsi/tgsi_exec.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define R600_ASM_ERR(fmt, args...) \
+	fprintf(stderr, "EE %s:%d %s - " fmt, __FILE__, __LINE__, __func__, ##args)
 
 struct r600_bytecode_alu_src {
 	unsigned			sel;
@@ -216,6 +207,7 @@ struct r600_bytecode_cf {
 	unsigned isa[2];
 	unsigned nlds_read;
 	unsigned nqueue_read;
+	unsigned clause_local_written;
 };
 
 #define FC_NONE				0
@@ -254,7 +246,7 @@ struct r600_stack_info {
 };
 
 struct r600_bytecode {
-	enum chip_class			chip_class;
+	enum amd_gfx_level			gfx_level;
 	enum radeon_family		family;
 	bool				has_compressed_msaa_texturing;
 	int				type;
@@ -262,6 +254,7 @@ struct r600_bytecode {
 	struct r600_bytecode_cf		*cf_last;
 	unsigned			ndw;
 	unsigned			ncf;
+	unsigned			nalu_groups;
 	unsigned			ngpr;
 	unsigned			nstack;
 	unsigned			nlds_dw;
@@ -269,7 +262,7 @@ struct r600_bytecode {
 	unsigned			force_add_cf;
 	uint32_t			*bytecode;
 	uint32_t			fc_sp;
-	struct r600_cf_stack_entry	fc_stack[TGSI_EXEC_MAX_NESTING];
+	struct r600_cf_stack_entry	fc_stack[256];
 	struct r600_stack_info		stack;
 	unsigned	ar_loaded;
 	unsigned	ar_reg;
@@ -278,24 +271,23 @@ struct r600_bytecode {
 	unsigned        r6xx_nop_after_rel_dst;
 	bool            index_loaded[2];
 	unsigned        index_reg[2]; /* indexing register CF_INDEX_[01] */
-	unsigned        index_reg_chan[2]; /* indexing register chanel CF_INDEX_[01] */
+	unsigned        index_reg_chan[2]; /* indexing register channel CF_INDEX_[01] */
 	unsigned        debug_id;
 	struct r600_isa* isa;
 	struct r600_bytecode_output pending_outputs[5];
 	int n_pending_outputs;
-	boolean			need_wait_ack; /* emit a pending WAIT_ACK prior to control flow */
-	boolean			precise;
+	bool			need_wait_ack; /* emit a pending WAIT_ACK prior to control flow */
+	bool			precise;
 };
 
 /* eg_asm.c */
 int eg_bytecode_cf_build(struct r600_bytecode *bc, struct r600_bytecode_cf *cf);
-int egcm_load_index_reg(struct r600_bytecode *bc, unsigned id, bool inside_alu_clause);
 int eg_bytecode_gds_build(struct r600_bytecode *bc, struct r600_bytecode_gds *gds, unsigned id);
 int eg_bytecode_alu_build(struct r600_bytecode *bc,
 			  struct r600_bytecode_alu *alu, unsigned id);
 /* r600_asm.c */
 void r600_bytecode_init(struct r600_bytecode *bc,
-			enum chip_class chip_class,
+			enum amd_gfx_level gfx_level,
 			enum radeon_family family,
 			bool has_compressed_msaa_texturing);
 void r600_bytecode_clear(struct r600_bytecode *bc);
@@ -313,25 +305,24 @@ int r600_bytecode_add_output(struct r600_bytecode *bc,
 		const struct r600_bytecode_output *output);
 int r600_bytecode_add_pending_output(struct r600_bytecode *bc,
 		const struct r600_bytecode_output *output);
-void r600_bytecode_need_wait_ack(struct r600_bytecode *bc, boolean needed);
-boolean r600_bytecode_get_need_wait_ack(struct r600_bytecode *bc);
+
+void r600_bytecode_add_ack(struct r600_bytecode *bc);
+int r600_bytecode_wait_acks(struct r600_bytecode *bc);
+uint32_t r600_bytecode_write_export_ack_type(struct r600_bytecode *bc, bool indirect);
+
 int r600_bytecode_build(struct r600_bytecode *bc);
 int r600_bytecode_add_cf(struct r600_bytecode *bc);
 int r600_bytecode_add_cfinst(struct r600_bytecode *bc,
 		unsigned op);
 int r600_bytecode_add_alu_type(struct r600_bytecode *bc,
 		const struct r600_bytecode_alu *alu, unsigned type);
-void r600_bytecode_special_constants(uint32_t value,
-		unsigned *sel, unsigned *neg, unsigned abs);
+void r600_bytecode_special_constants(uint32_t value, unsigned *sel);
 void r600_bytecode_disasm(struct r600_bytecode *bc);
 void r600_bytecode_alu_read(struct r600_bytecode *bc,
 		struct r600_bytecode_alu *alu, uint32_t word0, uint32_t word1);
+int r600_load_ar(struct r600_bytecode *bc, bool for_src);
 
 int cm_bytecode_add_cf_end(struct r600_bytecode *bc);
-
-void *r600_create_vertex_fetch_shader(struct pipe_context *ctx,
-				      unsigned count,
-				      const struct pipe_vertex_element *elements);
 
 /* r700_asm.c */
 void r700_bytecode_cf_vtx_build(uint32_t *bytecode,
@@ -350,6 +341,8 @@ void eg_bytecode_export_read(struct r600_bytecode *bc,
 
 void r600_vertex_data_type(enum pipe_format pformat, unsigned *format,
 			   unsigned *num_format, unsigned *format_comp, unsigned *endian);
+
+int r600_load_ar(struct r600_bytecode *bc, bool for_src);
 
 static inline int fp64_switch(int i)
 {

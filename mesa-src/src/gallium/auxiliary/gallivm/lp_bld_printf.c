@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 
+#include "util/compiler.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
 #include "util/u_string.h"
@@ -36,6 +37,24 @@
 #include "lp_bld_const.h"
 #include "lp_bld_printf.h"
 #include "lp_bld_type.h"
+
+
+static LLVMTypeRef
+lp_build_printf_hook_type(struct gallivm_state *gallivm)
+{
+   LLVMTypeRef format_type = LLVMPointerType(LLVMInt8TypeInContext(gallivm->context), 0);
+   return LLVMFunctionType(LLVMVoidTypeInContext(gallivm->context), &format_type, 1, 1);
+}
+
+
+void lp_init_printf_hook(struct gallivm_state *gallivm)
+{
+   if (gallivm->debug_printf_hook)
+      return;
+
+   gallivm->debug_printf_hook = LLVMAddFunction(gallivm->module, "debug_printf",
+                                                lp_build_printf_hook_type(gallivm));
+}
 
 
 /**
@@ -62,11 +81,9 @@ lp_build_print_args(struct gallivm_state* gallivm,
          args[i] = LLVMBuildFPExt(builder, args[i], LLVMDoubleTypeInContext(context), "");
    }
 
-   if (!gallivm->debug_printf_hook) {
-      LLVMTypeRef printf_type = LLVMFunctionType(LLVMInt32TypeInContext(context), NULL, 0, 1);
-      gallivm->debug_printf_hook = LLVMAddFunction(gallivm->module, "debug_printf", printf_type);
-   }
-   return LLVMBuildCall(builder, gallivm->debug_printf_hook, args, argcount, "");
+   lp_init_printf_hook(gallivm);
+   return LLVMBuildCall2(builder, lp_build_printf_hook_type(gallivm),
+                         gallivm->debug_printf_hook, args, argcount, "");
 }
 
 
@@ -99,7 +116,7 @@ lp_build_print_value(struct gallivm_state *gallivm,
       length = 1;
    }
 
-   if (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind) {
+   if (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind || type_kind == LLVMHalfTypeKind) {
       type_fmt[2] = '.';
       type_fmt[3] = '9';
       type_fmt[4] = 'g';
@@ -173,7 +190,7 @@ lp_get_printf_arg_count(const char *fmt)
           p += 3;
                continue;
        }
-       /* fallthrough */
+       FALLTHROUGH;
     default:
        count ++;
       }

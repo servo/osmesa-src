@@ -19,11 +19,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
-#
-# Authors:
-#    Jason Ekstrand (jason@jlekstrand.net)
 
-from __future__ import print_function
 import ast
 from collections import defaultdict
 import itertools
@@ -54,20 +50,22 @@ conv_opcode_types = {
     'f2b' : 'bool',
 }
 
+def get_cond_index(conds, cond):
+    if cond:
+        if cond in conds:
+            return conds[cond]
+        else:
+            cond_index = len(conds)
+            conds[cond] = cond_index
+            return cond_index
+    else:
+        return -1
+
 def get_c_opcode(op):
       if op in conv_opcode_types:
          return 'nir_search_op_' + op
       else:
          return 'nir_op_' + op
-
-
-if sys.version_info < (3, 0):
-    integer_types = (int, long)
-    string_type = unicode
-
-else:
-    integer_types = (int, )
-    string_type = str
 
 _type_re = re.compile(r"(?P<type>int|uint|bool|float)?(?P<bits>\d+)?")
 
@@ -97,19 +95,39 @@ class VarSet(object):
    def lock(self):
       self.immutable = True
 
+class SearchExpression(object):
+   def __init__(self, expr):
+      self.opcode = expr[0]
+      self.sources = expr[1:]
+      self.ignore_exact = False
+
+   @staticmethod
+   def create(val):
+      if isinstance(val, tuple):
+         return SearchExpression(val)
+      else:
+         assert(isinstance(val, SearchExpression))
+         return val
+
+   def __repr__(self):
+      l = [self.opcode, *self.sources]
+      if self.ignore_exact:
+         l.append('ignore_exact')
+      return repr((*l,))
+
 class Value(object):
    @staticmethod
-   def create(val, name_base, varset):
+   def create(val, name_base, varset, algebraic_pass):
       if isinstance(val, bytes):
          val = val.decode('utf-8')
 
-      if isinstance(val, tuple):
-         return Expression(val, name_base, varset)
+      if isinstance(val, tuple) or isinstance(val, SearchExpression):
+         return Expression(val, name_base, varset, algebraic_pass)
       elif isinstance(val, Expression):
          return val
-      elif isinstance(val, string_type):
-         return Variable(val, name_base, varset)
-      elif isinstance(val, (bool, float) + integer_types):
+      elif isinstance(val, str):
+         return Variable(val, name_base, varset, algebraic_pass)
+      elif isinstance(val, (bool, float, int)):
          return Constant(val, name_base)
 
    def __init__(self, val, name, type_str):
@@ -159,22 +177,6 @@ class Value(object):
       return "nir_search_value_" + self.type_str
 
    @property
-   def c_type(self):
-      return "nir_search_" + self.type_str
-
-   def __c_name(self, cache):
-      if cache is not None and self.name in cache:
-         return cache[self.name]
-      else:
-         return self.name
-
-   def c_value_ptr(self, cache):
-      return "&{0}.value".format(self.__c_name(cache))
-
-   def c_ptr(self, cache):
-      return "&{0}".format(self.__c_name(cache))
-
-   @property
    def c_bit_size(self):
       bit_size = self.get_bit_size()
       if isinstance(bit_size, int):
@@ -189,41 +191,48 @@ class Value(object):
          # We represent these cases with a 0 bit-size.
          return 0
 
-   __template = mako.template.Template("""{
-   { ${val.type_enum}, ${val.c_bit_size} },
+   __template = mako.template.Template("""   { .${val.type_str} = {
+      { ${val.type_enum}, ${val.c_bit_size} },
 % if isinstance(val, Constant):
-   ${val.type()}, { ${val.hex()} /* ${val.value} */ },
+      ${val.type()}, { ${val.hex()} /* ${val.value} */ },
 % elif isinstance(val, Variable):
-   ${val.index}, /* ${val.var_name} */
-   ${'true' if val.is_constant else 'false'},
-   ${val.type() or 'nir_type_invalid' },
-   ${val.cond if val.cond else 'NULL'},
-   ${val.swizzle()},
+      ${val.index}, /* ${val.var_name} */
+      ${'true' if val.is_constant else 'false'},
+      ${val.type() or 'nir_type_invalid' },
+      ${val.cond_index},
+      ${val.swizzle()},
 % elif isinstance(val, Expression):
-   ${'true' if val.inexact else 'false'}, ${'true' if val.exact else 'false'},
-   ${val.comm_expr_idx}, ${val.comm_exprs},
-   ${val.c_opcode()},
-   { ${', '.join(src.c_value_ptr(cache) for src in val.sources)} },
-   ${val.cond if val.cond else 'NULL'},
+      ${'true' if val.inexact else 'false'},
+      ${'true' if val.exact else 'false'},
+      ${'true' if val.ignore_exact else 'false'},
+      ${'true' if val.nsz else 'false'},
+      ${'true' if val.nnan else 'false'},
+      ${'true' if val.ninf else 'false'},
+      ${'true' if val.swizzle_y else 'false'},
+      ${val.c_opcode()},
+      ${val.comm_expr_idx}, ${val.comm_exprs},
+      { ${', '.join(src.array_index for src in val.sources)} },
+      ${val.cond_index},
 % endif
-};""")
+   } },
+""")
 
    def render(self, cache):
-      struct_init = self.__template.render(val=self, cache=cache,
+      struct_init = self.__template.render(val=self,
                                            Constant=Constant,
                                            Variable=Variable,
                                            Expression=Expression)
-      if cache is not None and struct_init in cache:
+      if struct_init in cache:
          # If it's in the cache, register a name remap in the cache and render
          # only a comment saying it's been remapped
-         cache[self.name] = cache[struct_init]
-         return "/* {} -> {} in the cache */\n".format(self.name,
+         self.array_index = cache[struct_init]
+         return "   /* {} -> {} in the cache */\n".format(self.name,
                                                        cache[struct_init])
       else:
-         if cache is not None:
-            cache[struct_init] = self.name
-         return "static const {} {} = {}\n".format(self.c_type, self.name,
-                                                   struct_init)
+         self.array_index = str(cache["next_index"])
+         cache[struct_init] = self.array_index
+         cache["next_index"] += 1
+         return struct_init
 
 _constant_re = re.compile(r"(?P<value>[^@\(]+)(?:@(?P<bits>\d+))?")
 
@@ -246,26 +255,22 @@ class Constant(Value):
    def hex(self):
       if isinstance(self.value, (bool)):
          return 'NIR_TRUE' if self.value else 'NIR_FALSE'
-      if isinstance(self.value, integer_types):
-         return hex(self.value)
+      if isinstance(self.value, int):
+         # Explicitly sign-extend negative integers to 64-bit, ensuring correct
+         # handling of -INT32_MIN which is not representable in 32-bit.
+         if self.value < 0:
+            return hex(struct.unpack('Q', struct.pack('q', self.value))[0]) + 'ull'
+         else:
+            return hex(self.value) + 'ull'
       elif isinstance(self.value, float):
-         i = struct.unpack('Q', struct.pack('d', self.value))[0]
-         h = hex(i)
-
-         # On Python 2 this 'L' suffix is automatically added, but not on Python 3
-         # Adding it explicitly makes the generated file identical, regardless
-         # of the Python version running this script.
-         if h[-1] != 'L' and i > sys.maxsize:
-            h += 'L'
-
-         return h
+         return hex(struct.unpack('Q', struct.pack('d', self.value))[0]) + 'ull'
       else:
          assert False
 
    def type(self):
       if isinstance(self.value, (bool)):
          return "nir_type_bool"
-      elif isinstance(self.value, integer_types):
+      elif isinstance(self.value, int):
          return "nir_type_int"
       elif isinstance(self.value, float):
          return "nir_type_float"
@@ -288,11 +293,11 @@ class Constant(Value):
 _var_name_re = re.compile(r"(?P<const>#)?(?P<name>\w+)"
                           r"(?:@(?P<type>int|uint|bool|float)?(?P<bits>\d+)?)?"
                           r"(?P<cond>\([^\)]+\))?"
-                          r"(?P<swiz>\.[xyzw]+)?"
+                          r"(?P<swiz>\.[xyzwabcdefghijklmnop]+)?"
                           r"$")
 
 class Variable(Value):
-   def __init__(self, val, name, varset):
+   def __init__(self, val, name, varset, algebraic_pass):
       Value.__init__(self, val, name, "variable")
 
       m = _var_name_re.match(val)
@@ -309,7 +314,7 @@ class Variable(Value):
       assert self.var_name != 'False'
 
       self.is_constant = m.group('const') is not None
-      self.cond = m.group('cond')
+      self.cond_index = get_cond_index(algebraic_pass.variable_cond, m.group('cond'))
       self.required_type = m.group('type')
       self._bit_size = int(m.group('bits')) if m.group('bits') else None
       self.swiz = m.group('swiz')
@@ -357,20 +362,22 @@ class Variable(Value):
       return '{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}'
 
 _opcode_re = re.compile(r"(?P<inexact>~)?(?P<exact>!)?(?P<opcode>\w+)(?:@(?P<bits>\d+))?"
-                        r"(?P<cond>\([^\)]+\))?")
+                        r"(?P<cond>\([^\)]+\))?(?P<swizzle_y>\.y)?")
 
 class Expression(Value):
-   def __init__(self, expr, name_base, varset):
+   def __init__(self, expr, name_base, varset, algebraic_pass):
       Value.__init__(self, expr, name_base, "expression")
-      assert isinstance(expr, tuple)
 
-      m = _opcode_re.match(expr[0])
+      expr = SearchExpression.create(expr)
+
+      m = _opcode_re.match(expr.opcode)
       assert m and m.group('opcode') is not None
 
       self.opcode = m.group('opcode')
       self._bit_size = int(m.group('bits')) if m.group('bits') else None
       self.inexact = m.group('inexact') is not None
       self.exact = m.group('exact') is not None
+      self.ignore_exact = expr.ignore_exact
       self.cond = m.group('cond')
 
       assert not self.inexact or not self.exact, \
@@ -379,18 +386,26 @@ class Expression(Value):
       # "many-comm-expr" isn't really a condition.  It's notification to the
       # generator that this pattern is known to have too many commutative
       # expressions, and an error should not be generated for this case.
-      self.many_commutative_expressions = False
-      if self.cond and self.cond.find("many-comm-expr") >= 0:
-         # Split the condition into a comma-separated list.  Remove
-         # "many-comm-expr".  If there is anything left, put it back together.
-         c = self.cond[1:-1].split(",")
-         c.remove("many-comm-expr")
+      # nsz, nnan and ninf are special conditions, so we treat them specially too.
+      cond = {k: True for k in self.cond[1:-1].split(",")} if self.cond else {}
+      self.many_commutative_expressions = cond.pop('many-comm-expr', False)
+      self.nsz = cond.pop('nsz', False)
+      self.nnan = cond.pop('nnan', False)
+      self.ninf = cond.pop('ninf', False)
+      self.swizzle_y = m.group('swizzle_y') is not None
 
-         self.cond = "({})".format(",".join(c)) if c else None
-         self.many_commutative_expressions = True
+      assert len(cond) <= 1
+      self.cond = cond.popitem()[0] if cond else None
 
-      self.sources = [ Value.create(src, "{0}_{1}".format(name_base, i), varset)
-                       for (i, src) in enumerate(expr[1:]) ]
+      # Deduplicate references to the condition functions for the expressions
+      # and save the index for the order they were added.
+      self.cond_index = get_cond_index(algebraic_pass.expression_cond, self.cond)
+
+      self.sources = [ Value.create(src, "{0}_{1}".format(name_base, i), varset, algebraic_pass)
+                       for (i, src) in enumerate(expr.sources) ]
+
+      # nir_search_expression::srcs is hard-coded to 4
+      assert len(self.sources) <= 4
 
       if self.opcode in conv_opcode_types:
          assert self._bit_size is None, \
@@ -450,7 +465,7 @@ class Expression(Value):
       return get_c_opcode(self.opcode)
 
    def render(self, cache):
-      srcs = "\n".join(src.render(cache) for src in self.sources)
+      srcs = "".join(src.render(cache) for src in self.sources)
       return srcs + super(Expression, self).render(cache)
 
 class BitSizeValidator(object):
@@ -730,6 +745,17 @@ class BitSizeValidator(object):
       if isinstance(val, Expression):
          for src in val.sources:
             self.validate_replace(src, search)
+      elif isinstance(val, Variable):
+          # These catch problems when someone copies and pastes the search
+          # into the replacement.
+          assert not val.is_constant, \
+              'Replacement variables must not be marked constant.'
+
+          assert val.cond_index == -1, \
+              'Replacement variables must not have a condition.'
+
+          assert not val.required_type, \
+              'Replacement variables must not have a required type.'
 
    def validate(self, search, replace):
       self.is_search = True
@@ -760,7 +786,7 @@ _optimization_ids = itertools.count()
 condition_list = ['true']
 
 class SearchAndReplace(object):
-   def __init__(self, transform):
+   def __init__(self, transform, algebraic_pass):
       self.id = next(_optimization_ids)
 
       search = transform[0]
@@ -778,14 +804,14 @@ class SearchAndReplace(object):
       if isinstance(search, Expression):
          self.search = search
       else:
-         self.search = Expression(search, "search{0}".format(self.id), varset)
+         self.search = Expression(search, "search{0}".format(self.id), varset, algebraic_pass)
 
       varset.lock()
 
       if isinstance(replace, Value):
          self.replace = replace
       else:
-         self.replace = Value.create(replace, "replace{0}".format(self.id), varset)
+         self.replace = Value.create(replace, "replace{0}".format(self.id), varset, algebraic_pass)
 
       BitSizeValidator(varset).validate(self.search, self.replace)
 
@@ -919,12 +945,12 @@ class TreeAutomaton(object):
             stripped = opcode.rstrip('0123456789')
             if stripped in conv_opcode_types:
                # Matches that use conversion opcodes with a specific type,
-               # like f2b1, are tricky.  Either we construct the automaton to
-               # match specific NIR opcodes like nir_op_f2b1, in which case we
+               # like f2i1, are tricky.  Either we construct the automaton to
+               # match specific NIR opcodes like nir_op_f2i1, in which case we
                # need to create separate items for each possible NIR opcode
-               # for patterns that have a generic opcode like f2b, or we
+               # for patterns that have a generic opcode like f2i, or we
                # construct it to match the search opcode, in which case we
-               # need to map f2b1 to f2b when constructing the automaton. Here
+               # need to map f2i1 to f2i when constructing the automaton. Here
                # we do the latter.
                opcode = stripped
             self.opcodes.add(opcode)
@@ -950,8 +976,10 @@ class TreeAutomaton(object):
       # Bijection from state to index. q in the original algorithm is
       # len(self.states)
       self.states = self.IndexMap()
-      # List of pattern matches for each state index.
-      self.state_patterns = []
+      # Lists of pattern matches separated by None
+      self.state_patterns = [None]
+      # Offset in the ->transforms table for each state index
+      self.state_pattern_offsets = []
       # Map from state index to filtered state index for each opcode.
       self.filter = defaultdict(list)
       # Bijections from filtered state to filtered state index for each
@@ -981,15 +1009,21 @@ class TreeAutomaton(object):
       def process_new_states():
          while self.worklist_index < len(self.states):
             state = self.states[self.worklist_index]
-
             # Calculate pattern matches for this state. Each pattern is
             # assigned to a unique item, so we don't have to worry about
             # deduplicating them here. However, we do have to sort them so
             # that they're visited at runtime in the order they're specified
             # in the source.
             patterns = list(sorted(p for item in state for p in item.patterns))
-            assert len(self.state_patterns) == self.worklist_index
-            self.state_patterns.append(patterns)
+
+            if patterns:
+                # Add our patterns to the global table.
+                self.state_pattern_offsets.append(len(self.state_patterns))
+                self.state_patterns.extend(patterns)
+                self.state_patterns.append(None)
+            else:
+                # Point to the initial sentinel in the global table.
+                self.state_pattern_offsets.append(0)
 
             # calculate filter table for this state, and update filtered
             # worklists.
@@ -1062,35 +1096,59 @@ _algebraic_pass_template = mako.template.Template("""
 % endfor
  */
 
-<% cache = {} %>
+<% cache = {"next_index": 0} %>
+static const nir_search_value_union ${pass_name}_values[] = {
 % for xform in xforms:
-   ${xform.search.render(cache)}
-   ${xform.replace.render(cache)}
+   /* ${xform.search} => ${xform.replace} */
+${xform.search.render(cache)}
+${xform.replace.render(cache)}
 % endfor
+};
 
-% for state_id, state_xforms in enumerate(automaton.state_patterns):
-% if state_xforms: # avoid emitting a 0-length array for MSVC
-static const struct transform ${pass_name}_state${state_id}_xforms[] = {
-% for i in state_xforms:
-  { ${xforms[i].search.c_ptr(cache)}, ${xforms[i].replace.c_value_ptr(cache)}, ${xforms[i].condition_index} },
+% if expression_cond:
+static const nir_search_expression_cond ${pass_name}_expression_cond[] = {
+% for cond in expression_cond:
+   ${cond[0]},
 % endfor
 };
 % endif
-% endfor
 
-static const struct per_op_table ${pass_name}_table[nir_num_search_ops] = {
+% if variable_cond:
+static const nir_search_variable_cond ${pass_name}_variable_cond[] = {
+% for cond in variable_cond:
+   ${cond[0]},
+% endfor
+};
+% endif
+
+static const struct transform ${pass_name}_transforms[] = {
+% for i in automaton.state_patterns:
+% if i is not None:
+   { ${xforms[i].search.array_index}, ${xforms[i].replace.array_index}, ${xforms[i].condition_index} },
+% else:
+   { ~0, ~0, ~0 }, /* Sentinel */
+
+% endif
+% endfor
+};
+
+static const struct per_op_table ${pass_name}_pass_op_table[nir_num_search_ops] = {
 % for op in automaton.opcodes:
    [${get_c_opcode(op)}] = {
-      .filter = (uint16_t []) {
+% if all(e == 0 for e in automaton.filter[op]):
+      .filter = NULL,
+% else:
+      .filter = (const uint16_t []) {
       % for e in automaton.filter[op]:
          ${e},
       % endfor
       },
+% endif
       <%
         num_filtered = len(automaton.rep[op])
       %>
       .num_filtered_states = ${num_filtered},
-      .table = (uint16_t []) {
+      .table = (const uint16_t []) {
       <%
         num_srcs = len(next(iter(automaton.table[op])))
       %>
@@ -1102,29 +1160,29 @@ static const struct per_op_table ${pass_name}_table[nir_num_search_ops] = {
 % endfor
 };
 
-const struct transform *${pass_name}_transforms[] = {
-% for i in range(len(automaton.state_patterns)):
-   % if automaton.state_patterns[i]:
-   ${pass_name}_state${i}_xforms,
-   % else:
-   NULL,
-   % endif
+/* Mapping from state index to offset in transforms (0 being no transforms) */
+static const uint16_t ${pass_name}_transform_offsets[] = {
+% for offset in automaton.state_pattern_offsets:
+   ${offset},
 % endfor
 };
 
-const uint16_t ${pass_name}_transform_counts[] = {
-% for i in range(len(automaton.state_patterns)):
-   % if automaton.state_patterns[i]:
-   (uint16_t)ARRAY_SIZE(${pass_name}_state${i}_xforms),
-   % else:
-   0,
-   % endif
-% endfor
+static const nir_algebraic_table ${pass_name}_table = {
+   .transforms = ${pass_name}_transforms,
+   .transform_offsets = ${pass_name}_transform_offsets,
+   .pass_op_table = ${pass_name}_pass_op_table,
+   .values = ${pass_name}_values,
+   .expression_cond = ${ pass_name + "_expression_cond" if expression_cond else "NULL" },
+   .variable_cond = ${ pass_name + "_variable_cond" if variable_cond else "NULL" },
 };
 
 bool
-${pass_name}(nir_shader *shader)
-{
+${pass_name}(
+   nir_shader *shader
+% for type, name in params:
+   , ${type} ${name}
+% endfor
+) {
    bool progress = false;
    bool condition_flags[${len(condition_list)}];
    const nir_shader_compiler_options *options = shader->options;
@@ -1132,17 +1190,13 @@ ${pass_name}(nir_shader *shader)
    (void) options;
    (void) info;
 
+   STATIC_ASSERT(${str(cache["next_index"])} == ARRAY_SIZE(${pass_name}_values));
    % for index, condition in enumerate(condition_list):
    condition_flags[${index}] = ${condition};
    % endfor
 
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         progress |= nir_algebraic_impl(function->impl, condition_flags,
-                                        ${pass_name}_transforms,
-                                        ${pass_name}_transform_counts,
-                                        ${pass_name}_table);
-      }
+   nir_foreach_function_impl(impl, shader) {
+     progress |= nir_algebraic_impl(impl, condition_flags, &${pass_name}_table);
    }
 
    return progress;
@@ -1151,17 +1205,21 @@ ${pass_name}(nir_shader *shader)
 
 
 class AlgebraicPass(object):
-   def __init__(self, pass_name, transforms):
+   # params is a list of `("type", "name")` tuples
+   def __init__(self, pass_name, transforms, params=[]):
       self.xforms = []
       self.opcode_xforms = defaultdict(lambda : [])
       self.pass_name = pass_name
+      self.expression_cond = {}
+      self.variable_cond = {}
+      self.params = params
 
       error = False
 
       for xform in transforms:
          if not isinstance(xform, SearchAndReplace):
             try:
-               xform = SearchAndReplace(xform)
+               xform = SearchAndReplace(xform, self)
             except:
                print("Failed to parse transformation:", file=sys.stderr)
                print("  " + str(xform), file=sys.stderr)
@@ -1217,5 +1275,14 @@ class AlgebraicPass(object):
                                              opcode_xforms=self.opcode_xforms,
                                              condition_list=condition_list,
                                              automaton=self.automaton,
+                                             expression_cond = sorted(self.expression_cond.items(), key=lambda kv: kv[1]),
+                                             variable_cond = sorted(self.variable_cond.items(), key=lambda kv: kv[1]),
                                              get_c_opcode=get_c_opcode,
-                                             itertools=itertools)
+                                             itertools=itertools,
+                                             params=self.params)
+
+# The replacement expression isn't necessarily exact if the search expression is exact.
+def ignore_exact(*expr):
+   expr = SearchExpression.create(expr)
+   expr.ignore_exact = True
+   return expr

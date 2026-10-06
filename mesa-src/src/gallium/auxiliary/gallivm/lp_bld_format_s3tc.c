@@ -192,7 +192,7 @@ lp_build_shuffle1undef(struct gallivm_state *gallivm,
    return LLVMBuildShuffleVector(gallivm->builder, a, a, shuf, "");
 }
 
-static boolean
+static bool
 format_dxt1_variant(enum pipe_format format)
 {
   return format == PIPE_FORMAT_DXT1_RGB ||
@@ -245,8 +245,8 @@ lp_build_gather_s3tc(struct gallivm_state *gallivm,
 
    for (i = 0; i < length; ++i) {
       elems[i] = lp_build_gather_elem(gallivm, length,
-                                      block_bits, block_bits, TRUE,
-                                      base_ptr, offsets, i, FALSE);
+                                      block_bits, block_bits, true,
+                                      base_ptr, offsets, i, false);
       elems[i] = LLVMBuildBitCast(builder, elems[i], type32dxt, "");
    }
    if (length == 1) {
@@ -523,7 +523,7 @@ lp_build_lerp23(struct lp_build_context *bld,
    assert(!type.floating && !type.fixed && !type.norm && type.width == 8);
 
    lp_build_context_init(&bld2, gallivm, i16_type);
-   bld2.type.sign = TRUE;
+   bld2.type.sign = true;
    x = lp_build_const_int_vec(gallivm, bld->type, 255*1/3);
 
    /* FIXME: use native avx256 unpack/pack */
@@ -573,7 +573,7 @@ s3tc_dxt1_full_to_rgba_aos(struct gallivm_state *gallivm,
    LLVMValueRef bit_pos, sel_mask, sel_lo, sel_hi, indices;
    struct lp_type type, type8;
    struct lp_build_context bld8, bld32;
-   boolean is_dxt1_variant = format_dxt1_variant(format);
+   bool is_dxt1_variant = format_dxt1_variant(format);
 
    memset(&type, 0, sizeof type);
    type.width = 32;
@@ -642,8 +642,8 @@ s3tc_dxt1_full_to_rgba_aos(struct gallivm_state *gallivm,
        * XXX with sse2 and 16x8 vectors, should use pavgb even when n == 1.
        * Much cheaper (but we don't care that much if n == 1).
        */
-      if ((util_cpu_caps.has_sse2 && n == 4) ||
-          (util_cpu_caps.has_avx2 && n == 8)) {
+      if ((util_get_cpu_caps()->has_sse2 && n == 4) ||
+          (util_get_cpu_caps()->has_avx2 && n == 8)) {
          color2_2 = lp_build_pavgb(&bld8, colors0, colors1);
          color2_2 = LLVMBuildBitCast(builder, color2_2, bld32.vec_type, "");
       }
@@ -653,7 +653,7 @@ s3tc_dxt1_full_to_rgba_aos(struct gallivm_state *gallivm,
          LLVMValueRef v0_lo, v0_hi, v1_lo, v1_hi, addlo, addhi;
 
          lp_build_context_init(&bld2, gallivm, i16_type);
-         bld2.type.sign = TRUE;
+         bld2.type.sign = true;
 
          /*
           * This isn't as expensive as it looks (the unpack is the same as
@@ -678,11 +678,11 @@ s3tc_dxt1_full_to_rgba_aos(struct gallivm_state *gallivm,
 
       /* select between colors2/3 */
       /* signed compare is faster saves some xors */
-      type.sign = TRUE;
+      type.sign = true;
       sel_mask = lp_build_compare(gallivm, type, PIPE_FUNC_GREATER, col0, col1);
       color2 = lp_build_select(&bld32, sel_mask, color2, color2_2);
       color3 = lp_build_select(&bld32, sel_mask, color3, color3_2);
-      type.sign = FALSE;
+      type.sign = false;
 
       if (format == PIPE_FORMAT_DXT1_RGBA ||
           format == PIPE_FORMAT_DXT1_SRGBA) {
@@ -853,7 +853,7 @@ lp_build_lerpdxta(struct gallivm_state *gallivm,
    memset(&type16, 0, sizeof type16);
    type16.width = 16;
    type16.length = 2*n;
-   type16.sign = TRUE;
+   type16.sign = true;
    memset(&type8, 0, sizeof type8);
    type8.width = 8;
    type8.length = 4*n;
@@ -991,7 +991,7 @@ s3tc_dxt5_alpha_channel(struct gallivm_state *gallivm,
    }
 
    /* signed compare is faster saves some xors */
-   type.sign = TRUE;
+   type.sign = true;
    /* alpha0 > alpha1 selection */
    sel_mask = lp_build_compare(gallivm, type, PIPE_FUNC_GREATER,
                                alpha0, alpha1);
@@ -1097,13 +1097,12 @@ lp_build_gather_s3tc_simple_scalar(struct gallivm_state *gallivm,
    LLVMValueRef elem, shuf;
    LLVMTypeRef type32 = LLVMIntTypeInContext(gallivm->context, 32);
    LLVMTypeRef src_type = LLVMIntTypeInContext(gallivm->context, block_bits);
-   LLVMTypeRef src_ptr_type = LLVMPointerType(src_type, 0);
    LLVMTypeRef type32_4 = LLVMVectorType(type32, 4);
 
    assert(block_bits == 64 || block_bits == 128);
 
-   ptr = LLVMBuildBitCast(builder, ptr, src_ptr_type, "");
-   elem = LLVMBuildLoad(builder, ptr, "");
+   ptr = LLVMBuildBitCast(builder, ptr, LLVMPointerType(src_type, 0), "");
+   elem = LLVMBuildLoad2(builder, src_type, ptr, "");
 
    if (block_bits == 128) {
       /* just return block as is */
@@ -1135,50 +1134,55 @@ s3tc_store_cached_block(struct gallivm_state *gallivm,
    indices[0] = lp_build_const_int32(gallivm, 0);
    indices[1] = lp_build_const_int32(gallivm, LP_BUILD_FORMAT_CACHE_MEMBER_TAGS);
    indices[2] = hash_index;
-   ptr = LLVMBuildGEP(builder, cache, indices, ARRAY_SIZE(indices), "");
+   LLVMTypeRef cache_type = lp_build_format_cache_type(gallivm);
+   ptr = LLVMBuildGEP2(builder, cache_type, cache, indices, ARRAY_SIZE(indices), "");
    LLVMBuildStore(builder, tag_value, ptr);
 
    indices[1] = lp_build_const_int32(gallivm, LP_BUILD_FORMAT_CACHE_MEMBER_DATA);
-   hash_index = LLVMBuildMul(builder, hash_index,
-                             lp_build_const_int32(gallivm, 16), "");
+   hash_index = LLVMBuildMul(builder, hash_index, lp_build_const_int32(gallivm, 16), "");
    for (count = 0; count < 4; count++) {
       indices[2] = hash_index;
-      ptr = LLVMBuildGEP(builder, cache, indices, ARRAY_SIZE(indices), "");
+      ptr = LLVMBuildGEP2(builder, cache_type, cache, indices, ARRAY_SIZE(indices), "");
       ptr = LLVMBuildBitCast(builder, ptr, type_ptr4x32, "");
       LLVMBuildStore(builder, col[count], ptr);
-      hash_index = LLVMBuildAdd(builder, hash_index,
-                                lp_build_const_int32(gallivm, 4), "");
+      hash_index = LLVMBuildAdd(builder, hash_index, lp_build_const_int32(gallivm, 4), "");
    }
 }
 
 static LLVMValueRef
-s3tc_lookup_cached_pixel(struct gallivm_state *gallivm,
-                         LLVMValueRef ptr,
-                         LLVMValueRef index)
-{
+lookup_cache_member(struct gallivm_state *gallivm, LLVMValueRef cache, enum cache_member member, LLVMValueRef index) {
+   assert(member == LP_BUILD_FORMAT_CACHE_MEMBER_DATA || member == LP_BUILD_FORMAT_CACHE_MEMBER_TAGS);
    LLVMBuilderRef builder = gallivm->builder;
    LLVMValueRef member_ptr, indices[3];
 
    indices[0] = lp_build_const_int32(gallivm, 0);
-   indices[1] = lp_build_const_int32(gallivm, LP_BUILD_FORMAT_CACHE_MEMBER_DATA);
+   indices[1] = lp_build_const_int32(gallivm, member);
    indices[2] = index;
-   member_ptr = LLVMBuildGEP(builder, ptr, indices, ARRAY_SIZE(indices), "");
-   return LLVMBuildLoad(builder, member_ptr, "cache_data");
+
+   const char *name =
+         member == LP_BUILD_FORMAT_CACHE_MEMBER_DATA ? "cache_data" :
+         member == LP_BUILD_FORMAT_CACHE_MEMBER_TAGS ? "tag_data" : "";
+
+   member_ptr = LLVMBuildGEP2(builder, lp_build_format_cache_type(gallivm),
+                              cache, indices, ARRAY_SIZE(indices), "cache_gep");
+
+   return LLVMBuildLoad2(builder, lp_build_format_cache_elem_type(gallivm, member), member_ptr, name);
+}
+
+static LLVMValueRef
+s3tc_lookup_cached_pixel(struct gallivm_state *gallivm,
+                         LLVMValueRef cache,
+                         LLVMValueRef index)
+{
+   return lookup_cache_member(gallivm, cache, LP_BUILD_FORMAT_CACHE_MEMBER_DATA, index);
 }
 
 static LLVMValueRef
 s3tc_lookup_tag_data(struct gallivm_state *gallivm,
-                     LLVMValueRef ptr,
+                     LLVMValueRef cache,
                      LLVMValueRef index)
 {
-   LLVMBuilderRef builder = gallivm->builder;
-   LLVMValueRef member_ptr, indices[3];
-
-   indices[0] = lp_build_const_int32(gallivm, 0);
-   indices[1] = lp_build_const_int32(gallivm, LP_BUILD_FORMAT_CACHE_MEMBER_TAGS);
-   indices[2] = index;
-   member_ptr = LLVMBuildGEP(builder, ptr, indices, ARRAY_SIZE(indices), "");
-   return LLVMBuildLoad(builder, member_ptr, "tag_data");
+   return lookup_cache_member(gallivm, cache, LP_BUILD_FORMAT_CACHE_MEMBER_TAGS, index);
 }
 
 #if LP_BUILD_FORMAT_CACHE_DEBUG
@@ -1193,12 +1197,11 @@ s3tc_update_cache_access(struct gallivm_state *gallivm,
 
    assert(index == LP_BUILD_FORMAT_CACHE_MEMBER_ACCESS_TOTAL ||
           index == LP_BUILD_FORMAT_CACHE_MEMBER_ACCESS_MISS);
-
-   member_ptr = lp_build_struct_get_ptr(gallivm, ptr, index, "");
-   cache_access = LLVMBuildLoad(builder, member_ptr, "cache_access");
+   LLVMTypeRef cache_type = lp_build_format_cache_type(gallivm);
+   member_ptr = lp_build_struct_get_ptr2(gallivm, cache_type, ptr, index, "");
+   cache_access = LLVMBuildLoad2(builder, LLVMInt64TypeInContext(gallivm->context), member_ptr, "cache_access");
    cache_access = LLVMBuildAdd(builder, cache_access,
-                               LLVMConstInt(LLVMInt64TypeInContext(gallivm->context),
-                                                                   count, 0), "");
+                               LLVMConstInt(LLVMInt64TypeInContext(gallivm->context), count, 0), "");
    LLVMBuildStore(builder, cache_access, member_ptr);
 }
 #endif
@@ -1223,7 +1226,7 @@ lp_build_lerp23_single(struct lp_build_context *bld,
    assert(!type.floating && !type.fixed && !type.norm && type.width == 8);
 
    lp_build_context_init(&bld2, gallivm, i16_type);
-   bld2.type.sign = TRUE;
+   bld2.type.sign = true;
 
    /* weights 256/3, 256*2/3, with correct rounding */
    elems[0] = elems[1] = elems[2] = elems[3] =
@@ -1266,12 +1269,12 @@ s3tc_decode_block_dxt1(struct gallivm_state *gallivm,
    struct lp_type type8, type32, type16, type64;
    struct lp_build_context bld8, bld32, bld16, bld64;
    unsigned i;
-   boolean is_dxt1_variant = format_dxt1_variant(format);
+   bool is_dxt1_variant = format_dxt1_variant(format);
 
    memset(&type32, 0, sizeof type32);
    type32.width = 32;
    type32.length = 4;
-   type32.sign = TRUE;
+   type32.sign = true;
 
    memset(&type8, 0, sizeof type8);
    type8.width = 8;
@@ -1350,7 +1353,7 @@ s3tc_decode_block_dxt1(struct gallivm_state *gallivm,
    if (is_dxt1_variant) {
       LLVMValueRef color23_2, color2_2;
 
-      if (util_cpu_caps.has_sse2) {
+      if (util_get_cpu_caps()->has_sse2) {
          LLVMValueRef intrargs[2];
          intrargs[0] = LLVMBuildBitCast(builder, color01, bld8.vec_type, "");
          /* same interleave as for lerp23 - correct result in 2nd element */
@@ -1389,7 +1392,7 @@ s3tc_decode_block_dxt1(struct gallivm_state *gallivm,
       color23 = lp_build_select(&bld32, sel_mask, color23, color23_2);
    }
 
-   if (util_cpu_caps.has_ssse3) {
+   if (util_get_cpu_caps()->has_ssse3) {
       /*
        * Use pshufb as mini-lut. (Only doable with intrinsics as the
        * final shuffles are non-constant. pshufb is awesome!)
@@ -1564,7 +1567,7 @@ lp_build_lerpdxta_block(struct gallivm_state *gallivm,
    memset(&type16, 0, sizeof type16);
    type16.width = 16;
    type16.length = 8;
-   type16.sign = TRUE;
+   type16.sign = true;
 
    lp_build_context_init(&bld, gallivm, type16);
    /*
@@ -1683,13 +1686,13 @@ s3tc_decode_block_dxt5(struct gallivm_state *gallivm,
    alpha0 = LLVMBuildShuffleVector(builder, alpha0, alpha0, shuffle1, "");
    alpha1 = LLVMBuildShuffleVector(builder, alpha1, alpha1, shuffle1, "");
 
-   type16.sign = TRUE;
+   type16.sign = true;
    sel_mask = lp_build_compare(gallivm, type16, PIPE_FUNC_GREATER,
                                alpha0, alpha1);
-   type16.sign = FALSE;
+   type16.sign = false;
    sel_mask = LLVMBuildBitCast(builder, sel_mask, bld8.vec_type, "");
 
-   if (!util_cpu_caps.has_ssse3) {
+   if (!util_get_cpu_caps()->has_ssse3) {
       LLVMValueRef acodeg, mask1, acode0, acode1;
 
       /* extraction of the 3 bit values into something more useful is HARD */
@@ -1715,9 +1718,9 @@ s3tc_decode_block_dxt5(struct gallivm_state *gallivm,
       tmp1 =  LLVMBuildLShr(builder, acode,
                             lp_build_const_int_vec(gallivm, type32, 6), "");
       /* use signed pack doesn't matter and otherwise need sse41 */
-      type32.sign = type16.sign = TRUE;
+      type32.sign = type16.sign = true;
       acode = lp_build_pack2(gallivm, type32, type16, tmp0, tmp1);
-      type32.sign = type16.sign = FALSE;
+      type32.sign = type16.sign = false;
       /* now have 8x6bit in 8x16bit, 01, 45, 89, ..., 23, 67, ... */
       acode0 = LLVMBuildAnd(builder, acode,
                             lp_build_const_int_vec(gallivm, type16, 0x7), "");
@@ -1996,24 +1999,17 @@ update_cached_block(struct gallivm_state *gallivm,
             format_desc->short_name);
    function = LLVMGetNamedFunction(module, name);
 
+   LLVMTypeRef ret_type = LLVMVoidTypeInContext(gallivm->context);
+   LLVMTypeRef arg_types[3];
+   arg_types[0] = pi8t;
+   arg_types[1] = LLVMInt32TypeInContext(gallivm->context);
+   arg_types[2] = LLVMTypeOf(cache); // XXX: put right type here
+   LLVMTypeRef function_type = LLVMFunctionType(ret_type, arg_types, ARRAY_SIZE(arg_types), 0);
+
    if (!function) {
-      LLVMTypeRef ret_type;
-      LLVMTypeRef arg_types[3];
-      LLVMTypeRef function_type;
-      unsigned arg;
-
-      /*
-       * Generate the function prototype.
-       */
-
-      ret_type = LLVMVoidTypeInContext(gallivm->context);
-      arg_types[0] = pi8t;
-      arg_types[1] = LLVMInt32TypeInContext(gallivm->context);
-      arg_types[2] = LLVMTypeOf(cache); // XXX: put right type here
-      function_type = LLVMFunctionType(ret_type, arg_types, ARRAY_SIZE(arg_types), 0);
       function = LLVMAddFunction(module, name, function_type);
 
-      for (arg = 0; arg < ARRAY_SIZE(arg_types); ++arg)
+      for (unsigned arg = 0; arg < ARRAY_SIZE(arg_types); ++arg)
          if (LLVMGetTypeKind(arg_types[arg]) == LLVMPointerTypeKind)
             lp_add_function_attr(function, arg + 1, LP_FUNC_ATTR_NOALIAS);
 
@@ -2026,7 +2022,7 @@ update_cached_block(struct gallivm_state *gallivm,
    args[1] = hash_index;
    args[2] = cache;
  
-   LLVMBuildCall(builder, function, args, ARRAY_SIZE(args), "");
+   LLVMBuildCall2(builder, function_type, function, args, ARRAY_SIZE(args), "");
    bb = LLVMGetInsertBlock(builder);
    inst = LLVMGetLastInstruction(bb);
    LLVMSetInstructionCallConv(inst, LLVMFastCallConv);
@@ -2348,8 +2344,8 @@ lp_build_gather_rgtc(struct gallivm_state *gallivm,
 
    for (i = 0; i < length; ++i) {
       elems[i] = lp_build_gather_elem(gallivm, length,
-                                      block_bits, block_bits, TRUE,
-                                      base_ptr, offsets, i, FALSE);
+                                      block_bits, block_bits, true,
+                                      base_ptr, offsets, i, false);
       elems[i] = LLVMBuildBitCast(builder, elems[i], type32dxt, "");
    }
    if (length == 1) {
@@ -2365,6 +2361,9 @@ lp_build_gather_rgtc(struct gallivm_state *gallivm,
                                              lp_build_const_int32(gallivm, 2), "");
          *green_hi = LLVMBuildExtractElement(builder, elem,
                                              lp_build_const_int32(gallivm, 3), "");
+      } else {
+         *green_lo = NULL;
+         *green_hi = NULL;
       }
    } else {
       LLVMValueRef tmp[4];
@@ -2444,7 +2443,7 @@ rgtc1_to_rgba_aos(struct gallivm_state *gallivm,
    memset(&type8, 0, sizeof type8);
    type8.width = 8;
    type8.length = n*4;
-   rgba = lp_build_const_int_vec(gallivm, type, is_signed ? (0x7f << 24) : (0xff << 24));
+   rgba = lp_build_const_int_vec(gallivm, type, is_signed ? (0x7f << 24) : (0xffu << 24));
    rgba = LLVMBuildOr(builder, rgba, red, "");
    return LLVMBuildBitCast(builder, rgba, lp_build_vec_type(gallivm, type8), "");
 }
@@ -2472,7 +2471,7 @@ rgtc2_to_rgba_aos(struct gallivm_state *gallivm,
    memset(&type8, 0, sizeof type8);
    type8.width = 8;
    type8.length = n*4;
-   rgba = lp_build_const_int_vec(gallivm, type, is_signed ? (0x7f << 24) : (0xff << 24));
+   rgba = lp_build_const_int_vec(gallivm, type, is_signed ? (0x7f << 24) : (0xffu << 24));
    rgba = LLVMBuildOr(builder, rgba, red, "");
    green = LLVMBuildShl(builder, green, lp_build_const_int_vec(gallivm, type, 8), "");
    rgba = LLVMBuildOr(builder, rgba, green, "");
@@ -2499,7 +2498,7 @@ latc1_to_rgba_aos(struct gallivm_state *gallivm,
    memset(&type8, 0, sizeof type8);
    type8.width = 8;
    type8.length = n*4;
-   rgba = lp_build_const_int_vec(gallivm, type, is_signed ? (0x7f << 24) : (0xff << 24));
+   rgba = lp_build_const_int_vec(gallivm, type, is_signed ? (0x7f << 24) : (0xffu << 24));
    rgba = LLVMBuildOr(builder, rgba, red, "");
    temp = LLVMBuildShl(builder, red, lp_build_const_int_vec(gallivm, type, 8), "");
    rgba = LLVMBuildOr(builder, rgba, temp, "");

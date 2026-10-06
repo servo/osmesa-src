@@ -24,7 +24,7 @@
 #include "ir_builder.h"
 #include "ir_rvalue_visitor.h"
 #include "ir_optimization.h"
-#include "main/mtypes.h"
+#include "main/shader_types.h"
 
 using namespace ir_builder;
 
@@ -60,7 +60,7 @@ vector_deref_visitor::visit_enter(ir_assignment *ir)
       return ir_rvalue_enter_visitor::visit_enter(ir);
 
    ir_dereference_array *const deref = (ir_dereference_array *) ir->lhs;
-   if (!deref->array->type->is_vector())
+   if (!glsl_type_is_vector(deref->array->type))
       return ir_rvalue_enter_visitor::visit_enter(ir);
 
    /* SSBOs and shared variables are backed by memory and may be accessed by
@@ -112,18 +112,17 @@ vector_deref_visitor::visit_enter(ir_assignment *ir)
 
             if (new_lhs->ir_type != ir_type_swizzle) {
                assert(lhs_clone->as_dereference());
-               ir_assignment *cond_assign =
-                  new(mem_ctx) ir_assignment(lhs_clone->as_dereference(),
-                                             src_temp_deref,
-                                             equal(arr_index, cmp_index),
-                                             WRITEMASK_X << i);
-               factory.emit(cond_assign);
+
+               factory.emit(if_tree(equal(arr_index, cmp_index),
+                                    assign(lhs_clone->as_dereference(),
+                                           src_temp_deref,
+                                           WRITEMASK_X << i)));
             } else {
                ir_assignment *cond_assign =
                   new(mem_ctx) ir_assignment(swizzle(lhs_clone, i, 1),
-                                             src_temp_deref,
-                                             equal(arr_index, cmp_index));
-               factory.emit(cond_assign);
+                                             src_temp_deref);
+
+               factory.emit(if_tree(equal(arr_index, cmp_index), cond_assign));
             }
          }
          ir->insert_after(factory.instructions);
@@ -173,7 +172,7 @@ vector_deref_visitor::handle_rvalue(ir_rvalue **rv)
       return;
 
    ir_dereference_array *const deref = (ir_dereference_array *) *rv;
-   if (!deref->array->type->is_vector())
+   if (!glsl_type_is_vector(deref->array->type))
       return;
 
    /* Back-ends need to be able to handle derefs on vectors for SSBOs, UBOs,
@@ -194,7 +193,7 @@ vector_deref_visitor::handle_rvalue(ir_rvalue **rv)
 }
 
 bool
-lower_vector_derefs(gl_linked_shader *shader)
+lower_vector_derefs(gl_shader *shader)
 {
    vector_deref_visitor v(shader->ir, shader->Stage);
 

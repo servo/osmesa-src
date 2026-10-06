@@ -30,7 +30,7 @@
  */
 
 
-#include "glheader.h"
+#include "util/glheader.h"
 
 #include "context.h"
 #include "formats.h"
@@ -347,7 +347,7 @@ _mesa_get_compressed_formats(struct gl_context *ctx, GLint *formats)
       formats[n++] = GL_COMPRESSED_SIGNED_RED_GREEN_RGTC2_EXT;
    }
 
-   if (ctx->API == API_OPENGLES) {
+   if (_mesa_is_gles1(ctx)) {
       formats[n++] = GL_PALETTE4_RGB8_OES;
       formats[n++] = GL_PALETTE4_RGBA8_OES;
       formats[n++] = GL_PALETTE4_R5_G6_B5_OES;
@@ -360,7 +360,7 @@ _mesa_get_compressed_formats(struct gl_context *ctx, GLint *formats)
       formats[n++] = GL_PALETTE8_RGB5_A1_OES;
    }
 
-   if (_mesa_is_gles3(ctx) || ctx->Extensions.ARB_ES3_compatibility) {
+   if (_mesa_is_gles3_compatible(ctx)) {
       formats[n++] = GL_COMPRESSED_RGB8_ETC2;
       formats[n++] = GL_COMPRESSED_RGBA8_ETC2_EAC;
       formats[n++] = GL_COMPRESSED_R11_EAC;
@@ -402,7 +402,7 @@ _mesa_get_compressed_formats(struct gl_context *ctx, GLint *formats)
     * COMPRESSED_TEXTURE_FORMATS query returns the set of supported specific
     * compressed formats.
     */
-   if (ctx->API == API_OPENGLES2 &&
+   if (_mesa_is_gles2(ctx) &&
        ctx->Extensions.KHR_texture_compression_astc_ldr) {
       formats[n++] = GL_COMPRESSED_RGBA_ASTC_4x4_KHR;
       formats[n++] = GL_COMPRESSED_RGBA_ASTC_5x4_KHR;
@@ -868,38 +868,6 @@ _mesa_compressed_format_to_glenum(struct gl_context *ctx,
                     " _mesa_compressed_format_to_glenum()");
       return 0;
    }
-}
-
-
-/*
- * Return the address of the pixel at (col, row, img) in a
- * compressed texture image.
- * \param col, row, img - image position (3D), should be a multiple of the
- *                        format's block size.
- * \param format - compressed image format
- * \param width - image width (stride) in pixels
- * \param image - the image address
- * \return address of pixel at (row, col, img)
- */
-GLubyte *
-_mesa_compressed_image_address(GLint col, GLint row, GLint img,
-                               mesa_format mesaFormat,
-                               GLsizei width, const GLubyte *image)
-{
-   /* XXX only 2D images implemented, not 3D */
-   const GLuint blockSize = _mesa_get_format_bytes(mesaFormat);
-   GLuint bw, bh;
-   GLint offset;
-
-   _mesa_get_format_block_size(mesaFormat, &bw, &bh);
-
-   assert(col % bw == 0);
-   assert(row % bh == 0);
-
-   offset = ((width + bw - 1) / bw) * (row / bh) + col / bw;
-   offset *= blockSize;
-
-   return (GLubyte *) image + offset;
 }
 
 

@@ -209,7 +209,7 @@ emit_vertices_seq(struct push_context *ctx, unsigned start, unsigned count)
 
 
 #define NV50_PRIM_GL_CASE(n) \
-   case PIPE_PRIM_##n: return NV50_3D_VERTEX_BEGIN_GL_PRIMITIVE_##n
+   case MESA_PRIM_##n: return NV50_3D_VERTEX_BEGIN_GL_PRIMITIVE_##n
 
 static inline unsigned
 nv50_prim_gl(unsigned prim)
@@ -238,20 +238,22 @@ nv50_prim_gl(unsigned prim)
 }
 
 void
-nv50_push_vbo(struct nv50_context *nv50, const struct pipe_draw_info *info)
+nv50_push_vbo(struct nv50_context *nv50, const struct pipe_draw_info *info,
+              const struct pipe_draw_indirect_info *indirect,
+              const struct pipe_draw_start_count_bias *draw)
 {
    struct push_context ctx;
    unsigned i, index_size;
    unsigned inst_count = info->instance_count;
-   unsigned vert_count = info->count;
-   bool apply_bias = info->index_size && info->index_bias;
+   unsigned vert_count = draw->count;
+   bool apply_bias = info->index_size && draw->index_bias;
 
    ctx.push = nv50->base.pushbuf;
    ctx.translate = nv50->vertex->translate;
 
    ctx.need_vertex_id = nv50->screen->base.class_3d >= NV84_3D_CLASS &&
       nv50->vertprog->vp.need_vertex_id && (nv50->vertex->num_elements < 32);
-   ctx.index_bias = info->index_bias;
+   ctx.index_bias = info->index_size ? draw->index_bias : 0;
    ctx.instance_id = 0;
 
    /* For indexed draws, gl_VertexID must be emitted for every vertex. */
@@ -274,9 +276,9 @@ nv50_push_vbo(struct nv50_context *nv50, const struct pipe_draw_info *info)
          data = vb->buffer.user;
 
       if (apply_bias && likely(!(nv50->vertex->instance_bufs & (1 << i))))
-         data += (ptrdiff_t)info->index_bias * vb->stride;
+         data += (ptrdiff_t)(info->index_size ? draw->index_bias : 0) * nv50->vertex->strides[i];
 
-      ctx.translate->set_buffer(ctx.translate, i, data, vb->stride, ~0);
+      ctx.translate->set_buffer(ctx.translate, i, data, nv50->vertex->strides[i], ~0);
    }
 
    if (info->index_size) {
@@ -292,10 +294,10 @@ nv50_push_vbo(struct nv50_context *nv50, const struct pipe_draw_info *info)
       ctx.primitive_restart = info->primitive_restart;
       ctx.restart_index = info->restart_index;
    } else {
-      if (unlikely(info->count_from_stream_output)) {
+      if (unlikely(indirect && indirect->count_from_stream_output)) {
          struct pipe_context *pipe = &nv50->base.pipe;
          struct nv50_so_target *targ;
-         targ = nv50_so_target(info->count_from_stream_output);
+         targ = nv50_so_target(indirect->count_from_stream_output);
          if (!targ->pq) {
             NOUVEAU_ERR("draw_stream_output not supported on pre-NVA0 cards\n");
             return;
@@ -328,16 +330,16 @@ nv50_push_vbo(struct nv50_context *nv50, const struct pipe_draw_info *info)
       PUSH_DATA (ctx.push, ctx.prim);
       switch (index_size) {
       case 0:
-         emit_vertices_seq(&ctx, info->start, vert_count);
+         emit_vertices_seq(&ctx, draw->start, vert_count);
          break;
       case 1:
-         emit_vertices_i08(&ctx, info->start, vert_count);
+         emit_vertices_i08(&ctx, draw->start, vert_count);
          break;
       case 2:
-         emit_vertices_i16(&ctx, info->start, vert_count);
+         emit_vertices_i16(&ctx, draw->start, vert_count);
          break;
       case 4:
-         emit_vertices_i32(&ctx, info->start, vert_count);
+         emit_vertices_i32(&ctx, draw->start, vert_count);
          break;
       default:
          assert(0);

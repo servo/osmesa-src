@@ -1,94 +1,22 @@
 /*
  * Copyright 2012 Advanced Micro Devices, Inc.
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
+#include "si_pm4.h"
 #include "si_pipe.h"
 #include "si_build_pm4.h"
 #include "sid.h"
 #include "util/u_memory.h"
+#include "ac_debug.h"
 
-static void si_pm4_cmd_begin(struct si_pm4_state *state, unsigned opcode)
+void si_pm4_clear_state(struct si_pm4_state *state, struct si_screen *sscreen,
+                        bool is_compute_queue)
 {
-   assert(state->ndw < SI_PM4_MAX_DW);
-   state->last_opcode = opcode;
-   state->last_pm4 = state->ndw++;
-}
+   const bool debug_sqtt = !!(sscreen->debug_flags & DBG(SQTT));
 
-void si_pm4_cmd_add(struct si_pm4_state *state, uint32_t dw)
-{
-   assert(state->ndw < SI_PM4_MAX_DW);
-   state->pm4[state->ndw++] = dw;
-}
-
-static void si_pm4_cmd_end(struct si_pm4_state *state, bool predicate)
-{
-   unsigned count;
-   count = state->ndw - state->last_pm4 - 2;
-   state->pm4[state->last_pm4] = PKT3(state->last_opcode, count, predicate);
-}
-
-void si_pm4_set_reg(struct si_pm4_state *state, unsigned reg, uint32_t val)
-{
-   unsigned opcode;
-
-   SI_CHECK_SHADOWED_REGS(reg, 1);
-
-   if (reg >= SI_CONFIG_REG_OFFSET && reg < SI_CONFIG_REG_END) {
-      opcode = PKT3_SET_CONFIG_REG;
-      reg -= SI_CONFIG_REG_OFFSET;
-
-   } else if (reg >= SI_SH_REG_OFFSET && reg < SI_SH_REG_END) {
-      opcode = PKT3_SET_SH_REG;
-      reg -= SI_SH_REG_OFFSET;
-
-   } else if (reg >= SI_CONTEXT_REG_OFFSET && reg < SI_CONTEXT_REG_END) {
-      opcode = PKT3_SET_CONTEXT_REG;
-      reg -= SI_CONTEXT_REG_OFFSET;
-
-   } else if (reg >= CIK_UCONFIG_REG_OFFSET && reg < CIK_UCONFIG_REG_END) {
-      opcode = PKT3_SET_UCONFIG_REG;
-      reg -= CIK_UCONFIG_REG_OFFSET;
-
-   } else {
-      PRINT_ERR("Invalid register offset %08x!\n", reg);
-      return;
-   }
-
-   reg >>= 2;
-
-   if (opcode != state->last_opcode || reg != (state->last_reg + 1)) {
-      si_pm4_cmd_begin(state, opcode);
-      si_pm4_cmd_add(state, reg);
-   }
-
-   state->last_reg = reg;
-   si_pm4_cmd_add(state, val);
-   si_pm4_cmd_end(state, false);
-}
-
-void si_pm4_clear_state(struct si_pm4_state *state)
-{
-   state->ndw = 0;
+   ac_pm4_clear_state(&state->base, &sscreen->info, debug_sqtt, is_compute_queue);
 }
 
 void si_pm4_free_state(struct si_context *sctx, struct si_pm4_state *state, unsigned idx)
@@ -96,46 +24,84 @@ void si_pm4_free_state(struct si_context *sctx, struct si_pm4_state *state, unsi
    if (!state)
       return;
 
-   if (idx != ~0 && sctx->emitted.array[idx] == state) {
-      sctx->emitted.array[idx] = NULL;
+   if (idx != ~0) {
+      if (sctx->emitted.array[idx] == state)
+         sctx->emitted.array[idx] = NULL;
+
+      if (sctx->queued.array[idx] == state) {
+         sctx->queued.array[idx] = NULL;
+         sctx->dirty_atoms &= ~BITFIELD64_BIT(idx);
+      }
    }
 
-   si_pm4_clear_state(state);
    FREE(state);
 }
 
-void si_pm4_emit(struct si_context *sctx, struct si_pm4_state *state)
+void si_pm4_emit_commands(struct si_context *sctx, struct si_pm4_state *state)
 {
-   struct radeon_cmdbuf *cs = sctx->gfx_cs;
+   struct radeon_cmdbuf *cs = &sctx->gfx_cs;
 
-   if (state->shader) {
-      radeon_add_to_buffer_list(sctx, sctx->gfx_cs, state->shader->bo,
-                                RADEON_USAGE_READ, RADEON_PRIO_SHADER_BINARY);
-   }
-
-   radeon_emit_array(cs, state->pm4, state->ndw);
-
-   if (state->atom.emit)
-      state->atom.emit(sctx);
+   radeon_begin(cs);
+   radeon_emit_array(state->base.pm4, state->base.ndw);
+   radeon_end();
 }
 
-void si_pm4_reset_emitted(struct si_context *sctx, bool first_cs)
+void si_pm4_emit_state(struct si_context *sctx, unsigned index)
 {
-   if (!first_cs && sctx->shadowed_regs) {
-      /* Only dirty states that contain buffers, so that they are
-       * added to the buffer list on the next draw call.
-       */
-      for (unsigned i = 0; i < SI_NUM_STATES; i++) {
-         struct si_pm4_state *state = sctx->emitted.array[i];
+   struct si_pm4_state *state = sctx->queued.array[index];
+   struct radeon_cmdbuf *cs = &sctx->gfx_cs;
 
-         if (state && state->shader) {
-            sctx->emitted.array[i] = NULL;
-            sctx->dirty_states |= 1 << i;
-         }
-      }
-      return;
-   }
+   /* All places should unset dirty_states if this doesn't pass. */
+   assert(state && state != sctx->emitted.array[index]);
 
+   radeon_begin(cs);
+   radeon_emit_array(state->base.pm4, state->base.ndw);
+   radeon_end();
+
+   sctx->emitted.array[index] = state;
+}
+
+void si_pm4_emit_shader(struct si_context *sctx, unsigned index)
+{
+   struct si_pm4_state *state = sctx->queued.array[index];
+
+   si_pm4_emit_state(sctx, index);
+
+   radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, ((struct si_shader*)state)->bo,
+                             RADEON_USAGE_READ | RADEON_PRIO_SHADER_BINARY);
+   if (state->atom.emit)
+      state->atom.emit(sctx, -1);
+}
+
+void si_pm4_reset_emitted(struct si_context *sctx)
+{
    memset(&sctx->emitted, 0, sizeof(sctx->emitted));
-   sctx->dirty_states |= u_bit_consecutive(0, SI_NUM_STATES);
+
+   for (unsigned i = 0; i < SI_NUM_STATES; i++) {
+      if (sctx->queued.array[i])
+         sctx->dirty_atoms |= BITFIELD64_BIT(i);
+   }
+}
+
+struct si_pm4_state *si_pm4_create_sized(struct si_screen *sscreen, unsigned max_dw,
+                                         bool is_compute_queue)
+{
+   struct si_pm4_state *pm4;
+   unsigned size = sizeof(*pm4) + 4 * (max_dw - ARRAY_SIZE(pm4->base.pm4));
+
+   pm4 = (struct si_pm4_state *)calloc(1, size);
+   if (pm4) {
+      pm4->base.max_dw = max_dw;
+      si_pm4_clear_state(pm4, sscreen, is_compute_queue);
+   }
+   return pm4;
+}
+
+struct si_pm4_state *si_pm4_clone(struct si_screen *sscreen, struct si_pm4_state *orig)
+{
+   struct si_pm4_state *pm4 = si_pm4_create_sized(sscreen, orig->base.max_dw,
+                                                  orig->base.is_compute_queue);
+   if (pm4)
+      memcpy(pm4, orig, sizeof(*pm4) + 4 * (pm4->base.max_dw - ARRAY_SIZE(pm4->base.pm4)));
+   return pm4;
 }

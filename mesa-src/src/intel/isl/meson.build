@@ -1,71 +1,68 @@
 # Copyright © 2017 Intel Corporation
+# SPDX-License-Identifier: MIT
 
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-
-isl_gen_files = files(
+isl_per_hw_ver_files = files(
+  'isl_emit_cpb.c',
   'isl_emit_depth_stencil.c',
   'isl_surface_state.c',
+  'isl_genX_helpers.h',
 )
 
-isl_gen4_files = files(
-  'isl_gen4.c',
-  'isl_gen4.h',
+isl_gfx4_files = files(
+  'isl_gfx4.c',
+  'isl_gfx4.h',
 )
 
-isl_gen6_files = files(
-  'isl_gen6.c',
-  'isl_gen6.h',
+isl_gfx6_files = files(
+  'isl_gfx6.c',
+  'isl_gfx6.h',
 )
 
-isl_gen7_files = files(
-  'isl_gen7.c',
-  'isl_gen7.h',
+isl_gfx7_files = files(
+  'isl_gfx7.c',
+  'isl_gfx7.h',
 )
 
-isl_gen8_files = files(
-  'isl_gen8.c',
-  'isl_gen8.h',
+isl_gfx8_files = files(
+  'isl_gfx8.c',
+  'isl_gfx8.h',
 )
 
-isl_gen9_files = files(
-  'isl_gen9.c',
-  'isl_gen9.h',
+isl_gfx9_files = files(
+  'isl_gfx9.c',
+  'isl_gfx9.h',
 )
 
-isl_gen12_files = files(
-  'isl_gen12.c',
-  'isl_gen12.h',
+isl_gfx12_files = files(
+  'isl_gfx12.c',
+  'isl_gfx12.h',
 )
 
-isl_gen_libs = []
-foreach g : [['40', isl_gen4_files], ['50', []], ['60', isl_gen6_files],
-             ['70', isl_gen7_files], ['75', []], ['80', isl_gen8_files],
-             ['90', isl_gen9_files], ['100', []], ['110', []],
-             ['120', isl_gen12_files]]
-  _gen = g[0]
-  isl_gen_libs += static_library(
-    'isl_gen@0@'.format(_gen),
-    [g[1], isl_gen_files, gen_xml_pack],
-    include_directories : [inc_include, inc_src, inc_gallium, inc_intel],
+isl_gfx125_files = files(
+  'isl_gfx12.c',
+  'isl_gfx12.h',
+)
+
+isl_gfx20_files = files(
+  'isl_gfx20.c',
+  'isl_gfx20.h',
+)
+
+isl_per_hw_ver_libs = []
+foreach g : [['40', isl_gfx4_files], ['50', []], ['60', isl_gfx6_files],
+             ['70', isl_gfx7_files], ['75', []], ['80', isl_gfx8_files],
+             ['90', isl_gfx9_files], ['110', []], ['120', isl_gfx12_files],
+             ['125', isl_gfx12_files], ['200', isl_gfx20_files],
+             ['300', isl_gfx20_files]]
+  _gfx_ver = g[0]
+  isl_per_hw_ver_libs += static_library(
+    'isl_per_hw_ver@0@'.format(_gfx_ver),
+    [g[1], isl_per_hw_ver_files],
+    include_directories : [inc_include, inc_src, inc_intel],
+    dependencies : [idep_mesautil, idep_intel_dev, idep_genxml],
     c_args : [
       no_override_init_args,
-      '-DGEN_VERSIONx10=@0@'.format(_gen)
+      '-DGFX_VERx10=@0@'.format(_gfx_ver)
     ],
     gnu_symbol_visibility : 'hidden',
   )
@@ -90,9 +87,11 @@ isl_tiled_memcpy = static_library(
   'isl_tiled_memcpy',
   [files_isl_tiled_memcpy],
   include_directories : [
-    inc_include, inc_src, inc_mesa, inc_gallium, inc_intel,
+    inc_include, inc_src, inc_intel,
   ],
-  c_args : [no_override_init_args, '-msse2'],
+
+  dependencies : [idep_mesautil, idep_intel_dev],
+  c_args : [no_override_init_args, sse2_arg],
   gnu_symbol_visibility : 'hidden',
   extra_files : ['isl_tiled_memcpy.c']
 )
@@ -102,10 +101,11 @@ if with_sse41
     'isl_tiled_memcpy_sse41',
     [files_isl_tiled_memcpy_sse41],
     include_directories : [
-      inc_include, inc_src, inc_mesa, inc_gallium, inc_intel,
+      inc_include, inc_src, inc_intel,
     ],
+    dependencies : [idep_mesautil, idep_intel_dev],
     link_args : ['-Wl,--exclude-libs=ALL'],
-    c_args : [no_override_init_args, '-msse2', sse41_args],
+    c_args : [no_override_init_args, sse2_arg, sse41_args],
     gnu_symbol_visibility : 'hidden',
     extra_files : ['isl_tiled_memcpy.c']
   )
@@ -127,11 +127,25 @@ libisl_files = files(
 libisl = static_library(
   'isl',
   [libisl_files, isl_format_layout_c, genX_bits_h],
-  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_intel],
-  link_with : [isl_gen_libs, isl_tiled_memcpy, isl_tiled_memcpy_sse41],
+  include_directories : [inc_include, inc_src, inc_intel],
+  link_with : [isl_per_hw_ver_libs, isl_tiled_memcpy, isl_tiled_memcpy_sse41],
+  dependencies : [idep_mesautil, idep_intel_dev],
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
 )
+
+if with_intel_tools
+isl_query = executable(
+  'isl_query',
+  files('isl_query.c'),
+  dependencies : [idep_mesautil, dep_m, idep_intel_dev],
+  include_directories : [inc_include, inc_src, inc_intel],
+  link_with : [libisl],
+  c_args : [no_override_init_args],
+  gnu_symbol_visibility : 'hidden',
+  install : false
+)
+endif
 
 if with_tests
   test(
@@ -139,9 +153,9 @@ if with_tests
     executable(
       'isl_surf_get_image_offset_test',
       'tests/isl_surf_get_image_offset_test.c',
-      dependencies : [dep_m, idep_mesautil],
-      include_directories : [inc_include, inc_src, inc_gallium, inc_intel],
-      link_with : [libisl, libintel_dev],
+      dependencies : [dep_m, idep_mesautil, idep_intel_dev],
+      link_with:  libisl,
+      include_directories : [inc_include, inc_src, inc_intel],
     ),
     suite : ['intel'],
   )
@@ -153,10 +167,48 @@ if with_tests
         'tests/isl_aux_info_test.cpp',
         'isl_aux_info.c',
       ],
-      dependencies : [dep_m, idep_gtest, idep_mesautil],
-      include_directories : [inc_include, inc_src, inc_gallium, inc_intel],
+      dependencies : [dep_m, idep_gtest, idep_mesautil, idep_intel_dev],
+      include_directories : [inc_include, inc_src, inc_intel],
       c_args : '-DIN_UNIT_TEST',
       cpp_args : '-DIN_UNIT_TEST',
+    ),
+    suite : ['intel'],
+    protocol : 'gtest',
+  )
+  test(
+    'isl_tile_std_y',
+    executable(
+      'isl_tile_std_y_test',
+      'tests/isl_tile_std_y_test.c',
+      dependencies : [dep_m, idep_mesautil],
+      include_directories : [inc_include, inc_src, inc_intel],
+      link_with : [libisl, libintel_dev],
+    ),
+    suite : ['intel'],
+  )
+  test(
+    'isl_tilememcpy',
+    executable(
+      'isl_tilememcpy_test',
+      [
+        'tests/isl_tilememcpy_tiled_unittest.cpp',
+      ],
+      dependencies : [dep_m, idep_gtest, idep_mesautil, idep_intel_dev],
+      include_directories : [inc_include, inc_src, inc_intel],
+      link_with : libisl,
+      c_args : '-DIN_UNIT_TEST',
+      cpp_args : ['-std=c++17', '-DIN_UNIT_TEST'],
+    ),
+    suite : ['intel'],
+  )
+  test(
+    'isl_surf_get_image_range_B_tile',
+    executable(
+      'isl_surf_get_image_range_B_tile_test',
+      'tests/isl_surf_get_image_range_B_tile_test.c',
+      dependencies : [dep_m, idep_mesautil, idep_intel_dev],
+      link_with:  libisl,
+      include_directories : [inc_include, inc_src, inc_intel],
     ),
     suite : ['intel'],
   )

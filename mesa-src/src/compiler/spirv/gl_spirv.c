@@ -33,14 +33,22 @@ vtn_validate_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
                                   const uint32_t *w, unsigned count)
 {
    switch (opcode) {
+   case SpvOpString:
    case SpvOpSource:
    case SpvOpSourceExtension:
    case SpvOpSourceContinued:
+   case SpvOpModuleProcessed:
+      /* We need this since vtn_foreach_instruction automatically handles
+       * OpLine / OpNoLine and relies on the SpvOpString from preamble being
+       * handled.
+       */
+      vtn_handle_debug_text(b, opcode, w, count);
+      break;
+
    case SpvOpExtension:
    case SpvOpCapability:
    case SpvOpExtInstImport:
    case SpvOpMemoryModel:
-   case SpvOpString:
    case SpvOpName:
    case SpvOpMemberName:
    case SpvOpExecutionMode:
@@ -218,16 +226,21 @@ vtn_validate_handle_constant_instruction(struct vtn_builder *b, SpvOp opcode,
  * would need to trigger the specific errors.
  *
  */
-bool
-gl_spirv_validation(const uint32_t *words, size_t word_count,
-                    struct nir_spirv_specialization *spec, unsigned num_spec,
-                    gl_shader_stage stage, const char *entry_point_name)
+enum spirv_verify_result
+spirv_verify_gl_specialization_constants(
+   const uint32_t *words, size_t word_count,
+   struct nir_spirv_specialization *spec, unsigned num_spec,
+   gl_shader_stage stage, const char *entry_point_name)
 {
    /* vtn_warn/vtn_log uses debug.func. Setting a null to prevent crash. Not
     * need to print the warnings now, would be done later, on the real
     * spirv_to_nir
     */
-   const struct spirv_to_nir_options options = { .debug.func = NULL};
+   const struct spirv_capabilities spirv_caps = { false, };
+   const struct spirv_to_nir_options options = {
+      .capabilities = &spirv_caps,
+      .debug.func = NULL,
+   };
    const uint32_t *word_end = words + word_count;
 
    struct vtn_builder *b = vtn_create_builder(words, word_count,
@@ -238,9 +251,9 @@ gl_spirv_validation(const uint32_t *words, size_t word_count,
       return false;
 
    /* See also _vtn_fail() */
-   if (setjmp(b->fail_jump)) {
+   if (vtn_setjmp(b->fail_jump)) {
       ralloc_free(b);
-      return false;
+      return SPIRV_VERIFY_PARSER_ERROR;
    }
 
    /* Skip the SPIR-V header, handled at vtn_create_builder */
@@ -252,7 +265,7 @@ gl_spirv_validation(const uint32_t *words, size_t word_count,
 
    if (b->entry_point == NULL) {
       ralloc_free(b);
-      return false;
+      return SPIRV_VERIFY_ENTRY_POINT_NOT_FOUND;
    }
 
    b->specializations = spec;
@@ -266,6 +279,11 @@ gl_spirv_validation(const uint32_t *words, size_t word_count,
 
    ralloc_free(b);
 
-   return true;
+   for (unsigned i = 0; i < num_spec; i++) {
+      if (!spec[i].defined_on_module)
+         return SPIRV_VERIFY_UNKNOWN_SPEC_INDEX;
+   }
+
+   return SPIRV_VERIFY_OK;
 }
 

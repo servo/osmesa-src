@@ -83,14 +83,14 @@ uyvy_to_yuv_soa(struct gallivm_state *gallivm,
     * v = (uyvy >>  8) & 0xff
     */
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
    /*
     * Avoid shift with per-element count.
     * No support on x86, gets translated to roughly 5 instructions
     * per element. Didn't measure performance but cuts shader size
     * by quite a bit (less difference if cpu has no sse4.1 support).
     */
-   if (util_cpu_caps.has_sse2 && n > 1) {
+   if (util_get_cpu_caps()->has_sse2 && n > 1) {
       LLVMValueRef sel, tmp, tmp2;
       struct lp_build_context bld32;
 
@@ -167,14 +167,14 @@ yuyv_to_yuv_soa(struct gallivm_state *gallivm,
     * v = (yuyv)                & 0xff
     */
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
    /*
     * Avoid shift with per-element count.
     * No support on x86, gets translated to roughly 5 instructions
     * per element. Didn't measure performance but cuts shader size
     * by quite a bit (less difference if cpu has no sse4.1 support).
     */
-   if (util_cpu_caps.has_sse2 && n > 1) {
+   if (util_get_cpu_caps()->has_sse2 && n > 1) {
       LLVMValueRef sel, tmp;
       struct lp_build_context bld32;
 
@@ -235,7 +235,7 @@ yuv_to_rgb_soa(struct gallivm_state *gallivm,
    LLVMValueRef cvg;
 
    memset(&type, 0, sizeof type);
-   type.sign = TRUE;
+   type.sign = true;
    type.width = 32;
    type.length = n;
 
@@ -322,7 +322,7 @@ rgb_to_rgba_aos(struct gallivm_state *gallivm,
    LLVMValueRef rgba;
 
    memset(&type, 0, sizeof type);
-   type.sign = TRUE;
+   type.sign = true;
    type.width = 32;
    type.length = n;
 
@@ -335,7 +335,6 @@ rgb_to_rgba_aos(struct gallivm_state *gallivm,
     */
 
 #if UTIL_ARCH_LITTLE_ENDIAN
-   r = r;
    g = LLVMBuildShl(builder, g, lp_build_const_int_vec(gallivm, type, 8), "");
    b = LLVMBuildShl(builder, b, lp_build_const_int_vec(gallivm, type, 16), "");
    a = lp_build_const_int_vec(gallivm, type, 0xff000000);
@@ -378,6 +377,26 @@ uyvy_to_rgba_aos(struct gallivm_state *gallivm,
    return rgba;
 }
 
+/**
+ * Convert from <n x i32> packed VYUY to <4n x i8> RGBA AoS
+ */
+static LLVMValueRef
+vyuy_to_rgba_aos(struct gallivm_state *gallivm,
+                 unsigned n,
+                 LLVMValueRef packed,
+                 LLVMValueRef i)
+{
+   LLVMValueRef y, u, v;
+   LLVMValueRef r, g, b;
+   LLVMValueRef rgba;
+
+   /* VYUY is UYVY with U/V swapped */
+   uyvy_to_yuv_soa(gallivm, n, packed, i, &y, &v, &u);
+   yuv_to_rgb_soa(gallivm, n, y, u, v, &r, &g, &b);
+   rgba = rgb_to_rgba_aos(gallivm, n, r, g, b);
+
+   return rgba;
+}
 
 /**
  * Convert from <n x i32> packed YUYV to <4n x i8> RGBA AoS
@@ -399,6 +418,26 @@ yuyv_to_rgba_aos(struct gallivm_state *gallivm,
    return rgba;
 }
 
+/**
+ * Convert from <n x i32> packed YUYV to <4n x i8> RGBA AoS
+ */
+static LLVMValueRef
+yvyu_to_rgba_aos(struct gallivm_state *gallivm,
+                 unsigned n,
+                 LLVMValueRef packed,
+                 LLVMValueRef i)
+{
+   LLVMValueRef y, u, v;
+   LLVMValueRef r, g, b;
+   LLVMValueRef rgba;
+
+   /* YVYU is YUYV with U/V swapped */
+   yuyv_to_yuv_soa(gallivm, n, packed, i, &y, &v, &u);
+   yuv_to_rgb_soa(gallivm, n, y, u, v, &r, &g, &b);
+   rgba = rgb_to_rgba_aos(gallivm, n, r, g, b);
+
+   return rgba;
+}
 
 /**
  * Convert from <n x i32> packed RG_BG to <4n x i8> RGBA AoS
@@ -475,6 +514,42 @@ rgrb_to_rgba_aos(struct gallivm_state *gallivm,
 }
 
 /**
+ * Convert from <n x i32> packed GB_GR to <4n x i8> RGBA AoS
+ */
+static LLVMValueRef
+gbgr_to_rgba_aos(struct gallivm_state *gallivm,
+                 unsigned n,
+                 LLVMValueRef packed,
+                 LLVMValueRef i)
+{
+   LLVMValueRef r, g, b;
+   LLVMValueRef rgba;
+
+   yuyv_to_yuv_soa(gallivm, n, packed, i, &g, &b, &r);
+   rgba = rgb_to_rgba_aos(gallivm, n, r, g, b);
+
+   return rgba;
+}
+
+/**
+ * Convert from <n x i32> packed BG_RG to <4n x i8> RGBA AoS
+ */
+static LLVMValueRef
+bgrg_to_rgba_aos(struct gallivm_state *gallivm,
+                 unsigned n,
+                 LLVMValueRef packed,
+                 LLVMValueRef i)
+{
+   LLVMValueRef r, g, b;
+   LLVMValueRef rgba;
+
+   uyvy_to_yuv_soa(gallivm, n, packed, i, &g, &b, &r);
+   rgba = rgb_to_rgba_aos(gallivm, n, r, g, b);
+
+   return rgba;
+}
+
+/**
  * @param n  is the number of pixels processed
  * @param packed  is a <n x i32> vector with the packed YUYV blocks
  * @param i  is a <n x i32> vector with the x pixel coordinate (0 or 1)
@@ -499,7 +574,7 @@ lp_build_fetch_subsampled_rgba_aos(struct gallivm_state *gallivm,
    assert(format_desc->block.height == 1);
 
    fetch_type = lp_type_uint(32);
-   packed = lp_build_gather(gallivm, n, 32, fetch_type, TRUE, base_ptr, offset, FALSE);
+   packed = lp_build_gather(gallivm, n, 32, fetch_type, true, base_ptr, offset, false);
 
    (void)j;
 
@@ -507,8 +582,14 @@ lp_build_fetch_subsampled_rgba_aos(struct gallivm_state *gallivm,
    case PIPE_FORMAT_UYVY:
       rgba = uyvy_to_rgba_aos(gallivm, n, packed, i);
       break;
+   case PIPE_FORMAT_VYUY:
+      rgba = vyuy_to_rgba_aos(gallivm, n, packed, i);
+      break;
    case PIPE_FORMAT_YUYV:
       rgba = yuyv_to_rgba_aos(gallivm, n, packed, i);
+      break;
+   case PIPE_FORMAT_YVYU:
+      rgba = yvyu_to_rgba_aos(gallivm, n, packed, i);
       break;
    case PIPE_FORMAT_R8G8_B8G8_UNORM:
       rgba = rgbg_to_rgba_aos(gallivm, n, packed, i);
@@ -521,6 +602,12 @@ lp_build_fetch_subsampled_rgba_aos(struct gallivm_state *gallivm,
       break;
    case PIPE_FORMAT_R8G8_R8B8_UNORM:
       rgba = rgrb_to_rgba_aos(gallivm, n, packed, i);
+      break;
+   case PIPE_FORMAT_G8B8_G8R8_UNORM:
+      rgba = gbgr_to_rgba_aos(gallivm, n, packed, i);
+      break;
+   case PIPE_FORMAT_B8G8_R8G8_UNORM:
+      rgba = bgrg_to_rgba_aos(gallivm, n, packed, i);
       break;
    default:
       assert(0);

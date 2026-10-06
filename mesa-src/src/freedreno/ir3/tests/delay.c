@@ -1,26 +1,9 @@
 /*
  * Copyright © 2020 Google, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
+#include <err.h>
 #include <stdio.h>
 
 #include "ir3.h"
@@ -36,187 +19,187 @@
  * instruction are not counted.
  */
 
+/* clang-format off */
 #define TEST(n, ...) { # __VA_ARGS__, n }
+/* clang-format on */
 
 static const struct test {
-	const char *asmstr;
-	unsigned expected_delay;
+   const char *asmstr;
+   unsigned expected_delay;
 } tests[] = {
-	TEST(6,
-		add.f r0.x, r2.x, r2.y
-		rsq r0.x, r0.x
-	),
-	TEST(3,
-		mov.f32f32 r0.x, c0.x
-		mov.f32f32 r0.y, c0.y
-		add.f r0.x, r0.x, r0.y
-	),
-	TEST(2,
-		mov.f32f32 r0.x, c0.x
-		mov.f32f32 r0.y, c0.y
-		mov.f32f32 r0.z, c0.z
-		mad.f32 r0.x, r0.x, r0.y, r0.z
-	),
-	TEST(2,
-		mov.f32f32 r0.x, c0.x
-		mov.f32f32 r0.y, c0.y
-		(rpt1)add.f r0.x, (r)r0.x, (r)c0.x
-	),
-	TEST(2,
-		(rpt1)mov.f32f32 r0.x, c0.x
-		(rpt1)add.f r0.x, (r)r0.x, (r)c0.x
-	),
-	TEST(3,
-		mov.f32f32 r0.y, c0.y
-		mov.f32f32 r0.x, c0.x
-		(rpt1)add.f r0.x, (r)r0.x, (r)c0.x
-	),
-	TEST(1,
-		(rpt2)mov.f32f32 r0.x, (r)c0.x
-		add.f r0.x, r0.x, c0.x
-	),
-	TEST(2,
-		(rpt2)mov.f32f32 r0.x, (r)c0.x
-		add.f r0.x, r0.x, r0.y
-	),
-	TEST(1,
-		(rpt2)mov.f32f32 r0.x, (r)c0.x
-		(rpt2)add.f r0.x, (r)r0.x, c0.x
-	),
+   /* clang-format off */
+   TEST(6,
+      add.f r0.x, r2.x, r2.y
+      rsq r0.x, r0.x
+   ),
+   TEST(3,
+      mov.f32f32 r0.x, c0.x
+      mov.f32f32 r0.y, c0.y
+      add.f r0.x, r0.x, r0.y
+   ),
+   TEST(2,
+      mov.f32f32 r0.x, c0.x
+      mov.f32f32 r0.y, c0.y
+      mov.f32f32 r0.z, c0.z
+      mad.f32 r0.x, r0.x, r0.y, r0.z
+   ),
+   TEST(0,
+      mov.f32f32 r0.x, c0.x
+      rcp r0.x, r0.y
+      add.f r0.x, r0.x, c0.x
+   ),
+   TEST(2,
+      mov.f32f32 r0.x, c0.x
+      mov.f32f32 r0.y, c0.y
+      (rpt1)add.f r0.x, (r)r0.x, (r)c0.x
+   ),
+   TEST(2,
+      (rpt1)mov.f32f32 r0.x, c0.x
+      (rpt1)add.f r0.x, (r)r0.x, (r)c0.x
+   ),
+   TEST(3,
+      mov.f32f32 r0.y, c0.y
+      mov.f32f32 r0.x, c0.x
+      (rpt1)add.f r0.x, (r)r0.x, (r)c0.x
+   ),
+   TEST(1,
+      (rpt2)mov.f32f32 r0.x, (r)c0.x
+      add.f r0.x, r0.x, c0.x
+   ),
+   TEST(2,
+      (rpt2)mov.f32f32 r0.x, (r)c0.x
+      add.f r0.x, r0.x, r0.y
+   ),
+   TEST(2,
+      (rpt1)mov.f32f32 r0.x, (r)c0.x
+      (rpt1)add.f r0.x, (r)r0.x, c0.x
+   ),
+   TEST(1,
+      (rpt1)mov.f32f32 r0.y, (r)c0.x
+      (rpt1)add.f r0.x, (r)r0.x, c0.x
+   ),
+   TEST(3,
+      (rpt1)mov.f32f32 r0.x, (r)c0.x
+      (rpt1)add.f r0.x, (r)r0.y, c0.x
+   ),
+   /* clang-format on */
 };
 
 static struct ir3_shader *
 parse_asm(struct ir3_compiler *c, const char *asmstr)
 {
-	struct ir3_kernel_info info = {};
-	FILE *in = fmemopen((void *)asmstr, strlen(asmstr), "r");
-	struct ir3_shader *shader = ir3_parse_asm(c, &info, in);
+   struct ir3_kernel_info info = {};
+   FILE *in = fmemopen((void *)asmstr, strlen(asmstr), "r");
+   struct ir3_shader *shader = ir3_parse_asm(c, &info, in);
 
-	fclose(in);
+   fclose(in);
 
-	return shader;
-}
+   if (!shader)
+      errx(-1, "assembler failed");
 
-static unsigned
-regn(struct ir3_register *reg)
-{
-	unsigned regn = reg->num;
-	if (reg->flags & IR3_REG_HALF)
-		regn += MAX_REG;
-	return regn;
+   return shader;
 }
 
 /**
- * Super-cheezy into-ssa pass, doesn't handle flow control or anything
- * hard.  Just enough to figure out the SSA srcs of the last instruction.
+ * ir3_delay_calc_* relies on the src/dst wrmask being correct even for ALU
+ * instructions, so this sets it here.
  *
  * Note that this is not clever enough to know how many src/dst there are
  * for various tex/mem instructions.  But the rules for tex consuming alu
  * are the same as sfu consuming alu.
  */
 static void
-regs_to_ssa(struct ir3 *ir)
+fixup_wrmask(struct ir3 *ir)
 {
-	struct ir3_instruction *regfile[2 * MAX_REG] = {};
-	struct ir3_block *block =
-		list_first_entry(&ir->block_list, struct ir3_block, node);
+   struct ir3_block *block = ir3_start_block(ir);
 
-	foreach_instr_safe (instr, &block->instr_list) {
-		foreach_src (reg, instr) {
-			if (reg->flags & (IR3_REG_CONST | IR3_REG_IMMED))
-				continue;
+   foreach_instr_safe (instr, &block->instr_list) {
+      instr->dsts[0]->wrmask = MASK(instr->repeat + 1);
+      foreach_src (reg, instr) {
+         if (reg->flags & (IR3_REG_CONST | IR3_REG_IMMED))
+            continue;
 
-			struct ir3_instruction *src = regfile[regn(reg)];
-
-			if (!src)
-				continue;
-
-			if (reg->flags & IR3_REG_R) {
-				unsigned nsrc = 1 + instr->repeat;
-				unsigned flags = src->regs[0]->flags & IR3_REG_HALF;
-				struct ir3_instruction *collect =
-					ir3_instr_create2(block, OPC_META_COLLECT, 1 + nsrc);
-				__ssa_dst(collect)->flags |= flags;
-				for (unsigned i = 0; i < nsrc; i++)
-					__ssa_src(collect, regfile[regn(reg) + i], flags);
-
-				ir3_instr_move_before(collect, instr);
-
-				src = collect;
-			}
-
-			reg->instr = src;
-			reg->flags |= IR3_REG_SSA;
-		}
-
-		if (instr->repeat) {
-			unsigned ndst = 1 + instr->repeat;
-			unsigned flags = instr->regs[0]->flags & IR3_REG_HALF;
-
-			for (unsigned i = 0; i < ndst; i++) {
-				struct ir3_instruction *split =
-					ir3_instr_create(block, OPC_META_SPLIT);
-				__ssa_dst(split)->flags |= flags;
-				__ssa_src(split, instr, flags);
-				split->split.off = i;
-
-				ir3_instr_move_after(split, instr);
-
-				regfile[regn(instr->regs[0]) + i] = split;
-			}
-		} else {
-			regfile[regn(instr->regs[0])] = instr;
-		}
-	}
+         if (reg->flags & IR3_REG_R)
+            reg->wrmask = MASK(instr->repeat + 1);
+         else
+            reg->wrmask = 1;
+      }
+   }
 }
 
+/* Calculate the number of nops added before the last instruction by
+ * ir3_legalize.
+ */
+static unsigned
+calc_nops(struct ir3_block *block, struct ir3_instruction *last)
+{
+   unsigned nops = 0;
+
+   foreach_instr_rev (instr, &block->instr_list) {
+      if (instr == last)
+         continue;
+
+      if (instr->opc == OPC_NOP) {
+         nops += 1 + instr->repeat;
+      } else {
+         if (is_alu(instr))
+            nops += instr->nop;
+         break;
+      }
+   }
+
+   return nops;
+}
 
 int
 main(int argc, char **argv)
 {
-	struct ir3_compiler *c;
-	int result = 0;
+   struct ir3_compiler *c;
+   int result = 0;
 
-	c = ir3_compiler_create(NULL, 630);
+   struct fd_dev_id dev_id = {
+         .gpu_id = 630,
+   };
 
-	for (int i = 0; i < ARRAY_SIZE(tests); i++) {
-		const struct test *test = &tests[i];
-		struct ir3_shader *shader = parse_asm(c, test->asmstr);
-		struct ir3 *ir = shader->variants->ir;
+   c = ir3_compiler_create(NULL, &dev_id, fd_dev_info_raw(&dev_id), &(struct ir3_compiler_options){});
 
-		regs_to_ssa(ir);
+   for (int i = 0; i < ARRAY_SIZE(tests); i++) {
+      const struct test *test = &tests[i];
+      struct ir3_shader *shader = parse_asm(c, test->asmstr);
+      struct ir3 *ir = shader->variants->ir;
 
-		ir3_debug_print(ir, "AFTER REGS->SSA");
+      fixup_wrmask(ir);
 
-		struct ir3_block *block =
-			list_first_entry(&ir->block_list, struct ir3_block, node);
-		struct ir3_instruction *last = NULL;
+      ir3_debug_print(ir, "AFTER fixup_wrmask");
 
-		foreach_instr_rev (instr, &block->instr_list) {
-			if (is_meta(instr))
-				continue;
-			last = instr;
-			break;
-		}
+      struct ir3_block *block =
+         list_first_entry(&ir->block_list, struct ir3_block, node);
+      struct ir3_instruction *last = NULL;
 
-		/* The delay calc is expecting the instr to not yet be added to the
-		 * block, so remove it from the block so that it doesn't get counted
-		 * in the distance from assigner:
-		 */
-		list_delinit(&last->node);
+      foreach_instr_rev (instr, &block->instr_list) {
+         if (is_meta(instr))
+            continue;
+         last = instr;
+         break;
+      }
 
-		unsigned n = ir3_delay_calc(block, last, false, false);
+      int max_bary;
+      ir3_legalize(ir, shader->variants, &max_bary);
 
-		if (n != test->expected_delay) {
-			printf("%d: FAIL: Expected delay %u, but got %u, for:\n%s\n",
-				i, test->expected_delay, n, test->asmstr);
-			result = -1;
-		} else {
-			printf("%d: PASS\n", i);
-		}
+      unsigned n = calc_nops(block, last);
 
-		ir3_shader_destroy(shader);
-	}
+      if (n != test->expected_delay) {
+         printf("%d: FAIL: Expected delay %u, but got %u, for:\n%s\n", i,
+                test->expected_delay, n, test->asmstr);
+         result = -1;
+      } else {
+         printf("%d: PASS\n", i);
+      }
 
-	return result;
+      ir3_shader_destroy(shader);
+   }
+
+   ir3_compiler_destroy(c);
+
+   return result;
 }

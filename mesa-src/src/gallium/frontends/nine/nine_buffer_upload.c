@@ -1,30 +1,12 @@
-/**************************************************************************
+/*
  *
  * Copyright 2009 VMware, Inc.
  * Copyright 2016 Axel Davy <axel.davy@ens.fr>
  * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
- * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
- * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
- * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
- * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- **************************************************************************/
+ * SPDX-License-Identifier: MIT
+ */
+
 /* Adapted from u_upload_mgr.
  * Makes suballocations from bigger allocations,
  * while enabling fast mapping. */
@@ -75,7 +57,7 @@ nine_upload_create_buffer_group(struct nine_buffer_upload *upload,
 {
     struct pipe_resource resource;
     struct pipe_screen *screen = upload->pipe->screen;
-    DBG("%p %p\n", upload, group);
+    DBG("Allocating %p %p\n", upload, group);
 
     memset(&resource, 0, sizeof(resource));
     resource.target = PIPE_BUFFER;
@@ -96,9 +78,12 @@ nine_upload_create_buffer_group(struct nine_buffer_upload *upload,
 
     group->map = pipe_buffer_map_range(upload->pipe, group->resource,
                                        0, upload->buffers_size,
-                                       PIPE_TRANSFER_WRITE |
-                                       PIPE_TRANSFER_PERSISTENT |
-                                       PIPE_TRANSFER_COHERENT,
+                                       PIPE_MAP_WRITE |
+#if DETECT_ARCH_X86
+                                       PIPE_MAP_ONCE |
+#endif
+                                       PIPE_MAP_PERSISTENT |
+                                       PIPE_MAP_COHERENT,
                                        &group->transfer);
     if (group->map == NULL) {
         group->transfer = NULL;
@@ -107,6 +92,7 @@ nine_upload_create_buffer_group(struct nine_buffer_upload *upload,
     }
 
     group->free_offset = 0;
+    DBG("Success: %p %p\n", group->map, group->map+upload->buffers_size);
 }
 
 static void
@@ -114,10 +100,11 @@ nine_upload_destroy_buffer_group(struct nine_buffer_upload *upload,
                                  struct nine_buffer_group *group)
 {
     DBG("%p %p\n", upload, group);
+    DBG("Release: %p %p\n", group->map, group->map+upload->buffers_size);
     assert(group->refcount == 0);
 
     if (group->transfer)
-        pipe_transfer_unmap(upload->pipe, group->transfer);
+        pipe_buffer_unmap(upload->pipe, group->transfer);
     if (group->resource)
         pipe_resource_reference(&group->resource, NULL);
     group->transfer = NULL;
@@ -133,8 +120,7 @@ nine_upload_create(struct pipe_context *pipe, unsigned buffers_size,
 
     DBG("\n");
 
-    if (!pipe->screen->get_param(pipe->screen,
-                                 PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT))
+    if (!pipe->screen->caps.buffer_map_persistent_coherent)
         return NULL;
 
     upload = CALLOC_STRUCT(nine_buffer_upload);
@@ -225,9 +211,12 @@ nine_upload_create_buffer(struct nine_buffer_upload *upload,
 
         buf->map = pipe_buffer_map_range(upload->pipe, buf->resource,
                                          0, buffer_size,
-                                         PIPE_TRANSFER_WRITE |
-                                         PIPE_TRANSFER_PERSISTENT |
-                                         PIPE_TRANSFER_COHERENT,
+                                         PIPE_MAP_WRITE |
+#if DETECT_ARCH_X86
+                                         PIPE_MAP_ONCE |
+#endif
+                                         PIPE_MAP_PERSISTENT |
+                                         PIPE_MAP_COHERENT,
                                          &buf->transfer);
         if (buf->map == NULL) {
             pipe_resource_reference(&buf->resource, NULL);
@@ -268,7 +257,7 @@ nine_upload_release_buffer(struct nine_buffer_upload *upload,
     } else {
         /* lonely buffer */
         if (buf->transfer)
-            pipe_transfer_unmap(upload->pipe, buf->transfer);
+            pipe_buffer_unmap(upload->pipe, buf->transfer);
         pipe_resource_reference(&buf->resource, NULL);
     }
 
@@ -279,6 +268,7 @@ uint8_t *
 nine_upload_buffer_get_map(struct nine_subbuffer *buf)
 {
     if (buf->parent) {
+        DBG("%d\n", buf->parent->refcount);
         return buf->parent->map + buf->offset;
     }
     /* lonely buffer */

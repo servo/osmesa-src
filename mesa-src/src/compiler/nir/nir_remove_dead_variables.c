@@ -26,20 +26,21 @@
  */
 
 #include "nir.h"
+#include "nir_builder.h"
 
 static bool
 deref_used_for_not_store(nir_deref_instr *deref)
 {
-   nir_foreach_use(src, &deref->dest.ssa) {
-      switch (src->parent_instr->type) {
+   nir_foreach_use(src, &deref->def) {
+      switch (nir_src_parent_instr(src)->type) {
       case nir_instr_type_deref:
-         if (deref_used_for_not_store(nir_instr_as_deref(src->parent_instr)))
+         if (deref_used_for_not_store(nir_instr_as_deref(nir_src_parent_instr(src))))
             return true;
          break;
 
       case nir_instr_type_intrinsic: {
          nir_intrinsic_instr *intrin =
-            nir_instr_as_intrinsic(src->parent_instr);
+            nir_instr_as_intrinsic(nir_src_parent_instr(src));
          /* The first source of copy and store intrinsics is the deref to
           * write.  Don't record those.
           */
@@ -67,84 +68,83 @@ add_var_use_deref(nir_deref_instr *deref, struct set *live)
    if (deref->deref_type != nir_deref_type_var)
       return;
 
-   /* If it's not a local that never escapes the shader, then any access at
-    * all means we need to keep it alive.
+   /* Since these local variables don't escape the shader, writing doesn't
+    * make them live.  Only keep them if they are used by some intrinsic.
     */
-   assert(deref->mode == deref->var->data.mode);
-   if (!(deref->mode & (nir_var_function_temp | nir_var_shader_temp | nir_var_mem_shared)) ||
-       deref_used_for_not_store(deref))
-      _mesa_set_add(live, deref->var);
+   if ((deref->var->data.mode & (nir_var_function_temp |
+                                 nir_var_shader_temp)) &&
+       !deref_used_for_not_store(deref))
+      return;
+
+   /*
+    * Shared memory blocks (interface type) alias each other, so be
+    * conservative in that case.
+    */
+   if ((deref->var->data.mode & nir_var_mem_shared) &&
+       !glsl_type_is_interface(deref->var->type) &&
+       !deref_used_for_not_store(deref))
+      return;
+
+   nir_variable *var = deref->var;
+   do {
+      _mesa_set_add(live, var);
+      /* Also mark the chain of variables used to initialize it. */
+      var = var->pointer_initializer;
+   } while (var);
 }
 
 static void
 add_var_use_shader(nir_shader *shader, struct set *live, nir_variable_mode modes)
 {
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         nir_foreach_block(block, function->impl) {
-            nir_foreach_instr(instr, block) {
-               if (instr->type == nir_instr_type_deref)
-                  add_var_use_deref(nir_instr_as_deref(instr), live);
-            }
-         }
-      }
-   }
-}
-
-static void
-remove_dead_var_writes(nir_shader *shader, struct set *live)
-{
-   nir_foreach_function(function, shader) {
-      if (!function->impl)
-         continue;
-
-      nir_foreach_block(block, function->impl) {
-         nir_foreach_instr_safe(instr, block) {
-            switch (instr->type) {
-            case nir_instr_type_deref: {
-               nir_deref_instr *deref = nir_instr_as_deref(instr);
-               if (deref->deref_type == nir_deref_type_cast &&
-                   !nir_deref_instr_parent(deref))
-                  continue;
-
-               nir_variable_mode parent_mode;
-               if (deref->deref_type == nir_deref_type_var)
-                  parent_mode = deref->var->data.mode;
-               else
-                  parent_mode = nir_deref_instr_parent(deref)->mode;
-
-               /* If the parent mode is 0, then it references a dead variable.
-                * Flag this deref as dead and remove it.
-                */
-               if (parent_mode == 0) {
-                  deref->mode = 0;
-                  nir_instr_remove(&deref->instr);
-               }
-               break;
-            }
-
-            case nir_instr_type_intrinsic: {
-               nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
-               if (intrin->intrinsic != nir_intrinsic_copy_deref &&
-                   intrin->intrinsic != nir_intrinsic_store_deref)
-                  break;
-
-               if (nir_src_as_deref(intrin->src[0])->mode == 0)
-                  nir_instr_remove(instr);
-               break;
-            }
-
-            default:
-               break; /* Nothing to do */
-            }
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type == nir_instr_type_deref)
+               add_var_use_deref(nir_instr_as_deref(instr), live);
          }
       }
    }
 }
 
 static bool
+remove_dead_var_writes(nir_builder *b, nir_instr *instr, void *_)
+{
+   if (instr->type == nir_instr_type_deref) {
+      nir_deref_instr *deref = nir_instr_as_deref(instr);
+      if (deref->deref_type == nir_deref_type_cast &&
+          !nir_deref_instr_parent(deref))
+         return false;
+
+      nir_variable_mode parent_modes;
+      if (deref->deref_type == nir_deref_type_var)
+         parent_modes = deref->var->data.mode;
+      else
+         parent_modes = nir_deref_instr_parent(deref)->modes;
+
+      /* If the parent mode is 0, then it references a dead variable.
+       * Flag this deref as dead and remove it.
+       */
+      if (parent_modes != 0)
+         return false;
+
+      deref->modes = 0;
+   } else if (instr->type == nir_instr_type_intrinsic) {
+      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+      if (!(intrin->intrinsic == nir_intrinsic_copy_deref ||
+            intrin->intrinsic == nir_intrinsic_store_deref) ||
+          nir_src_as_deref(intrin->src[0])->modes != 0)
+         return false;
+   } else {
+      return false;
+   }
+
+   nir_instr_remove(instr);
+   return true;
+}
+
+static bool
 remove_dead_vars(struct exec_list *var_list, nir_variable_mode modes,
-                 struct set *live, bool (*can_remove_var)(nir_variable *var))
+                 struct set *live, const nir_remove_dead_variables_options *opts)
 {
    bool progress = false;
 
@@ -152,12 +152,13 @@ remove_dead_vars(struct exec_list *var_list, nir_variable_mode modes,
       if (!(var->data.mode & modes))
          continue;
 
-      if (can_remove_var && !can_remove_var(var))
+      if (opts && opts->can_remove_var &&
+          !opts->can_remove_var(var, opts->can_remove_var_data))
          continue;
 
       struct set_entry *entry = _mesa_set_search(live, var);
       if (entry == NULL) {
-         /* Mark this variable as used by setting the mode to 0 */
+         /* Mark this variable as dead by setting the mode to 0 */
          var->data.mode = 0;
          exec_node_remove(&var->node);
          progress = true;
@@ -169,7 +170,7 @@ remove_dead_vars(struct exec_list *var_list, nir_variable_mode modes,
 
 bool
 nir_remove_dead_variables(nir_shader *shader, nir_variable_mode modes,
-                          bool (*can_remove_var)(nir_variable *var))
+                          const nir_remove_dead_variables_options *opts)
 {
    bool progress = false;
    struct set *live = _mesa_pointer_set_create(NULL);
@@ -178,33 +179,27 @@ nir_remove_dead_variables(nir_shader *shader, nir_variable_mode modes,
 
    if (modes & ~nir_var_function_temp) {
       progress = remove_dead_vars(&shader->variables, modes,
-                                  live, can_remove_var) || progress;
+                                  live, opts) ||
+                 progress;
    }
 
    if (modes & nir_var_function_temp) {
-      nir_foreach_function(function, shader) {
-         if (function->impl) {
-            if (remove_dead_vars(&function->impl->locals,
-                                 nir_var_function_temp,
-                                 live, can_remove_var))
-               progress = true;
-         }
-      }
-   }
-
-   nir_foreach_function(function, shader) {
-      if (!function->impl)
-         continue;
-
-      if (progress) {
-         remove_dead_var_writes(shader, live);
-         nir_metadata_preserve(function->impl, nir_metadata_block_index |
-                                               nir_metadata_dominance);
-      } else {
-         nir_metadata_preserve(function->impl, nir_metadata_all);
+      nir_foreach_function_impl(impl, shader) {
+         if (remove_dead_vars(&impl->locals,
+                              nir_var_function_temp,
+                              live, opts))
+            progress = true;
       }
    }
 
    _mesa_set_destroy(live, NULL);
+
+   if (progress) {
+      nir_shader_instructions_pass(shader, remove_dead_var_writes,
+                                   nir_metadata_control_flow, NULL);
+   } else {
+      nir_shader_preserve_all_metadata(shader);
+   }
+
    return progress;
 }

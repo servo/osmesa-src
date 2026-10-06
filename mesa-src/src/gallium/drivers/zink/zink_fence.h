@@ -24,38 +24,45 @@
 #ifndef ZINK_FENCE_H
 #define ZINK_FENCE_H
 
-#include "util/u_inlines.h"
-
-#include <vulkan/vulkan.h>
-
-struct pipe_screen;
-struct zink_screen;
-
-struct zink_fence {
-   struct pipe_reference reference;
-   VkFence fence;
-   struct set *active_queries; /* zink_query objects which were active at some point in this batch */
-};
+#include "zink_types.h"
 
 static inline struct zink_fence *
-zink_fence(struct pipe_fence_handle *pfence)
+zink_fence(void *pfence)
 {
    return (struct zink_fence *)pfence;
 }
 
-struct zink_fence *
-zink_create_fence(struct pipe_screen *pscreen, struct zink_batch *batch);
+static inline struct zink_tc_fence *
+zink_tc_fence(void *pfence)
+{
+   return (struct zink_tc_fence *)pfence;
+}
+
+struct zink_tc_fence *
+zink_create_tc_fence(void);
+
+struct pipe_fence_handle *
+zink_create_tc_fence_for_tc(struct pipe_context *pctx, struct tc_unflushed_batch_token *tc_token);
 
 void
 zink_fence_reference(struct zink_screen *screen,
-                     struct zink_fence **ptr,
-                     struct zink_fence *fence);
+                     struct zink_tc_fence **ptr,
+                     struct zink_tc_fence *fence);
 
-bool
-zink_fence_finish(struct zink_screen *screen, struct zink_fence *fence,
-                  uint64_t timeout_ns);
+void
+zink_create_fence_fd(struct pipe_context *pctx, struct pipe_fence_handle **pfence, int fd, enum pipe_fd_type type);
+#if defined(_WIN32)
+void
+zink_create_fence_win32(struct pipe_screen *screen, struct pipe_fence_handle **pfence, void *handle, const void *name, enum pipe_fd_type type);
+#endif
+void
+zink_fence_server_signal(struct pipe_context *pctx, struct pipe_fence_handle *pfence);
+void
+zink_fence_server_sync(struct pipe_context *pctx, struct pipe_fence_handle *pfence);
 
 void
 zink_screen_fence_init(struct pipe_screen *pscreen);
 
+void
+zink_fence_clear_resources(struct zink_screen *screen, struct zink_fence *fence);
 #endif

@@ -40,7 +40,7 @@ clCreateContext(const cl_context_properties *d_props, cl_uint num_devs,
 
    for (auto &prop : props) {
       if (prop.first == CL_CONTEXT_PLATFORM)
-         obj(prop.second.as<cl_platform_id>());
+         find_platform(prop.second.as<cl_platform_id>());
       else
          throw error(CL_INVALID_PROPERTY);
    }
@@ -136,6 +136,24 @@ clGetContextInfo(cl_context d_ctx, cl_context_info param,
    default:
       throw error(CL_INVALID_VALUE);
    }
+
+   return CL_SUCCESS;
+
+} catch (error &e) {
+   return e.get();
+}
+
+CLOVER_API cl_int
+clSetContextDestructorCallback(cl_context d_ctx,
+                               void (CL_CALLBACK *pfn_notify)(cl_context, void *),
+                               void *user_data) try {
+   CLOVER_NOT_SUPPORTED_UNTIL("3.0");
+   auto &ctx = obj(d_ctx);
+
+   if (!pfn_notify)
+      return CL_INVALID_VALUE;
+
+   ctx.destroy_notify([=]{ pfn_notify(d_ctx, user_data); });
 
    return CL_SUCCESS;
 

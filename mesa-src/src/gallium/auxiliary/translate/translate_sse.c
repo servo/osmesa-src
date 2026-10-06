@@ -26,18 +26,18 @@
  */
 
 
-#include "pipe/p_config.h"
-#include "pipe/p_compiler.h"
+#include "util/detect.h"
+#include "util/compiler.h"
 #include "util/u_memory.h"
+#include "util/u_cpu_detect.h"
 #include "util/u_math.h"
 #include "util/format/u_format.h"
 
 #include "translate.h"
 
 
-#if (defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)) && !defined(EMBEDDED_DEVICE)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
 
-#include "rtasm/rtasm_cpu.h"
 #include "rtasm/rtasm_x86sse.h"
 
 
@@ -64,7 +64,8 @@ struct translate_buffer_variant
 
 #define ELEMENT_BUFFER_INSTANCE_ID  1001
 
-#define NUM_CONSTS 7
+#define NUM_FLOAT_CONSTS 9
+#define NUM_UNSIGNED_CONSTS 1
 
 enum
 {
@@ -74,21 +75,31 @@ enum
    CONST_INV_32767,
    CONST_INV_65535,
    CONST_INV_2147483647,
-   CONST_255
+   CONST_INV_4294967295,
+   CONST_255,
+   CONST_2147483648,
+   /* float consts end */
+   CONST_2147483647_INT,
 };
 
 #define C(v) {(float)(v), (float)(v), (float)(v), (float)(v)}
-static float consts[NUM_CONSTS][4] = {
+static float consts[NUM_FLOAT_CONSTS][4] = {
    {0, 0, 0, 1},
    C(1.0 / 127.0),
    C(1.0 / 255.0),
    C(1.0 / 32767.0),
    C(1.0 / 65535.0),
    C(1.0 / 2147483647.0),
-   C(255.0)
+   C(1.0 / 4294967295.0),
+   C(255.0),
+   C(2147483648.0),
 };
 
 #undef C
+
+static unsigned uconsts[NUM_UNSIGNED_CONSTS][4] = {
+   {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff},
+};
 
 struct translate_sse
 {
@@ -100,9 +111,10 @@ struct translate_sse
    struct x86_function elt8_func;
    struct x86_function *func;
 
-     PIPE_ALIGN_VAR(16) float consts[NUM_CONSTS][4];
+   alignas(16) float consts[NUM_FLOAT_CONSTS][4];
+   alignas(16) float uconsts[NUM_UNSIGNED_CONSTS][4];
    int8_t reg_to_const[16];
-   int8_t const_to_reg[NUM_CONSTS];
+   int8_t const_to_reg[NUM_FLOAT_CONSTS + NUM_UNSIGNED_CONSTS];
 
    struct translate_buffer buffer[TRANSLATE_MAX_ATTRIBS];
    unsigned nr_buffers;
@@ -114,7 +126,7 @@ struct translate_sse
    /* Multiple elements can map to a single buffer variant. */
    unsigned element_to_buffer_variant[TRANSLATE_MAX_ATTRIBS];
 
-   boolean use_instancing;
+   bool use_instancing;
    unsigned instance_id;
    unsigned start_instance;
 
@@ -165,16 +177,20 @@ get_const(struct translate_sse *p, unsigned id)
    p->const_to_reg[id] = i;
 
    /* TODO: this should happen outside the loop, if possible */
+   const void *c;
+   if (id < NUM_FLOAT_CONSTS)
+      c = &p->consts[id][0];
+   else
+      c = &p->uconsts[id - NUM_FLOAT_CONSTS][0];
    sse_movaps(p->func, reg,
-              x86_make_disp(p->machine_EDI,
-                            get_offset(p, &p->consts[id][0])));
+              x86_make_disp(p->machine_EDI, get_offset(p, c)));
 
    return reg;
 }
 
 
 /* load the data in a SSE2 register, padding with zeros */
-static boolean
+static bool
 emit_load_sse2(struct translate_sse *p,
                struct x86_reg data, struct x86_reg src, unsigned size)
 {
@@ -216,9 +232,9 @@ emit_load_sse2(struct translate_sse *p,
       sse2_movdqu(p->func, data, src);
       break;
    default:
-      return FALSE;
+      return false;
    }
-   return TRUE;
+   return true;
 }
 
 
@@ -455,7 +471,7 @@ emit_memcpy(struct translate_sse *p, struct x86_reg dst, struct x86_reg src,
    }
 }
 
-static boolean
+static bool
 translate_attr_convert(struct translate_sse *p,
                        const struct translate_element *a,
                        struct x86_reg src, struct x86_reg dst)
@@ -465,7 +481,7 @@ translate_attr_convert(struct translate_sse *p,
    const struct util_format_description *output_desc =
       util_format_description(a->output_format);
    unsigned i;
-   boolean id_swizzle = TRUE;
+   bool id_swizzle = true;
    unsigned swizzle[4] =
       { PIPE_SWIZZLE_NONE, PIPE_SWIZZLE_NONE,
         PIPE_SWIZZLE_NONE, PIPE_SWIZZLE_NONE };
@@ -474,26 +490,26 @@ translate_attr_convert(struct translate_sse *p,
 
    if (a->output_format == PIPE_FORMAT_NONE
        || a->input_format == PIPE_FORMAT_NONE)
-      return FALSE;
+      return false;
 
    if (input_desc->channel[0].size & 7)
-      return FALSE;
+      return false;
 
    if (input_desc->colorspace != output_desc->colorspace)
-      return FALSE;
+      return false;
 
    for (i = 1; i < input_desc->nr_channels; ++i) {
       if (memcmp
           (&input_desc->channel[i], &input_desc->channel[0],
            sizeof(input_desc->channel[0])))
-         return FALSE;
+         return false;
    }
 
    for (i = 1; i < output_desc->nr_channels; ++i) {
       if (memcmp
           (&output_desc->channel[i], &output_desc->channel[0],
            sizeof(output_desc->channel[0]))) {
-         return FALSE;
+         return false;
       }
    }
 
@@ -508,6 +524,7 @@ translate_attr_convert(struct translate_sse *p,
         || a->output_format == PIPE_FORMAT_R32G32B32_FLOAT
         || a->output_format == PIPE_FORMAT_R32G32B32A32_FLOAT)) {
       struct x86_reg dataXMM = x86_make_reg(file_XMM, 0);
+      struct x86_reg auxXMM;
 
       for (i = 0; i < output_desc->nr_channels; ++i) {
          if (swizzle[i] == PIPE_SWIZZLE_0
@@ -519,14 +536,14 @@ translate_attr_convert(struct translate_sse *p,
          if (swizzle[i] < 4)
             needed_chans = MAX2(needed_chans, swizzle[i] + 1);
          if (swizzle[i] < PIPE_SWIZZLE_0 && swizzle[i] != i)
-            id_swizzle = FALSE;
+            id_swizzle = false;
       }
 
       if (needed_chans > 0) {
          switch (input_desc->channel[0].type) {
          case UTIL_FORMAT_TYPE_UNSIGNED:
             if (!(x86_target_caps(p->func) & X86_SSE2))
-               return FALSE;
+               return false;
             emit_load_sse2(p, dataXMM, src,
                            input_desc->channel[0].size *
                            input_desc->nr_channels >> 3);
@@ -544,12 +561,26 @@ translate_attr_convert(struct translate_sse *p,
                sse2_punpcklwd(p->func, dataXMM, get_const(p, CONST_IDENTITY));
                break;
             case 32:           /* we lose precision here */
-               sse2_psrld_imm(p->func, dataXMM, 1);
+               /* No unsigned conversion (except in AVX512F), so we check if
+                * it's negative, and stick the high bit as a separate float
+                * value in an aux register: */
+               auxXMM = x86_make_reg(file_XMM, 1);
+               /* aux = 0 */
+               sse_xorps(p->func, auxXMM, auxXMM);
+               /* aux = aux > data ? 0xffffffff : 0 */
+               sse2_pcmpgtd(p->func, auxXMM, dataXMM);
+               /* data = data & 0x7fffffff */
+               sse_andps(p->func, dataXMM, get_const(p, CONST_2147483647_INT));
+               /* aux = aux & 2147483648.0 */
+               sse_andps(p->func, auxXMM, get_const(p, CONST_2147483648));
                break;
             default:
-               return FALSE;
+               return false;
             }
             sse2_cvtdq2ps(p->func, dataXMM, dataXMM);
+            if (input_desc->channel[0].size == 32)
+               /* add in the high bit's worth of float that we AND'd away */
+               sse_addps(p->func, dataXMM, auxXMM);
             if (input_desc->channel[0].normalized) {
                struct x86_reg factor;
                switch (input_desc->channel[0].size) {
@@ -560,7 +591,7 @@ translate_attr_convert(struct translate_sse *p,
                   factor = get_const(p, CONST_INV_65535);
                   break;
                case 32:
-                  factor = get_const(p, CONST_INV_2147483647);
+                  factor = get_const(p, CONST_INV_4294967295);
                   break;
                default:
                   assert(0);
@@ -572,13 +603,10 @@ translate_attr_convert(struct translate_sse *p,
                }
                sse_mulps(p->func, dataXMM, factor);
             }
-            else if (input_desc->channel[0].size == 32)
-               /* compensate for the bit we threw away to fit u32 into s32 */
-               sse_addps(p->func, dataXMM, dataXMM);
             break;
          case UTIL_FORMAT_TYPE_SIGNED:
             if (!(x86_target_caps(p->func) & X86_SSE2))
-               return FALSE;
+               return false;
             emit_load_sse2(p, dataXMM, src,
                            input_desc->channel[0].size *
                            input_desc->nr_channels >> 3);
@@ -597,7 +625,7 @@ translate_attr_convert(struct translate_sse *p,
             case 32:           /* we lose precision here */
                break;
             default:
-               return FALSE;
+               return false;
             }
             sse2_cvtdq2ps(p->func, dataXMM, dataXMM);
             if (input_desc->channel[0].normalized) {
@@ -628,7 +656,7 @@ translate_attr_convert(struct translate_sse *p,
          case UTIL_FORMAT_TYPE_FLOAT:
             if (input_desc->channel[0].size != 32
                 && input_desc->channel[0].size != 64) {
-               return FALSE;
+               return false;
             }
             if (swizzle[3] == PIPE_SWIZZLE_1
                 && input_desc->nr_channels <= 3) {
@@ -642,16 +670,16 @@ translate_attr_convert(struct translate_sse *p,
                break;
             case 64:           /* we lose precision here */
                if (!(x86_target_caps(p->func) & X86_SSE2))
-                  return FALSE;
+                  return false;
                emit_load_float64to32(p, dataXMM, src, needed_chans,
                                      input_desc->nr_channels);
                break;
             default:
-               return FALSE;
+               return false;
             }
             break;
          default:
-            return FALSE;
+            return false;
          }
 
          if (!id_swizzle) {
@@ -723,7 +751,7 @@ translate_attr_convert(struct translate_sse *p,
             }
          }
       }
-      return TRUE;
+      return true;
    }
    else if ((x86_target_caps(p->func) & X86_SSE2)
             && input_desc->channel[0].size == 8
@@ -752,7 +780,7 @@ translate_attr_convert(struct translate_sse *p,
          if (swizzle[i] < 4)
             needed_chans = MAX2(needed_chans, swizzle[i] + 1);
          if (swizzle[i] < PIPE_SWIZZLE_0 && swizzle[i] != i)
-            id_swizzle = FALSE;
+            id_swizzle = false;
       }
 
       if (needed_chans > 0) {
@@ -881,7 +909,7 @@ translate_attr_convert(struct translate_sse *p,
             }
          }
       }
-      return TRUE;
+      return true;
    }
    else if (!memcmp(&output_desc->channel[0], &input_desc->channel[0],
                     sizeof(output_desc->channel[0]))) {
@@ -898,7 +926,7 @@ translate_attr_convert(struct translate_sse *p,
          x86_mov(p->func, tmp, src);
          x86_bswap(p->func, tmp);
          x86_mov(p->func, dst, tmp);
-         return TRUE;
+         return true;
       }
 
       for (i = 0; i < output_desc->nr_channels; ++i) {
@@ -915,7 +943,7 @@ translate_attr_convert(struct translate_sse *p,
                      v = output_desc->channel[0].normalized ? 0x7f : 1;
                      break;
                   default:
-                     return FALSE;
+                     return false;
                   }
                }
                x86_mov8_imm(p->func, x86_make_disp(dst, i * 1), v);
@@ -940,7 +968,7 @@ translate_attr_convert(struct translate_sse *p,
                      v = 0x3c00;
                      break;
                   default:
-                     return FALSE;
+                     return false;
                   }
                }
                x86_mov16_imm(p->func, x86_make_disp(dst, i * 2), v);
@@ -968,7 +996,7 @@ translate_attr_convert(struct translate_sse *p,
                      v = 0x3f800000;
                      break;
                   default:
-                     return FALSE;
+                     return false;
                   }
                }
                x86_mov_imm(p->func, x86_make_disp(dst, i * 4), v);
@@ -997,7 +1025,7 @@ translate_attr_convert(struct translate_sse *p,
                      l = 0;
                      break;
                   default:
-                     return FALSE;
+                     return false;
                   }
                }
                x86_mov_imm(p->func, x86_make_disp(dst, i * 8), l);
@@ -1020,10 +1048,10 @@ translate_attr_convert(struct translate_sse *p,
             }
             break;
          default:
-            return FALSE;
+            return false;
          }
       }
-      return TRUE;
+      return true;
    }
    /* special case for draw's EMIT_4UB (RGBA) and EMIT_4UB_BGRA */
    else if ((x86_target_caps(p->func) & X86_SSE2) &&
@@ -1048,28 +1076,28 @@ translate_attr_convert(struct translate_sse *p,
       sse2_packuswb(p->func, dataXMM, dataXMM);
       sse2_movd(p->func, dst, dataXMM);
 
-      return TRUE;
+      return true;
    }
 
-   return FALSE;
+   return false;
 }
 
 
-static boolean
+static bool
 translate_attr(struct translate_sse *p,
                const struct translate_element *a,
                struct x86_reg src, struct x86_reg dst)
 {
    if (a->input_format == a->output_format) {
       emit_memcpy(p, dst, src, util_format_get_stride(a->input_format, 1));
-      return TRUE;
+      return true;
    }
 
    return translate_attr_convert(p, a, src, dst);
 }
 
 
-static boolean
+static bool
 init_inputs(struct translate_sse *p, unsigned index_size)
 {
    unsigned i;
@@ -1157,7 +1185,7 @@ init_inputs(struct translate_sse *p, unsigned index_size)
       }
    }
 
-   return TRUE;
+   return true;
 }
 
 
@@ -1224,7 +1252,7 @@ get_buffer_ptr(struct translate_sse *p,
 }
 
 
-static boolean
+static bool
 incr_inputs(struct translate_sse *p, unsigned index_size)
 {
    if (!index_size && p->nr_buffer_variants == 1) {
@@ -1268,7 +1296,7 @@ incr_inputs(struct translate_sse *p, unsigned index_size)
       x86_lea(p->func, p->idx_ESI, x86_make_disp(p->idx_ESI, index_size));
    }
 
-   return TRUE;
+   return true;
 }
 
 
@@ -1288,7 +1316,7 @@ incr_inputs(struct translate_sse *p, unsigned index_size)
  * ECX -- pointer to current attribute 
  * 
  */
-static boolean
+static bool
 build_vertex_emit(struct translate_sse *p,
                   struct x86_function *func, unsigned index_size)
 {
@@ -1392,7 +1420,7 @@ build_vertex_emit(struct translate_sse *p,
          if (!translate_attr(p, a,
                              x86_make_disp(vb, a->input_offset),
                              x86_make_disp(p->outbuf_EBX, a->output_offset)))
-            return FALSE;
+            return false;
       }
 
       /* Next output vertex:
@@ -1438,7 +1466,7 @@ build_vertex_emit(struct translate_sse *p,
    }
    x86_ret(p->func);
 
-   return TRUE;
+   return true;
 }
 
 
@@ -1457,7 +1485,7 @@ translate_sse_set_buffer(struct translate *translate,
 
    if (0)
       debug_printf("%s %d/%d: %p %d\n",
-                   __FUNCTION__, buf, p->nr_buffers, ptr, stride);
+                   __func__, buf, p->nr_buffers, ptr, stride);
 }
 
 
@@ -1481,8 +1509,7 @@ translate_sse2_create(const struct translate_key *key)
    struct translate_sse *p = NULL;
    unsigned i;
 
-   /* this is misnamed, it actually refers to whether rtasm is enabled or not */
-   if (!rtasm_cpu_has_sse())
+   if (!util_get_cpu_caps()->has_sse)
       goto fail;
 
    p = os_malloc_aligned(sizeof(struct translate_sse), 16);
@@ -1491,6 +1518,7 @@ translate_sse2_create(const struct translate_key *key)
 
    memset(p, 0, sizeof(*p));
    memcpy(p->consts, consts, sizeof(consts));
+   memcpy(p->uconsts, uconsts, sizeof(uconsts));
 
    p->translate.key = *key;
    p->translate.release = translate_sse_release;
@@ -1506,7 +1534,7 @@ translate_sse2_create(const struct translate_key *key)
             MAX2(p->nr_buffers, key->element[i].input_buffer + 1);
 
          if (key->element[i].instance_divisor) {
-            p->use_instancing = TRUE;
+            p->use_instancing = true;
          }
 
          /*

@@ -9,8 +9,8 @@ struct lp_setup_variant;
 
 struct lp_setup_variant_list_item
 {
+   struct list_head list;
    struct lp_setup_variant *base;
-   struct lp_setup_variant_list_item *next, *prev;
 };
 
 
@@ -25,6 +25,7 @@ struct lp_setup_variant_key {
    unsigned pixel_center_half:1;
    unsigned twoside:1;
    unsigned floating_point_depth:1;
+   unsigned uses_constant_interp:1;
    unsigned multisample:1;
    unsigned pad:3;
 
@@ -36,15 +37,14 @@ struct lp_setup_variant_key {
 };
 
 
-typedef void (*lp_jit_setup_triangle)( const float (*v0)[4],
-				       const float (*v1)[4],
-				       const float (*v2)[4],
-				       boolean front_facing,
-				       float (*a0)[4],
-				       float (*dadx)[4],
-				       float (*dady)[4] );
-
-
+typedef void (*lp_jit_setup_triangle)(const float (*v0)[4],
+                                      const float (*v1)[4],
+                                      const float (*v2)[4],
+                                      bool front_facing,
+                                      float (*a0)[4],
+                                      float (*dadx)[4],
+                                      float (*dady)[4],
+                                      const struct lp_setup_variant_key *key);
 
 
 /* At this stage, for a given variant key, we create a
@@ -55,7 +55,7 @@ typedef void (*lp_jit_setup_triangle)( const float (*v0)[4],
  */
 struct lp_setup_variant {
    struct lp_setup_variant_key key;
-   
+
    struct lp_setup_variant_list_item list_item_global;
 
    struct gallivm_state *gallivm;
@@ -66,6 +66,7 @@ struct lp_setup_variant {
     * assembly.
     */
    LLVMValueRef function;
+   char *function_name;
 
    /* The actual generated setup function:
     */
@@ -74,12 +75,14 @@ struct lp_setup_variant {
    unsigned no;
 };
 
-void lp_delete_setup_variants(struct llvmpipe_context *lp);
 
 void
-lp_dump_setup_coef( const struct lp_setup_variant_key *key,
-		    const float (*sa0)[4],
-		    const float (*sdadx)[4],
-		    const float (*sdady)[4]);
+lp_delete_setup_variants(struct llvmpipe_context *lp);
+
+void
+lp_dump_setup_coef(const struct lp_setup_variant_key *key,
+                   const float (*sa0)[4],
+                   const float (*sdadx)[4],
+                   const float (*sdady)[4]);
 
 #endif

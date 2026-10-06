@@ -5,57 +5,6 @@
 
 #include "nvc0/nvc0_context.h"
 
-#if 0
-static void
-nvc0_validate_zcull(struct nvc0_context *nvc0)
-{
-    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
-    struct pipe_framebuffer_state *fb = &nvc0->framebuffer;
-    struct nv50_surface *sf = nv50_surface(fb->zsbuf);
-    struct nv50_miptree *mt = nv50_miptree(sf->base.texture);
-    struct nouveau_bo *bo = mt->base.bo;
-    uint32_t size;
-    uint32_t offset = align(mt->total_size, 1 << 17);
-    unsigned width, height;
-
-    assert(mt->base.base.depth0 == 1 && mt->base.base.array_size < 2);
-
-    size = mt->total_size * 2;
-
-    height = align(fb->height, 32);
-    width = fb->width % 224;
-    if (width)
-       width = fb->width + (224 - width);
-    else
-       width = fb->width;
-
-    BEGIN_NVC0(push, NVC0_3D(ZCULL_REGION), 1);
-    PUSH_DATA (push, 0);
-    BEGIN_NVC0(push, NVC0_3D(ZCULL_ADDRESS_HIGH), 2);
-    PUSH_DATAh(push, bo->offset + offset);
-    PUSH_DATA (push, bo->offset + offset);
-    offset += 1 << 17;
-    BEGIN_NVC0(push, NVC0_3D(ZCULL_LIMIT_HIGH), 2);
-    PUSH_DATAh(push, bo->offset + offset);
-    PUSH_DATA (push, bo->offset + offset);
-    BEGIN_NVC0(push, SUBC_3D(0x07e0), 2);
-    PUSH_DATA (push, size);
-    PUSH_DATA (push, size >> 16);
-    BEGIN_NVC0(push, SUBC_3D(0x15c8), 1); /* bits 0x3 */
-    PUSH_DATA (push, 2);
-    BEGIN_NVC0(push, NVC0_3D(ZCULL_WIDTH), 4);
-    PUSH_DATA (push, width);
-    PUSH_DATA (push, height);
-    PUSH_DATA (push, 1);
-    PUSH_DATA (push, 0);
-    BEGIN_NVC0(push, NVC0_3D(ZCULL_WINDOW_OFFSET_X), 2);
-    PUSH_DATA (push, 0);
-    PUSH_DATA (push, 0);
-    BEGIN_NVC0(push, NVC0_3D(ZCULL_INVALIDATE), 1);
-    PUSH_DATA (push, 0);
-}
-#endif
-
 static inline void
 nvc0_fb_set_null_rt(struct nouveau_pushbuf *push, unsigned i, unsigned layers)
 {
@@ -253,7 +202,7 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
          PUSH_DATA(push, 0);
          PUSH_DATA(push, 0);
 
-         nvc0_resource_fence(res, NOUVEAU_BO_WR);
+         nvc0_resource_fence(nvc0, res, NOUVEAU_BO_WR);
 
          assert(!fb->zsbuf);
       }
@@ -338,7 +287,7 @@ static void
 nvc0_validate_stencil_ref(struct nvc0_context *nvc0)
 {
     struct nouveau_pushbuf *push = nvc0->base.pushbuf;
-    const ubyte *ref = &nvc0->stencil_ref.ref_value[0];
+    const uint8_t *ref = &nvc0->stencil_ref.ref_value[0];
 
     IMMED_NVC0(push, NVC0_3D(STENCIL_FRONT_FUNC_REF), ref[0]);
     IMMED_NVC0(push, NVC0_3D(STENCIL_BACK_FUNC_REF), ref[1]);
@@ -577,6 +526,7 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
    unsigned s;
 
    bool can_serialize = true;
+   struct nouveau_pushbuf *push = nvc0->base.pushbuf;
 
    for (s = 0; s < 5; ++s) {
       while (nvc0->constbuf_dirty[s]) {
@@ -593,7 +543,7 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
             if (!nvc0->state.uniform_buffer_bound[s]) {
                nvc0->state.uniform_buffer_bound[s] = true;
 
-               nvc0_screen_bind_cb_3d(nvc0->screen, &can_serialize, s, i,
+               nvc0_screen_bind_cb_3d(nvc0->screen, push, &can_serialize, s, i,
                                       NVC0_MAX_CONSTBUF_SIZE, bo->offset + base);
             }
             nvc0_cb_bo_push(&nvc0->base, bo, NV_VRAM_DOMAIN(&nvc0->screen->base),
@@ -604,7 +554,7 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
             struct nv04_resource *res =
                nv04_resource(nvc0->constbuf[s][i].u.buf);
             if (res) {
-               nvc0_screen_bind_cb_3d(nvc0->screen, &can_serialize, s, i,
+               nvc0_screen_bind_cb_3d(nvc0->screen, push, &can_serialize, s, i,
                                       nvc0->constbuf[s][i].size,
                                       res->address + nvc0->constbuf[s][i].offset);
 
@@ -616,7 +566,7 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
                if (i == 0)
                   nvc0->state.uniform_buffer_bound[s] = false;
             } else if (i != 0) {
-               nvc0_screen_bind_cb_3d(nvc0->screen, &can_serialize, s, i, -1, 0);
+               nvc0_screen_bind_cb_3d(nvc0->screen, push, &can_serialize, s, i, -1, 0);
             }
          }
       }
@@ -717,7 +667,7 @@ nvc0_validate_driverconst(struct nvc0_context *nvc0)
    int i;
 
    for (i = 0; i < 5; ++i)
-      nvc0_screen_bind_cb_3d(screen, NULL, i, 15, NVC0_CB_AUX_SIZE,
+      nvc0_screen_bind_cb_3d(screen, nvc0->base.pushbuf, NULL, i, 15, NVC0_CB_AUX_SIZE,
                              screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
 
    nvc0->dirty_cp |= NVC0_NEW_CP_DRIVERCONST;
@@ -733,7 +683,7 @@ nvc0_validate_fp_zsa_rast(struct nvc0_context *nvc0)
       rasterizer_discard = true;
    } else {
       bool zs = nvc0->zsa &&
-         (nvc0->zsa->pipe.depth.enabled || nvc0->zsa->pipe.stencil[0].enabled);
+         (nvc0->zsa->pipe.depth_enabled || nvc0->zsa->pipe.stencil[0].enabled);
       rasterizer_discard = !zs &&
          (!nvc0->fragprog || !nvc0->fragprog->hdr[18]);
    }
@@ -753,7 +703,7 @@ nvc0_validate_zsa_fb(struct nvc0_context *nvc0)
 {
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
 
-   if (nvc0->zsa && nvc0->zsa->pipe.alpha.enabled &&
+   if (nvc0->zsa && nvc0->zsa->pipe.alpha_enabled &&
        nvc0->framebuffer.zsbuf &&
        nvc0->framebuffer.nr_cbufs == 0) {
       nvc0_fb_set_null_rt(push, 0, 0);
@@ -810,7 +760,7 @@ nvc0_validate_fbread(struct nvc0_context *nvc0)
        nvc0->fragprog->fp.reads_framebuffer &&
        nvc0->framebuffer.nr_cbufs &&
        nvc0->framebuffer.cbufs[0]) {
-      struct pipe_sampler_view tmpl;
+      struct pipe_sampler_view tmpl = {0};
       struct pipe_surface *sf = nvc0->framebuffer.cbufs[0];
 
       tmpl.target = PIPE_TEXTURE_2D_ARRAY;
@@ -871,6 +821,7 @@ nvc0_switch_pipe_context(struct nvc0_context *ctx_to)
    struct nvc0_context *ctx_from = ctx_to->screen->cur_ctx;
    unsigned s;
 
+   simple_mtx_assert_locked(&ctx_to->screen->state_lock);
    if (ctx_from)
       ctx_to->state = ctx_from->state;
    else
@@ -967,6 +918,8 @@ nvc0_state_validate(struct nvc0_context *nvc0, uint32_t mask,
    int ret;
    unsigned i;
 
+   simple_mtx_assert_locked(&nvc0->screen->state_lock);
+
    if (nvc0->screen->cur_ctx != nvc0)
       nvc0_switch_pipe_context(nvc0);
 
@@ -985,7 +938,7 @@ nvc0_state_validate(struct nvc0_context *nvc0, uint32_t mask,
    }
 
    nouveau_pushbuf_bufctx(nvc0->base.pushbuf, bufctx);
-   ret = nouveau_pushbuf_validate(nvc0->base.pushbuf);
+   ret = PUSH_VAL(nvc0->base.pushbuf);
 
    return !ret;
 }

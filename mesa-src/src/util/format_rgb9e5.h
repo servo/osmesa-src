@@ -29,8 +29,7 @@
 
 #include <assert.h>
 #include <stdint.h>
-
-#include "c99_math.h"
+#include <math.h>
 
 #define RGB9E5_EXPONENT_BITS          5
 #define RGB9E5_MANTISSA_BITS          9
@@ -59,7 +58,8 @@ static inline int rgb9e5_ClampRange(float x)
 
 static inline uint32_t float3_to_rgb9e5(const float rgb[3])
 {
-   int rm, gm, bm, exp_shared;
+   int rm, gm, bm;
+   uint32_t exp_shared;
    uint32_t revdenom_biasedexp;
    union { float f; uint32_t u; } rc, bc, gc, maxrgb, revdenom;
 

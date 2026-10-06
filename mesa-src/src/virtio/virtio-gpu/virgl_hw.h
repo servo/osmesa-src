@@ -331,7 +331,10 @@ enum virgl_formats {
    VIRGL_FORMAT_BPTC_RGB_FLOAT          = 257,
    VIRGL_FORMAT_BPTC_RGB_UFLOAT         = 258,
 
-   VIRGL_FORMAT_A16L16_UNORM            = 262,
+   /*VIRGL_FORMAT_A8L8_UNORM              = 259, Removed and no user */
+   /*VIRGL_FORMAT_A8L8_SNORM              = 260, Removed and no user */
+   /*VIRGL_FORMAT_A8L8_SRGB               = 261, Removed and no user */
+   /*VIRGL_FORMAT_A16L16_UNORM            = 262, Removed and no user */
 
    VIRGL_FORMAT_G8R8_UNORM              = 263,
    VIRGL_FORMAT_G8R8_SNORM              = 264,
@@ -339,12 +342,7 @@ enum virgl_formats {
    VIRGL_FORMAT_G16R16_SNORM            = 266,
    VIRGL_FORMAT_A8B8G8R8_SNORM          = 267,
 
-   VIRGL_FORMAT_A8L8_UNORM              = 259,
-   VIRGL_FORMAT_A8L8_SNORM              = 260,
-   VIRGL_FORMAT_A8L8_SRGB               = 261,
-
    VIRGL_FORMAT_X8B8G8R8_SNORM          = 268,
-
 
    /* etc2 compressed */
    VIRGL_FORMAT_ETC2_RGB8               = 269,
@@ -358,10 +356,185 @@ enum virgl_formats {
    VIRGL_FORMAT_ETC2_RG11_UNORM         = 277,
    VIRGL_FORMAT_ETC2_RG11_SNORM         = 278,
 
+    /* astc compressed */
+   VIRGL_FORMAT_ASTC_4x4                = 279,
+   VIRGL_FORMAT_ASTC_5x4                = 280,
+   VIRGL_FORMAT_ASTC_5x5                = 281,
+   VIRGL_FORMAT_ASTC_6x5                = 282,
+   VIRGL_FORMAT_ASTC_6x6                = 283,
+   VIRGL_FORMAT_ASTC_8x5                = 284,
+   VIRGL_FORMAT_ASTC_8x6                = 285,
+   VIRGL_FORMAT_ASTC_8x8                = 286,
+   VIRGL_FORMAT_ASTC_10x5               = 287,
+   VIRGL_FORMAT_ASTC_10x6               = 288,
+   VIRGL_FORMAT_ASTC_10x8               = 289,
+   VIRGL_FORMAT_ASTC_10x10              = 290,
+   VIRGL_FORMAT_ASTC_12x10              = 291,
+   VIRGL_FORMAT_ASTC_12x12              = 292,
+   VIRGL_FORMAT_ASTC_4x4_SRGB           = 293,
+   VIRGL_FORMAT_ASTC_5x4_SRGB           = 294,
+   VIRGL_FORMAT_ASTC_5x5_SRGB           = 295,
+   VIRGL_FORMAT_ASTC_6x5_SRGB           = 296,
+   VIRGL_FORMAT_ASTC_6x6_SRGB           = 297,
+   VIRGL_FORMAT_ASTC_8x5_SRGB           = 298,
+   VIRGL_FORMAT_ASTC_8x6_SRGB           = 299,
+   VIRGL_FORMAT_ASTC_8x8_SRGB           = 300,
+   VIRGL_FORMAT_ASTC_10x5_SRGB          = 301,
+   VIRGL_FORMAT_ASTC_10x6_SRGB          = 302,
+   VIRGL_FORMAT_ASTC_10x8_SRGB          = 303,
+   VIRGL_FORMAT_ASTC_10x10_SRGB         = 304,
+   VIRGL_FORMAT_ASTC_12x10_SRGB         = 305,
+   VIRGL_FORMAT_ASTC_12x12_SRGB         = 306,
+
    VIRGL_FORMAT_R10G10B10X2_UNORM       = 308,
    VIRGL_FORMAT_A4B4G4R4_UNORM          = 311,
 
    VIRGL_FORMAT_R8_SRGB                 = 312,
+   VIRGL_FORMAT_R8G8_SRGB               = 313,
+
+   VIRGL_FORMAT_P010                    = 314,
+   VIRGL_FORMAT_P012                    = 315,
+   VIRGL_FORMAT_P016                    = 316,
+
+   VIRGL_FORMAT_B8G8R8_UNORM            = 317,
+   VIRGL_FORMAT_R3G3B2_UNORM            = 318,
+   VIRGL_FORMAT_R4G4B4A4_UNORM          = 319,
+   VIRGL_FORMAT_R5G5B5A1_UNORM          = 320,
+   VIRGL_FORMAT_R5G6B5_UNORM            = 321,
+
+   VIRGL_FORMAT_Y8_400_UNORM            = 322,
+   VIRGL_FORMAT_Y8_U8_V8_444_UNORM      = 323,
+   VIRGL_FORMAT_Y8_U8_V8_422_UNORM      = 324,
+   VIRGL_FORMAT_NV16                    = 325, /* aka Y8_U8V8_422_UNORM */
+   VIRGL_FORMAT_Y8_UNORM                = 326,
+   VIRGL_FORMAT_YVYU                    = 327,
+   VIRGL_FORMAT_Z16_UNORM_S8_UINT       = 328,
+   VIRGL_FORMAT_Z24_UNORM_S8_UINT_AS_R8G8B8A8 = 329,
+   VIRGL_FORMAT_A1B5G5R5_UINT           = 330,
+   VIRGL_FORMAT_A1B5G5R5_UNORM          = 331,
+   VIRGL_FORMAT_A1R5G5B5_UINT           = 332,
+   VIRGL_FORMAT_A1R5G5B5_UNORM          = 333,
+   VIRGL_FORMAT_A2B10G10R10_UINT        = 334,
+   VIRGL_FORMAT_A2B10G10R10_UNORM       = 335,
+   VIRGL_FORMAT_A2R10G10B10_UINT        = 336,
+   VIRGL_FORMAT_A2R10G10B10_UNORM       = 337,
+   VIRGL_FORMAT_A4B4G4R4_UINT           = 338,
+   VIRGL_FORMAT_A4R4G4B4_UINT           = 339,
+   VIRGL_FORMAT_A4R4G4B4_UNORM          = 340,
+   VIRGL_FORMAT_A8B8G8R8_SINT           = 341,
+   VIRGL_FORMAT_A8B8G8R8_SSCALED        = 342,
+   VIRGL_FORMAT_A8B8G8R8_UINT           = 343,
+   VIRGL_FORMAT_A8B8G8R8_USCALED        = 344,
+   VIRGL_FORMAT_A8R8G8B8_SINT           = 345,
+   VIRGL_FORMAT_A8R8G8B8_SNORM          = 346,
+   VIRGL_FORMAT_A8R8G8B8_UINT           = 347,
+   VIRGL_FORMAT_ASTC_3x3x3              = 348,
+   VIRGL_FORMAT_ASTC_3x3x3_SRGB         = 349,
+   VIRGL_FORMAT_ASTC_4x3x3              = 350,
+   VIRGL_FORMAT_ASTC_4x3x3_SRGB         = 351,
+   VIRGL_FORMAT_ASTC_4x4x3              = 352,
+   VIRGL_FORMAT_ASTC_4x4x3_SRGB         = 353,
+   VIRGL_FORMAT_ASTC_4x4x4              = 354,
+   VIRGL_FORMAT_ASTC_4x4x4_SRGB         = 355,
+   VIRGL_FORMAT_ASTC_5x4x4              = 356,
+   VIRGL_FORMAT_ASTC_5x4x4_SRGB         = 357,
+   VIRGL_FORMAT_ASTC_5x5x4              = 358,
+   VIRGL_FORMAT_ASTC_5x5x4_SRGB         = 359,
+   VIRGL_FORMAT_ASTC_5x5x5              = 360,
+   VIRGL_FORMAT_ASTC_5x5x5_SRGB         = 361,
+   VIRGL_FORMAT_ASTC_6x5x5              = 362,
+   VIRGL_FORMAT_ASTC_6x5x5_SRGB         = 363,
+   VIRGL_FORMAT_ASTC_6x6x5              = 364,
+   VIRGL_FORMAT_ASTC_6x6x5_SRGB         = 365,
+   VIRGL_FORMAT_ASTC_6x6x6              = 366,
+   VIRGL_FORMAT_ASTC_6x6x6_SRGB         = 367,
+   VIRGL_FORMAT_ATC_RGB                 = 368,
+   VIRGL_FORMAT_ATC_RGBA_EXPLICIT       = 369,
+   VIRGL_FORMAT_ATC_RGBA_INTERPOLATED   = 370,
+   VIRGL_FORMAT_AYUV                    = 371,
+   VIRGL_FORMAT_B10G10R10A2_SINT        = 372,
+   VIRGL_FORMAT_B10G10R10X2_SINT        = 373,
+   VIRGL_FORMAT_B10G10R10X2_SNORM       = 374,
+   VIRGL_FORMAT_B2G3R3_UINT             = 375,
+   VIRGL_FORMAT_B4G4R4A4_UINT           = 376,
+   VIRGL_FORMAT_B5G5R5A1_UINT           = 377,
+   VIRGL_FORMAT_B5G6R5_UINT             = 378,
+   VIRGL_FORMAT_B8G8R8A8_SINT           = 379,
+   VIRGL_FORMAT_B8G8R8A8_SNORM          = 380,
+   VIRGL_FORMAT_B8G8R8A8_SSCALED        = 381,
+   VIRGL_FORMAT_B8G8R8A8_UINT           = 382,
+   VIRGL_FORMAT_B8G8R8A8_USCALED        = 383,
+   VIRGL_FORMAT_B8G8_R8G8_UNORM         = 384,
+   VIRGL_FORMAT_B8G8R8_SINT             = 385,
+   VIRGL_FORMAT_B8G8R8_SNORM            = 386,
+   VIRGL_FORMAT_B8G8R8_SRGB             = 387,
+   VIRGL_FORMAT_B8G8R8_SSCALED          = 388,
+   VIRGL_FORMAT_B8G8R8_UINT             = 389,
+   VIRGL_FORMAT_B8G8R8_USCALED          = 390,
+   VIRGL_FORMAT_B8G8R8X8_SINT           = 391,
+   VIRGL_FORMAT_B8G8R8X8_SNORM          = 392,
+   VIRGL_FORMAT_B8G8R8X8_UINT           = 393,
+   VIRGL_FORMAT_B8R8_G8R8_UNORM         = 394,
+   VIRGL_FORMAT_FXT1_RGB                = 395,
+   VIRGL_FORMAT_FXT1_RGBA               = 396,
+   VIRGL_FORMAT_G16R16_SINT             = 397,
+   VIRGL_FORMAT_G8B8_G8R8_UNORM         = 398,
+   VIRGL_FORMAT_G8_B8_R8_420_UNORM      = 399,
+   VIRGL_FORMAT_G8_B8R8_420_UNORM       = 400,
+   VIRGL_FORMAT_G8R8_SINT               = 401,
+   VIRGL_FORMAT_P030                    = 402,
+   VIRGL_FORMAT_R10G10B10A2_SINT        = 403,
+   VIRGL_FORMAT_R10G10B10X2_SINT        = 404,
+   VIRGL_FORMAT_R3G3B2_UINT             = 405,
+   VIRGL_FORMAT_R4G4B4A4_UINT           = 406,
+   VIRGL_FORMAT_R4G4B4X4_UNORM          = 407,
+   VIRGL_FORMAT_R5G5B5A1_UINT           = 408,
+   VIRGL_FORMAT_R5G5B5X1_UNORM          = 409,
+   VIRGL_FORMAT_R5G6B5_SRGB             = 410,
+   VIRGL_FORMAT_R5G6B5_UINT             = 411,
+   VIRGL_FORMAT_R64G64B64A64_SINT       = 412,
+   VIRGL_FORMAT_R64G64B64A64_UINT       = 413,
+   VIRGL_FORMAT_R64G64B64_SINT          = 414,
+   VIRGL_FORMAT_R64G64B64_UINT          = 415,
+   VIRGL_FORMAT_R64G64_SINT             = 416,
+   VIRGL_FORMAT_R64G64_UINT             = 417,
+   VIRGL_FORMAT_R64_SINT                = 418,
+   VIRGL_FORMAT_R64_UINT                = 419, /**< raw doubles (ARB_vertex_attrib_64bit) */
+   VIRGL_FORMAT_R8_B8_G8_420_UNORM      = 420,
+   VIRGL_FORMAT_R8_B8G8_420_UNORM       = 421,
+   VIRGL_FORMAT_R8B8_R8G8_UNORM         = 422,
+   VIRGL_FORMAT_R8_G8_B8_420_UNORM      = 423,
+   VIRGL_FORMAT_R8_G8B8_420_UNORM       = 424,
+   VIRGL_FORMAT_R8_G8_B8_UNORM          = 425,
+   VIRGL_FORMAT_VYUY                    = 426,
+   VIRGL_FORMAT_X1B5G5R5_UNORM          = 427,
+   VIRGL_FORMAT_X1R5G5B5_UNORM          = 428,
+   VIRGL_FORMAT_XYUV                    = 429,
+   VIRGL_FORMAT_X8B8G8R8_SINT           = 430,
+   VIRGL_FORMAT_X8R8G8B8_SINT           = 431,
+   VIRGL_FORMAT_X8R8G8B8_SNORM          = 432,
+   VIRGL_FORMAT_Y16_U16_V16_420_UNORM   = 433,
+   VIRGL_FORMAT_Y16_U16_V16_422_UNORM   = 434,
+   VIRGL_FORMAT_Y16_U16V16_422_UNORM    = 435,
+   VIRGL_FORMAT_Y16_U16_V16_444_UNORM   = 436,
+   VIRGL_FORMAT_Y210                    = 437,
+   VIRGL_FORMAT_Y212                    = 438,
+   VIRGL_FORMAT_Y216                    = 439,
+   VIRGL_FORMAT_Y410                    = 440,
+   VIRGL_FORMAT_Y412                    = 441,
+   VIRGL_FORMAT_Y416                    = 442,
+   VIRGL_FORMAT_NV15                    = 443,
+   VIRGL_FORMAT_NV20                    = 444,
+   VIRGL_FORMAT_Y8_U8_V8_440_UNORM      = 445,
+   VIRGL_FORMAT_R10_G10B10_420_UNORM    = 446,
+   VIRGL_FORMAT_R10_G10B10_422_UNORM    = 447,
+   VIRGL_FORMAT_X6G10_X6B10X6R10_420_UNORM = 448,
+   VIRGL_FORMAT_X4G12_X4B12X4R12_420_UNORM = 449,
+   VIRGL_FORMAT_X6R10_UNORM             = 450,
+   VIRGL_FORMAT_X6R10X6G10_UNORM        = 451,
+   VIRGL_FORMAT_X4R12_UNORM             = 452,
+   VIRGL_FORMAT_X4R12X4G12_UNORM        = 453,
+   VIRGL_FORMAT_R8_G8B8_422_UNORM       = 454,
    VIRGL_FORMAT_MAX /* = PIPE_FORMAT_COUNT */,
 
    /* Below formats must not be used in the guest. */
@@ -371,81 +544,101 @@ enum virgl_formats {
 };
 
 /* These are used by the capability_bits field in virgl_caps_v2. */
-#define VIRGL_CAP_NONE 0
-#define VIRGL_CAP_TGSI_INVARIANT       (1 << 0)
-#define VIRGL_CAP_TEXTURE_VIEW         (1 << 1)
-#define VIRGL_CAP_SET_MIN_SAMPLES      (1 << 2)
-#define VIRGL_CAP_COPY_IMAGE           (1 << 3)
-#define VIRGL_CAP_TGSI_PRECISE         (1 << 4)
-#define VIRGL_CAP_TXQS                 (1 << 5)
-#define VIRGL_CAP_MEMORY_BARRIER       (1 << 6)
-#define VIRGL_CAP_COMPUTE_SHADER       (1 << 7)
-#define VIRGL_CAP_FB_NO_ATTACH         (1 << 8)
-#define VIRGL_CAP_ROBUST_BUFFER_ACCESS (1 << 9)
-#define VIRGL_CAP_TGSI_FBFETCH         (1 << 10)
-#define VIRGL_CAP_SHADER_CLOCK         (1 << 11)
-#define VIRGL_CAP_TEXTURE_BARRIER      (1 << 12)
-#define VIRGL_CAP_TGSI_COMPONENTS      (1 << 13)
-#define VIRGL_CAP_GUEST_MAY_INIT_LOG   (1 << 14)
-#define VIRGL_CAP_SRGB_WRITE_CONTROL   (1 << 15)
-#define VIRGL_CAP_QBO                  (1 << 16)
-#define VIRGL_CAP_TRANSFER             (1 << 17)
-#define VIRGL_CAP_FBO_MIXED_COLOR_FORMATS  (1 << 18)
-#define VIRGL_CAP_FAKE_FP64            (1 << 19)
-#define VIRGL_CAP_BIND_COMMAND_ARGS    (1 << 20)
-#define VIRGL_CAP_MULTI_DRAW_INDIRECT  (1 << 21)
-#define VIRGL_CAP_INDIRECT_PARAMS      (1 << 22)
-#define VIRGL_CAP_TRANSFORM_FEEDBACK3  (1 << 23)
-#define VIRGL_CAP_3D_ASTC              (1 << 24)
-#define VIRGL_CAP_INDIRECT_INPUT_ADDR  (1 << 25)
-#define VIRGL_CAP_COPY_TRANSFER        (1 << 26)
-#define VIRGL_CAP_CLIP_HALFZ           (1 << 27)
-#define VIRGL_CAP_APP_TWEAK_SUPPORT    (1 << 28)
-#define VIRGL_CAP_BGRA_SRGB_IS_EMULATED (1 << 29)
-#define VIRGL_CAP_CLEAR_TEXTURE        (1 << 30)
-#define VIRGL_CAP_ARB_BUFFER_STORAGE   (1 << 31)
+#define VIRGL_CAP_NONE 0u
+#define VIRGL_CAP_TGSI_INVARIANT       (1u << 0)
+#define VIRGL_CAP_TEXTURE_VIEW         (1u << 1)
+#define VIRGL_CAP_SET_MIN_SAMPLES      (1u << 2)
+#define VIRGL_CAP_COPY_IMAGE           (1u << 3)
+#define VIRGL_CAP_TGSI_PRECISE         (1u << 4)
+#define VIRGL_CAP_TXQS                 (1u << 5)
+#define VIRGL_CAP_MEMORY_BARRIER       (1u << 6)
+#define VIRGL_CAP_COMPUTE_SHADER       (1u << 7)
+#define VIRGL_CAP_FB_NO_ATTACH         (1u << 8)
+#define VIRGL_CAP_ROBUST_BUFFER_ACCESS (1u << 9)
+#define VIRGL_CAP_TGSI_FBFETCH         (1u << 10)
+#define VIRGL_CAP_SHADER_CLOCK         (1u << 11)
+#define VIRGL_CAP_TEXTURE_BARRIER      (1u << 12)
+#define VIRGL_CAP_TGSI_COMPONENTS      (1u << 13)
+#define VIRGL_CAP_GUEST_MAY_INIT_LOG   (1u << 14)
+#define VIRGL_CAP_SRGB_WRITE_CONTROL   (1u << 15)
+#define VIRGL_CAP_QBO                  (1u << 16)
+#define VIRGL_CAP_TRANSFER             (1u << 17)
+#define VIRGL_CAP_FBO_MIXED_COLOR_FORMATS  (1u << 18)
+#define VIRGL_CAP_HOST_IS_GLES         (1u << 19)
+#define VIRGL_CAP_BIND_COMMAND_ARGS    (1u << 20)
+#define VIRGL_CAP_MULTI_DRAW_INDIRECT  (1u << 21)
+#define VIRGL_CAP_INDIRECT_PARAMS      (1u << 22)
+#define VIRGL_CAP_TRANSFORM_FEEDBACK3  (1u << 23)
+#define VIRGL_CAP_3D_ASTC              (1u << 24)
+#define VIRGL_CAP_INDIRECT_INPUT_ADDR  (1u << 25)
+#define VIRGL_CAP_COPY_TRANSFER        (1u << 26)
+#define VIRGL_CAP_CLIP_HALFZ           (1u << 27)
+#define VIRGL_CAP_APP_TWEAK_SUPPORT    (1u << 28)
+#define VIRGL_CAP_BGRA_SRGB_IS_EMULATED (1u << 29)
+#define VIRGL_CAP_CLEAR_TEXTURE        (1u << 30)
+#define VIRGL_CAP_ARB_BUFFER_STORAGE   (1u << 31)
+
+// Legacy alias
+#define VIRGL_CAP_FAKE_FP64            VIRGL_CAP_HOST_IS_GLES
 
 /* These are used by the capability_bits_v2 field in virgl_caps_v2. */
-#define VIRGL_CAP_V2_BLEND_EQUATION       (1 << 0)
+#define VIRGL_CAP_V2_BLEND_EQUATION       (1u << 0)
+#define VIRGL_CAP_V2_UNTYPED_RESOURCE     (1u << 1)
+#define VIRGL_CAP_V2_VIDEO_MEMORY         (1u << 2)
+#define VIRGL_CAP_V2_MEMINFO              (1u << 3)
+#define VIRGL_CAP_V2_STRING_MARKER        (1u << 4)
+#define VIRGL_CAP_V2_DIFFERENT_GPU        (1u << 5)
+#define VIRGL_CAP_V2_IMPLICIT_MSAA        (1u << 6)
+#define VIRGL_CAP_V2_COPY_TRANSFER_BOTH_DIRECTIONS (1u << 7)
+#define VIRGL_CAP_V2_SCANOUT_USES_GBM     (1u << 8)
+#define VIRGL_CAP_V2_SSO                  (1u << 9)
+#define VIRGL_CAP_V2_TEXTURE_SHADOW_LOD   (1u << 10)
+#define VIRGL_CAP_V2_VS_VERTEX_LAYER      (1u << 11)
+#define VIRGL_CAP_V2_VS_VIEWPORT_INDEX    (1u << 12)
+#define VIRGL_CAP_V2_PIPELINE_STATISTICS_QUERY (1u << 13)
+#define VIRGL_CAP_V2_DRAW_PARAMETERS      (1u << 14)
+#define VIRGL_CAP_V2_GROUP_VOTE           (1u << 15)
+#define VIRGL_CAP_V2_MIRROR_CLAMP_TO_EDGE (1u << 16)
+#define VIRGL_CAP_V2_MIRROR_CLAMP         (1u << 17)
 
 /* virgl bind flags - these are compatible with mesa 10.5 gallium.
  * but are fixed, no other should be passed to virgl either.
  */
-#define VIRGL_BIND_DEPTH_STENCIL (1 << 0)
-#define VIRGL_BIND_RENDER_TARGET (1 << 1)
-#define VIRGL_BIND_SAMPLER_VIEW  (1 << 3)
-#define VIRGL_BIND_VERTEX_BUFFER (1 << 4)
-#define VIRGL_BIND_INDEX_BUFFER  (1 << 5)
-#define VIRGL_BIND_CONSTANT_BUFFER (1 << 6)
-#define VIRGL_BIND_DISPLAY_TARGET (1 << 7)
-#define VIRGL_BIND_COMMAND_ARGS  (1 << 8)
-#define VIRGL_BIND_STREAM_OUTPUT (1 << 11)
-#define VIRGL_BIND_SHADER_BUFFER (1 << 14)
-#define VIRGL_BIND_QUERY_BUFFER  (1 << 15)
-#define VIRGL_BIND_CURSOR        (1 << 16)
-#define VIRGL_BIND_CUSTOM        (1 << 17)
-#define VIRGL_BIND_SCANOUT       (1 << 18)
+#define VIRGL_BIND_DEPTH_STENCIL (1u << 0)
+#define VIRGL_BIND_RENDER_TARGET (1u << 1)
+#define VIRGL_BIND_SAMPLER_VIEW  (1u << 3)
+#define VIRGL_BIND_VERTEX_BUFFER (1u << 4)
+#define VIRGL_BIND_INDEX_BUFFER  (1u << 5)
+#define VIRGL_BIND_CONSTANT_BUFFER (1u << 6)
+#define VIRGL_BIND_DISPLAY_TARGET (1u << 7)
+#define VIRGL_BIND_COMMAND_ARGS  (1u << 8)
+#define VIRGL_BIND_STREAM_OUTPUT (1u << 11)
+#define VIRGL_BIND_SHADER_BUFFER (1u << 14)
+#define VIRGL_BIND_QUERY_BUFFER  (1u << 15)
+#define VIRGL_BIND_CURSOR        (1u << 16)
+#define VIRGL_BIND_CUSTOM        (1u << 17)
+#define VIRGL_BIND_SCANOUT       (1u << 18)
 /* Used for buffers that are backed by guest storage and
  * are only read by the host.
  */
-#define VIRGL_BIND_STAGING       (1 << 19)
-#define VIRGL_BIND_SHARED        (1 << 20)
+#define VIRGL_BIND_STAGING       (1u << 19)
+#define VIRGL_BIND_SHARED        (1u << 20)
 
-#define VIRGL_BIND_PREFER_EMULATED_BGRA  (1 << 21)
+#define VIRGL_BIND_PREFER_EMULATED_BGRA  (1u << 21) /* non-functional */
 
-#define VIRGL_BIND_LINEAR (1 << 22)
+#define VIRGL_BIND_LINEAR (1u << 22)
 
-#define VIRGL_BIND_SHARED_SUBFLAGS (0xff << 24)
+#define VIRGL_BIND_SHARED_SUBFLAGS (0xffu << 24)
 
-#define VIRGL_BIND_MINIGBM_CAMERA_WRITE (1 << 24)
-#define VIRGL_BIND_MINIGBM_CAMERA_READ (1 << 25)
-#define VIRGL_BIND_MINIGBM_HW_VIDEO_DECODER (1 << 26)
-#define VIRGL_BIND_MINIGBM_HW_VIDEO_ENCODER (1 << 27)
-#define VIRGL_BIND_MINIGBM_SW_READ_OFTEN (1 << 28)
-#define VIRGL_BIND_MINIGBM_SW_READ_RARELY (1 << 29)
-#define VIRGL_BIND_MINIGBM_SW_WRITE_OFTEN (1 << 30)
-#define VIRGL_BIND_MINIGBM_SW_WRITE_RARELY (1 << 31)
-#define VIRGL_BIND_MINIGBM_PROTECTED (0xf << 28) // Mutually exclusive with SW_ flags
+#define VIRGL_BIND_MINIGBM_CAMERA_WRITE (1u << 24)
+#define VIRGL_BIND_MINIGBM_CAMERA_READ (1u << 25)
+#define VIRGL_BIND_MINIGBM_HW_VIDEO_DECODER (1u << 26)
+#define VIRGL_BIND_MINIGBM_HW_VIDEO_ENCODER (1u << 27)
+#define VIRGL_BIND_MINIGBM_SW_READ_OFTEN (1u << 28)
+#define VIRGL_BIND_MINIGBM_SW_READ_RARELY (1u << 29)
+#define VIRGL_BIND_MINIGBM_SW_WRITE_OFTEN (1u << 30)
+#define VIRGL_BIND_MINIGBM_SW_WRITE_RARELY (1u << 31)
+#define VIRGL_BIND_MINIGBM_PROTECTED (0xfu << 28) // Mutually exclusive with SW_ flags
 
 struct virgl_caps_bool_set1 {
         unsigned indep_blend_enable:1;
@@ -508,6 +701,26 @@ struct virgl_caps_v1 {
         uint32_t max_texture_gather_components;
 };
 
+struct virgl_video_caps {
+        uint32_t profile:8;
+        uint32_t entrypoint:8;
+        uint32_t max_level:8;
+        uint32_t stacked_frames:8;
+
+        uint32_t max_width:16;
+        uint32_t max_height:16;
+
+        uint32_t prefered_format:16;
+        uint32_t max_macroblocks:16;
+
+        uint32_t npot_texture:1;
+        uint32_t supports_progressive:1;
+        uint32_t supports_interlaced:1;
+        uint32_t prefers_interlaced:1;
+        uint32_t max_temporal_layers:8;
+        uint32_t reserved:20;
+};
+
 /*
  * This struct should be growable when used in capset 2,
  * so we shouldn't have to add a v3 ever.
@@ -559,6 +772,21 @@ struct virgl_caps_v2 {
         struct virgl_supported_format_mask supported_readback_formats;
         struct virgl_supported_format_mask scanout;
         uint32_t capability_bits_v2;
+        uint32_t max_video_memory;
+        char renderer[64];
+        float max_anisotropy;
+        // NOTE: this informs guest-side PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS,
+        // **NOT** GL_MAX_TEXTURE_IMAGE_UNITS!!!
+        // Guest-side driver has always used it as such.
+        uint32_t max_texture_samplers;
+        struct virgl_supported_format_mask supported_multisample_formats;
+        uint32_t max_const_buffer_size[6]; // PIPE_SHADER_TYPES
+        uint32_t num_video_caps;
+        struct virgl_video_caps video_caps[32];
+        uint32_t max_uniform_block_size;
+        uint32_t max_tcs_outputs;
+        uint32_t max_tes_outputs;
+        uint32_t max_shader_storage_blocks[6]; // PIPE_SHADER_TYPES
 };
 
 union virgl_caps {
@@ -587,7 +815,29 @@ enum virgl_ctx_errors {
         VIRGL_ERROR_CTX_ILLEGAL_FORMAT,
         VIRGL_ERROR_CTX_ILLEGAL_SAMPLER_VIEW_TARGET,
         VIRGL_ERROR_CTX_TRANSFER_IOV_BOUNDS,
-        VIRGL_ERROR_CTX_ILLEGAL_DUAL_SRC_BLEND
+        VIRGL_ERROR_CTX_ILLEGAL_DUAL_SRC_BLEND,
+        VIRGL_ERROR_CTX_UNSUPPORTED_FUNCTION,
+        VIRGL_ERROR_CTX_ILLEGAL_PROGRAM_PIPELINE,
+        VIRGL_ERROR_CTX_TOO_MANY_VERTEX_ATTRIBUTES,
+        VIRGL_ERROR_CTX_UNSUPPORTED_TEX_WRAP,
+        VIRGL_ERROR_CTX_CUBE_MAP_FACE_OUT_OF_RANGE,
+        VIRGL_ERROR_CTX_BLIT_AREA_OUT_OF_RANGE,
+        VIRGL_ERROR_CTX_SSBO_BINDING_RANGE,
+        VIRGL_ERROR_CTX_RESOURCE_OUT_OF_RANGE,
+};
+
+enum virgl_statistics_query_index {
+   VIRGL_STAT_QUERY_IA_VERTICES = 0,
+   VIRGL_STAT_QUERY_IA_PRIMITIVES = 1,
+   VIRGL_STAT_QUERY_VS_INVOCATIONS = 2,
+   VIRGL_STAT_QUERY_GS_INVOCATIONS = 3,
+   VIRGL_STAT_QUERY_GS_PRIMITIVES = 4,
+   VIRGL_STAT_QUERY_C_INVOCATIONS = 5,
+   VIRGL_STAT_QUERY_C_PRIMITIVES = 6,
+   VIRGL_STAT_QUERY_PS_INVOCATIONS = 7,
+   VIRGL_STAT_QUERY_HS_INVOCATIONS = 8,
+   VIRGL_STAT_QUERY_DS_INVOCATIONS = 9,
+   VIRGL_STAT_QUERY_CS_INVOCATIONS = 10,
 };
 
 /**

@@ -1,28 +1,10 @@
 /*
- * Copyright © 2007-2019 Advanced Micro Devices, Inc.
- * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS
- * AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- */
+************************************************************************************************************************
+*
+*  Copyright (C) 2007-2024 Advanced Micro Devices, Inc. All rights reserved.
+*  SPDX-License-Identifier: MIT
+*
+***********************************************************************************************************************/
 
 /**
 ****************************************************************************************************
@@ -35,41 +17,125 @@
 #define __ADDR_COMMON_H__
 
 #include "addrinterface.h"
+#include <stdint.h>
 
-#if !defined(DEBUG)
-#ifdef NDEBUG
-#define DEBUG 0
-#else
-#define DEBUG 1
-#endif
-#endif
 
-// ADDR_LNX_KERNEL_BUILD is for internal build
-// Moved from addrinterface.h so __KERNEL__ is not needed any more
-#if ADDR_LNX_KERNEL_BUILD // || (defined(__GNUC__) && defined(__KERNEL__))
-    #include <string.h>
-#elif !defined(__APPLE__) || defined(HAVE_TSERVER)
+#if !defined(__APPLE__) || defined(HAVE_TSERVER)
     #include <stdlib.h>
     #include <string.h>
 #endif
 
-#include <assert.h>
-#include "util/macros.h"
+#if defined(__GNUC__)
+    #include <signal.h>
+#endif
+
+#if defined(_WIN32)
+#include <intrin.h>
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Platform specific debug break defines
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 #if DEBUG
     #if defined(__GNUC__)
-        #define ADDR_DBG_BREAK()    assert(false)
+        #define ADDR_DBG_BREAK()    { raise(SIGTRAP); }
     #elif defined(__APPLE__)
         #define ADDR_DBG_BREAK()    { IOPanic("");}
     #else
         #define ADDR_DBG_BREAK()    { __debugbreak(); }
     #endif
 #else
-    #define ADDR_DBG_BREAK() do {} while(0)
+    #define ADDR_DBG_BREAK()
 #endif
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Debug print macro
+////////////////////////////////////////////////////////////////////////////////////////////////////
+#if DEBUG
+
+// Forward decl.
+namespace Addr {
+
+/// @brief Debug print helper
+/// This function sends messages to thread-local callbacks for printing. If no callback is present
+/// it is sent to stderr.
+///
+VOID DebugPrint( const CHAR* pDebugString, ...);
+
+/// This function sets thread-local callbacks (or NULL) for printing. It should be called when
+/// entering addrlib and is implicitly called by GetLib().
+VOID ApplyDebugPrinters(ADDR_DEBUGPRINT pfnDebugPrint, ADDR_CLIENT_HANDLE pClientHandle);
+}
+
+/// @brief Printf-like macro for printing messages
+#define ADDR_PRNT(msg, ...) Addr::DebugPrint(msg, ##__VA_ARGS__)
+
+/// @brief Resets thread-local debug state
+/// @ingroup util
+///
+/// This macro resets any thread-local state on where to print a message.
+/// It should be called before returning from addrlib.
+#define ADDR_RESET_DEBUG_PRINTERS() Addr::ApplyDebugPrinters(NULL, NULL)
+
+/// @brief Macro for reporting informational messages
+/// @ingroup util
+///
+/// This macro optionally prints an informational message to stdout.
+/// The first parameter is a condition -- if it is true, nothing is done.
+/// The second parameter is a message that may have printf-like args.
+/// Any remaining parameters are used to format the message.
+///
+#define ADDR_INFO(cond, msg, ...)         \
+do { if (!(cond)) { Addr::DebugPrint(msg, ##__VA_ARGS__); } } while (0)
+
+
+/// @brief Macro for reporting error warning messages
+/// @ingroup util
+///
+/// This macro optionally prints an error warning message to stdout,
+/// followed by the file name and line number where the macro was called.
+/// The first parameter is a condition -- if it is true, nothing is done.
+/// The second parameter is a message that may have printf-like args.
+/// Any remaining parameters are used to format the message.
+///
+#define ADDR_WARN(cond, msg, ...)         \
+do { if (!(cond))                         \
+  { Addr::DebugPrint(msg, ##__VA_ARGS__); \
+    Addr::DebugPrint("  WARNING in file %s, line %d\n", __FILE__, __LINE__); \
+} } while (0)
+
+
+/// @brief Macro for reporting fatal error conditions
+/// @ingroup util
+///
+/// This macro optionally stops execution of the current routine
+/// after printing an error warning message to stdout,
+/// followed by the file name and line number where the macro was called.
+/// The first parameter is a condition -- if it is true, nothing is done.
+/// The second parameter is a message that may have printf-like args.
+/// Any remaining parameters are used to format the message.
+///
+#define ADDR_EXIT(cond, msg, ...)                           \
+do { if (!(cond))                                           \
+  { Addr::DebugPrint(msg, ##__VA_ARGS__); ADDR_DBG_BREAK(); \
+} } while (0)
+
+#else // DEBUG
+
+#define ADDR_RESET_DEBUG_PRINTERS()
+
+#define ADDR_PRNT(msg, ...)
+
+#define ADDR_DBG_BREAK()
+
+#define ADDR_INFO(cond, msg, ...)
+
+#define ADDR_WARN(cond, msg, ...)
+
+#define ADDR_EXIT(cond, msg, ...)
+
+#endif // DEBUG
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -81,89 +147,56 @@
     #define ADDR_ANALYSIS_ASSUME(expr) do { (void)(expr); } while (0)
 #endif
 
-#define ADDR_ASSERT(__e) assert(__e)
-#define ADDR_ASSERT_ALWAYS() ADDR_DBG_BREAK()
-#define ADDR_UNHANDLED_CASE() ADDR_ASSERT(!"Unhandled case")
-#define ADDR_NOT_IMPLEMENTED() ADDR_ASSERT(!"Not implemented");
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Debug print macro from legacy address library
-////////////////////////////////////////////////////////////////////////////////////////////////////
 #if DEBUG
+    #define ADDR_BREAK_WITH_MSG(msg)                                      \
+        do {                                                              \
+            Addr::DebugPrint(msg " in file %s:%d\n", __FILE__, __LINE__); \
+            ADDR_DBG_BREAK();                                             \
+        } while (0)
 
-#define ADDR_PRNT(a)    Object::DebugPrint a
+    #define ADDR_ASSERT(__e)                                    \
+    do {                                                        \
+        ADDR_ANALYSIS_ASSUME(__e);                              \
+        if ( !((__e) ? TRUE : FALSE)) {                         \
+            ADDR_BREAK_WITH_MSG("Assertion '" #__e "' failed"); \
+        }                                                       \
+    } while (0)
 
-/// @brief Macro for reporting informational messages
-/// @ingroup util
-///
-/// This macro optionally prints an informational message to stdout.
-/// The first parameter is a condition -- if it is true, nothing is done.
-/// The second pararmeter MUST be a parenthesis-enclosed list of arguments,
-/// starting with a string. This is passed to printf() or an equivalent
-/// in order to format the informational message. For example,
-/// ADDR_INFO(0, ("test %d",3) ); prints out "test 3".
-///
-#define ADDR_INFO(cond, a)         \
-{ if (!(cond)) { ADDR_PRNT(a); } }
+    #if ADDR_SILENCE_ASSERT_ALWAYS
+        #define ADDR_ASSERT_ALWAYS()
+    #else
+        #define ADDR_ASSERT_ALWAYS() ADDR_BREAK_WITH_MSG("Unconditional assert failed")
+    #endif
 
-/// @brief Macro for reporting error warning messages
-/// @ingroup util
-///
-/// This macro optionally prints an error warning message to stdout,
-/// followed by the file name and line number where the macro was called.
-/// The first parameter is a condition -- if it is true, nothing is done.
-/// The second pararmeter MUST be a parenthesis-enclosed list of arguments,
-/// starting with a string. This is passed to printf() or an equivalent
-/// in order to format the informational message. For example,
-/// ADDR_WARN(0, ("test %d",3) ); prints out "test 3" followed by
-/// a second line with the file name and line number.
-///
-#define ADDR_WARN(cond, a)         \
-{ if (!(cond))                     \
-  { ADDR_PRNT(a);                  \
-    ADDR_PRNT(("  WARNING in file %s, line %d\n", __FILE__, __LINE__)); \
-} }
-
-/// @brief Macro for reporting fatal error conditions
-/// @ingroup util
-///
-/// This macro optionally stops execution of the current routine
-/// after printing an error warning message to stdout,
-/// followed by the file name and line number where the macro was called.
-/// The first parameter is a condition -- if it is true, nothing is done.
-/// The second pararmeter MUST be a parenthesis-enclosed list of arguments,
-/// starting with a string. This is passed to printf() or an equivalent
-/// in order to format the informational message. For example,
-/// ADDR_EXIT(0, ("test %d",3) ); prints out "test 3" followed by
-/// a second line with the file name and line number, then stops execution.
-///
-#define ADDR_EXIT(cond, a)         \
-{ if (!(cond))                     \
-  { ADDR_PRNT(a); ADDR_DBG_BREAK();\
-} }
-
-#else // DEBUG
-
-#define ADDRDPF 1 ? (void)0 : (void)
-
-#define ADDR_PRNT(a) do {} while(0)
-
-#define ADDR_DBG_BREAK() do {} while(0)
-
-#define ADDR_INFO(cond, a) do {} while(0)
-
-#define ADDR_WARN(cond, a) do {} while(0)
-
-#define ADDR_EXIT(cond, a) do {} while(0)
-
-#endif // DEBUG
+    #define ADDR_UNHANDLED_CASE() ADDR_BREAK_WITH_MSG("Unhandled case")
+    #define ADDR_NOT_IMPLEMENTED() ADDR_BREAK_WITH_MSG("Not implemented");
+#else //DEBUG
+    #if defined( _WIN32 )
+        #define ADDR_ASSERT(__e) ADDR_ANALYSIS_ASSUME(__e)
+    #else
+        #define ADDR_ASSERT(__e)
+    #endif
+    #define ADDR_ASSERT_ALWAYS()
+    #define ADDR_UNHANDLED_CASE()
+    #define ADDR_NOT_IMPLEMENTED()
+#endif //DEBUG
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define ADDR_C_ASSERT(__e) STATIC_ASSERT(__e)
+
+#if 1
+#define ADDR_C_ASSERT(__e) static_assert(__e, "")
+#else
+#define ADDR_C_ASSERT(__e) typedef char __ADDR_C_ASSERT__[(__e) ? 1 : -1]
+#endif
 
 namespace Addr
 {
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Common constants
+////////////////////////////////////////////////////////////////////////////////////////////////////
+static const UINT_32 MaxElementBytesLog2 = 5; ///< Max number of bpp (8bpp/16bpp/32bpp/64bpp/128bpp)
+
 
 namespace V1
 {
@@ -193,8 +226,15 @@ namespace V2
 // Common constants
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 static const UINT_32 MaxSurfaceHeight = 16384;
-
 } // V2
+
+namespace V3
+{
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Common constants
+////////////////////////////////////////////////////////////////////////////////////////////////////
+static const UINT_32 MaxSurfaceHeight = 65536;
+} // V3
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Common macros
@@ -205,21 +245,6 @@ static const UINT_32 MaxSurfaceHeight = 16384;
 
 /// Helper macros to select a single bit from an int (undefined later in section)
 #define _BIT(v,b)      (((v) >> (b) ) & 1)
-
-/**
-****************************************************************************************************
-* @brief Enums to identify AddrLib type
-****************************************************************************************************
-*/
-enum LibClass
-{
-    BASE_ADDRLIB = 0x0,
-    R600_ADDRLIB = 0x6,
-    R800_ADDRLIB = 0x8,
-    SI_ADDRLIB   = 0xa,
-    CI_ADDRLIB   = 0xb,
-    AI_ADDRLIB   = 0xd,
-};
 
 /**
 ****************************************************************************************************
@@ -242,6 +267,7 @@ enum ChipFamily
     ADDR_CHIP_FAMILY_VI,
     ADDR_CHIP_FAMILY_AI,
     ADDR_CHIP_FAMILY_NAVI,
+    ADDR_CHIP_FAMILY_UNKNOWN,
 };
 
 /**
@@ -270,8 +296,9 @@ union ConfigFlags
         UINT_32 disableLinearOpt       : 1;    ///< Disallow tile modes to be optimized to linear
         UINT_32 use32bppFor422Fmt      : 1;    ///< View 422 formats as 32 bits per pixel element
         UINT_32 forceDccAndTcCompat    : 1;    ///< Force enable DCC and TC compatibility
-        UINT_32 nonPower2MemConfig     : 1;    ///< Physical video memory size is not power of 2
-        UINT_32 reserved               : 19;   ///< Reserved bits for future use
+        UINT_32 nonPower2MemConfig     : 1;    ///< Video memory bit width is not power of 2
+        UINT_32 enableAltTiling        : 1;    ///< Enable alt tile mode
+        UINT_32 reserved               : 18;   ///< Reserved bits for future use
     };
 
     UINT_32 value;
@@ -306,6 +333,79 @@ static inline UINT_32 XorReduce(
 
 /**
 ****************************************************************************************************
+*   Unset least bit
+*
+*   @brief
+*       Returns a copy of the value with the least-significant '1' bit unset
+****************************************************************************************************
+*/
+static inline UINT_32 UnsetLeastBit(
+    UINT_32 val)
+{
+    return val & (val - 1);
+}
+
+/**
+****************************************************************************************************
+*   BitScanForward
+*
+*   @brief
+*       Returns the index-position of the least-significant '1' bit. Must not be 0.
+****************************************************************************************************
+*/
+static inline UINT_32 BitScanForward(
+    UINT_32 mask) ///< [in] Bitmask to scan
+{
+    ADDR_ASSERT(mask > 0);
+    unsigned long out = 0;
+#if (defined(_WIN64) && defined(_M_X64)) || (defined(_WIN32) && defined(_M_IX64))
+    out = ::_tzcnt_u32(mask);
+#elif (defined(_WIN32) || defined(_WIN64))
+    ::_BitScanForward(&out, mask);
+#elif defined(__GNUC__)
+    out = __builtin_ctz(mask);
+#else
+    while ((mask & 1) == 0)
+    {
+        mask >>= 1;
+        out++;
+    }
+#endif
+    return out;
+}
+
+/**
+****************************************************************************************************
+*   BitScanReverse
+*
+*   @brief
+*       Returns the reverse-position of the most-significant '1' bit. Must not be 0.
+****************************************************************************************************
+*/
+static inline UINT_32 BitScanReverse(
+    UINT_32 mask) ///< [in] Bitmask to scan
+{
+    ADDR_ASSERT(mask > 0);
+    unsigned long out = 0;
+#if (defined(_WIN32) || defined(_WIN64))
+    ::_BitScanReverse(&out, mask);
+    out ^= 31;
+#elif defined(__GNUC__)
+    out = __builtin_clz(mask);
+#else
+    out = 32;
+    while (mask != 0)
+    {
+        mask >>= 1;
+        out++;
+    }
+    out = sizeof(mask) * 8 - out;
+#endif
+    return out;
+}
+
+/**
+****************************************************************************************************
 *   IsPow2
 *
 *   @brief
@@ -336,10 +436,10 @@ static inline UINT_64 IsPow2(
 
 /**
 ****************************************************************************************************
-*   ByteAlign
+*   PowTwoAlign
 *
 *   @brief
-*       Align UINT_32 "x" to "align" alignment, "align" should be power of 2
+*       Align UINT_32 "x" up to "align" alignment, "align" should be power of 2
 ****************************************************************************************************
 */
 static inline UINT_32 PowTwoAlign(
@@ -355,10 +455,10 @@ static inline UINT_32 PowTwoAlign(
 
 /**
 ****************************************************************************************************
-*   ByteAlign
+*   PowTwoAlign
 *
 *   @brief
-*       Align UINT_64 "x" to "align" alignment, "align" should be power of 2
+*       Align UINT_64 "x" up to "align" alignment, "align" should be power of 2
 ****************************************************************************************************
 */
 static inline UINT_64 PowTwoAlign(
@@ -370,6 +470,44 @@ static inline UINT_64 PowTwoAlign(
     //
     ADDR_ASSERT(IsPow2(align));
     return (x + (align - 1)) & (~(align - 1));
+}
+
+/**
+****************************************************************************************************
+*   PowTwoAlignDown
+*
+*   @brief
+*       Align UINT_32 "x" down to "align" alignment, "align" should be power of 2
+****************************************************************************************************
+*/
+static inline UINT_32 PowTwoAlignDown(
+    UINT_32 x,
+    UINT_32 align)
+{
+    //
+    // Assert that x is a power of two.
+    //
+    ADDR_ASSERT(IsPow2(align));
+    return (x & ~(align - 1));
+}
+
+/**
+****************************************************************************************************
+*   PowTwoAlignDown
+*
+*   @brief
+*       Align UINT_64 "x" down to "align" alignment, "align" should be power of 2
+****************************************************************************************************
+*/
+static inline UINT_64 PowTwoAlignDown(
+    UINT_64 x,
+    UINT_64 align)
+{
+    //
+    // Assert that x is a power of two.
+    //
+    ADDR_ASSERT(IsPow2(align));
+    return (x & ~(align - 1));
 }
 
 /**
@@ -434,6 +572,38 @@ static inline INT_32 Max(
 
 /**
 ****************************************************************************************************
+*   RoundUpQuotient
+*
+*   @brief
+*       Divides two numbers, rounding up any remainder.
+****************************************************************************************************
+*/
+static inline UINT_32 RoundUpQuotient(
+    UINT_32 numerator,
+    UINT_32 denominator)
+{
+    ADDR_ASSERT(denominator > 0);
+    return ((numerator + (denominator - 1)) / denominator);
+}
+
+/**
+****************************************************************************************************
+*   RoundUpQuotient
+*
+*   @brief
+*       Divides two numbers, rounding up any remainder.
+****************************************************************************************************
+*/
+static inline UINT_64 RoundUpQuotient(
+    UINT_64 numerator,
+    UINT_64 denominator)
+{
+    ADDR_ASSERT(denominator > 0);
+    return ((numerator + (denominator - 1)) / denominator);
+}
+
+/**
+****************************************************************************************************
 *   NextPow2
 *
 *   @brief
@@ -463,42 +633,16 @@ static inline UINT_32 NextPow2(
 
 /**
 ****************************************************************************************************
-*   Log2NonPow2
-*
-*   @brief
-*       Compute log of base 2 no matter the target is power of 2 or not
-****************************************************************************************************
-*/
-static inline UINT_32 Log2NonPow2(
-    UINT_32 x)      ///< [in] the value should calculate log based 2
-{
-    UINT_32 y;
-
-    y = 0;
-    while (x > 1)
-    {
-        x >>= 1;
-        y++;
-    }
-
-    return y;
-}
-
-/**
-****************************************************************************************************
 *   Log2
 *
 *   @brief
-*       Compute log of base 2
+*       Compute log of base 2 no matter the target is power of 2 or not. Returns 0 if 0.
 ****************************************************************************************************
 */
 static inline UINT_32 Log2(
     UINT_32 x)      ///< [in] the value should calculate log based 2
 {
-    // Assert that x is a power of two.
-    ADDR_ASSERT(IsPow2(x));
-
-    return Log2NonPow2(x);
+    return (x != 0) ? (31 ^ BitScanReverse(x)) : 0;
 }
 
 /**
@@ -569,24 +713,6 @@ static inline VOID SafeAssign(
 static inline VOID SafeAssign(
     UINT_64*    pLVal,  ///< [in] Pointer to left val
     UINT_64     rVal)   ///< [in] Right value
-{
-    if (pLVal)
-    {
-        *pLVal = rVal;
-    }
-}
-
-/**
-****************************************************************************************************
-*   SafeAssign
-*
-*   @brief
-*       NULL pointer safe assignment for AddrTileMode
-****************************************************************************************************
-*/
-static inline VOID SafeAssign(
-    AddrTileMode*    pLVal, ///< [in] Pointer to left val
-    AddrTileMode     rVal)  ///< [in] Right value
 {
     if (pLVal)
     {
@@ -855,6 +981,7 @@ static inline VOID InitChannel(
     pChanSet->index = index;
 }
 
+
 /**
 ****************************************************************************************************
 *   InitChannel
@@ -929,10 +1056,41 @@ static inline UINT_32 GetCoordActiveMask(
 
 /**
 ****************************************************************************************************
+*   FillEqBitComponents
+*
+*   @brief
+*       Fill the 'numBitComponents' field based on the equation.
+****************************************************************************************************
+*/
+static inline void FillEqBitComponents(
+    ADDR_EQUATION *pEquation) // [in/out] Equation to calculate bit components for
+{
+    pEquation->numBitComponents = 1; // We always have at least the address
+    for (UINT_32 xorN = 1; xorN < ADDR_MAX_EQUATION_COMP; xorN++)
+    {
+        for (UINT_32 bit = 0; bit < ADDR_MAX_EQUATION_BIT; bit++)
+        {
+            if (pEquation->comps[xorN][bit].valid)
+            {
+                pEquation->numBitComponents = xorN + 1;
+                break;
+            }
+        }
+
+        if (pEquation->numBitComponents != (xorN + 1))
+        {
+            // Skip following components if this one wasn't valid
+            break;
+        }
+    }
+}
+
+/**
+****************************************************************************************************
 *   ShiftCeil
 *
 *   @brief
-*       Apply righ-shift with ceiling
+*       Apply right-shift with ceiling
 ****************************************************************************************************
 */
 static inline UINT_32 ShiftCeil(
@@ -940,6 +1098,87 @@ static inline UINT_32 ShiftCeil(
     UINT_32 b)  ///< [in] number of bits to shift
 {
     return (a >> b) + (((a & ((1 << b) - 1)) != 0) ? 1 : 0);
+}
+
+/**
+****************************************************************************************************
+*   ShiftRight
+*
+*   @brief
+*       Return right-shift value and minimum is 1
+****************************************************************************************************
+*/
+static inline UINT_32 ShiftRight(
+    UINT_32 a,  ///< [in] value to be right-shifted
+    UINT_32 b)  ///< [in] number of bits to shift
+{
+    return Max(a >> b, 1u);
+}
+
+/**
+****************************************************************************************************
+*   VoidPtrDec
+*
+*   @brief
+*       Subtracts a value to the given pointer directly.
+****************************************************************************************************
+*/
+static inline void* VoidPtrDec(
+    void*  pIn,
+    size_t offset)
+{
+    return (void*)(((char*)(pIn)) - offset);
+}
+
+static inline const void* VoidPtrDec(
+    const void* pIn,
+    size_t      offset)
+{
+    return (const void*)(((const char*)(pIn)) - offset);
+}
+
+/**
+****************************************************************************************************
+*   VoidPtrInc
+*
+*   @brief
+*       Adds a value to the given pointer directly.
+****************************************************************************************************
+*/
+static inline void* VoidPtrInc(
+    void*  pIn,
+    size_t offset)
+{
+    return (void*)(((char*)(pIn)) + offset);
+}
+
+static inline const void* VoidPtrInc(
+    const void* pIn,
+    size_t      offset)
+{
+    return (const void*)(((const char*)(pIn)) + offset);
+}
+
+/**
+****************************************************************************************************
+*   VoidPtrXor
+*
+*   @brief
+*       Xors a value to the given pointer directly.
+****************************************************************************************************
+*/
+static inline void* VoidPtrXor(
+    void*  pIn,
+    size_t offset)
+{
+    return (void*)(((uintptr_t)(pIn)) ^ offset);
+}
+
+static inline const void* VoidPtrXor(
+    const void* pIn,
+    size_t      offset)
+{
+    return (const void*)(((uintptr_t)(pIn)) ^ offset);
 }
 
 } // Addr

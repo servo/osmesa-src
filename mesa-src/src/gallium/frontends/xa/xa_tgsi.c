@@ -27,7 +27,7 @@
  */
 #include "xa_priv.h"
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "pipe/p_shader_tokens.h"
@@ -108,7 +108,7 @@ src_in_mask(struct ureg_program *ureg,
 	    struct ureg_dst dst,
 	    struct ureg_src src,
 	    struct ureg_src mask,
-	    unsigned mask_luminance, boolean component_alpha)
+	    unsigned mask_luminance, bool component_alpha)
 {
     if (mask_luminance)
         if (component_alpha) {
@@ -145,16 +145,16 @@ create_vs(struct pipe_context *pipe, unsigned vs_traits)
     struct ureg_src src;
     struct ureg_dst dst;
     struct ureg_src const0, const1;
-    boolean is_composite = (vs_traits & VS_COMPOSITE) != 0;
-    boolean has_mask = (vs_traits & VS_MASK) != 0;
-    boolean is_yuv = (vs_traits & VS_YUV) != 0;
-    boolean is_src_src = (vs_traits & VS_SRC_SRC) != 0;
-    boolean is_mask_src = (vs_traits & VS_MASK_SRC) != 0;
+    bool is_composite = (vs_traits & VS_COMPOSITE) != 0;
+    bool has_mask = (vs_traits & VS_MASK) != 0;
+    bool is_yuv = (vs_traits & VS_YUV) != 0;
+    bool is_src_src = (vs_traits & VS_SRC_SRC) != 0;
+    bool is_mask_src = (vs_traits & VS_MASK_SRC) != 0;
     unsigned input_slot = 0;
 
     ureg = ureg_create(PIPE_SHADER_VERTEX);
     if (ureg == NULL)
-	return 0;
+	return NULL;
 
     const0 = ureg_DECL_constant(ureg, 0);
     const1 = ureg_DECL_constant(ureg, 1);
@@ -259,7 +259,7 @@ xrender_tex(struct ureg_program *ureg,
 	    struct ureg_src coords,
 	    struct ureg_src sampler,
 	    const struct ureg_src *imm0,
-	    boolean repeat_none, boolean swizzle, boolean set_alpha)
+	    bool repeat_none, bool swizzle, bool set_alpha)
 {
     if (repeat_none) {
 	struct ureg_dst tmp0 = ureg_DECL_temporary(ureg);
@@ -315,8 +315,8 @@ static void
 read_input(struct ureg_program *ureg,
            struct ureg_dst dst,
            const struct ureg_src *imm0,
-           boolean repeat_none, boolean swizzle, boolean set_alpha,
-           boolean is_src, unsigned *cur_constant, unsigned *cur_sampler)
+           bool repeat_none, bool swizzle, bool set_alpha,
+           bool is_src, unsigned *cur_constant, unsigned *cur_sampler)
 {
     struct ureg_src input, sampler;
 
@@ -356,7 +356,7 @@ create_fs(struct pipe_context *pipe, unsigned fs_traits)
     unsigned dst_luminance = (fs_traits & FS_DST_LUMINANCE) != 0;
     unsigned is_src_src = (fs_traits & FS_SRC_SRC) != 0;
     unsigned is_mask_src = (fs_traits & FS_MASK_SRC) != 0;
-    boolean component_alpha = (fs_traits & FS_CA) != 0;
+    bool component_alpha = (fs_traits & FS_CA) != 0;
     unsigned cur_sampler = 0;
     unsigned cur_constant = 0;
 
@@ -368,7 +368,7 @@ create_fs(struct pipe_context *pipe, unsigned fs_traits)
 
     ureg = ureg_create(PIPE_SHADER_FRAGMENT);
     if (ureg == NULL)
-	return 0;
+	return NULL;
 
     if (is_yuv)
        return create_yuv_shader(pipe, ureg);
@@ -462,7 +462,7 @@ static inline void *
 shader_from_cache(struct pipe_context *pipe,
 		  unsigned type, struct cso_hash *hash, unsigned key)
 {
-    void *shader = 0;
+    void *shader = NULL;
 
     struct cso_hash_iter iter = cso_hash_find(hash, key);
 
@@ -489,7 +489,7 @@ xa_shaders_get(struct xa_shaders *sc, unsigned vs_traits, unsigned fs_traits)
     fs = shader_from_cache(sc->r->pipe, PIPE_SHADER_FRAGMENT,
 			   &sc->fs_hash, fs_traits);
 
-    debug_assert(vs && fs);
+    assert(vs && fs);
     if (!vs || !fs)
 	return shader;
 

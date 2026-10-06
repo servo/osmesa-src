@@ -23,16 +23,19 @@
  *
  */
 
+#include "util/format/u_format.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
 #include "util/u_helpers.h"
 #include "util/u_debug.h"
 #include "util/u_framebuffer.h"
+#include "util/u_viewport.h"
 
 #include "pipe/p_state.h"
 
 #include "lima_screen.h"
 #include "lima_context.h"
+#include "lima_format.h"
 #include "lima_resource.h"
 
 static void
@@ -183,14 +186,14 @@ lima_delete_vertex_elements_state(struct pipe_context *pctx, void *hwcso)
 
 static void
 lima_set_vertex_buffers(struct pipe_context *pctx,
-                        unsigned start_slot, unsigned count,
+                        unsigned count,
                         const struct pipe_vertex_buffer *vb)
 {
    struct lima_context *ctx = lima_context(pctx);
    struct lima_context_vertex_buffer *so = &ctx->vertex_buffers;
 
    util_set_vertex_buffers_mask(so->vb, &so->enabled_mask,
-                                vb, start_slot, count);
+                                vb, count, true);
    so->count = util_last_bit(so->enabled_mask);
 
    ctx->dirty |= LIMA_CONTEXT_DIRTY_VERTEX_BUFF;
@@ -205,18 +208,22 @@ lima_set_viewport_states(struct pipe_context *pctx,
    struct lima_context *ctx = lima_context(pctx);
 
    /* reverse calculate the parameter of glViewport */
-   ctx->viewport.left = viewport->translate[0] - fabsf(viewport->scale[0]);
-   ctx->viewport.right = viewport->translate[0] + fabsf(viewport->scale[0]);
-   ctx->viewport.bottom = viewport->translate[1] - fabsf(viewport->scale[1]);
-   ctx->viewport.top = viewport->translate[1] + fabsf(viewport->scale[1]);
+   ctx->viewport.left = ctx->ext_viewport.left =
+      viewport->translate[0] - fabsf(viewport->scale[0]);
+   ctx->viewport.right = ctx->ext_viewport.right =
+      viewport->translate[0] + fabsf(viewport->scale[0]);
+   ctx->viewport.bottom = ctx->ext_viewport.bottom =
+      viewport->translate[1] - fabsf(viewport->scale[1]);
+   ctx->viewport.top = ctx->ext_viewport.top =
+      viewport->translate[1] + fabsf(viewport->scale[1]);
 
    /* reverse calculate the parameter of glDepthRange */
    float near, far;
-   near = viewport->translate[2] - viewport->scale[2];
-   far = viewport->translate[2] + viewport->scale[2];
+   bool halfz = ctx->rasterizer && ctx->rasterizer->base.clip_halfz;
+   util_viewport_zmin_zmax(viewport, halfz, &near, &far);
 
-   ctx->viewport.near = MIN2(near, far);
-   ctx->viewport.far = MAX2(near, far);
+   ctx->viewport.near = ctx->rasterizer && ctx->rasterizer->base.depth_clip_near ? near : 0.0f;
+   ctx->viewport.far = ctx->rasterizer && ctx->rasterizer->base.depth_clip_far ? far : 1.0f;
 
    ctx->viewport.transform = *viewport;
    ctx->dirty |= LIMA_CONTEXT_DIRTY_VIEWPORT;
@@ -246,17 +253,28 @@ lima_set_blend_color(struct pipe_context *pctx,
 
 static void
 lima_set_stencil_ref(struct pipe_context *pctx,
-                     const struct pipe_stencil_ref *stencil_ref)
+                     const struct pipe_stencil_ref stencil_ref)
 {
    struct lima_context *ctx = lima_context(pctx);
 
-   ctx->stencil_ref = *stencil_ref;
+   ctx->stencil_ref = stencil_ref;
    ctx->dirty |= LIMA_CONTEXT_DIRTY_STENCIL_REF;
+}
+
+static void
+lima_set_clip_state(struct pipe_context *pctx,
+                    const struct pipe_clip_state *clip)
+{
+   struct lima_context *ctx = lima_context(pctx);
+   ctx->clip = *clip;
+
+   ctx->dirty |= LIMA_CONTEXT_DIRTY_CLIP;
 }
 
 static void
 lima_set_constant_buffer(struct pipe_context *pctx,
                          enum pipe_shader_type shader, uint index,
+                         bool pass_reference,
                          const struct pipe_constant_buffer *cb)
 {
    struct lima_context *ctx = lima_context(pctx);
@@ -340,6 +358,11 @@ lima_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
    so->base.reference.count = 1;
    so->base.context = pctx;
 
+   uint8_t sampler_swizzle[4] = { cso->swizzle_r, cso->swizzle_g,
+                                  cso->swizzle_b, cso->swizzle_a };
+   const uint8_t *format_swizzle = lima_format_get_texel_swizzle(cso->format);
+   util_format_compose_swizzles(format_swizzle, sampler_swizzle, so->swizzle);
+
    return &so->base;
 }
 
@@ -358,6 +381,8 @@ static void
 lima_set_sampler_views(struct pipe_context *pctx,
                       enum pipe_shader_type shader,
                       unsigned start, unsigned nr,
+                       unsigned unbind_num_trailing_slots,
+                       bool take_ownership,
                       struct pipe_sampler_view **views)
 {
    struct lima_context *ctx = lima_context(pctx);
@@ -370,7 +395,13 @@ lima_set_sampler_views(struct pipe_context *pctx,
    for (i = 0; i < nr; i++) {
       if (views[i])
          new_nr = i + 1;
-      pipe_sampler_view_reference(&lima_tex->textures[i], views[i]);
+
+      if (take_ownership) {
+         pipe_sampler_view_reference(&lima_tex->textures[i], NULL);
+         lima_tex->textures[i] = views[i];
+      } else {
+         pipe_sampler_view_reference(&lima_tex->textures[i], views[i]);
+      }
    }
 
    for (; i < lima_tex->num_textures; i++) {
@@ -385,6 +416,9 @@ static void
 lima_set_sample_mask(struct pipe_context *pctx,
                      unsigned sample_mask)
 {
+   struct lima_context *ctx = lima_context(pctx);
+   ctx->sample_mask = sample_mask & ((1 << LIMA_MAX_SAMPLES) - 1);
+   ctx->dirty |= LIMA_CONTEXT_DIRTY_SAMPLE_MASK;
 }
 
 void
@@ -396,6 +430,7 @@ lima_state_init(struct lima_context *ctx)
    ctx->base.set_scissor_states = lima_set_scissor_states;
    ctx->base.set_blend_color = lima_set_blend_color;
    ctx->base.set_stencil_ref = lima_set_stencil_ref;
+   ctx->base.set_clip_state = lima_set_clip_state;
 
    ctx->base.set_vertex_buffers = lima_set_vertex_buffers;
    ctx->base.set_constant_buffer = lima_set_constant_buffer;
@@ -433,8 +468,5 @@ lima_state_fini(struct lima_context *ctx)
    struct lima_context_vertex_buffer *so = &ctx->vertex_buffers;
 
    util_set_vertex_buffers_mask(so->vb, &so->enabled_mask, NULL,
-                                0, ARRAY_SIZE(so->vb));
-
-   pipe_surface_reference(&ctx->framebuffer.base.cbufs[0], NULL);
-   pipe_surface_reference(&ctx->framebuffer.base.zsbuf, NULL);
+                                0, false);
 }

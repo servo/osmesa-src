@@ -21,22 +21,24 @@
  * IN THE SOFTWARE.
  */
 
-#include "nir.h"
-#include "nir_builder.h"
 #include "nir_deref.h"
 #include "util/hash_table.h"
+#include "nir.h"
+#include "nir_builder.h"
 
-static bool
-is_trivial_deref_cast(nir_deref_instr *cast)
+bool
+nir_deref_cast_is_trivial(nir_deref_instr *cast)
 {
+   assert(cast->deref_type == nir_deref_type_cast);
+
    nir_deref_instr *parent = nir_src_as_deref(cast->parent);
    if (!parent)
       return false;
 
-   return cast->mode == parent->mode &&
+   return cast->modes == parent->modes &&
           cast->type == parent->type &&
-          cast->dest.ssa.num_components == parent->dest.ssa.num_components &&
-          cast->dest.ssa.bit_size == parent->dest.ssa.bit_size;
+          cast->def.num_components == parent->def.num_components &&
+          cast->def.bit_size == parent->def.bit_size;
 }
 
 void
@@ -57,7 +59,7 @@ nir_deref_path_init(nir_deref_path *path,
 
    *tail = NULL;
    for (nir_deref_instr *d = deref; d; d = nir_deref_instr_parent(d)) {
-      if (d->deref_type == nir_deref_type_cast && is_trivial_deref_cast(d))
+      if (d->deref_type == nir_deref_type_cast && nir_deref_cast_is_trivial(d))
          continue;
       count++;
       if (count <= max_short_path_len)
@@ -80,7 +82,7 @@ nir_deref_path_init(nir_deref_path *path,
    head = tail = path->path + count;
    *tail = NULL;
    for (nir_deref_instr *d = deref; d; d = nir_deref_instr_parent(d)) {
-      if (d->deref_type == nir_deref_type_cast && is_trivial_deref_cast(d))
+      if (d->deref_type == nir_deref_type_cast && nir_deref_cast_is_trivial(d))
          continue;
       *(--head) = d;
    }
@@ -109,8 +111,7 @@ nir_deref_instr_remove_if_unused(nir_deref_instr *instr)
 
    for (nir_deref_instr *d = instr; d; d = nir_deref_instr_parent(d)) {
       /* If anyone is using this deref, leave it alone */
-      assert(d->dest.is_ssa);
-      if (!list_is_empty(&d->dest.ssa.uses))
+      if (!nir_def_is_unused(&d->def))
          break;
 
       nir_instr_remove(&d->instr);
@@ -145,8 +146,8 @@ nir_deref_instr_is_known_out_of_bounds(nir_deref_instr *instr)
    for (; instr; instr = nir_deref_instr_parent(instr)) {
       if (instr->deref_type == nir_deref_type_array &&
           nir_src_is_const(instr->arr.index) &&
-           nir_src_as_uint(instr->arr.index) >=
-           glsl_get_length(nir_deref_instr_parent(instr)->type))
+          nir_src_as_uint(instr->arr.index) >=
+             glsl_get_length(nir_deref_instr_parent(instr)->type))
          return true;
    }
 
@@ -154,10 +155,14 @@ nir_deref_instr_is_known_out_of_bounds(nir_deref_instr *instr)
 }
 
 bool
-nir_deref_instr_has_complex_use(nir_deref_instr *deref)
+nir_deref_instr_has_complex_use(nir_deref_instr *deref,
+                                nir_deref_instr_has_complex_use_options opts)
 {
-   nir_foreach_use(use_src, &deref->dest.ssa) {
-      nir_instr *use_instr = use_src->parent_instr;
+   nir_foreach_use_including_if(use_src, &deref->def) {
+      if (nir_src_is_if(use_src))
+         return true;
+
+      nir_instr *use_instr = nir_src_parent_instr(use_src);
 
       switch (use_instr->type) {
       case nir_instr_type_deref: {
@@ -184,7 +189,7 @@ nir_deref_instr_has_complex_use(nir_deref_instr *deref)
              use_deref->deref_type != nir_deref_type_array)
             return true;
 
-         if (nir_deref_instr_has_complex_use(use_deref))
+         if (nir_deref_instr_has_complex_use(use_deref, opts))
             return true;
 
          continue;
@@ -214,6 +219,21 @@ nir_deref_instr_has_complex_use(nir_deref_instr *deref)
                continue;
             return true;
 
+         case nir_intrinsic_memcpy_deref:
+            if (use_src == &use_intrin->src[0] &&
+                (opts & nir_deref_instr_has_complex_use_allow_memcpy_dst))
+               continue;
+            if (use_src == &use_intrin->src[1] &&
+                (opts & nir_deref_instr_has_complex_use_allow_memcpy_src))
+               continue;
+            return true;
+
+         case nir_intrinsic_deref_atomic:
+         case nir_intrinsic_deref_atomic_swap:
+            if (opts & nir_deref_instr_has_complex_use_allow_atomics)
+               continue;
+            return true;
+
          default:
             return true;
          }
@@ -225,20 +245,35 @@ nir_deref_instr_has_complex_use(nir_deref_instr *deref)
       }
    }
 
-   nir_foreach_if_use(use, &deref->dest.ssa)
-      return true;
-
    return false;
 }
 
+static unsigned
+type_scalar_size_bytes(const struct glsl_type *type)
+{
+   assert(glsl_type_is_vector_or_scalar(type) ||
+          glsl_type_is_matrix(type));
+   return glsl_type_is_boolean(type) ? 4 : glsl_get_bit_size(type) / 8;
+}
+
 unsigned
-nir_deref_instr_ptr_as_array_stride(nir_deref_instr *deref)
+nir_deref_instr_array_stride(nir_deref_instr *deref)
 {
    switch (deref->deref_type) {
    case nir_deref_type_array:
-      return glsl_get_explicit_stride(nir_deref_instr_parent(deref)->type);
+   case nir_deref_type_array_wildcard: {
+      const struct glsl_type *arr_type = nir_deref_instr_parent(deref)->type;
+      unsigned stride = glsl_get_explicit_stride(arr_type);
+
+      if ((glsl_type_is_matrix(arr_type) &&
+           glsl_matrix_type_is_row_major(arr_type)) ||
+          (glsl_type_is_vector(arr_type) && stride == 0))
+         stride = type_scalar_size_bytes(arr_type);
+
+      return stride;
+   }
    case nir_deref_type_ptr_as_array:
-      return nir_deref_instr_ptr_as_array_stride(nir_deref_instr_parent(deref));
+      return nir_deref_instr_array_stride(nir_deref_instr_parent(deref));
    case nir_deref_type_cast:
       return deref->cast.ptr_stride;
    default:
@@ -285,13 +320,13 @@ nir_deref_instr_get_const_offset(nir_deref_instr *deref,
       case nir_deref_type_array:
          offset += nir_src_as_uint((*p)->arr.index) *
                    type_get_array_stride((*p)->type, size_align);
-	 break;
+         break;
       case nir_deref_type_struct: {
          /* p starts at path[1], so this is safe */
          nir_deref_instr *parent = *(p - 1);
          offset += struct_type_get_field_offset(parent->type, size_align,
                                                 (*p)->strct.index);
-	 break;
+         break;
       }
       case nir_deref_type_cast:
          /* A cast doesn't contribute to the offset */
@@ -306,18 +341,19 @@ nir_deref_instr_get_const_offset(nir_deref_instr *deref,
    return offset;
 }
 
-nir_ssa_def *
+nir_def *
 nir_build_deref_offset(nir_builder *b, nir_deref_instr *deref,
                        glsl_type_size_align_func size_align)
 {
    nir_deref_path path;
    nir_deref_path_init(&path, deref, NULL);
 
-   nir_ssa_def *offset = nir_imm_intN_t(b, 0, deref->dest.ssa.bit_size);
+   nir_def *offset = nir_imm_intN_t(b, 0, deref->def.bit_size);
    for (nir_deref_instr **p = &path.path[1]; *p; p++) {
       switch ((*p)->deref_type) {
-      case nir_deref_type_array: {
-         nir_ssa_def *index = nir_ssa_for_src(b, (*p)->arr.index, 1);
+      case nir_deref_type_array:
+      case nir_deref_type_ptr_as_array: {
+         nir_def *index = (*p)->arr.index.ssa;
          int stride = type_get_array_stride((*p)->type, size_align);
          offset = nir_iadd(b, offset, nir_amul_imm(b, index, stride));
          break;
@@ -357,9 +393,11 @@ nir_remove_dead_derefs_impl(nir_function_impl *impl)
       }
    }
 
-   if (progress)
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
+   if (progress) {
+      nir_metadata_preserve(impl, nir_metadata_control_flow);
+   } else {
+      nir_metadata_preserve(impl, nir_metadata_all);
+   }
 
    return progress;
 }
@@ -368,120 +406,316 @@ bool
 nir_remove_dead_derefs(nir_shader *shader)
 {
    bool progress = false;
-   nir_foreach_function(function, shader) {
-      if (function->impl && nir_remove_dead_derefs_impl(function->impl))
+   nir_foreach_function_impl(impl, shader) {
+      if (nir_remove_dead_derefs_impl(impl))
          progress = true;
    }
 
    return progress;
 }
 
+static bool
+nir_fixup_deref_modes_instr(UNUSED struct nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   if (instr->type != nir_instr_type_deref)
+      return false;
+
+   nir_deref_instr *deref = nir_instr_as_deref(instr);
+   nir_variable_mode parent_modes;
+   if (deref->deref_type == nir_deref_type_var) {
+      parent_modes = deref->var->data.mode;
+   } else {
+      nir_deref_instr *parent = nir_src_as_deref(deref->parent);
+      if (parent == NULL) {
+         /* Cast to some non-deref value, nothing to propagate. */
+         assert(deref->deref_type == nir_deref_type_cast);
+         return false;
+      }
+
+      /* It's safe to propagate a specific mode into a more generic one
+       * but never the other way around.
+       */
+      if (util_bitcount(parent->modes) != 1)
+         return false;
+
+      parent_modes = parent->modes;
+   }
+
+   if (deref->modes == parent_modes)
+      return false;
+
+   deref->modes = parent_modes;
+   return true;
+}
+
 void
 nir_fixup_deref_modes(nir_shader *shader)
 {
-   nir_foreach_function(function, shader) {
-      if (!function->impl)
-         continue;
+   nir_shader_instructions_pass(shader, nir_fixup_deref_modes_instr,
+                                nir_metadata_control_flow |
+                                nir_metadata_live_defs |
+                                nir_metadata_instr_index,
+                                NULL);
+}
 
-      nir_foreach_block(block, function->impl) {
-         nir_foreach_instr(instr, block) {
-            if (instr->type != nir_instr_type_deref)
-               continue;
+static bool
+nir_fixup_deref_types_instr(UNUSED struct nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   if (instr->type != nir_instr_type_deref)
+      return false;
 
-            nir_deref_instr *deref = nir_instr_as_deref(instr);
-            if (deref->deref_type == nir_deref_type_cast)
-               continue;
-
-            nir_variable_mode parent_mode;
-            if (deref->deref_type == nir_deref_type_var) {
-               parent_mode = deref->var->data.mode;
-            } else {
-               assert(deref->parent.is_ssa);
-               nir_deref_instr *parent =
-                  nir_instr_as_deref(deref->parent.ssa->parent_instr);
-               parent_mode = parent->mode;
-            }
-
-            deref->mode = parent_mode;
-         }
-      }
+   nir_deref_instr *deref = nir_instr_as_deref(instr);
+   const struct glsl_type *parent_derived_type;
+   if (deref->deref_type == nir_deref_type_var) {
+      parent_derived_type = deref->var->type;
+   } else if (deref->deref_type == nir_deref_type_array ||
+              deref->deref_type == nir_deref_type_array_wildcard) {
+      nir_deref_instr *parent = nir_src_as_deref(deref->parent);
+      parent_derived_type = glsl_get_array_element(parent->type);
+   }  else if (deref->deref_type == nir_deref_type_struct) {
+      nir_deref_instr *parent = nir_src_as_deref(deref->parent);
+      parent_derived_type = glsl_get_struct_field(parent->type, deref->strct.index);
+   } else if (deref->deref_type == nir_deref_type_ptr_as_array) {
+      nir_deref_instr *parent = nir_src_as_deref(deref->parent);
+      parent_derived_type = parent->type;
+   } else if (deref->deref_type == nir_deref_type_cast) {
+      return false;
+   } else {
+      unreachable("Unsupported deref type");
    }
+
+   if (deref->type == parent_derived_type)
+      return false;
+
+   deref->type = parent_derived_type;
+   return true;
+}
+
+/* Update deref types when array sizes have changed. */
+void
+nir_fixup_deref_types(nir_shader *shader)
+{
+   nir_shader_instructions_pass(shader, nir_fixup_deref_types_instr,
+                                nir_metadata_control_flow |
+                                nir_metadata_live_defs |
+                                nir_metadata_instr_index,
+                                NULL);
 }
 
 static bool
 modes_may_alias(nir_variable_mode a, nir_variable_mode b)
 {
    /* Generic pointers can alias with SSBOs */
-   if ((a == nir_var_mem_ssbo || a == nir_var_mem_global) &&
-       (b == nir_var_mem_ssbo || b == nir_var_mem_global))
+   if ((a & (nir_var_mem_ssbo | nir_var_mem_global)) &&
+       (b & (nir_var_mem_ssbo | nir_var_mem_global)))
       return true;
 
-   /* In the general case, pointers can only alias if they have the same mode.
-    *
-    * NOTE: In future, with things like OpenCL generic pointers, this may not
-    * be true and will have to be re-evaluated.  However, with graphics only,
-    * it should be safe.
+   /* Pointers can only alias if they share a mode. */
+   return a & b;
+}
+
+ALWAYS_INLINE static nir_deref_compare_result
+compare_deref_paths(nir_deref_path *a_path, nir_deref_path *b_path,
+                    unsigned *i, bool (*stop_fn)(const nir_deref_instr *))
+{
+   /* Start off assuming they fully compare.  We ignore equality for now.  In
+    * the end, we'll determine that by containment.
     */
-   return a == b;
+   nir_deref_compare_result result = nir_derefs_may_alias_bit |
+                                     nir_derefs_a_contains_b_bit |
+                                     nir_derefs_b_contains_a_bit;
+
+   nir_deref_instr **a = a_path->path;
+   nir_deref_instr **b = b_path->path;
+
+   for (; a[*i] != NULL; (*i)++) {
+      if (a[*i] != b[*i])
+         break;
+
+      if (stop_fn && stop_fn(a[*i]))
+         break;
+   }
+
+   /* We're at either the tail or the divergence point between the two deref
+    * paths.  Look to see if either contains cast or a ptr_as_array deref.  If
+    * it does we don't know how to safely make any inferences.  Hopefully,
+    * nir_opt_deref will clean most of these up and we can start inferring
+    * things again.
+    *
+    * In theory, we could do a bit better.  For instance, we could detect the
+    * case where we have exactly one ptr_as_array deref in the chain after the
+    * divergence point and it's matched in both chains and the two chains have
+    * different constant indices.
+    */
+   for (unsigned j = *i; a[j] != NULL; j++) {
+      if (stop_fn && stop_fn(a[j]))
+         break;
+
+      if (a[j]->deref_type == nir_deref_type_cast ||
+          a[j]->deref_type == nir_deref_type_ptr_as_array)
+         return nir_derefs_may_alias_bit;
+   }
+   for (unsigned j = *i; b[j] != NULL; j++) {
+      if (stop_fn && stop_fn(b[j]))
+         break;
+
+      if (b[j]->deref_type == nir_deref_type_cast ||
+          b[j]->deref_type == nir_deref_type_ptr_as_array)
+         return nir_derefs_may_alias_bit;
+   }
+
+   for (; a[*i] != NULL && b[*i] != NULL; (*i)++) {
+      if (stop_fn && (stop_fn(a[*i]) || stop_fn(b[*i])))
+         break;
+
+      switch (a[*i]->deref_type) {
+      case nir_deref_type_array:
+      case nir_deref_type_array_wildcard: {
+         assert(b[*i]->deref_type == nir_deref_type_array ||
+                b[*i]->deref_type == nir_deref_type_array_wildcard);
+
+         if (a[*i]->deref_type == nir_deref_type_array_wildcard) {
+            if (b[*i]->deref_type != nir_deref_type_array_wildcard)
+               result &= ~nir_derefs_b_contains_a_bit;
+         } else if (b[*i]->deref_type == nir_deref_type_array_wildcard) {
+            if (a[*i]->deref_type != nir_deref_type_array_wildcard)
+               result &= ~nir_derefs_a_contains_b_bit;
+         } else {
+            assert(a[*i]->deref_type == nir_deref_type_array &&
+                   b[*i]->deref_type == nir_deref_type_array);
+
+            if (nir_src_is_const(a[*i]->arr.index) &&
+                nir_src_is_const(b[*i]->arr.index)) {
+               /* If they're both direct and have different offsets, they
+                * don't even alias much less anything else.
+                */
+               if (nir_src_as_uint(a[*i]->arr.index) !=
+                   nir_src_as_uint(b[*i]->arr.index))
+                  return nir_derefs_do_not_alias;
+            } else if (a[*i]->arr.index.ssa == b[*i]->arr.index.ssa) {
+               /* They're the same indirect, continue on */
+            } else {
+               /* They're not the same index so we can't prove anything about
+                * containment.
+                */
+               result &= ~(nir_derefs_a_contains_b_bit | nir_derefs_b_contains_a_bit);
+            }
+         }
+         break;
+      }
+
+      case nir_deref_type_struct: {
+         /* If they're different struct members, they don't even alias */
+         if (a[*i]->strct.index != b[*i]->strct.index)
+            return nir_derefs_do_not_alias;
+         break;
+      }
+
+      default:
+         unreachable("Invalid deref type");
+      }
+   }
+
+   /* If a is longer than b, then it can't contain b.  If neither a[i] nor
+    * b[i] are NULL then we aren't at the end of the chain and we know nothing
+    * about containment.
+    */
+   if (a[*i] != NULL)
+      result &= ~nir_derefs_a_contains_b_bit;
+   if (b[*i] != NULL)
+      result &= ~nir_derefs_b_contains_a_bit;
+
+   /* If a contains b and b contains a they must be equal. */
+   if ((result & nir_derefs_a_contains_b_bit) &&
+       (result & nir_derefs_b_contains_a_bit))
+      result |= nir_derefs_equal_bit;
+
+   return result;
 }
 
 static bool
-deref_path_contains_coherent_decoration(nir_deref_path *path)
+is_interface_struct_deref(const nir_deref_instr *deref)
 {
-   assert(path->path[0]->deref_type == nir_deref_type_var);
-
-   if (path->path[0]->var->data.access & ACCESS_COHERENT)
+   if (deref->deref_type == nir_deref_type_struct) {
+      assert(glsl_type_is_struct_or_ifc(nir_deref_instr_parent(deref)->type));
       return true;
-
-   for (nir_deref_instr **p = &path->path[1]; *p; p++) {
-      if ((*p)->deref_type != nir_deref_type_struct)
-         continue;
-
-      const struct glsl_type *struct_type = (*(p - 1))->type;
-      const struct glsl_struct_field *field =
-         glsl_get_struct_field_data(struct_type, (*p)->strct.index);
-      if (field->memory_coherent)
-         return true;
+   } else {
+      return false;
    }
-
-   return false;
 }
 
 nir_deref_compare_result
 nir_compare_deref_paths(nir_deref_path *a_path,
                         nir_deref_path *b_path)
 {
-   if (!modes_may_alias(b_path->path[0]->mode, a_path->path[0]->mode))
+   if (!modes_may_alias(b_path->path[0]->modes, a_path->path[0]->modes))
       return nir_derefs_do_not_alias;
 
    if (a_path->path[0]->deref_type != b_path->path[0]->deref_type)
       return nir_derefs_may_alias_bit;
 
+   unsigned path_idx = 1;
    if (a_path->path[0]->deref_type == nir_deref_type_var) {
-      if (a_path->path[0]->var != b_path->path[0]->var) {
-         /* Shader and function temporaries aren't backed by memory so two
-          * distinct variables never alias.
+      const nir_variable *a_var = a_path->path[0]->var;
+      const nir_variable *b_var = b_path->path[0]->var;
+
+      /* If we got here, the two variables must have the same mode.  The
+       * only way modes_may_alias() can return true for two different modes
+       * is if one is global and the other ssbo.  However, Global variables
+       * only exist in OpenCL and SSBOs don't exist there.  No API allows
+       * both for variables.
+       */
+      assert(a_var->data.mode == b_var->data.mode);
+
+      switch (a_var->data.mode) {
+      case nir_var_mem_ssbo: {
+         nir_deref_compare_result binding_compare;
+         if (a_var == b_var) {
+            binding_compare = compare_deref_paths(a_path, b_path, &path_idx,
+                                                  is_interface_struct_deref);
+         } else {
+            binding_compare = nir_derefs_do_not_alias;
+         }
+
+         if (binding_compare & nir_derefs_equal_bit)
+            break;
+
+         /* If the binding derefs can't alias and at least one is RESTRICT,
+          * then we know they can't alias.
           */
-         static const nir_variable_mode temp_var_modes =
-            nir_var_shader_temp | nir_var_function_temp;
-         if ((a_path->path[0]->mode & temp_var_modes) ||
-             (b_path->path[0]->mode & temp_var_modes))
+         if (!(binding_compare & nir_derefs_may_alias_bit) &&
+             ((a_var->data.access & ACCESS_RESTRICT) ||
+              (b_var->data.access & ACCESS_RESTRICT)))
             return nir_derefs_do_not_alias;
 
-         /* If they are both declared coherent or have coherent somewhere in
-          * their path (due to a member of an interface being declared
-          * coherent), we have to assume we that we could have any kind of
-          * aliasing.  Otherwise, they could still alias but the client didn't
-          * tell us and that's their fault.
-          */
-         if (deref_path_contains_coherent_decoration(a_path) &&
-             deref_path_contains_coherent_decoration(b_path))
-            return nir_derefs_may_alias_bit;
+         return nir_derefs_may_alias_bit;
+      }
 
-         /* If we can chase the deref all the way back to the variable and
-          * they're not the same variable and at least one is not declared
-          * coherent, we know they can't possibly alias.
+      case nir_var_mem_shared:
+         if (a_var == b_var)
+            break;
+
+         /* Per SPV_KHR_workgroup_memory_explicit_layout and
+          * GL_EXT_shared_memory_block, shared blocks alias each other.
+          * We will have either all blocks or all non-blocks.
           */
+         if (glsl_type_is_interface(a_var->type) ||
+             glsl_type_is_interface(b_var->type)) {
+            assert(glsl_type_is_interface(a_var->type) &&
+                   glsl_type_is_interface(b_var->type));
+            return nir_derefs_may_alias_bit;
+         }
+
+         /* Otherwise, distinct shared vars don't alias */
+         return nir_derefs_do_not_alias;
+
+      default:
+         /* For any other variable types, if we can chase them back to the
+          * variable, and the variables are different, they don't alias.
+          */
+         if (a_var == b_var)
+            break;
+
          return nir_derefs_do_not_alias;
       }
    } else {
@@ -501,106 +735,7 @@ nir_compare_deref_paths(nir_deref_path *a_path,
          return nir_derefs_may_alias_bit;
    }
 
-   /* Start off assuming they fully compare.  We ignore equality for now.  In
-    * the end, we'll determine that by containment.
-    */
-   nir_deref_compare_result result = nir_derefs_may_alias_bit |
-                                     nir_derefs_a_contains_b_bit |
-                                     nir_derefs_b_contains_a_bit;
-
-   nir_deref_instr **a_p = &a_path->path[1];
-   nir_deref_instr **b_p = &b_path->path[1];
-   while (*a_p != NULL && *a_p == *b_p) {
-      a_p++;
-      b_p++;
-   }
-
-   /* We're at either the tail or the divergence point between the two deref
-    * paths.  Look to see if either contains cast or a ptr_as_array deref.  If
-    * it does we don't know how to safely make any inferences.  Hopefully,
-    * nir_opt_deref will clean most of these up and we can start inferring
-    * things again.
-    *
-    * In theory, we could do a bit better.  For instance, we could detect the
-    * case where we have exactly one ptr_as_array deref in the chain after the
-    * divergence point and it's matched in both chains and the two chains have
-    * different constant indices.
-    */
-   for (nir_deref_instr **t_p = a_p; *t_p; t_p++) {
-      if ((*t_p)->deref_type == nir_deref_type_cast ||
-          (*t_p)->deref_type == nir_deref_type_ptr_as_array)
-         return nir_derefs_may_alias_bit;
-   }
-   for (nir_deref_instr **t_p = b_p; *t_p; t_p++) {
-      if ((*t_p)->deref_type == nir_deref_type_cast ||
-          (*t_p)->deref_type == nir_deref_type_ptr_as_array)
-         return nir_derefs_may_alias_bit;
-   }
-
-   while (*a_p != NULL && *b_p != NULL) {
-      nir_deref_instr *a_tail = *(a_p++);
-      nir_deref_instr *b_tail = *(b_p++);
-
-      switch (a_tail->deref_type) {
-      case nir_deref_type_array:
-      case nir_deref_type_array_wildcard: {
-         assert(b_tail->deref_type == nir_deref_type_array ||
-                b_tail->deref_type == nir_deref_type_array_wildcard);
-
-         if (a_tail->deref_type == nir_deref_type_array_wildcard) {
-            if (b_tail->deref_type != nir_deref_type_array_wildcard)
-               result &= ~nir_derefs_b_contains_a_bit;
-         } else if (b_tail->deref_type == nir_deref_type_array_wildcard) {
-            if (a_tail->deref_type != nir_deref_type_array_wildcard)
-               result &= ~nir_derefs_a_contains_b_bit;
-         } else {
-            assert(a_tail->deref_type == nir_deref_type_array &&
-                   b_tail->deref_type == nir_deref_type_array);
-            assert(a_tail->arr.index.is_ssa && b_tail->arr.index.is_ssa);
-
-            if (nir_src_is_const(a_tail->arr.index) &&
-                nir_src_is_const(b_tail->arr.index)) {
-               /* If they're both direct and have different offsets, they
-                * don't even alias much less anything else.
-                */
-               if (nir_src_as_uint(a_tail->arr.index) !=
-                   nir_src_as_uint(b_tail->arr.index))
-                  return nir_derefs_do_not_alias;
-            } else if (a_tail->arr.index.ssa == b_tail->arr.index.ssa) {
-               /* They're the same indirect, continue on */
-            } else {
-               /* They're not the same index so we can't prove anything about
-                * containment.
-                */
-               result &= ~(nir_derefs_a_contains_b_bit | nir_derefs_b_contains_a_bit);
-            }
-         }
-         break;
-      }
-
-      case nir_deref_type_struct: {
-         /* If they're different struct members, they don't even alias */
-         if (a_tail->strct.index != b_tail->strct.index)
-            return nir_derefs_do_not_alias;
-         break;
-      }
-
-      default:
-         unreachable("Invalid deref type");
-      }
-   }
-
-   /* If a is longer than b, then it can't contain b */
-   if (*a_p != NULL)
-      result &= ~nir_derefs_a_contains_b_bit;
-   if (*b_p != NULL)
-      result &= ~nir_derefs_b_contains_a_bit;
-
-   /* If a contains b and b contains a they must be equal. */
-   if ((result & nir_derefs_a_contains_b_bit) && (result & nir_derefs_b_contains_a_bit))
-      result |= nir_derefs_equal_bit;
-
-   return result;
+   return compare_deref_paths(a_path, b_path, &path_idx, NULL);
 }
 
 nir_deref_compare_result
@@ -627,11 +762,32 @@ nir_compare_derefs(nir_deref_instr *a, nir_deref_instr *b)
    return result;
 }
 
+nir_deref_path *
+nir_get_deref_path(void *mem_ctx, nir_deref_and_path *deref)
+{
+   if (!deref->_path) {
+      deref->_path = ralloc(mem_ctx, nir_deref_path);
+      nir_deref_path_init(deref->_path, deref->instr, mem_ctx);
+   }
+   return deref->_path;
+}
+
+nir_deref_compare_result
+nir_compare_derefs_and_paths(void *mem_ctx,
+                             nir_deref_and_path *a,
+                             nir_deref_and_path *b)
+{
+   if (a->instr == b->instr) /* nir_compare_derefs has a fast path if a == b */
+      return nir_compare_derefs(a->instr, b->instr);
+
+   return nir_compare_deref_paths(nir_get_deref_path(mem_ctx, a),
+                                  nir_get_deref_path(mem_ctx, b));
+}
+
 struct rematerialize_deref_state {
    bool progress;
    nir_builder builder;
    nir_block *block;
-   struct hash_table *cache;
 };
 
 static nir_deref_instr *
@@ -641,18 +797,10 @@ rematerialize_deref_in_block(nir_deref_instr *deref,
    if (deref->instr.block == state->block)
       return deref;
 
-   if (!state->cache) {
-      state->cache = _mesa_pointer_hash_table_create(NULL);
-   }
-
-   struct hash_entry *cached = _mesa_hash_table_search(state->cache, deref);
-   if (cached)
-      return cached->data;
-
    nir_builder *b = &state->builder;
    nir_deref_instr *new_deref =
       nir_deref_instr_create(b->shader, deref->deref_type);
-   new_deref->mode = deref->mode;
+   new_deref->modes = deref->modes;
    new_deref->type = deref->type;
 
    if (deref->deref_type == nir_deref_type_var) {
@@ -661,9 +809,9 @@ rematerialize_deref_in_block(nir_deref_instr *deref,
       nir_deref_instr *parent = nir_src_as_deref(deref->parent);
       if (parent) {
          parent = rematerialize_deref_in_block(parent, state);
-         new_deref->parent = nir_src_for_ssa(&parent->dest.ssa);
+         new_deref->parent = nir_src_for_ssa(&parent->def);
       } else {
-         nir_src_copy(&new_deref->parent, &deref->parent, new_deref);
+         new_deref->parent = nir_src_for_ssa(deref->parent.ssa);
       }
    }
 
@@ -675,12 +823,14 @@ rematerialize_deref_in_block(nir_deref_instr *deref,
 
    case nir_deref_type_cast:
       new_deref->cast.ptr_stride = deref->cast.ptr_stride;
+      new_deref->cast.align_mul = deref->cast.align_mul;
+      new_deref->cast.align_offset = deref->cast.align_offset;
       break;
 
    case nir_deref_type_array:
    case nir_deref_type_ptr_as_array:
       assert(!nir_src_as_deref(deref->arr.index));
-      nir_src_copy(&new_deref->arr.index, &deref->arr.index, new_deref);
+      new_deref->arr.index = nir_src_for_ssa(deref->arr.index.ssa);
       break;
 
    case nir_deref_type_struct:
@@ -691,10 +841,8 @@ rematerialize_deref_in_block(nir_deref_instr *deref,
       unreachable("Invalid deref instruction type");
    }
 
-   nir_ssa_dest_init(&new_deref->instr, &new_deref->dest,
-                     deref->dest.ssa.num_components,
-                     deref->dest.ssa.bit_size,
-                     deref->dest.ssa.name);
+   nir_def_init(&new_deref->instr, &new_deref->def,
+                deref->def.num_components, deref->def.bit_size);
    nir_builder_instr_insert(b, &new_deref->instr);
 
    return new_deref;
@@ -711,13 +859,41 @@ rematerialize_deref_src(nir_src *src, void *_state)
 
    nir_deref_instr *block_deref = rematerialize_deref_in_block(deref, state);
    if (block_deref != deref) {
-      nir_instr_rewrite_src(src->parent_instr, src,
-                            nir_src_for_ssa(&block_deref->dest.ssa));
+      nir_src_rewrite(src, &block_deref->def);
       nir_deref_instr_remove_if_unused(deref);
       state->progress = true;
    }
 
    return true;
+}
+
+bool
+nir_rematerialize_deref_in_use_blocks(nir_deref_instr *instr)
+{
+   if (nir_deref_instr_remove_if_unused(instr))
+      return true;
+
+   struct rematerialize_deref_state state = {
+      .builder = nir_builder_create(nir_cf_node_get_function(&instr->instr.block->cf_node)),
+   };
+
+   nir_foreach_use_safe(use, &instr->def) {
+      nir_instr *parent = nir_src_parent_instr(use);
+      if (parent->block == instr->instr.block)
+         continue;
+
+      /* If a deref is used in a phi, we can't rematerialize it, as the new
+       * derefs would appear before the phi, which is not valid.
+       */
+      if (parent->type == nir_instr_type_phi)
+         continue;
+
+      state.block = parent->block;
+      state.builder.cursor = nir_before_instr(parent);
+      rematerialize_deref_src(use, &state);
+   }
+
+   return state.progress;
 }
 
 /** Re-materialize derefs in every block
@@ -732,29 +908,13 @@ rematerialize_deref_src(nir_src *src, void *_state)
 bool
 nir_rematerialize_derefs_in_use_blocks_impl(nir_function_impl *impl)
 {
-   struct rematerialize_deref_state state = { 0 };
-   nir_builder_init(&state.builder, impl);
-
+   bool progress = false;
    nir_foreach_block_unstructured(block, impl) {
-      state.block = block;
-
-      /* Start each block with a fresh cache */
-      if (state.cache)
-         _mesa_hash_table_clear(state.cache, NULL);
-
       nir_foreach_instr_safe(instr, block) {
-         if (instr->type == nir_instr_type_deref &&
-             nir_deref_instr_remove_if_unused(nir_instr_as_deref(instr)))
-            continue;
-
-         /* If a deref is used in a phi, we can't rematerialize it, as the new
-          * derefs would appear before the phi, which is not valid.
-          */
-         if (instr->type == nir_instr_type_phi)
-            continue;
-
-         state.builder.cursor = nir_before_instr(instr);
-         nir_foreach_src(instr, rematerialize_deref_src, &state);
+         if (instr->type == nir_instr_type_deref) {
+            nir_deref_instr *deref = nir_instr_as_deref(instr);
+            progress |= nir_rematerialize_deref_in_use_blocks(deref);
+         }
       }
 
 #ifndef NDEBUG
@@ -764,19 +924,17 @@ nir_rematerialize_derefs_in_use_blocks_impl(nir_function_impl *impl)
 #endif
    }
 
-   _mesa_hash_table_destroy(state.cache, NULL);
-
-   return state.progress;
+   return progress;
 }
 
 static void
 nir_deref_instr_fixup_child_types(nir_deref_instr *parent)
 {
-   nir_foreach_use(use, &parent->dest.ssa) {
-      if (use->parent_instr->type != nir_instr_type_deref)
+   nir_foreach_use(use, &parent->def) {
+      if (nir_src_parent_instr(use)->type != nir_instr_type_deref)
          continue;
 
-      nir_deref_instr *child = nir_instr_as_deref(use->parent_instr);
+      nir_deref_instr *child = nir_instr_as_deref(nir_src_parent_instr(use));
       switch (child->deref_type) {
       case nir_deref_type_var:
          unreachable("nir_deref_type_var cannot be a child");
@@ -806,9 +964,30 @@ nir_deref_instr_fixup_child_types(nir_deref_instr *parent)
 }
 
 static bool
+opt_alu_of_cast(nir_alu_instr *alu)
+{
+   bool progress = false;
+
+   for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; i++) {
+      nir_instr *src_instr = alu->src[i].src.ssa->parent_instr;
+      if (src_instr->type != nir_instr_type_deref)
+         continue;
+
+      nir_deref_instr *src_deref = nir_instr_as_deref(src_instr);
+      if (src_deref->deref_type != nir_deref_type_cast)
+         continue;
+
+      nir_src_rewrite(&alu->src[i].src, src_deref->parent.ssa);
+      progress = true;
+   }
+
+   return progress;
+}
+
+static bool
 is_trivial_array_deref_cast(nir_deref_instr *cast)
 {
-   assert(is_trivial_deref_cast(cast));
+   assert(nir_deref_cast_is_trivial(cast));
 
    nir_deref_instr *parent = nir_src_as_deref(cast->parent);
 
@@ -817,7 +996,7 @@ is_trivial_array_deref_cast(nir_deref_instr *cast)
              glsl_get_explicit_stride(nir_deref_instr_parent(parent)->type);
    } else if (parent->deref_type == nir_deref_type_ptr_as_array) {
       return cast->cast.ptr_stride ==
-             nir_deref_instr_ptr_as_array_stride(parent);
+             nir_deref_instr_array_stride(parent);
    } else {
       return false;
    }
@@ -830,25 +1009,127 @@ is_deref_ptr_as_array(nir_instr *instr)
           nir_instr_as_deref(instr)->deref_type == nir_deref_type_ptr_as_array;
 }
 
+static bool
+opt_remove_restricting_cast_alignments(nir_deref_instr *cast)
+{
+   assert(cast->deref_type == nir_deref_type_cast);
+   if (cast->cast.align_mul == 0)
+      return false;
+
+   nir_deref_instr *parent = nir_src_as_deref(cast->parent);
+   if (parent == NULL)
+      return false;
+
+   /* Don't use any default alignment for this check.  We don't want to fall
+    * back to type alignment too early in case we find out later that we're
+    * somehow a child of a packed struct.
+    */
+   uint32_t parent_mul, parent_offset;
+   if (!nir_get_explicit_deref_align(parent, false /* default_to_type_align */,
+                                     &parent_mul, &parent_offset))
+      return false;
+
+   /* If this cast increases the alignment, we want to keep it.
+    *
+    * There is a possibility that the larger alignment provided by this cast
+    * somehow disagrees with the smaller alignment further up the deref chain.
+    * In that case, we choose to favor the alignment closer to the actual
+    * memory operation which, in this case, is the cast and not its parent so
+    * keeping the cast alignment is the right thing to do.
+    */
+   if (parent_mul < cast->cast.align_mul)
+      return false;
+
+   /* If we've gotten here, we have a parent deref with an align_mul at least
+    * as large as ours so we can potentially throw away the alignment
+    * information on this deref.  There are two cases to consider here:
+    *
+    *  1. We can chase the deref all the way back to the variable.  In this
+    *     case, we have "perfect" knowledge, modulo indirect array derefs.
+    *     Unless we've done something wrong in our indirect/wildcard stride
+    *     calculations, our knowledge from the deref walk is better than the
+    *     client's.
+    *
+    *  2. We can't chase it all the way back to the variable.  In this case,
+    *     because our call to nir_get_explicit_deref_align(parent, ...) above
+    *     above passes default_to_type_align=false, the only way we can even
+    *     get here is if something further up the deref chain has a cast with
+    *     an alignment which can only happen if we get an alignment from the
+    *     client (most likely a decoration in the SPIR-V).  If the client has
+    *     provided us with two conflicting alignments in the deref chain,
+    *     that's their fault and we can do whatever we want.
+    *
+    * In either case, we should be without our rights, at this point, to throw
+    * away the alignment information on this deref.  However, to be "nice" to
+    * weird clients, we do one more check.  It really shouldn't happen but
+    * it's possible that the parent's alignment offset disagrees with the
+    * cast's alignment offset.  In this case, we consider the cast as
+    * providing more information (or at least more valid information) and keep
+    * it even if the align_mul from the parent is larger.
+    */
+   assert(cast->cast.align_mul <= parent_mul);
+   if (parent_offset % cast->cast.align_mul != cast->cast.align_offset)
+      return false;
+
+   /* If we got here, the parent has better alignment information than the
+    * child and we can get rid of the child alignment information.
+    */
+   cast->cast.align_mul = 0;
+   cast->cast.align_offset = 0;
+   return true;
+}
+
 /**
  * Remove casts that just wrap other casts.
  */
 static bool
 opt_remove_cast_cast(nir_deref_instr *cast)
 {
-   nir_deref_instr *first_cast = cast;
-
-   while (true) {
-      nir_deref_instr *parent = nir_deref_instr_parent(first_cast);
-      if (parent == NULL || parent->deref_type != nir_deref_type_cast)
-         break;
-      first_cast = parent;
-   }
-   if (cast == first_cast)
+   nir_deref_instr *parent = nir_deref_instr_parent(cast);
+   if (parent == NULL || parent->deref_type != nir_deref_type_cast)
       return false;
 
-   nir_instr_rewrite_src(&cast->instr, &cast->parent,
-                         nir_src_for_ssa(first_cast->parent.ssa));
+   /* Copy align info from the parent cast if needed
+    *
+    * In the case that align_mul = 0, the alignment for this cast is inhereted
+    * from the parent deref (if any). If we aren't careful, removing our
+    * parent cast from the chain may lose alignment information so we need to
+    * copy the parent's alignment information (if any).
+    *
+    * opt_remove_restricting_cast_alignments() above is run before this pass
+    * and will will have cleared our alignment (set align_mul = 0) in the case
+    * where the parent's alignment information is somehow superior.
+    */
+   if (cast->cast.align_mul == 0) {
+      cast->cast.align_mul = parent->cast.align_mul;
+      cast->cast.align_offset = parent->cast.align_offset;
+   }
+
+   nir_src_rewrite(&cast->parent, parent->parent.ssa);
+   return true;
+}
+
+/* Restrict variable modes in casts.
+ *
+ * If we know from something higher up the deref chain that the deref has a
+ * specific mode, we can cast to more general and back but we can never cast
+ * across modes.  For non-cast derefs, we should only ever do anything here if
+ * the parent eventually comes from a cast that we restricted earlier.
+ */
+static bool
+opt_restrict_deref_modes(nir_deref_instr *deref)
+{
+   if (deref->deref_type == nir_deref_type_var) {
+      assert(deref->modes == deref->var->data.mode);
+      return false;
+   }
+
+   nir_deref_instr *parent = nir_src_as_deref(deref->parent);
+   if (parent == NULL || parent->modes == deref->modes)
+      return false;
+
+   assert(parent->modes & deref->modes);
+   deref->modes &= parent->modes;
    return true;
 }
 
@@ -872,17 +1153,18 @@ opt_remove_sampler_cast(nir_deref_instr *cast)
       cast_type = glsl_get_array_element(cast_type);
    }
 
-   if (glsl_type_is_array(parent_type) || glsl_type_is_array(cast_type))
+   if (!glsl_type_is_sampler(parent_type))
       return false;
 
-   if (!glsl_type_is_sampler(parent_type) ||
-       cast_type != glsl_bare_sampler_type())
+   if (cast_type != glsl_bare_sampler_type() &&
+       (glsl_type_is_bare_sampler(parent_type) ||
+        cast_type != glsl_sampler_type_to_texture(parent_type)))
       return false;
 
-   /* We're a cast from a more detailed sampler type to a bare sampler */
-   nir_ssa_def_rewrite_uses(&cast->dest.ssa,
-                            nir_src_for_ssa(&parent->dest.ssa));
-   nir_instr_remove(&cast->instr);
+   /* We're a cast from a more detailed sampler type to a bare sampler or a
+    * texture type with the same dimensionality.
+    */
+   nir_def_replace(&cast->def, &parent->def);
 
    /* Recursively crawl the deref tree and clean up types */
    nir_deref_instr_fixup_child_types(parent);
@@ -906,17 +1188,29 @@ opt_replace_struct_wrapper_cast(nir_builder *b, nir_deref_instr *cast)
    if (!parent)
       return false;
 
+   if (cast->cast.align_mul > 0)
+      return false;
+
    if (!glsl_type_is_struct(parent->type))
+      return false;
+
+   /* Empty struct */
+   if (glsl_get_length(parent->type) < 1)
       return false;
 
    if (glsl_get_struct_field_offset(parent->type, 0) != 0)
       return false;
 
-   if (cast->type != glsl_get_struct_field(parent->type, 0))
+   const struct glsl_type *field_type = glsl_get_struct_field(parent->type, 0);
+   if (cast->type != field_type)
+      return false;
+
+   /* we can't drop the stride information */
+   if (cast->cast.ptr_stride != glsl_get_explicit_stride(field_type))
       return false;
 
    nir_deref_instr *replace = nir_build_deref_struct(b, parent, 0);
-   nir_ssa_def_rewrite_uses(&cast->dest.ssa, nir_src_for_ssa(&replace->dest.ssa));
+   nir_def_rewrite_uses(&cast->def, &replace->def);
    nir_deref_instr_remove_if_unused(cast);
    return true;
 }
@@ -924,7 +1218,9 @@ opt_replace_struct_wrapper_cast(nir_builder *b, nir_deref_instr *cast)
 static bool
 opt_deref_cast(nir_builder *b, nir_deref_instr *cast)
 {
-   bool progress;
+   bool progress = false;
+
+   progress |= opt_remove_restricting_cast_alignments(cast);
 
    if (opt_replace_struct_wrapper_cast(b, cast))
       return true;
@@ -932,29 +1228,31 @@ opt_deref_cast(nir_builder *b, nir_deref_instr *cast)
    if (opt_remove_sampler_cast(cast))
       return true;
 
-   progress = opt_remove_cast_cast(cast);
-   if (!is_trivial_deref_cast(cast))
+   progress |= opt_remove_cast_cast(cast);
+   if (!nir_deref_cast_is_trivial(cast))
+      return progress;
+
+   /* If this deref still contains useful alignment information, we don't want
+    * to delete it.
+    */
+   if (cast->cast.align_mul > 0)
       return progress;
 
    bool trivial_array_cast = is_trivial_array_deref_cast(cast);
 
-   assert(cast->dest.is_ssa);
-   assert(cast->parent.is_ssa);
+   nir_foreach_use_including_if_safe(use_src, &cast->def) {
+      assert(!nir_src_is_if(use_src) && "there cannot be if-uses");
 
-   nir_foreach_use_safe(use_src, &cast->dest.ssa) {
       /* If this isn't a trivial array cast, we can't propagate into
        * ptr_as_array derefs.
        */
-      if (is_deref_ptr_as_array(use_src->parent_instr) &&
+      if (is_deref_ptr_as_array(nir_src_parent_instr(use_src)) &&
           !trivial_array_cast)
          continue;
 
-      nir_instr_rewrite_src(use_src->parent_instr, use_src, cast->parent);
+      nir_src_rewrite(use_src, cast->parent.ssa);
       progress = true;
    }
-
-   /* If uses would be a bit crazy */
-   assert(list_is_empty(&cast->dest.ssa.if_uses));
 
    if (nir_deref_instr_remove_if_unused(cast))
       progress = true;
@@ -972,7 +1270,8 @@ opt_deref_ptr_as_array(nir_builder *b, nir_deref_instr *deref)
    if (nir_src_is_const(deref->arr.index) &&
        nir_src_as_int(deref->arr.index) == 0) {
       /* If it's a ptr_as_array deref with an index of 0, it does nothing
-       * and we can just replace its uses with its parent.
+       * and we can just replace its uses with its parent, unless it has
+       * alignment information.
        *
        * The source of a ptr_as_array deref always has a deref_type of
        * nir_deref_type_array or nir_deref_type_cast.  If it's a cast, it
@@ -981,11 +1280,10 @@ opt_deref_ptr_as_array(nir_builder *b, nir_deref_instr *deref)
        * opt_deref_cast() above.
        */
       if (parent->deref_type == nir_deref_type_cast &&
-          is_trivial_deref_cast(parent))
+          parent->cast.align_mul == 0 &&
+          nir_deref_cast_is_trivial(parent))
          parent = nir_deref_instr_parent(parent);
-      nir_ssa_def_rewrite_uses(&deref->dest.ssa,
-                               nir_src_for_ssa(&parent->dest.ssa));
-      nir_instr_remove(&deref->instr);
+      nir_def_replace(&deref->def, &parent->def);
       return true;
    }
 
@@ -993,17 +1291,177 @@ opt_deref_ptr_as_array(nir_builder *b, nir_deref_instr *deref)
        parent->deref_type != nir_deref_type_ptr_as_array)
       return false;
 
-   assert(parent->parent.is_ssa);
-   assert(parent->arr.index.is_ssa);
-   assert(deref->arr.index.is_ssa);
+   deref->arr.in_bounds &= parent->arr.in_bounds;
 
-   nir_ssa_def *new_idx = nir_iadd(b, parent->arr.index.ssa,
-                                      deref->arr.index.ssa);
+   nir_def *new_idx = nir_iadd(b, parent->arr.index.ssa,
+                               deref->arr.index.ssa);
 
    deref->deref_type = parent->deref_type;
-   nir_instr_rewrite_src(&deref->instr, &deref->parent, parent->parent);
-   nir_instr_rewrite_src(&deref->instr, &deref->arr.index,
-                         nir_src_for_ssa(new_idx));
+   nir_src_rewrite(&deref->parent, parent->parent.ssa);
+   nir_src_rewrite(&deref->arr.index, new_idx);
+   return true;
+}
+
+static bool
+is_vector_bitcast_deref(nir_deref_instr *cast,
+                        nir_component_mask_t mask,
+                        bool is_write)
+{
+   if (cast->deref_type != nir_deref_type_cast)
+      return false;
+
+   /* Don't throw away useful alignment information */
+   if (cast->cast.align_mul > 0)
+      return false;
+
+   /* It has to be a cast of another deref */
+   nir_deref_instr *parent = nir_src_as_deref(cast->parent);
+   if (parent == NULL)
+      return false;
+
+   /* The parent has to be a vector or scalar */
+   if (!glsl_type_is_vector_or_scalar(parent->type))
+      return false;
+
+   /* Don't bother with 1-bit types */
+   unsigned cast_bit_size = glsl_get_bit_size(cast->type);
+   unsigned parent_bit_size = glsl_get_bit_size(parent->type);
+   if (cast_bit_size == 1 || parent_bit_size == 1)
+      return false;
+
+   /* A strided vector type means it's not tightly packed */
+   if (glsl_get_explicit_stride(cast->type) ||
+       glsl_get_explicit_stride(parent->type))
+      return false;
+
+   assert(cast_bit_size > 0 && cast_bit_size % 8 == 0);
+   assert(parent_bit_size > 0 && parent_bit_size % 8 == 0);
+   unsigned bytes_used = util_last_bit(mask) * (cast_bit_size / 8);
+   unsigned parent_bytes = glsl_get_vector_elements(parent->type) *
+                           (parent_bit_size / 8);
+   if (bytes_used > parent_bytes)
+      return false;
+
+   if (is_write && !nir_component_mask_can_reinterpret(mask, cast_bit_size,
+                                                       parent_bit_size))
+      return false;
+
+   return true;
+}
+
+static nir_def *
+resize_vector(nir_builder *b, nir_def *data, unsigned num_components)
+{
+   if (num_components == data->num_components)
+      return data;
+
+   unsigned swiz[NIR_MAX_VEC_COMPONENTS] = {
+      0,
+   };
+   for (unsigned i = 0; i < MIN2(num_components, data->num_components); i++)
+      swiz[i] = i;
+
+   return nir_swizzle(b, data, swiz, num_components);
+}
+
+static bool
+opt_load_vec_deref(nir_builder *b, nir_intrinsic_instr *load)
+{
+   nir_deref_instr *deref = nir_src_as_deref(load->src[0]);
+   nir_component_mask_t read_mask =
+      nir_def_components_read(&load->def);
+
+   /* LLVM loves take advantage of the fact that vec3s in OpenCL are
+    * vec4-aligned and so it can just read/write them as vec4s.  This
+    * results in a LOT of vec4->vec3 casts on loads and stores.
+    */
+   if (is_vector_bitcast_deref(deref, read_mask, false)) {
+      const unsigned old_num_comps = load->def.num_components;
+      const unsigned old_bit_size = load->def.bit_size;
+
+      nir_deref_instr *parent = nir_src_as_deref(deref->parent);
+      const unsigned new_num_comps = glsl_get_vector_elements(parent->type);
+      const unsigned new_bit_size = glsl_get_bit_size(parent->type);
+
+      /* Stomp it to reference the parent */
+      nir_src_rewrite(&load->src[0], &parent->def);
+      load->def.bit_size = new_bit_size;
+      load->def.num_components = new_num_comps;
+      load->num_components = new_num_comps;
+
+      b->cursor = nir_after_instr(&load->instr);
+      nir_def *data = &load->def;
+      if (old_bit_size != new_bit_size)
+         data = nir_bitcast_vector(b, &load->def, old_bit_size);
+      data = resize_vector(b, data, old_num_comps);
+
+      nir_def_rewrite_uses_after(&load->def, data,
+                                 data->parent_instr);
+      return true;
+   }
+
+   return false;
+}
+
+static bool
+opt_store_vec_deref(nir_builder *b, nir_intrinsic_instr *store)
+{
+   nir_deref_instr *deref = nir_src_as_deref(store->src[0]);
+   nir_component_mask_t write_mask = nir_intrinsic_write_mask(store);
+
+   /* LLVM loves take advantage of the fact that vec3s in OpenCL are
+    * vec4-aligned and so it can just read/write them as vec4s.  This
+    * results in a LOT of vec4->vec3 casts on loads and stores.
+    */
+   if (is_vector_bitcast_deref(deref, write_mask, true)) {
+      nir_def *data = store->src[1].ssa;
+
+      const unsigned old_bit_size = data->bit_size;
+
+      nir_deref_instr *parent = nir_src_as_deref(deref->parent);
+      const unsigned new_num_comps = glsl_get_vector_elements(parent->type);
+      const unsigned new_bit_size = glsl_get_bit_size(parent->type);
+
+      nir_src_rewrite(&store->src[0], &parent->def);
+
+      /* Restrict things down as needed so the bitcast doesn't fail */
+      data = nir_trim_vector(b, data, util_last_bit(write_mask));
+      if (old_bit_size != new_bit_size)
+         data = nir_bitcast_vector(b, data, new_bit_size);
+      data = resize_vector(b, data, new_num_comps);
+      nir_src_rewrite(&store->src[1], data);
+      store->num_components = new_num_comps;
+
+      /* Adjust the write mask */
+      write_mask = nir_component_mask_reinterpret(write_mask, old_bit_size,
+                                                  new_bit_size);
+      nir_intrinsic_set_write_mask(store, write_mask);
+      return true;
+   }
+
+   return false;
+}
+
+static bool
+opt_known_deref_mode_is(nir_builder *b, nir_intrinsic_instr *intrin)
+{
+   nir_variable_mode modes = nir_intrinsic_memory_modes(intrin);
+   nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
+   if (deref == NULL)
+      return false;
+
+   nir_def *deref_is = NULL;
+
+   if (nir_deref_mode_must_be(deref, modes))
+      deref_is = nir_imm_true(b);
+
+   if (!nir_deref_mode_may_be(deref, modes))
+      deref_is = nir_imm_false(b);
+
+   if (deref_is == NULL)
+      return false;
+
+   nir_def_replace(&intrin->def, deref_is);
    return true;
 }
 
@@ -1012,27 +1470,68 @@ nir_opt_deref_impl(nir_function_impl *impl)
 {
    bool progress = false;
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_foreach_block(block, impl) {
       nir_foreach_instr_safe(instr, block) {
-         if (instr->type != nir_instr_type_deref)
-            continue;
-
          b.cursor = nir_before_instr(instr);
 
-         nir_deref_instr *deref = nir_instr_as_deref(instr);
-         switch (deref->deref_type) {
-         case nir_deref_type_ptr_as_array:
-            if (opt_deref_ptr_as_array(&b, deref))
+         switch (instr->type) {
+         case nir_instr_type_alu: {
+            nir_alu_instr *alu = nir_instr_as_alu(instr);
+            if (opt_alu_of_cast(alu))
                progress = true;
             break;
+         }
 
-         case nir_deref_type_cast:
-            if (opt_deref_cast(&b, deref))
+         case nir_instr_type_deref: {
+            nir_deref_instr *deref = nir_instr_as_deref(instr);
+
+            if (opt_restrict_deref_modes(deref))
                progress = true;
+
+            switch (deref->deref_type) {
+            case nir_deref_type_ptr_as_array:
+               if (opt_deref_ptr_as_array(&b, deref))
+                  progress = true;
+               break;
+
+            case nir_deref_type_cast:
+               if (opt_deref_cast(&b, deref))
+                  progress = true;
+               break;
+
+            default:
+               /* Do nothing */
+               break;
+            }
             break;
+         }
+
+         case nir_instr_type_intrinsic: {
+            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+            switch (intrin->intrinsic) {
+            case nir_intrinsic_load_deref:
+               if (opt_load_vec_deref(&b, intrin))
+                  progress = true;
+               break;
+
+            case nir_intrinsic_store_deref:
+               if (opt_store_vec_deref(&b, intrin))
+                  progress = true;
+               break;
+
+            case nir_intrinsic_deref_mode_is:
+               if (opt_known_deref_mode_is(&b, intrin))
+                  progress = true;
+               break;
+
+            default:
+               /* Do nothing */
+               break;
+            }
+            break;
+         }
 
          default:
             /* Do nothing */
@@ -1042,8 +1541,7 @@ nir_opt_deref_impl(nir_function_impl *impl)
    }
 
    if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
+      nir_metadata_preserve(impl, nir_metadata_control_flow);
    } else {
       nir_metadata_preserve(impl, nir_metadata_all);
    }
@@ -1056,10 +1554,28 @@ nir_opt_deref(nir_shader *shader)
 {
    bool progress = false;
 
-   nir_foreach_function(func, shader) {
-      if (func->impl && nir_opt_deref_impl(func->impl))
+   nir_foreach_function_impl(impl, shader) {
+      if (nir_opt_deref_impl(impl))
          progress = true;
    }
 
    return progress;
+}
+
+/*
+ * With library-based approaches to driver shaders, it may not be possible to
+ * implement constant_data directly, but LLVM loves to produce constants e.g.
+ * for designated initializers. This helper lowers away constant data. This may
+ * allow additional optimizations. If desired, the backend driver can regather
+ * constant data later with nir_opt_large_constants.
+ */
+void
+nir_lower_constant_to_temp(nir_shader *nir)
+{
+   nir_foreach_variable_with_modes(var, nir, nir_var_mem_constant) {
+      var->data.mode = nir_var_shader_temp;
+   }
+
+   nir_fixup_deref_modes(nir);
+   nir_lower_global_vars_to_local(nir);
 }

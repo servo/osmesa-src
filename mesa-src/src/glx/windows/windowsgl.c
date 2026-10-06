@@ -55,10 +55,10 @@ windows_glapi_create_table(void)
    assert(windows_api);
 }
 
-static void windows_glapi_set_dispatch(void)
+static void windows_mesa_glapi_set_dispatch(void)
 {
    windows_glapi_create_table();
-   _glapi_set_dispatch(windows_api);
+   _mesa_glapi_set_dispatch(windows_api);
 }
 
 windowsContext *
@@ -218,7 +218,7 @@ int windows_bind_context(windowsContext *context, windowsDrawable *draw, windows
 
       if (!ret) {
          printf("wglMakeContextCurrentARB error: %08x\n", (int)GetLastError());
-         return FALSE;
+         return false;
       }
    }
    else
@@ -227,15 +227,15 @@ int windows_bind_context(windowsContext *context, windowsDrawable *draw, windows
       BOOL ret = wglMakeCurrent(drawDc, context->ctx);
       if (!ret) {
          printf("wglMakeCurrent error: %08x\n", (int)GetLastError());
-         return FALSE;
+         return false;
       }
    }
 
    draw->callbacks->releasedc(draw, drawDc);
 
-   windows_glapi_set_dispatch();
+   windows_mesa_glapi_set_dispatch();
 
-   return TRUE;
+   return true;
 }
 
 void windows_unbind_context(windowsContext * context)
@@ -344,9 +344,9 @@ windows_check_render_test(HDC hdc, void *args)
    const char *gl_renderer = (const char *)proc(GL_RENDERER);
 
    if ((!gl_renderer) || (strcasecmp(gl_renderer, "GDI Generic") == 0))
-      *result = FALSE;
+      *result = false;
    else
-      *result = TRUE;
+      *result = true;
 }
 
 int
@@ -388,16 +388,4 @@ windows_extensions(char **gl_extensions, char **wgl_extensions)
 
    *gl_extensions = result.gl_extensions;
    *wgl_extensions = result.wgl_extensions;
-}
-
-void windows_setTexBuffer(windowsContext *context, int textureTarget,
-                         int textureFormat, windowsDrawable *drawable)
-{
-   // not yet implemented
-}
-
-void windows_releaseTexBuffer(windowsContext *context, int textureTarget,
-                             windowsDrawable *drawable)
-{
-   // not yet implemented
 }

@@ -86,7 +86,7 @@ calc_line(struct pipe_screen *screen, struct ureg_program *shader)
 
    tmp = ureg_DECL_temporary(shader);
 
-   if (screen->get_param(screen, PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL))
+   if (screen->caps.fs_position_is_sysval)
       pos = ureg_DECL_system_value(shader, TGSI_SEMANTIC_POSITION, 0);
    else
       pos = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_POSITION, VS_O_VPOS,
@@ -391,7 +391,6 @@ init_pipe_state(struct vl_mc *r)
    sampler.mag_img_filter = PIPE_TEX_FILTER_LINEAR;
    sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
    sampler.compare_func = PIPE_FUNC_ALWAYS;
-   sampler.normalized_coords = 1;
    r->sampler_ref = r->pipe->create_sampler_state(r->pipe, &sampler);
    if (!r->sampler_ref)
       goto error_sampler_ref;
@@ -563,6 +562,10 @@ vl_mc_init_buffer(struct vl_mc *renderer, struct vl_mc_buffer *buffer)
    buffer->viewport.translate[0] = 0;
    buffer->viewport.translate[1] = 0;
    buffer->viewport.translate[2] = 0;
+   buffer->viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+   buffer->viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+   buffer->viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+   buffer->viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
    buffer->fb_state.nr_cbufs = 1;
    buffer->fb_state.zsbuf = NULL;
@@ -618,11 +621,11 @@ vl_mc_render_ref(struct vl_mc *renderer, struct vl_mc_buffer *buffer, struct pip
    renderer->pipe->bind_fs_state(renderer->pipe, renderer->fs_ref);
 
    renderer->pipe->set_sampler_views(renderer->pipe, PIPE_SHADER_FRAGMENT,
-                                     0, 1, &ref);
+                                     0, 1, 0, false, &ref);
    renderer->pipe->bind_sampler_states(renderer->pipe, PIPE_SHADER_FRAGMENT,
                                        0, 1, &renderer->sampler_ref);
 
-   util_draw_arrays_instanced(renderer->pipe, PIPE_PRIM_QUADS, 0, 4, 0,
+   util_draw_arrays_instanced(renderer->pipe, MESA_PRIM_QUADS, 0, 4, 0,
                               renderer->buffer_width / VL_MACROBLOCK_WIDTH *
                               renderer->buffer_height / VL_MACROBLOCK_HEIGHT);
 
@@ -644,11 +647,11 @@ vl_mc_render_ycbcr(struct vl_mc *renderer, struct vl_mc_buffer *buffer, unsigned
    renderer->pipe->bind_vs_state(renderer->pipe, renderer->vs_ycbcr);
    renderer->pipe->bind_fs_state(renderer->pipe, renderer->fs_ycbcr);
 
-   util_draw_arrays_instanced(renderer->pipe, PIPE_PRIM_QUADS, 0, 4, 0, num_instances);
+   util_draw_arrays_instanced(renderer->pipe, MESA_PRIM_QUADS, 0, 4, 0, num_instances);
    
    if (buffer->surface_cleared) {
       renderer->pipe->bind_blend_state(renderer->pipe, renderer->blend_sub[mask]);
       renderer->pipe->bind_fs_state(renderer->pipe, renderer->fs_ycbcr_sub);
-      util_draw_arrays_instanced(renderer->pipe, PIPE_PRIM_QUADS, 0, 4, 0, num_instances);
+      util_draw_arrays_instanced(renderer->pipe, MESA_PRIM_QUADS, 0, 4, 0, num_instances);
    }
 }

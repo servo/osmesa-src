@@ -49,12 +49,20 @@ clGetPlatformIDs(cl_uint num_entries, cl_platform_id *rd_platforms,
    return CL_SUCCESS;
 }
 
+platform &clover::find_platform(cl_platform_id d_platform)
+{
+   /* this error is only added in CL2.0 */
+   if (d_platform != desc(_clover_platform))
+      throw error(CL_INVALID_PLATFORM);
+   return obj(d_platform);
+}
+
 cl_int
 clover::GetPlatformInfo(cl_platform_id d_platform, cl_platform_info param,
                         size_t size, void *r_buf, size_t *r_size) try {
    property_buffer buf { r_buf, size, r_size };
 
-   auto &platform = obj(d_platform);
+   auto &platform = find_platform(d_platform);
 
    switch (param) {
    case CL_PLATFORM_PROFILE:
@@ -62,10 +70,7 @@ clover::GetPlatformInfo(cl_platform_id d_platform, cl_platform_info param,
       break;
 
    case CL_PLATFORM_VERSION: {
-      static const std::string version_string =
-            debug_get_option("CLOVER_PLATFORM_VERSION_OVERRIDE", "1.1");
-
-      buf.as_string() = "OpenCL " + version_string + " Mesa " PACKAGE_VERSION MESA_GIT_SHA1;
+      buf.as_string() = "OpenCL " + platform.platform_version_as_string() + " Mesa " PACKAGE_VERSION MESA_GIT_SHA1;
       break;
    }
    case CL_PLATFORM_NAME:
@@ -77,11 +82,24 @@ clover::GetPlatformInfo(cl_platform_id d_platform, cl_platform_info param,
       break;
 
    case CL_PLATFORM_EXTENSIONS:
-      buf.as_string() = platform.supported_extensions();
+      buf.as_string() = platform.supported_extensions_as_string();
       break;
 
    case CL_PLATFORM_ICD_SUFFIX_KHR:
       buf.as_string() = "MESA";
+      break;
+
+   case CL_PLATFORM_NUMERIC_VERSION: {
+      buf.as_scalar<cl_version>() = platform.platform_version();
+      break;
+   }
+
+   case CL_PLATFORM_EXTENSIONS_WITH_VERSION:
+      buf.as_vector<cl_name_version>() = platform.supported_extensions();
+      break;
+
+   case CL_PLATFORM_HOST_TIMER_RESOLUTION:
+      buf.as_scalar<cl_ulong>() = 0;
       break;
 
    default:
@@ -100,7 +118,7 @@ clover::GetExtensionFunctionAddressForPlatform(cl_platform_id d_platform,
    obj(d_platform);
    return GetExtensionFunctionAddress(p_name);
 
-} catch (error &e) {
+} catch (error &) {
    return NULL;
 }
 
@@ -194,6 +212,9 @@ ext_funcs = {
 
    // cl_khr_icd
    { "clIcdGetPlatformIDsKHR", reinterpret_cast<void *>(IcdGetPlatformIDsKHR) },
+
+   // cl_khr_il_program
+   { "clCreateProgramWithILKHR", reinterpret_cast<void *>(CreateProgramWithILKHR) },
 };
 
 } // anonymous namespace

@@ -36,6 +36,7 @@
 
 #include "pipe/p_defines.h"
 
+
 struct draw_assembler
 {
    struct draw_context *draw;
@@ -46,7 +47,7 @@ struct draw_assembler
    const struct draw_prim_info *input_prims;
    const struct draw_vertex_info *input_verts;
 
-   boolean needs_primid;
+   bool needs_primid;
    int primid_slot;
    unsigned primid;
 
@@ -54,7 +55,7 @@ struct draw_assembler
 };
 
 
-static boolean
+static bool
 needs_primid(const struct draw_context *draw)
 {
    const struct draw_fragment_shader *fs = draw->fs.fragment_shader;
@@ -66,29 +67,42 @@ needs_primid(const struct draw_context *draw)
       else if (tes)
          return !tes->info.uses_primid;
       else
-         return TRUE;
+         return true;
    }
-   return FALSE;
+   return false;
 }
 
-boolean
+
+bool
 draw_prim_assembler_is_required(const struct draw_context *draw,
                                 const struct draw_prim_info *prim_info,
                                 const struct draw_vertex_info *vert_info)
 {
    /* viewport index requires primitive boundaries to get correct vertex */
    if (draw_current_shader_uses_viewport_index(draw))
-      return TRUE;
+      return true;
    switch (prim_info->prim) {
-   case PIPE_PRIM_LINES_ADJACENCY:
-   case PIPE_PRIM_LINE_STRIP_ADJACENCY:
-   case PIPE_PRIM_TRIANGLES_ADJACENCY:
-   case PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY:
-      return TRUE;
+   case MESA_PRIM_LINES_ADJACENCY:
+   case MESA_PRIM_LINE_STRIP_ADJACENCY:
+   case MESA_PRIM_TRIANGLES_ADJACENCY:
+   case MESA_PRIM_TRIANGLE_STRIP_ADJACENCY:
+      return true;
    default:
       return needs_primid(draw);
    }
 }
+
+
+static void
+add_prim(struct draw_assembler *asmblr, unsigned length)
+{
+   struct draw_prim_info *output_prims = asmblr->output_prims;
+
+   output_prims->primitive_lengths = realloc(output_prims->primitive_lengths, sizeof(unsigned) * (output_prims->primitive_count + 1));
+   output_prims->primitive_lengths[output_prims->primitive_count] = length;
+   output_prims->primitive_count++;
+}
+
 
 /*
  * Copy the vertex header along with its data from the current
@@ -100,12 +114,10 @@ static void
 copy_verts(struct draw_assembler *asmblr,
            unsigned *indices, unsigned num_indices)
 {
-   unsigned i;
-
    char *output = (char*)asmblr->output_verts->verts;
    const char *input = (const char*)asmblr->input_verts->verts;
 
-   for (i = 0; i < num_indices; ++i) {
+   for (unsigned i = 0; i < num_indices; ++i) {
       unsigned idx = indices[i];
       unsigned output_offset =
          asmblr->output_verts->count * asmblr->output_verts->stride;
@@ -150,9 +162,11 @@ prim_point(struct draw_assembler *asmblr,
       inject_primid(asmblr, idx, asmblr->primid++);
    }
    indices[0] = idx;
-   
+
+   add_prim(asmblr, 1);
    copy_verts(asmblr, indices, 1);
 }
+
 
 static void
 prim_line(struct draw_assembler *asmblr,
@@ -167,8 +181,10 @@ prim_line(struct draw_assembler *asmblr,
    indices[0] = i0;
    indices[1] = i1;
 
+   add_prim(asmblr, 2);
    copy_verts(asmblr, indices, 2);
 }
+
 
 static void
 prim_tri(struct draw_assembler *asmblr,
@@ -185,8 +201,33 @@ prim_tri(struct draw_assembler *asmblr,
    indices[1] = i1;
    indices[2] = i2;
 
+   add_prim(asmblr, 3);
    copy_verts(asmblr, indices, 3);
 }
+
+
+static void
+prim_quad(struct draw_assembler *asmblr,
+          unsigned i0, unsigned i1,
+          unsigned i2, unsigned i3)
+{
+   unsigned indices[4];
+
+   if (asmblr->needs_primid) {
+      inject_primid(asmblr, i0, asmblr->primid);
+      inject_primid(asmblr, i1, asmblr->primid);
+      inject_primid(asmblr, i2, asmblr->primid);
+      inject_primid(asmblr, i3, asmblr->primid++);
+   }
+   indices[0] = i0;
+   indices[1] = i1;
+   indices[2] = i2;
+   indices[3] = i3;
+
+   add_prim(asmblr, 4);
+   copy_verts(asmblr, indices, 4);
+}
+
 
 void
 draw_prim_assembler_prepare_outputs(struct draw_assembler *ia)
@@ -206,17 +247,16 @@ draw_prim_assembler_prepare_outputs(struct draw_assembler *ia)
 #include "draw_prim_assembler_tmp.h"
 
 #define FUNC assembler_run_elts
-#define LOCAL_VARS   const ushort *elts = input_prims->elts;
+#define LOCAL_VARS   const uint16_t *elts = input_prims->elts;
 #define GET_ELT(idx) (elts[start + (idx)])
 #include "draw_prim_assembler_tmp.h"
-
 
 
 /*
  * Primitive assembler breaks up adjacency primitives and assembles
  * the base primitives they represent, e.g. vertices forming
- * PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY
- * become vertices forming PIPE_PRIM_TRIANGLES 
+ * MESA_PRIM_TRIANGLE_STRIP_ADJACENCY
+ * become vertices forming MESA_PRIM_TRIANGLES
  * This is needed because specification says that the adjacency
  * primitives are only visible in the geometry shader so we need
  * to get rid of them so that the rest of the pipeline can
@@ -231,10 +271,12 @@ draw_prim_assembler_run(struct draw_context *draw,
 {
    struct draw_assembler *asmblr = draw->ia;
    unsigned start, i;
-   unsigned assembled_prim = u_reduced_prim(input_prims->prim);
+   unsigned assembled_prim = (input_prims->prim == MESA_PRIM_QUADS ||
+                              input_prims->prim == MESA_PRIM_QUAD_STRIP) ?
+      MESA_PRIM_QUADS : u_reduced_prim(input_prims->prim);
    unsigned max_primitives = u_decomposed_prims_for_vertices(
       input_prims->prim, input_prims->count);
-   unsigned max_verts = u_vertices_per_prim(assembled_prim) * max_primitives;
+   unsigned max_verts = mesa_vertices_per_prim(assembled_prim) * max_primitives;
 
    asmblr->output_prims = output_prims;
    asmblr->output_verts = output_verts;
@@ -243,7 +285,7 @@ draw_prim_assembler_run(struct draw_context *draw,
    asmblr->needs_primid = needs_primid(asmblr->draw);
    asmblr->num_prims = 0;
 
-   output_prims->linear = TRUE;
+   output_prims->linear = true;
    output_prims->elts = NULL;
    output_prims->start = 0;
    output_prims->prim = assembled_prim;
@@ -255,13 +297,12 @@ draw_prim_assembler_run(struct draw_context *draw,
    output_verts->vertex_size = input_verts->vertex_size;
    output_verts->stride = input_verts->stride;
    output_verts->verts = (struct vertex_header*)MALLOC(
-      input_verts->vertex_size * max_verts);
+      input_verts->vertex_size * max_verts + DRAW_EXTRA_VERTICES_PADDING);
    output_verts->count = 0;
 
 
    for (start = i = 0; i < input_prims->primitive_count;
-        start += input_prims->primitive_lengths[i], i++)
-   {
+        start += input_prims->primitive_lengths[i], i++) {
       unsigned count = input_prims->primitive_lengths[i];
       if (input_prims->linear) {
          assembler_run_linear(asmblr, input_prims, input_verts,
@@ -272,19 +313,20 @@ draw_prim_assembler_run(struct draw_context *draw,
       }
    }
 
-   output_prims->primitive_lengths[0] = output_verts->count;
    output_prims->count = output_verts->count;
 }
+
 
 struct draw_assembler *
 draw_prim_assembler_create(struct draw_context *draw)
 {
-   struct draw_assembler *ia = CALLOC_STRUCT( draw_assembler );
+   struct draw_assembler *ia = CALLOC_STRUCT(draw_assembler);
 
    ia->draw = draw;
 
    return ia;
 }
+
 
 void
 draw_prim_assembler_destroy(struct draw_assembler *ia)

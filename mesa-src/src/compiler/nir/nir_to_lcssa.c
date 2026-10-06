@@ -45,6 +45,8 @@ typedef struct {
 
    /* The loop we store information for */
    nir_loop *loop;
+   nir_block *block_after_loop;
+   nir_block **exit_blocks;
 
    /* Whether to skip loop invariant variables */
    bool skip_invariants;
@@ -62,7 +64,7 @@ is_if_use_inside_loop(nir_src *use, nir_loop *loop)
       nir_cf_node_as_block(nir_cf_node_next(&loop->cf_node));
 
    nir_block *prev_block =
-      nir_cf_node_as_block(nir_cf_node_prev(&use->parent_if->cf_node));
+      nir_cf_node_as_block(nir_cf_node_prev(&nir_src_parent_if(use)->cf_node));
    if (prev_block->index <= block_before_loop->index ||
        prev_block->index >= block_after_loop->index) {
       return false;
@@ -79,8 +81,8 @@ is_use_inside_loop(nir_src *use, nir_loop *loop)
    nir_block *block_after_loop =
       nir_cf_node_as_block(nir_cf_node_next(&loop->cf_node));
 
-   if (use->parent_instr->block->index <= block_before_loop->index ||
-       use->parent_instr->block->index >= block_after_loop->index) {
+   if (nir_src_parent_instr(use)->block->index <= block_before_loop->index ||
+       nir_src_parent_instr(use)->block->index >= block_after_loop->index) {
       return false;
    }
 
@@ -88,7 +90,7 @@ is_use_inside_loop(nir_src *use, nir_loop *loop)
 }
 
 static bool
-is_defined_before_loop(nir_ssa_def *def, nir_loop *loop)
+is_defined_before_loop(nir_def *def, nir_loop *loop)
 {
    nir_instr *instr = def->parent_instr;
    nir_block *block_before_loop =
@@ -107,7 +109,7 @@ static instr_invariance
 instr_is_invariant(nir_instr *instr, nir_loop *loop);
 
 static bool
-def_is_invariant(nir_ssa_def *def, nir_loop *loop)
+def_is_invariant(nir_def *def, nir_loop *loop)
 {
    if (is_defined_before_loop(def, loop))
       return invariant;
@@ -121,7 +123,6 @@ def_is_invariant(nir_ssa_def *def, nir_loop *loop)
 static bool
 src_is_invariant(nir_src *src, void *state)
 {
-   assert(src->is_ssa);
    return def_is_invariant(src->ssa, (nir_loop *)state);
 }
 
@@ -155,7 +156,6 @@ phi_is_invariant(nir_phi_instr *instr, nir_loop *loop)
    return invariant;
 }
 
-
 /* An instruction is said to be loop-invariant if it
  * - has no sideeffects and
  * - solely depends on variables defined outside of the loop or
@@ -168,7 +168,7 @@ instr_is_invariant(nir_instr *instr, nir_loop *loop)
 
    switch (instr->type) {
    case nir_instr_type_load_const:
-   case nir_instr_type_ssa_undef:
+   case nir_instr_type_undef:
       return invariant;
    case nir_instr_type_call:
       return not_invariant;
@@ -176,10 +176,10 @@ instr_is_invariant(nir_instr *instr, nir_loop *loop)
       return phi_is_invariant(nir_instr_as_phi(instr), loop);
    case nir_instr_type_intrinsic: {
       nir_intrinsic_instr *intrinsic = nir_instr_as_intrinsic(instr);
-      if (!(nir_intrinsic_infos[intrinsic->intrinsic].flags & NIR_INTRINSIC_CAN_REORDER))
+      if (!nir_intrinsic_can_reorder(intrinsic))
          return not_invariant;
    }
-   /* fallthrough */
+      FALLTHROUGH;
    default:
       return nir_foreach_src(instr, src_is_invariant, loop) ? invariant : not_invariant;
    }
@@ -188,7 +188,7 @@ instr_is_invariant(nir_instr *instr, nir_loop *loop)
 }
 
 static bool
-convert_loop_exit_for_ssa(nir_ssa_def *def, void *void_state)
+convert_loop_exit_for_ssa(nir_def *def, void *void_state)
 {
    lcssa_state *state = void_state;
    bool all_uses_inside_loop = true;
@@ -201,22 +201,20 @@ convert_loop_exit_for_ssa(nir_ssa_def *def, void *void_state)
          return true;
    }
 
-   nir_block *block_after_loop =
-      nir_cf_node_as_block(nir_cf_node_next(&state->loop->cf_node));
+   nir_foreach_use_including_if(use, def) {
+      if (nir_src_is_if(use)) {
+         if (!is_if_use_inside_loop(use, state->loop))
+            all_uses_inside_loop = false;
 
-   nir_foreach_use(use, def) {
-      if (use->parent_instr->type == nir_instr_type_phi &&
-          use->parent_instr->block == block_after_loop) {
+         continue;
+      }
+
+      if (nir_src_parent_instr(use)->type == nir_instr_type_phi &&
+          nir_src_parent_instr(use)->block == state->block_after_loop) {
          continue;
       }
 
       if (!is_use_inside_loop(use, state->loop)) {
-         all_uses_inside_loop = false;
-      }
-   }
-
-   nir_foreach_if_use(use, def) {
-      if (!is_if_use_inside_loop(use, state->loop)) {
          all_uses_inside_loop = false;
       }
    }
@@ -225,65 +223,83 @@ convert_loop_exit_for_ssa(nir_ssa_def *def, void *void_state)
    if (all_uses_inside_loop)
       return true;
 
+   if (def->parent_instr->type == nir_instr_type_deref) {
+      nir_rematerialize_deref_in_use_blocks(nir_instr_as_deref(def->parent_instr));
+      return true;
+   }
+
    /* Initialize a phi-instruction */
    nir_phi_instr *phi = nir_phi_instr_create(state->shader);
-   nir_ssa_dest_init(&phi->instr, &phi->dest,
-                     def->num_components, def->bit_size, "LCSSA-phi");
+   nir_def_init(&phi->instr, &phi->def, def->num_components,
+                def->bit_size);
 
    /* Create a phi node with as many sources pointing to the same ssa_def as
     * the block has predecessors.
     */
-   set_foreach(block_after_loop->predecessors, entry) {
-      nir_phi_src *phi_src = ralloc(phi, nir_phi_src);
-      phi_src->src = nir_src_for_ssa(def);
-      phi_src->pred = (nir_block *) entry->key;
-
-      exec_list_push_tail(&phi->srcs, &phi_src->node);
+   uint32_t num_exits = state->block_after_loop->predecessors->entries;
+   for (uint32_t i = 0; i < num_exits; i++) {
+      nir_phi_instr_add_src(phi, state->exit_blocks[i], def);
    }
 
-   nir_instr_insert_before_block(block_after_loop, &phi->instr);
-   nir_ssa_def *dest = &phi->dest.ssa;
-
-   /* deref instructions need a cast after the phi */
-   if (def->parent_instr->type == nir_instr_type_deref) {
-      nir_deref_instr *cast =
-         nir_deref_instr_create(state->shader, nir_deref_type_cast);
-
-      nir_deref_instr *instr = nir_instr_as_deref(def->parent_instr);
-      cast->mode = instr->mode;
-      cast->type = instr->type;
-      cast->parent = nir_src_for_ssa(&phi->dest.ssa);
-      cast->cast.ptr_stride = nir_deref_instr_ptr_as_array_stride(instr);
-
-      nir_ssa_dest_init(&cast->instr, &cast->dest,
-                        phi->dest.ssa.num_components,
-                        phi->dest.ssa.bit_size, NULL);
-      nir_instr_insert(nir_after_phis(block_after_loop), &cast->instr);
-      dest = &cast->dest.ssa;
-   }
+   nir_instr_insert_before_block(state->block_after_loop, &phi->instr);
+   nir_def *dest = &phi->def;
 
    /* Run through all uses and rewrite those outside the loop to point to
     * the phi instead of pointing to the ssa-def.
     */
-   nir_foreach_use_safe(use, def) {
-      if (use->parent_instr->type == nir_instr_type_phi &&
-          block_after_loop == use->parent_instr->block) {
+   nir_foreach_use_including_if_safe(use, def) {
+      if (nir_src_is_if(use)) {
+         if (!is_if_use_inside_loop(use, state->loop))
+            nir_src_rewrite(&nir_src_parent_if(use)->condition, dest);
+
+         continue;
+      }
+
+      if (nir_src_parent_instr(use)->type == nir_instr_type_phi &&
+          state->block_after_loop == nir_src_parent_instr(use)->block) {
          continue;
       }
 
       if (!is_use_inside_loop(use, state->loop)) {
-         nir_instr_rewrite_src(use->parent_instr, use, nir_src_for_ssa(dest));
-      }
-   }
-
-   nir_foreach_if_use_safe(use, def) {
-      if (!is_if_use_inside_loop(use, state->loop)) {
-         nir_if_rewrite_condition(use->parent_if, nir_src_for_ssa(dest));
+         nir_src_rewrite(use, dest);
       }
    }
 
    state->progress = true;
    return true;
+}
+
+static void
+setup_loop_state(lcssa_state *state, nir_loop *loop)
+{
+   state->loop = loop;
+   state->block_after_loop =
+      nir_cf_node_as_block(nir_cf_node_next(&loop->cf_node));
+
+   ralloc_free(state->exit_blocks);
+   state->exit_blocks = nir_block_get_predecessors_sorted(state->block_after_loop, state);
+}
+
+static void
+convert_block_to_lcssa(nir_block *block, lcssa_state *state)
+{
+   nir_instr *instr = nir_block_last_instr(block);
+   while (instr) {
+      /* We assume "next" will not be removed. It is used to obtain the next iteration's
+       * pointer if "instr" is removed.
+       */
+      nir_instr *next = nir_instr_next(instr);
+
+      nir_foreach_def(instr, convert_loop_exit_for_ssa, state);
+
+      /* for outer loops, invariant instructions can be variant */
+      if (state->skip_invariants && instr->pass_flags == invariant)
+         instr->pass_flags = undefined;
+
+      nir_instr *if_removed = next ? nir_instr_prev(next) : nir_block_last_instr(block);
+      bool has_instr_been_removed = if_removed != instr;
+      instr = has_instr_been_removed ? if_removed : nir_instr_prev(instr);
+   }
 }
 
 static void
@@ -310,11 +326,22 @@ convert_to_lcssa(nir_cf_node *cf_node, lcssa_state *state)
 
       /* first, convert inner loops */
       nir_loop *loop = nir_cf_node_as_loop(cf_node);
+      assert(!nir_loop_has_continue_construct(loop));
       foreach_list_typed(nir_cf_node, nested_node, node, &loop->body)
          convert_to_lcssa(nested_node, state);
 
+      setup_loop_state(state, loop);
+
       /* mark loop-invariant instructions */
       if (state->skip_invariants) {
+         /* Without a loop all instructions are invariant.
+          * For outer loops, multiple breaks can still create phis.
+          * The variance then depends on all (nested) break conditions.
+          * We don't consider this, but assume all not_invariant.
+          */
+         if (nir_loop_first_block(loop)->predecessors->entries == 1)
+            goto end;
+
          nir_foreach_block_in_cf_node(block, cf_node) {
             nir_foreach_instr(instr, block) {
                if (instr->pass_flags == undefined)
@@ -323,22 +350,13 @@ convert_to_lcssa(nir_cf_node *cf_node, lcssa_state *state)
          }
       }
 
-      state->loop = loop;
-      nir_foreach_block_in_cf_node(block, cf_node) {
-         nir_foreach_instr(instr, block) {
-            nir_foreach_ssa_def(instr, convert_loop_exit_for_ssa, state);
+      nir_foreach_block_in_cf_node_reverse(block, cf_node)
+         convert_block_to_lcssa(block, state);
 
-            /* for outer loops, invariant instructions can be variant */
-            if (state->skip_invariants && instr->pass_flags == invariant)
-               instr->pass_flags = undefined;
-         }
-      }
-
+   end:
       /* For outer loops, the LCSSA-phi should be considered not invariant */
       if (state->skip_invariants) {
-         nir_block *block_after_loop =
-            nir_cf_node_as_block(nir_cf_node_next(&state->loop->cf_node));
-         nir_foreach_instr(instr, block_after_loop) {
+         nir_foreach_instr(instr, state->block_after_loop) {
             if (instr->type == nir_instr_type_phi)
                instr->pass_flags = not_invariant;
             else
@@ -355,20 +373,19 @@ convert_to_lcssa(nir_cf_node *cf_node, lcssa_state *state)
 void
 nir_convert_loop_to_lcssa(nir_loop *loop)
 {
+   assert(!nir_loop_has_continue_construct(loop));
    nir_function_impl *impl = nir_cf_node_get_function(&loop->cf_node);
 
    nir_metadata_require(impl, nir_metadata_block_index);
 
    lcssa_state *state = rzalloc(NULL, lcssa_state);
-   state->loop = loop;
+   setup_loop_state(state, loop);
    state->shader = impl->function->shader;
    state->skip_invariants = false;
    state->skip_bool_invariants = false;
 
-   nir_foreach_block_in_cf_node (block, &loop->cf_node) {
-      nir_foreach_instr(instr, block)
-         nir_foreach_ssa_def(instr, convert_loop_exit_for_ssa, state);
-   }
+   nir_foreach_block_in_cf_node_reverse(block, &loop->cf_node)
+      convert_block_to_lcssa(block, state);
 
    ralloc_free(state);
 }
@@ -382,26 +399,21 @@ nir_convert_to_lcssa(nir_shader *shader, bool skip_invariants, bool skip_bool_in
    state->skip_invariants = skip_invariants;
    state->skip_bool_invariants = skip_bool_invariants;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl == NULL)
-         continue;
-
+   nir_foreach_function_impl(impl, shader) {
       state->progress = false;
-      nir_metadata_require(function->impl, nir_metadata_block_index);
+      nir_metadata_require(impl, nir_metadata_block_index);
 
-      foreach_list_typed(nir_cf_node, node, node, &function->impl->body)
+      foreach_list_typed(nir_cf_node, node, node, &impl->body)
          convert_to_lcssa(node, state);
 
       if (state->progress) {
          progress = true;
-         nir_metadata_preserve(function->impl, nir_metadata_block_index |
-                                               nir_metadata_dominance);
+         nir_metadata_preserve(impl, nir_metadata_control_flow);
       } else {
-         nir_metadata_preserve(function->impl, nir_metadata_all);
+         nir_metadata_preserve(impl, nir_metadata_all);
       }
    }
 
    ralloc_free(state);
    return progress;
 }
-

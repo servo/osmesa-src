@@ -1,7 +1,7 @@
 #ifndef __NV30_CONTEXT_H__
 #define __NV30_CONTEXT_H__
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "util/u_blitter.h"
 
 #include "nv30/nv30_screen.h"
@@ -188,20 +188,25 @@ nv40_verttex_sampler_states_bind(struct pipe_context *pipe,
 
 void
 nv40_verttex_set_sampler_views(struct pipe_context *pipe, unsigned nr,
+                               bool take_ownership,
                                struct pipe_sampler_view **views);
 
 void
 nv30_fragtex_set_sampler_views(struct pipe_context *pipe,
-                               unsigned nr, struct pipe_sampler_view **views);
+                               unsigned nr, bool take_ownership,
+                               struct pipe_sampler_view **views);
 
 void
-nv30_push_vbo(struct nv30_context *nv30, const struct pipe_draw_info *info);
+nv30_push_vbo(struct nv30_context *nv30, const struct pipe_draw_info *info,
+              const struct pipe_draw_start_count_bias *draw);
 
 void
 nv30_draw_init(struct pipe_context *pipe);
 
 void
-nv30_render_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info);
+nv30_render_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+                unsigned drawid_offset,
+                const struct pipe_draw_start_count_bias *draw);
 
 bool
 nv30_state_validate(struct nv30_context *nv30, uint32_t mask, bool hwtnl);
@@ -211,7 +216,7 @@ nv30_state_release(struct nv30_context *nv30);
 
 #ifdef NV30_3D_VERTEX_BEGIN_END
 #define NV30_PRIM_GL_CASE(n) \
-   case PIPE_PRIM_##n: return NV30_3D_VERTEX_BEGIN_END_##n
+   case MESA_PRIM_##n: return NV30_3D_VERTEX_BEGIN_END_##n
 
 static inline unsigned
 nv30_prim_gl(unsigned prim)

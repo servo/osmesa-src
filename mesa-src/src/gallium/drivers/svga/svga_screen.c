@@ -1,37 +1,19 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "git_sha1.h" /* For MESA_GIT_SHA1 */
+#include "compiler/nir/nir.h"
 #include "util/format/u_format.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
+#include "util/u_process.h"
 #include "util/u_screen.h"
 #include "util/u_string.h"
 #include "util/u_math.h"
-
-#include "os/os_process.h"
 
 #include "svga_winsys.h"
 #include "svga_public.h"
@@ -43,6 +25,7 @@
 #include "svga_resource.h"
 #include "svga_debug.h"
 
+#include "vm_basic_types.h"
 #include "svga3d_shaderdefs.h"
 #include "VGPU10ShaderTokens.h"
 
@@ -53,7 +36,7 @@
 #define MESA_GIT_SHA1 "(unknown git revision)"
 #endif
 
-#ifdef DEBUG
+#if MESA_DEBUG
 int SVGA_DEBUG = 0;
 
 static const struct debug_named_value svga_debug_flags[] = {
@@ -74,6 +57,9 @@ static const struct debug_named_value svga_debug_flags[] = {
    { "streamout",   DEBUG_STREAMOUT, NULL },
    { "query",       DEBUG_QUERY, NULL },
    { "samplers",    DEBUG_SAMPLERS, NULL },
+   { "image",       DEBUG_IMAGE, NULL },
+   { "uav",         DEBUG_UAV, NULL },
+   { "retry",       DEBUG_RETRY, NULL },
    DEBUG_NAMED_VALUE_END
 };
 #endif
@@ -90,15 +76,15 @@ svga_get_name( struct pipe_screen *pscreen )
 {
    const char *build = "", *llvm = "", *mutex = "";
    static char name[100];
-#ifdef DEBUG
-   /* Only return internal details in the DEBUG version:
+#if MESA_DEBUG
+   /* Only return internal details in the MESA_DEBUG version:
     */
    build = "build: DEBUG;";
    mutex = "mutex: " PIPE_ATOMIC ";";
 #else
    build = "build: RELEASE;";
 #endif
-#ifdef LLVM_AVAILABLE
+#if DRAW_LLVM_AVAILABLE
    llvm = "LLVM;";
 #endif
 
@@ -134,290 +120,15 @@ get_uint_cap(struct svga_winsys_screen *sws, SVGA3dDevCapIndex cap,
 
 
 /** Helper for querying boolean-valued device cap */
-static boolean
+static bool
 get_bool_cap(struct svga_winsys_screen *sws, SVGA3dDevCapIndex cap,
-             boolean defaultVal)
+             bool defaultVal)
 {
    SVGA3dDevCapResult result;
    if (sws->get_cap(sws, cap, &result))
       return result.b;
    else
       return defaultVal;
-}
-
-
-static float
-svga_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
-{
-   struct svga_screen *svgascreen = svga_screen(screen);
-   struct svga_winsys_screen *sws = svgascreen->sws;
-
-   switch (param) {
-   case PIPE_CAPF_MAX_LINE_WIDTH:
-      return svgascreen->maxLineWidth;
-   case PIPE_CAPF_MAX_LINE_WIDTH_AA:
-      return svgascreen->maxLineWidthAA;
-
-   case PIPE_CAPF_MAX_POINT_WIDTH:
-      /* fall-through */
-   case PIPE_CAPF_MAX_POINT_WIDTH_AA:
-      return svgascreen->maxPointSize;
-
-   case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
-      return (float) get_uint_cap(sws, SVGA3D_DEVCAP_MAX_TEXTURE_ANISOTROPY, 4);
-
-   case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
-      return 15.0;
-
-   case PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE:
-      /* fall-through */
-   case PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE:
-      /* fall-through */
-   case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
-      return 0.0f;
-
-   }
-
-   debug_printf("Unexpected PIPE_CAPF_ query %u\n", param);
-   return 0;
-}
-
-
-static int
-svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
-{
-   struct svga_screen *svgascreen = svga_screen(screen);
-   struct svga_winsys_screen *sws = svgascreen->sws;
-   SVGA3dDevCapResult result;
-
-   switch (param) {
-   case PIPE_CAP_NPOT_TEXTURES:
-   case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
-   case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
-      return 1;
-   case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
-      /*
-       * "In virtually every OpenGL implementation and hardware,
-       * GL_MAX_DUAL_SOURCE_DRAW_BUFFERS is 1"
-       * http://www.opengl.org/wiki/Blending
-       */
-      return sws->have_vgpu10 ? 1 : 0;
-   case PIPE_CAP_ANISOTROPIC_FILTER:
-      return 1;
-   case PIPE_CAP_POINT_SPRITE:
-      return 1;
-   case PIPE_CAP_MAX_RENDER_TARGETS:
-      return svgascreen->max_color_buffers;
-   case PIPE_CAP_OCCLUSION_QUERY:
-      return 1;
-   case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
-      return sws->have_vgpu10;
-   case PIPE_CAP_TEXTURE_SWIZZLE:
-      return 1;
-   case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
-      return 256;
-
-   case PIPE_CAP_MAX_TEXTURE_2D_SIZE:
-      {
-         unsigned size = 1 << (SVGA_MAX_TEXTURE_LEVELS - 1);
-         if (sws->get_cap(sws, SVGA3D_DEVCAP_MAX_TEXTURE_WIDTH, &result))
-            size = MIN2(result.u, size);
-         else
-            size = 2048;
-         if (sws->get_cap(sws, SVGA3D_DEVCAP_MAX_TEXTURE_HEIGHT, &result))
-            size = MIN2(result.u, size);
-         else
-            size = 2048;
-         return size;
-      }
-
-   case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
-      if (!sws->get_cap(sws, SVGA3D_DEVCAP_MAX_VOLUME_EXTENT, &result))
-         return 8;  /* max 128x128x128 */
-      return MIN2(util_logbase2(result.u) + 1, SVGA_MAX_TEXTURE_LEVELS);
-
-   case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-      /*
-       * No mechanism to query the host, and at least limited to 2048x2048 on
-       * certain hardware.
-       */
-      return MIN2(util_last_bit(screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_2D_SIZE)),
-                  12 /* 2048x2048 */);
-
-   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-      return sws->have_sm5 ? SVGA3D_SM5_MAX_SURFACE_ARRAYSIZE :
-             (sws->have_vgpu10 ? SVGA3D_SM4_MAX_SURFACE_ARRAYSIZE : 0);
-
-   case PIPE_CAP_BLEND_EQUATION_SEPARATE: /* req. for GL 1.5 */
-      return 1;
-
-   case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-      return 1;
-   case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
-      return sws->have_vgpu10;
-   case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
-      return !sws->have_vgpu10;
-
-   case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
-      return 1; /* The color outputs of vertex shaders are not clamped */
-   case PIPE_CAP_VERTEX_COLOR_CLAMPED:
-      return sws->have_vgpu10;
-
-   case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
-      return 1; /* expected for GL_ARB_framebuffer_object */
-
-   case PIPE_CAP_GLSL_FEATURE_LEVEL:
-      if (sws->have_sm5) {
-         return 410;
-      } else if (sws->have_vgpu10) {
-         return 330;
-      } else {
-         return 120;
-      }
-
-   case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
-      return sws->have_sm5 ? 410 : (sws->have_vgpu10 ? 330 : 120);
-
-   case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
-      return 0;
-
-   case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
-   case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
-   case PIPE_CAP_VERTEX_SHADER_SATURATE:
-      return 1;
-
-   case PIPE_CAP_DEPTH_CLIP_DISABLE:
-   case PIPE_CAP_INDEP_BLEND_ENABLE:
-   case PIPE_CAP_CONDITIONAL_RENDER:
-   case PIPE_CAP_QUERY_TIMESTAMP:
-   case PIPE_CAP_TGSI_INSTANCEID:
-   case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
-   case PIPE_CAP_SEAMLESS_CUBE_MAP:
-   case PIPE_CAP_FAKE_SW_MSAA:
-      return sws->have_vgpu10;
-
-   case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-      return sws->have_vgpu10 ? SVGA3D_DX_MAX_SOTARGETS : 0;
-   case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
-      return sws->have_vgpu10 ? 4 : 0;
-   case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-      return sws->have_sm5 ? SVGA3D_MAX_STREAMOUT_DECLS :
-             (sws->have_vgpu10 ? SVGA3D_MAX_DX10_STREAMOUT_DECLS : 0);
-   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-      return sws->have_sm5;
-   case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
-      return sws->have_sm5;
-   case PIPE_CAP_TEXTURE_MULTISAMPLE:
-      return svgascreen->ms_samples ? 1 : 0;
-
-   case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
-      /* convert bytes to texels for the case of the largest texel
-       * size: float[4].
-       */
-      return SVGA3D_DX_MAX_RESOURCE_SIZE / (4 * sizeof(float));
-
-   case PIPE_CAP_MIN_TEXEL_OFFSET:
-      return sws->have_vgpu10 ? VGPU10_MIN_TEXEL_FETCH_OFFSET : 0;
-   case PIPE_CAP_MAX_TEXEL_OFFSET:
-      return sws->have_vgpu10 ? VGPU10_MAX_TEXEL_FETCH_OFFSET : 0;
-
-   case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
-   case PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET:
-      return 0;
-
-   case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
-      return sws->have_vgpu10 ? 256 : 0;
-   case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
-      return sws->have_vgpu10 ? 1024 : 0;
-
-   case PIPE_CAP_PRIMITIVE_RESTART:
-   case PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX:
-      return 1; /* may be a sw fallback, depending on restart index */
-
-   case PIPE_CAP_GENERATE_MIPMAP:
-      return sws->have_generate_mipmap_cmd;
-
-   case PIPE_CAP_NATIVE_FENCE_FD:
-      return sws->have_fence_fd;
-
-   case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
-      return 1;
-
-   case PIPE_CAP_CUBE_MAP_ARRAY:
-   case PIPE_CAP_INDEP_BLEND_FUNC:
-   case PIPE_CAP_SAMPLE_SHADING:
-   case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
-   case PIPE_CAP_TEXTURE_QUERY_LOD:
-      return sws->have_sm4_1;
-
-   case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
-      /* SM4_1 supports only single-channel textures where as SM5 supports
-       * all four channel textures */
-      return sws->have_sm5 ? 4 :
-             (sws->have_sm4_1 ? 1 : 0);
-   case PIPE_CAP_DRAW_INDIRECT:
-      return sws->have_sm5;
-   case PIPE_CAP_MAX_VERTEX_STREAMS:
-      return sws->have_sm5 ? 4 : 0;
-   case PIPE_CAP_COMPUTE:
-      return 0;
-   case PIPE_CAP_MAX_VARYINGS:
-      return sws->have_vgpu10 ? VGPU10_MAX_FS_INPUTS : 10;
-   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
-      return sws->have_coherent;
-
-   case PIPE_CAP_PCI_GROUP:
-   case PIPE_CAP_PCI_BUS:
-   case PIPE_CAP_PCI_DEVICE:
-   case PIPE_CAP_PCI_FUNCTION:
-      return 0;
-   case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
-      return 64;
-   case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
-   case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
-   case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-      return 1;  /* need 4-byte alignment for all offsets and strides */
-   case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
-      return 2048;
-   case PIPE_CAP_MAX_VIEWPORTS:
-      assert((!sws->have_vgpu10 && svgascreen->max_viewports == 1) ||
-             (sws->have_vgpu10 &&
-              svgascreen->max_viewports == SVGA3D_DX_MAX_VIEWPORTS));
-      return svgascreen->max_viewports;
-   case PIPE_CAP_ENDIANNESS:
-      return PIPE_ENDIAN_LITTLE;
-
-   case PIPE_CAP_VENDOR_ID:
-      return 0x15ad; /* VMware Inc. */
-   case PIPE_CAP_DEVICE_ID:
-      return 0x0405; /* assume SVGA II */
-   case PIPE_CAP_ACCELERATED:
-      return 0; /* XXX: */
-   case PIPE_CAP_VIDEO_MEMORY:
-      /* XXX: Query the host ? */
-      return 1;
-   case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
-      return sws->have_vgpu10;
-   case PIPE_CAP_CLEAR_TEXTURE:
-      return sws->have_vgpu10;
-   case PIPE_CAP_DOUBLES:
-      return sws->have_sm5;
-   case PIPE_CAP_UMA:
-   case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
-   case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
-      return 0;
-   case PIPE_CAP_TGSI_DIV:
-      return 1;
-   case PIPE_CAP_MAX_GS_INVOCATIONS:
-      return 32;
-   case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
-      return 1 << 27;
-   /* Verify this once protocol is finalized. Setting it to minimum value. */
-   case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
-      return sws->have_sm5 ? 30 : 0;
-   default:
-      return u_pipe_screen_get_param_defaults(screen, param);
-   }
 }
 
 
@@ -451,26 +162,17 @@ vgpu9_get_shader_param(struct pipe_screen *screen,
          return 10;
       case PIPE_SHADER_CAP_MAX_OUTPUTS:
          return svgascreen->max_color_buffers;
-      case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+      case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
          return 224 * sizeof(float[4]);
       case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
          return 1;
       case PIPE_SHADER_CAP_MAX_TEMPS:
          val = get_uint_cap(sws, SVGA3D_DEVCAP_MAX_FRAGMENT_SHADER_TEMPS, 32);
          return MIN2(val, SVGA3D_TEMPREG_MAX);
-      case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
-         /*
-          * Although PS 3.0 has some addressing abilities it can only represent
-          * loops that can be statically determined and unrolled. Given we can
-          * only handle a subset of the cases that the gallium frontend already
-          * does it is better to defer loop unrolling to the gallium frontend.
-          */
-         return 0;
-      case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
+      case PIPE_SHADER_CAP_CONT_SUPPORTED:
          return 0;
       case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
          return 0;
-      case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
       case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
       case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
          return 0;
@@ -481,30 +183,21 @@ vgpu9_get_shader_param(struct pipe_screen *screen,
          return 0;
       case PIPE_SHADER_CAP_FP16:
       case PIPE_SHADER_CAP_FP16_DERIVATIVES:
+      case PIPE_SHADER_CAP_FP16_CONST_BUFFERS:
       case PIPE_SHADER_CAP_INT16:
       case PIPE_SHADER_CAP_GLSL_16BIT_CONSTS:
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
       case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
          return 16;
-      case PIPE_SHADER_CAP_PREFERRED_IR:
-         return PIPE_SHADER_IR_TGSI;
       case PIPE_SHADER_CAP_SUPPORTED_IRS:
-         return 0;
-      case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
-      case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
-      case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
-      case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+         return (1 << PIPE_SHADER_IR_TGSI) | (1 << PIPE_SHADER_IR_NIR);
       case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-      case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-      case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
          return 0;
-      case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-         return 32;
       }
       /* If we get here, we failed to handle a cap above */
       debug_printf("Unexpected fragment shader query %u\n", param);
@@ -526,20 +219,17 @@ vgpu9_get_shader_param(struct pipe_screen *screen,
          return 16;
       case PIPE_SHADER_CAP_MAX_OUTPUTS:
          return 10;
-      case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+      case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
          return 256 * sizeof(float[4]);
       case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
          return 1;
       case PIPE_SHADER_CAP_MAX_TEMPS:
          val = get_uint_cap(sws, SVGA3D_DEVCAP_MAX_VERTEX_SHADER_TEMPS, 32);
          return MIN2(val, SVGA3D_TEMPREG_MAX);
-      case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
+      case PIPE_SHADER_CAP_CONT_SUPPORTED:
          return 0;
       case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
          return 0;
-      case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
-      case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
-         return 1;
       case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
          return 0;
       case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
@@ -551,30 +241,21 @@ vgpu9_get_shader_param(struct pipe_screen *screen,
          return 0;
       case PIPE_SHADER_CAP_FP16:
       case PIPE_SHADER_CAP_FP16_DERIVATIVES:
+      case PIPE_SHADER_CAP_FP16_CONST_BUFFERS:
       case PIPE_SHADER_CAP_INT16:
       case PIPE_SHADER_CAP_GLSL_16BIT_CONSTS:
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
       case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
          return 0;
-      case PIPE_SHADER_CAP_PREFERRED_IR:
-         return PIPE_SHADER_IR_TGSI;
       case PIPE_SHADER_CAP_SUPPORTED_IRS:
-         return 0;
-      case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
-      case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
-      case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
-      case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+         return (1 << PIPE_SHADER_IR_TGSI) | (1 << PIPE_SHADER_IR_NIR);
       case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-      case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-      case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
          return 0;
-      case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-         return 32;
       }
       /* If we get here, we failed to handle a cap above */
       debug_printf("Unexpected vertex shader query %u\n", param);
@@ -584,6 +265,9 @@ vgpu9_get_shader_param(struct pipe_screen *screen,
    case PIPE_SHADER_TESS_CTRL:
    case PIPE_SHADER_TESS_EVAL:
       /* no support for geometry, tess or compute shaders at this time */
+      return 0;
+   case PIPE_SHADER_MESH:
+   case PIPE_SHADER_TASK:
       return 0;
    default:
       debug_printf("Unexpected shader type (%u) query\n", shader);
@@ -604,11 +288,14 @@ vgpu10_get_shader_param(struct pipe_screen *screen,
    assert(sws->have_vgpu10);
    (void) sws;  /* silence unused var warnings in non-debug builds */
 
+   if (shader == PIPE_SHADER_MESH || shader == PIPE_SHADER_TASK)
+      return 0;
+
    if ((!sws->have_sm5) &&
        (shader == PIPE_SHADER_TESS_CTRL || shader == PIPE_SHADER_TESS_EVAL))
       return 0;
 
-   if (shader == PIPE_SHADER_COMPUTE)
+   if ((!sws->have_gl43) && (shader == PIPE_SHADER_COMPUTE))
       return 0;
 
    /* NOTE: we do not query the device for any caps/limits at this time */
@@ -624,18 +311,18 @@ vgpu10_get_shader_param(struct pipe_screen *screen,
       return 64;
    case PIPE_SHADER_CAP_MAX_INPUTS:
       if (shader == PIPE_SHADER_FRAGMENT)
-         return VGPU10_MAX_FS_INPUTS;
+         return VGPU10_MAX_PS_INPUTS;
       else if (shader == PIPE_SHADER_GEOMETRY)
-         return VGPU10_MAX_GS_INPUTS;
+         return svgascreen->max_gs_inputs;
       else if (shader == PIPE_SHADER_TESS_CTRL)
          return VGPU11_MAX_HS_INPUT_CONTROL_POINTS;
       else if (shader == PIPE_SHADER_TESS_EVAL)
          return VGPU11_MAX_DS_INPUT_CONTROL_POINTS;
       else
-         return VGPU10_MAX_VS_INPUTS;
+         return svgascreen->max_vs_inputs;
    case PIPE_SHADER_CAP_MAX_OUTPUTS:
       if (shader == PIPE_SHADER_FRAGMENT)
-         return VGPU10_MAX_FS_OUTPUTS;
+         return VGPU10_MAX_PS_OUTPUTS;
       else if (shader == PIPE_SHADER_GEOMETRY)
          return VGPU10_MAX_GS_OUTPUTS;
       else if (shader == PIPE_SHADER_TESS_CTRL)
@@ -643,50 +330,50 @@ vgpu10_get_shader_param(struct pipe_screen *screen,
       else if (shader == PIPE_SHADER_TESS_EVAL)
          return VGPU11_MAX_DS_OUTPUTS;
       else
-         return VGPU10_MAX_VS_OUTPUTS;
-   case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+         return svgascreen->max_vs_outputs;
+
+   case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
       return VGPU10_MAX_CONSTANT_BUFFER_ELEMENT_COUNT * sizeof(float[4]);
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
       return svgascreen->max_const_buffers;
    case PIPE_SHADER_CAP_MAX_TEMPS:
       return VGPU10_MAX_TEMPS;
-   case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
-   case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
-      return TRUE; /* XXX verify */
-   case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
+      return true; /* XXX verify */
+   case PIPE_SHADER_CAP_CONT_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
    case PIPE_SHADER_CAP_SUBROUTINES:
    case PIPE_SHADER_CAP_INTEGERS:
-      return TRUE;
+      return true;
    case PIPE_SHADER_CAP_FP16:
    case PIPE_SHADER_CAP_FP16_DERIVATIVES:
+   case PIPE_SHADER_CAP_FP16_CONST_BUFFERS:
    case PIPE_SHADER_CAP_INT16:
    case PIPE_SHADER_CAP_GLSL_16BIT_CONSTS:
-      return FALSE;
+      return false;
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
-      return SVGA3D_DX_MAX_SAMPLERS;
-   case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_TGSI;
+      return sws->have_gl43 ? PIPE_MAX_SAMPLERS : SVGA3D_DX_MAX_SAMPLERS;
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
-      return 0;
-   case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
-   case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
+      if (sws->have_gl43)
+         return (1 << PIPE_SHADER_IR_TGSI) | (1 << PIPE_SHADER_IR_NIR);
+      else
+         return 0;
+
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-   case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
-   case PIPE_SHADER_CAP_INT64_ATOMICS:
+      return sws->have_gl43 ? SVGA_MAX_IMAGES : 0;
+
+   case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
+      return sws->have_gl43 ? SVGA_MAX_SHADER_BUFFERS : 0;
+
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
+      return sws->have_gl43 ? SVGA_MAX_ATOMIC_BUFFERS : 0;
+
+   case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
+   case PIPE_SHADER_CAP_INT64_ATOMICS:
       return 0;
-   case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-      return 32;
    default:
       debug_printf("Unexpected vgpu10 shader query %u\n", param);
       return 0;
@@ -694,6 +381,77 @@ vgpu10_get_shader_param(struct pipe_screen *screen,
    return 0;
 }
 
+#define COMMON_OPTIONS                                                        \
+   .lower_extract_byte = true,                                                \
+   .lower_extract_word = true,                                                \
+   .lower_insert_byte = true,                                                 \
+   .lower_insert_word = true,                                                 \
+   .lower_int64_options = nir_lower_imul_2x32_64 | nir_lower_divmod64,        \
+   .lower_fdph = true,                                                        \
+   .lower_flrp64 = true,                                                      \
+   .lower_ldexp = true,                                                       \
+   .lower_uniforms_to_ubo = true,                                             \
+   .lower_vector_cmp = true,                                                  \
+   .lower_cs_local_index_to_id = true,                                        \
+   .max_unroll_iterations = 32
+
+#define VGPU10_OPTIONS                                                        \
+   .lower_doubles_options = nir_lower_dfloor | nir_lower_dsign | nir_lower_dceil | nir_lower_dtrunc | nir_lower_dround_even, \
+   .lower_fmod = true,                                                        \
+   .lower_fpow = true,                                                        \
+   .support_indirect_inputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),      \
+   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES)
+
+static const nir_shader_compiler_options svga_vgpu9_fragment_compiler_options = {
+   COMMON_OPTIONS,
+   .lower_bitops = true,
+   .force_indirect_unrolling = nir_var_all,
+   .force_indirect_unrolling_sampler = true,
+   .no_integers = true,
+};
+
+static const nir_shader_compiler_options svga_vgpu9_vertex_compiler_options = {
+   COMMON_OPTIONS,
+   .lower_bitops = true,
+   .force_indirect_unrolling = nir_var_function_temp,
+   .force_indirect_unrolling_sampler = true,
+   .no_integers = true,
+   .support_indirect_inputs = BITFIELD_BIT(MESA_SHADER_VERTEX),
+   .support_indirect_outputs = BITFIELD_BIT(MESA_SHADER_VERTEX),
+};
+
+static const nir_shader_compiler_options svga_vgpu10_compiler_options = {
+   COMMON_OPTIONS,
+   VGPU10_OPTIONS,
+   .force_indirect_unrolling_sampler = true,
+};
+
+static const nir_shader_compiler_options svga_gl4_compiler_options = {
+   COMMON_OPTIONS,
+   VGPU10_OPTIONS,
+};
+
+static const void *
+svga_get_compiler_options(struct pipe_screen *pscreen,
+                          enum pipe_shader_ir ir,
+                          enum pipe_shader_type shader)
+{
+   struct svga_screen *svgascreen = svga_screen(pscreen);
+   struct svga_winsys_screen *sws = svgascreen->sws;
+
+   assert(ir == PIPE_SHADER_IR_NIR);
+
+   if (sws->have_gl43 || sws->have_sm5)
+      return &svga_gl4_compiler_options;
+   else if (sws->have_vgpu10)
+      return &svga_vgpu10_compiler_options;
+   else {
+      if (shader == PIPE_SHADER_FRAGMENT)
+         return &svga_vgpu9_fragment_compiler_options;
+      else
+         return &svga_vgpu9_vertex_compiler_options;
+   }
+}
 
 static int
 svga_get_shader_param(struct pipe_screen *screen, enum pipe_shader_type shader,
@@ -709,6 +467,241 @@ svga_get_shader_param(struct pipe_screen *screen, enum pipe_shader_type shader,
    }
 }
 
+
+static int
+svga_sm5_get_compute_param(struct pipe_screen *screen,
+                           enum pipe_shader_ir ir_type,
+                           enum pipe_compute_cap param,
+                           void *ret)
+{
+   ASSERTED struct svga_screen *svgascreen = svga_screen(screen);
+   ASSERTED struct svga_winsys_screen *sws = svgascreen->sws;
+   uint64_t *iret = (uint64_t *)ret;
+
+   assert(sws->have_gl43);
+
+   switch (param) {
+   case PIPE_COMPUTE_CAP_MAX_GRID_SIZE:
+      iret[0] = 65535;
+      iret[1] = 65535;
+      iret[2] = 65535;
+      return 3 * sizeof(uint64_t);
+   case PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE:
+      iret[0] = 1024;
+      iret[1] = 1024;
+      iret[2] = 64;
+      return 3 * sizeof(uint64_t);
+   case PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK:
+      *iret = 1024;
+      return sizeof(uint64_t);
+   case PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE:
+      *iret = 32768;
+      return sizeof(uint64_t);
+   case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
+      *iret = 0;
+      return sizeof(uint64_t);
+   default:
+      debug_printf("Unexpected compute param %u\n", param);
+   }
+   return 0;
+}
+
+static void
+svga_init_screen_caps(struct svga_screen *svgascreen)
+{
+   struct pipe_caps *caps = (struct pipe_caps *)&svgascreen->screen.caps;
+
+   u_init_pipe_screen_caps(&svgascreen->screen, 0);
+
+   struct svga_winsys_screen *sws = svgascreen->sws;
+   SVGA3dDevCapResult result;
+
+   caps->npot_textures = true;
+   caps->mixed_framebuffer_sizes = true;
+   caps->mixed_color_depth_bits = true;
+   /*
+    * "In virtually every OpenGL implementation and hardware,
+    * GL_MAX_DUAL_SOURCE_DRAW_BUFFERS is 1"
+    * http://www.opengl.org/wiki/Blending
+    */
+   caps->max_dual_source_render_targets = sws->have_vgpu10 ? 1 : 0;
+   caps->anisotropic_filter = true;
+   caps->max_render_targets = svgascreen->max_color_buffers;
+   caps->occlusion_query = true;
+   caps->texture_buffer_objects = sws->have_vgpu10;
+   caps->texture_buffer_offset_alignment = sws->have_vgpu10 ? 16 : 0;
+
+   caps->texture_swizzle = true;
+   caps->constant_buffer_offset_alignment = 256;
+
+   unsigned size = 1 << (SVGA_MAX_TEXTURE_LEVELS - 1);
+   if (sws->get_cap(sws, SVGA3D_DEVCAP_MAX_TEXTURE_WIDTH, &result))
+      size = MIN2(result.u, size);
+   else
+      size = 2048;
+   if (sws->get_cap(sws, SVGA3D_DEVCAP_MAX_TEXTURE_HEIGHT, &result))
+      size = MIN2(result.u, size);
+   else
+      size = 2048;
+   caps->max_texture_2d_size = size;
+
+   caps->max_texture_3d_levels =
+      sws->get_cap(sws, SVGA3D_DEVCAP_MAX_VOLUME_EXTENT, &result) ?
+      MIN2(util_logbase2(result.u) + 1, SVGA_MAX_TEXTURE_LEVELS) : 8; /* max 128x128x128 */
+
+   caps->max_texture_cube_levels = util_last_bit(caps->max_texture_2d_size);
+
+   caps->max_texture_array_layers =
+      sws->have_sm5 ? SVGA3D_SM5_MAX_SURFACE_ARRAYSIZE :
+      (sws->have_vgpu10 ? SVGA3D_SM4_MAX_SURFACE_ARRAYSIZE : 0);
+
+   caps->blend_equation_separate = true; /* req. for GL 1.5 */
+
+   caps->fs_coord_origin_upper_left = true;
+   caps->fs_coord_pixel_center_half_integer = sws->have_vgpu10;
+   caps->fs_coord_pixel_center_integer = !sws->have_vgpu10;
+
+   /* The color outputs of vertex shaders are not clamped */
+   caps->vertex_color_unclamped = true;
+   caps->vertex_color_clamped = sws->have_vgpu10;
+
+   caps->glsl_feature_level =
+   caps->glsl_feature_level_compatibility =
+      sws->have_gl43 ? 430 : (sws->have_sm5 ? 410 : (sws->have_vgpu10 ? 330 : 120));
+
+   caps->texture_transfer_modes = 0;
+
+   caps->fragment_shader_texture_lod = true;
+   caps->fragment_shader_derivatives = true;
+
+   caps->depth_clip_disable =
+   caps->indep_blend_enable =
+   caps->conditional_render =
+   caps->query_timestamp =
+   caps->vs_instanceid =
+   caps->vertex_element_instance_divisor =
+   caps->seamless_cube_map =
+   caps->fake_sw_msaa = sws->have_vgpu10;
+
+   caps->max_stream_output_buffers = sws->have_vgpu10 ? SVGA3D_DX_MAX_SOTARGETS : 0;
+   caps->max_stream_output_separate_components = sws->have_vgpu10 ? 4 : 0;
+   caps->max_stream_output_interleaved_components =
+      sws->have_sm5 ? SVGA3D_MAX_STREAMOUT_DECLS :
+      (sws->have_vgpu10 ? SVGA3D_MAX_DX10_STREAMOUT_DECLS : 0);
+   caps->stream_output_pause_resume = sws->have_sm5;
+   caps->stream_output_interleave_buffers = sws->have_sm5;
+   caps->texture_multisample = svgascreen->ms_samples;
+
+   /* convert bytes to texels for the case of the largest texel
+    * size: float[4].
+    */
+   caps->max_texel_buffer_elements =
+      SVGA3D_DX_MAX_RESOURCE_SIZE / (4 * sizeof(float));
+
+   caps->min_texel_offset = sws->have_vgpu10 ? VGPU10_MIN_TEXEL_FETCH_OFFSET : 0;
+   caps->max_texel_offset = sws->have_vgpu10 ? VGPU10_MAX_TEXEL_FETCH_OFFSET : 0;
+
+   caps->min_texture_gather_offset = 0;
+   caps->max_texture_gather_offset = 0;
+
+   caps->max_geometry_output_vertices = sws->have_vgpu10 ? 256 : 0;
+   caps->max_geometry_total_output_components = sws->have_vgpu10 ? 1024 : 0;
+
+   /* may be a sw fallback, depending on restart index */
+   caps->primitive_restart = true;
+   caps->primitive_restart_fixed_index = true;
+
+   caps->generate_mipmap = sws->have_generate_mipmap_cmd;
+
+   caps->native_fence_fd = sws->have_fence_fd;
+
+   caps->quads_follow_provoking_vertex_convention = true;
+
+   caps->cube_map_array =
+   caps->indep_blend_func =
+   caps->sample_shading =
+   caps->force_persample_interp =
+   caps->texture_query_lod = sws->have_sm4_1;
+
+   /* SM4_1 supports only single-channel textures where as SM5 supports
+    * all four channel textures */
+   caps->max_texture_gather_components = sws->have_sm5 ? 4 : (sws->have_sm4_1 ? 1 : 0);
+   caps->draw_indirect = sws->have_sm5;
+   caps->max_vertex_streams = sws->have_sm5 ? 4 : 0;
+   caps->compute = sws->have_gl43;
+   /* According to the spec, max varyings does not include the components
+    * for position, so remove one count from the max for position.
+    */
+   caps->max_varyings = sws->have_vgpu10 ? VGPU10_MAX_PS_INPUTS-1 : 10;
+   caps->buffer_map_persistent_coherent = sws->have_coherent;
+
+   caps->start_instance = sws->have_sm5;
+   caps->robust_buffer_access_behavior = sws->have_sm5;
+
+   caps->sampler_view_target = sws->have_gl43;
+
+   caps->framebuffer_no_attachment = sws->have_gl43;
+
+   caps->clip_halfz = sws->have_gl43;
+   caps->shareable_shaders = false;
+
+   caps->pci_group =
+   caps->pci_bus =
+   caps->pci_device =
+   caps->pci_function = 0;
+   caps->shader_buffer_offset_alignment = sws->have_gl43 ? 16 : 0;
+
+   caps->max_combined_shader_output_resources =
+   caps->max_combined_shader_buffers = sws->have_gl43 ? SVGA_MAX_SHADER_BUFFERS : 0;
+   caps->max_combined_hw_atomic_counters =
+   caps->max_combined_hw_atomic_counter_buffers =
+      sws->have_gl43 ? SVGA_MAX_ATOMIC_BUFFERS : 0;
+   caps->min_map_buffer_alignment = 64;
+   caps->vertex_input_alignment =
+      sws->have_vgpu10 ? PIPE_VERTEX_INPUT_ALIGNMENT_ELEMENT : PIPE_VERTEX_INPUT_ALIGNMENT_4BYTE;
+   caps->max_vertex_attrib_stride = 2048;
+
+   assert((!sws->have_vgpu10 && svgascreen->max_viewports == 1) ||
+          (sws->have_vgpu10 &&
+           svgascreen->max_viewports == SVGA3D_DX_MAX_VIEWPORTS));
+   caps->max_viewports = svgascreen->max_viewports;
+
+   caps->endianness = PIPE_ENDIAN_LITTLE;
+
+   caps->vendor_id = 0x15ad; /* VMware Inc. */
+   caps->device_id = sws->device_id ? sws->device_id : 0x0405; /* assume SVGA II */
+   caps->video_memory = 1; /* XXX: Query the host ? */
+   caps->copy_between_compressed_and_plain_formats = sws->have_vgpu10;
+   caps->doubles = sws->have_sm5;
+   caps->uma = false;
+   caps->allow_mapped_buffers_during_execution = false;
+   caps->tgsi_div = true;
+   caps->max_gs_invocations = 32;
+   caps->max_shader_buffer_size = 1 << 27;
+   /* Verify this once protocol is finalized. Setting it to minimum value. */
+   caps->max_shader_patch_varyings = sws->have_sm5 ? 30 : 0;
+   caps->texture_float_linear = true;
+   caps->texture_half_float_linear = true;
+   caps->tgsi_texcoord = sws->have_vgpu10 ? 1 : 0;
+   caps->image_store_formatted = sws->have_gl43;
+
+   caps->min_line_width =
+   caps->min_line_width_aa =
+   caps->min_point_size =
+   caps->min_point_size_aa = 1;
+   caps->point_size_granularity =
+   caps->line_width_granularity = 0.1;
+   caps->max_line_width = svgascreen->maxLineWidth;
+   caps->max_line_width_aa = svgascreen->maxLineWidthAA;
+
+   caps->max_point_size =
+   caps->max_point_size_aa = svgascreen->maxPointSize;
+
+   caps->max_texture_anisotropy =
+      get_uint_cap(sws, SVGA3D_DEVCAP_MAX_TEXTURE_ANISOTROPY, 4);
+
+   caps->max_texture_lod_bias = 15.0;
+}
 
 static void
 svga_fence_reference(struct pipe_screen *screen,
@@ -736,7 +729,7 @@ svga_fence_finish(struct pipe_screen *screen,
    }
    else {
       SVGA_DBG(DEBUG_DMA|DEBUG_PERF, "%s fence_ptr %p\n",
-               __FUNCTION__, fence);
+               __func__, fence);
 
       retVal = sws->fence_finish(sws, fence, timeout, 0) == 0;
    }
@@ -753,7 +746,7 @@ svga_fence_get_fd(struct pipe_screen *screen,
 {
    struct svga_winsys_screen *sws = svga_screen(screen)->sws;
 
-   return sws->fence_get_fd(sws, fence, TRUE);
+   return sws->fence_get_fd(sws, fence, true);
 }
 
 
@@ -858,9 +851,9 @@ init_logging(struct pipe_screen *screen)
    /* If the SVGA_EXTRA_LOGGING env var is set, log the process's command
     * line (program name and arguments).
     */
-   if (debug_get_bool_option("SVGA_EXTRA_LOGGING", FALSE)) {
+   if (debug_get_bool_option("SVGA_EXTRA_LOGGING", false)) {
       char cmdline[1000];
-      if (os_get_command_line(cmdline, sizeof(cmdline))) {
+      if (util_get_command_line(cmdline, sizeof(cmdline))) {
          snprintf(host_log, sizeof(host_log) - strlen(log_prefix),
                   "%s%s\n", log_prefix, cmdline);
          svgascreen->sws->host_log(svgascreen->sws, host_log);
@@ -895,6 +888,15 @@ svga_destroy_screen( struct pipe_screen *screen )
 }
 
 
+static int
+svga_screen_get_fd( struct pipe_screen *screen )
+{
+   struct svga_winsys_screen *sws = svga_screen(screen)->sws;
+
+   return sws->get_fd(sws);
+}
+
+
 /**
  * Create a new svga_screen object
  */
@@ -904,7 +906,7 @@ svga_screen_create(struct svga_winsys_screen *sws)
    struct svga_screen *svgascreen;
    struct pipe_screen *screen;
 
-#ifdef DEBUG
+#if MESA_DEBUG
    SVGA_DEBUG = debug_get_flags_option("SVGA_DEBUG", svga_debug_flags, 0 );
 #endif
 
@@ -913,17 +915,17 @@ svga_screen_create(struct svga_winsys_screen *sws)
       goto error1;
 
    svgascreen->debug.force_level_surface_view =
-      debug_get_bool_option("SVGA_FORCE_LEVEL_SURFACE_VIEW", FALSE);
+      debug_get_bool_option("SVGA_FORCE_LEVEL_SURFACE_VIEW", false);
    svgascreen->debug.force_surface_view =
-      debug_get_bool_option("SVGA_FORCE_SURFACE_VIEW", FALSE);
+      debug_get_bool_option("SVGA_FORCE_SURFACE_VIEW", false);
    svgascreen->debug.force_sampler_view =
-      debug_get_bool_option("SVGA_FORCE_SAMPLER_VIEW", FALSE);
+      debug_get_bool_option("SVGA_FORCE_SAMPLER_VIEW", false);
    svgascreen->debug.no_surface_view =
-      debug_get_bool_option("SVGA_NO_SURFACE_VIEW", FALSE);
+      debug_get_bool_option("SVGA_NO_SURFACE_VIEW", false);
    svgascreen->debug.no_sampler_view =
-      debug_get_bool_option("SVGA_NO_SAMPLER_VIEW", FALSE);
+      debug_get_bool_option("SVGA_NO_SAMPLER_VIEW", false);
    svgascreen->debug.no_cache_index_buffers =
-      debug_get_bool_option("SVGA_NO_CACHE_INDEX_BUFFERS", FALSE);
+      debug_get_bool_option("SVGA_NO_CACHE_INDEX_BUFFERS", false);
 
    screen = &svgascreen->screen;
 
@@ -931,9 +933,9 @@ svga_screen_create(struct svga_winsys_screen *sws)
    screen->get_name = svga_get_name;
    screen->get_vendor = svga_get_vendor;
    screen->get_device_vendor = svga_get_vendor; // TODO actual device vendor
-   screen->get_param = svga_get_param;
+   screen->get_screen_fd = svga_screen_get_fd;
    screen->get_shader_param = svga_get_shader_param;
-   screen->get_paramf = svga_get_paramf;
+   screen->get_compiler_options = svga_get_compiler_options;
    screen->get_timestamp = NULL;
    screen->is_format_supported = svga_is_format_supported;
    screen->context_create = svga_context_create;
@@ -942,6 +944,9 @@ svga_screen_create(struct svga_winsys_screen *sws)
    screen->fence_get_fd = svga_fence_get_fd;
 
    screen->get_driver_query_info = svga_get_driver_query_info;
+
+   screen->get_compute_param = svga_sm5_get_compute_param;
+
    svgascreen->sws = sws;
 
    svga_init_screen_resource_functions(svgascreen);
@@ -959,7 +964,29 @@ svga_screen_create(struct svga_winsys_screen *sws)
       goto error2;
    }
 
+   if (sws->have_gl43) {
+      svgascreen->forcedSampleCount =
+         get_uint_cap(sws, SVGA3D_DEVCAP_MAX_FORCED_SAMPLE_COUNT, 0);
+
+      sws->have_gl43 = sws->have_gl43 && (svgascreen->forcedSampleCount >= 4);
+
+      /* Allow a temporary environment variable to enable/disable GL43 support.
+       */
+      sws->have_gl43 =
+         debug_get_bool_option("SVGA_GL43", sws->have_gl43);
+
+      svgascreen->debug.sampler_state_mapping =
+         debug_get_bool_option("SVGA_SAMPLER_STATE_MAPPING", false);
+   }
+   else {
+      /* sampler state mapping code is only enabled with GL43
+       * due to the limitation in SW Renderer. (VMware bug 2825014)
+       */
+      svgascreen->debug.sampler_state_mapping = false;
+   }
+
    debug_printf("%s enabled\n",
+                sws->have_gl43 ? "SM5+" :
                 sws->have_sm5 ? "SM5" :
                 sws->have_sm4_1 ? "SM4_1" :
                 sws->have_vgpu10 ? "VGPU10" : "VGPU9");
@@ -977,7 +1004,7 @@ svga_screen_create(struct svga_winsys_screen *sws)
     */
 
    {
-      boolean has_df16, has_df24, has_d24s8_int;
+      bool has_df16, has_df24, has_d24s8_int;
       SVGA3dSurfaceFormatCaps caps;
       SVGA3dSurfaceFormatCaps mask;
       mask.value = 0;
@@ -1016,36 +1043,53 @@ svga_screen_create(struct svga_winsys_screen *sws)
     */
    if (sws->have_vgpu10) {
       svgascreen->haveProvokingVertex
-         = get_bool_cap(sws, SVGA3D_DEVCAP_DX_PROVOKING_VERTEX, FALSE);
-      svgascreen->haveLineSmooth = TRUE;
+         = get_bool_cap(sws, SVGA3D_DEVCAP_DX_PROVOKING_VERTEX, false);
+      svgascreen->haveLineSmooth = true;
       svgascreen->maxPointSize = 80.0F;
       svgascreen->max_color_buffers = SVGA3D_DX_MAX_RENDER_TARGETS;
 
       /* Multisample samples per pixel */
-      if (sws->have_sm4_1 && debug_get_bool_option("SVGA_MSAA", TRUE)) {
-         if (get_bool_cap(sws, SVGA3D_DEVCAP_MULTISAMPLE_2X, FALSE))
+      if (sws->have_sm4_1 && debug_get_bool_option("SVGA_MSAA", true)) {
+         if (get_bool_cap(sws, SVGA3D_DEVCAP_MULTISAMPLE_2X, false))
             svgascreen->ms_samples |= 1 << 1;
-         if (get_bool_cap(sws, SVGA3D_DEVCAP_MULTISAMPLE_4X, FALSE))
+         if (get_bool_cap(sws, SVGA3D_DEVCAP_MULTISAMPLE_4X, false))
             svgascreen->ms_samples |= 1 << 3;
       }
 
-      if (sws->have_sm5 && debug_get_bool_option("SVGA_MSAA", TRUE)) {
-         if (get_bool_cap(sws, SVGA3D_DEVCAP_MULTISAMPLE_8X, FALSE))
+      if (sws->have_sm5 && debug_get_bool_option("SVGA_MSAA", true)) {
+         if (get_bool_cap(sws, SVGA3D_DEVCAP_MULTISAMPLE_8X, false))
             svgascreen->ms_samples |= 1 << 7;
       }
 
       /* Maximum number of constant buffers */
-      svgascreen->max_const_buffers =
-         get_uint_cap(sws, SVGA3D_DEVCAP_DX_MAX_CONSTANT_BUFFERS, 1);
-      svgascreen->max_const_buffers = MIN2(svgascreen->max_const_buffers,
-                                           SVGA_MAX_CONST_BUFS);
+      if (sws->have_gl43) {
+         svgascreen->max_const_buffers = SVGA_MAX_CONST_BUFS;
+      }
+      else {
+         svgascreen->max_const_buffers =
+            get_uint_cap(sws, SVGA3D_DEVCAP_DX_MAX_CONSTANT_BUFFERS, 1);
+         svgascreen->max_const_buffers = MIN2(svgascreen->max_const_buffers,
+                                              SVGA_MAX_CONST_BUFS);
+      }
 
       svgascreen->haveBlendLogicops =
-         get_bool_cap(sws, SVGA3D_DEVCAP_LOGIC_BLENDOPS, FALSE);
+         get_bool_cap(sws, SVGA3D_DEVCAP_LOGIC_BLENDOPS, false);
 
       screen->is_format_supported = svga_is_dx_format_supported;
 
       svgascreen->max_viewports = SVGA3D_DX_MAX_VIEWPORTS;
+
+      /* Shader limits */
+      if (sws->have_sm4_1) {
+         svgascreen->max_vs_inputs  = VGPU10_1_MAX_VS_INPUTS;
+         svgascreen->max_vs_outputs = VGPU10_1_MAX_VS_OUTPUTS;
+         svgascreen->max_gs_inputs  = VGPU10_1_MAX_GS_INPUTS;
+      }
+      else {
+         svgascreen->max_vs_inputs  = VGPU10_MAX_VS_INPUTS;
+         svgascreen->max_vs_outputs = VGPU10_MAX_VS_OUTPUTS;
+         svgascreen->max_gs_inputs  = VGPU10_MAX_GS_INPUTS;
+      }
    }
    else {
       /* VGPU9 */
@@ -1059,10 +1103,10 @@ svga_screen_create(struct svga_winsys_screen *sws)
          goto error2;
       }
 
-      svgascreen->haveProvokingVertex = FALSE;
+      svgascreen->haveProvokingVertex = false;
 
       svgascreen->haveLineSmooth =
-         get_bool_cap(sws, SVGA3D_DEVCAP_LINE_AA, FALSE);
+         get_bool_cap(sws, SVGA3D_DEVCAP_LINE_AA, false);
 
       svgascreen->maxPointSize =
          get_float_cap(sws, SVGA3D_DEVCAP_MAX_POINT_SIZE, 1.0f);
@@ -1083,11 +1127,16 @@ svga_screen_create(struct svga_winsys_screen *sws)
 
       /* Only one viewport */
       svgascreen->max_viewports = 1;
+
+      /* Shader limits */
+      svgascreen->max_vs_inputs  = 16;
+      svgascreen->max_vs_outputs = 10;
+      svgascreen->max_gs_inputs  = 0;
    }
 
    /* common VGPU9 / VGPU10 caps */
    svgascreen->haveLineStipple =
-      get_bool_cap(sws, SVGA3D_DEVCAP_LINE_STIPPLE, FALSE);
+      get_bool_cap(sws, SVGA3D_DEVCAP_LINE_STIPPLE, false);
 
    svgascreen->maxLineWidth =
       MAX2(1.0, get_float_cap(sws, SVGA3D_DEVCAP_MAX_LINE_WIDTH, 1.0f));
@@ -1107,11 +1156,13 @@ svga_screen_create(struct svga_winsys_screen *sws)
    }
 
    (void) mtx_init(&svgascreen->tex_mutex, mtx_plain);
-   (void) mtx_init(&svgascreen->swc_mutex, mtx_recursive);
+   (void) mtx_init(&svgascreen->swc_mutex, mtx_plain | mtx_recursive);
 
    svga_screen_cache_init(svgascreen);
 
-   if (debug_get_bool_option("SVGA_NO_LOGGING", FALSE) == TRUE) {
+   svga_init_screen_caps(svgascreen);
+
+   if (debug_get_bool_option("SVGA_NO_LOGGING", false) == true) {
       svgascreen->sws->host_log = nop_host_log;
    } else {
       init_logging(screen);
@@ -1132,7 +1183,7 @@ svga_winsys_screen(struct pipe_screen *screen)
 }
 
 
-#ifdef DEBUG
+#if MESA_DEBUG
 struct svga_screen *
 svga_screen(struct pipe_screen *screen)
 {

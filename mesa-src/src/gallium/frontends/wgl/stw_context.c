@@ -25,6 +25,8 @@
  *
  **************************************************************************/
 
+#include "state_tracker/st_context.h"
+
 #include <windows.h>
 
 #define WGL_WGLEXT_PROTOTYPES
@@ -32,14 +34,15 @@
 #include <GL/gl.h>
 #include <GL/wglext.h>
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
+#include "util/compiler.h"
 #include "util/u_memory.h"
 #include "util/u_atomic.h"
-#include "frontend/api.h"
 #include "hud/hud_context.h"
 
+#include "stw_gdishim.h"
 #include "gldrv.h"
 #include "stw_device.h"
 #include "stw_winsys.h"
@@ -48,15 +51,16 @@
 #include "stw_context.h"
 #include "stw_tls.h"
 
+#include "main/context.h"
 
 struct stw_context *
 stw_current_context(void)
 {
-   struct st_context_iface *st;
+   struct st_context *st;
 
-   st = (stw_dev) ? stw_dev->stapi->get_current(stw_dev->stapi) : NULL;
+   st = (stw_dev) ? st_api_get_current() : NULL;
 
-   return (struct stw_context *) ((st) ? st->st_manager_private : NULL);
+   return (struct stw_context *) ((st) ? st->frontend_context : NULL);
 }
 
 
@@ -65,10 +69,10 @@ DrvCopyContext(DHGLRC dhrcSource, DHGLRC dhrcDest, UINT fuMask)
 {
    struct stw_context *src;
    struct stw_context *dst;
-   BOOL ret = FALSE;
+   BOOL ret = false;
 
    if (!stw_dev)
-      return FALSE;
+      return false;
 
    stw_lock_contexts(stw_dev);
 
@@ -94,20 +98,20 @@ DrvShareLists(DHGLRC dhglrc1, DHGLRC dhglrc2)
 {
    struct stw_context *ctx1;
    struct stw_context *ctx2;
-   BOOL ret = FALSE;
+   BOOL ret = false;
 
    if (!stw_dev)
-      return FALSE;
+      return false;
 
    stw_lock_contexts(stw_dev);
 
    ctx1 = stw_lookup_context_locked( dhglrc1 );
    ctx2 = stw_lookup_context_locked( dhglrc2 );
 
-   if (ctx1 && ctx2 && ctx2->st->share) {
-      ret = ctx2->st->share(ctx2->st, ctx1->st);
-      ctx1->shared = TRUE;
-      ctx2->shared = TRUE;
+   if (ctx1 && ctx2) {
+      ret = _mesa_share_state(ctx2->st->ctx, ctx1->st->ctx);
+      ctx1->shared = true;
+      ctx2->shared = true;
    }
 
    stw_unlock_contexts(stw_dev);
@@ -126,50 +130,40 @@ DrvCreateContext(HDC hdc)
 DHGLRC APIENTRY
 DrvCreateLayerContext(HDC hdc, INT iLayerPlane)
 {
-   return stw_create_context_attribs(hdc, iLayerPlane, 0, 1, 0, 0,
-                                     WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-                                     0);
-}
-
-
-/**
- * Return the stw pixel format that most closely matches the pixel format
- * on HDC.
- * Used to get a pixel format when SetPixelFormat() hasn't been called before.
- */
-static int
-get_matching_pixel_format(HDC hdc)
-{
-   int iPixelFormat = GetPixelFormat(hdc);
-   PIXELFORMATDESCRIPTOR pfd;
-
-   if (!iPixelFormat)
+   if (!stw_dev)
       return 0;
-   if (!DescribePixelFormat(hdc, iPixelFormat, sizeof(pfd), &pfd))
-      return 0;
-   return stw_pixelformat_choose(hdc, &pfd);
-}
 
+   const struct stw_pixelformat_info *pfi = stw_pixelformat_get_info_from_hdc(hdc);
+   if (!pfi)
+      return 0;
+
+   struct stw_context *ctx = stw_create_context_attribs(hdc, iLayerPlane, NULL, stw_dev->fscreen, 1, 0, 0,
+                                                        WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+                                                        pfi, WGL_NO_RESET_NOTIFICATION_ARB);
+   if (!ctx)
+      return 0;
+
+   DHGLRC ret = stw_create_context_handle(ctx, 0);
+   if (!ret)
+      stw_destroy_context(ctx);
+
+   return ret;
+}
 
 /**
  * Called via DrvCreateContext(), DrvCreateLayerContext() and
  * wglCreateContextAttribsARB() to actually create a rendering context.
- * \param handle  the desired DHGLRC handle to use for the context, or zero
- *                if a new handle should be allocated.
- * \return the handle for the new context or zero if there was a problem.
  */
-DHGLRC
-stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
+struct stw_context *
+stw_create_context_attribs(HDC hdc, INT iLayerPlane, struct stw_context *shareCtx,
+                           struct pipe_frontend_screen *fscreen,
                            int majorVersion, int minorVersion,
                            int contextFlags, int profileMask,
-                           DHGLRC handle)
+                           const struct stw_pixelformat_info *pfi,
+                           int resetStrategy)
 {
-   int iPixelFormat;
-   struct stw_framebuffer *fb;
-   const struct stw_pixelformat_info *pfi;
    struct st_context_attribs attribs;
    struct stw_context *ctx = NULL;
-   struct stw_context *shareCtx = NULL;
    enum st_context_error ctx_err = 0;
 
    if (!stw_dev)
@@ -178,34 +172,8 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
    if (iLayerPlane != 0)
       return 0;
 
-   /*
-    * GDI only knows about displayable pixel formats, so determine the pixel
-    * format from the framebuffer.
-    *
-    * This also allows to use a OpenGL DLL / ICD without installing.
-    */
-   fb = stw_framebuffer_from_hdc( hdc );
-   if (fb) {
-      iPixelFormat = fb->iPixelFormat;
-      stw_framebuffer_unlock(fb);
-   } else {
-      /* Applications should call SetPixelFormat before creating a context,
-       * but not all do, and the opengl32 runtime seems to use a default
-       * pixel format in some cases, so use that.
-       */
-      iPixelFormat = get_matching_pixel_format(hdc);
-      if (!iPixelFormat)
-         return 0;
-   }
-
-   pfi = stw_pixelformat_get_info( iPixelFormat );
-
-   if (hShareContext != 0) {
-      stw_lock_contexts(stw_dev);
-      shareCtx = stw_lookup_context_locked( hShareContext );
-      shareCtx->shared = TRUE;
-      stw_unlock_contexts(stw_dev);
-   }
+   if (shareCtx != NULL)
+      shareCtx->shared = true;
 
    ctx = CALLOC_STRUCT( stw_context );
    if (ctx == NULL)
@@ -213,17 +181,22 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
 
    ctx->hDrawDC = hdc;
    ctx->hReadDC = hdc;
-   ctx->iPixelFormat = iPixelFormat;
+   ctx->pfi = pfi;
    ctx->shared = shareCtx != NULL;
 
    memset(&attribs, 0, sizeof(attribs));
-   attribs.visual = pfi->stvis;
+   if (pfi)
+      attribs.visual = pfi->stvis;
    attribs.major = majorVersion;
    attribs.minor = minorVersion;
    if (contextFlags & WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB)
       attribs.flags |= ST_CONTEXT_FLAG_FORWARD_COMPATIBLE;
    if (contextFlags & WGL_CONTEXT_DEBUG_BIT_ARB)
       attribs.flags |= ST_CONTEXT_FLAG_DEBUG;
+   if (contextFlags & WGL_CONTEXT_ROBUST_ACCESS_BIT_ARB)
+      attribs.context_flags |= PIPE_CONTEXT_ROBUST_BUFFER_ACCESS;
+   if (resetStrategy != WGL_NO_RESET_NOTIFICATION_ARB)
+      attribs.context_flags |= PIPE_CONTEXT_LOSE_CONTEXT_ON_RESET;
 
    switch (profileMask) {
    case WGL_CONTEXT_CORE_PROFILE_BIT_ARB:
@@ -235,10 +208,10 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
        *     of the context is determined solely by the requested version."
        */
       if (majorVersion > 3 || (majorVersion == 3 && minorVersion >= 2)) {
-         attribs.profile = ST_PROFILE_OPENGL_CORE;
+         attribs.profile = API_OPENGL_CORE;
          break;
       }
-      /* fall-through */
+      FALLTHROUGH;
    case WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB:
       /*
        * The spec also says:
@@ -256,13 +229,13 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
        * GL_ARB_compatibility, so returning a core profile here does more harm
        * than good.
        */
-      attribs.profile = ST_PROFILE_DEFAULT;
+      attribs.profile = API_OPENGL_COMPAT;
       break;
    case WGL_CONTEXT_ES_PROFILE_BIT_EXT:
       if (majorVersion >= 2) {
-         attribs.profile = ST_PROFILE_OPENGL_ES2;
+         attribs.profile = API_OPENGLES2;
       } else {
-         attribs.profile = ST_PROFILE_OPENGL_ES1;
+         attribs.profile = API_OPENGLES;
       }
       break;
    default:
@@ -270,16 +243,32 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
       goto no_st_ctx;
    }
 
-   ctx->st = stw_dev->stapi->create_context(stw_dev->stapi,
-         stw_dev->smapi, &attribs, &ctx_err, shareCtx ? shareCtx->st : NULL);
+   attribs.options = stw_dev->st_options;
+
+   ctx->st = st_api_create_context(
+         fscreen, &attribs, &ctx_err, shareCtx ? shareCtx->st : NULL);
    if (ctx->st == NULL)
       goto no_st_ctx;
 
-   ctx->st->st_manager_private = (void *) ctx;
+   ctx->st->frontend_context = (void *) ctx;
 
    if (ctx->st->cso_context) {
-      ctx->hud = hud_create(ctx->st->cso_context, NULL);
+      ctx->hud = hud_create(ctx->st->cso_context, NULL, ctx->st,
+                            st_context_invalidate_state);
    }
+
+   return ctx;
+
+no_st_ctx:
+   FREE(ctx);
+no_ctx:
+   return NULL;
+}
+
+DHGLRC
+stw_create_context_handle(struct stw_context *ctx, DHGLRC handle)
+{
+   assert(ctx->dhglrc == 0);
 
    stw_lock_contexts(stw_dev);
    if (handle) {
@@ -289,12 +278,7 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
       struct stw_context *old_ctx =
          stw_lookup_context_locked((unsigned) handle);
       if (old_ctx) {
-         /* free the old context data associated with this handle */
-         if (old_ctx->hud) {
-            hud_destroy(old_ctx->hud, NULL);
-         }
-         ctx->st->destroy(old_ctx->st);
-         FREE(old_ctx);
+         stw_destroy_context(old_ctx);
       }
 
       /* replace table entry */
@@ -309,20 +293,18 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, DHGLRC hShareContext,
 
    stw_unlock_contexts(stw_dev);
 
-   if (!ctx->dhglrc)
-      goto no_hglrc;
-
    return ctx->dhglrc;
+}
 
-no_hglrc:
+void
+stw_destroy_context(struct stw_context *ctx)
+{
    if (ctx->hud) {
       hud_destroy(ctx->hud, NULL);
    }
-   ctx->st->destroy(ctx->st);
-no_st_ctx:
+
+   st_destroy_context(ctx->st);
    FREE(ctx);
-no_ctx:
-   return 0;
 }
 
 
@@ -330,10 +312,10 @@ BOOL APIENTRY
 DrvDeleteContext(DHGLRC dhglrc)
 {
    struct stw_context *ctx ;
-   BOOL ret = FALSE;
+   BOOL ret = false;
 
    if (!stw_dev)
-      return FALSE;
+      return false;
 
    stw_lock_contexts(stw_dev);
    ctx = stw_lookup_context_locked(dhglrc);
@@ -345,21 +327,33 @@ DrvDeleteContext(DHGLRC dhglrc)
 
       /* Unbind current if deleting current context. */
       if (curctx == ctx)
-         stw_dev->stapi->make_current(stw_dev->stapi, NULL, NULL, NULL);
+         st_api_make_current(NULL, NULL, NULL);
 
-      if (ctx->hud) {
-         hud_destroy(ctx->hud, NULL);
-      }
-
-      ctx->st->destroy(ctx->st);
-      FREE(ctx);
-
-      ret = TRUE;
+      stw_destroy_context(ctx);
+      ret = true;
    }
 
    return ret;
 }
 
+BOOL
+stw_unbind_context(struct stw_context *ctx)
+{
+   if (!ctx)
+      return false;
+
+   /* The expectation is that ctx is the same context which is
+    * current for this thread.  We should check that and return False
+    * if not the case.
+    */
+   if (ctx != stw_current_context())
+      return false;
+
+   if (stw_make_current( NULL, NULL, NULL ) == false)
+      return false;
+
+   return true;
+}
 
 BOOL APIENTRY
 DrvReleaseContext(DHGLRC dhglrc)
@@ -367,26 +361,13 @@ DrvReleaseContext(DHGLRC dhglrc)
    struct stw_context *ctx;
 
    if (!stw_dev)
-      return FALSE;
+      return false;
 
    stw_lock_contexts(stw_dev);
    ctx = stw_lookup_context_locked( dhglrc );
    stw_unlock_contexts(stw_dev);
 
-   if (!ctx)
-      return FALSE;
-
-   /* The expectation is that ctx is the same context which is
-    * current for this thread.  We should check that and return False
-    * if not the case.
-    */
-   if (ctx != stw_current_context())
-      return FALSE;
-
-   if (stw_make_current( NULL, NULL, 0 ) == FALSE)
-      return FALSE;
-
-   return TRUE;
+   return stw_unbind_context(ctx);
 }
 
 
@@ -427,161 +408,204 @@ stw_get_current_read_dc( void )
    return ctx->hReadDC;
 }
 
+static void
+release_old_framebuffers(struct stw_framebuffer *old_fb, struct stw_framebuffer *old_fbRead,
+                         struct stw_context *old_ctx)
+{
+   if (old_fb || old_fbRead) {
+      stw_lock_framebuffers(stw_dev);
+      if (old_fb) {
+         stw_framebuffer_lock(old_fb);
+         stw_framebuffer_release_locked(old_fb, old_ctx->st);
+      }
+      if (old_fbRead && old_fb != old_fbRead) {
+         stw_framebuffer_lock(old_fbRead);
+         stw_framebuffer_release_locked(old_fbRead, old_ctx->st);
+      }
+      stw_unlock_framebuffers(stw_dev);
+   }
+}
+
 BOOL
-stw_make_current(HDC hDrawDC, HDC hReadDC, DHGLRC dhglrc)
+stw_make_current(struct stw_framebuffer *fb, struct stw_framebuffer *fbRead, struct stw_context *ctx)
 {
    struct stw_context *old_ctx = NULL;
-   struct stw_context *ctx = NULL;
-   BOOL ret = FALSE;
+   BOOL ret = false;
 
    if (!stw_dev)
-      return FALSE;
+      return false;
 
    old_ctx = stw_current_context();
    if (old_ctx != NULL) {
-      if (old_ctx->dhglrc == dhglrc) {
-         if (old_ctx->hDrawDC == hDrawDC && old_ctx->hReadDC == hReadDC) {
+      if (old_ctx == ctx) {
+         if (old_ctx->current_framebuffer == fb && old_ctx->current_read_framebuffer == fbRead) {
             /* Return if already current. */
-            return TRUE;
+            return true;
          }
       } else {
          if (old_ctx->shared) {
-            struct pipe_fence_handle *fence = NULL;
-            old_ctx->st->flush(old_ctx->st,
-                               ST_FLUSH_FRONT | ST_FLUSH_WAIT, &fence,
-                               NULL, NULL);
-         }
-         else {
-            old_ctx->st->flush(old_ctx->st, ST_FLUSH_FRONT, NULL, NULL, NULL);
+            if (old_ctx->current_framebuffer) {
+               stw_st_flush(old_ctx->st, old_ctx->current_framebuffer->drawable,
+                            ST_FLUSH_FRONT | ST_FLUSH_WAIT);
+            } else {
+               struct pipe_fence_handle *fence = NULL;
+               st_context_flush(old_ctx->st,
+                                ST_FLUSH_FRONT | ST_FLUSH_WAIT, &fence,
+                                NULL, NULL);
+            }
+         } else {
+            if (old_ctx->current_framebuffer)
+               stw_st_flush(old_ctx->st, old_ctx->current_framebuffer->drawable,
+                            ST_FLUSH_FRONT);
+            else
+               st_context_flush(old_ctx->st, ST_FLUSH_FRONT, NULL, NULL, NULL);
          }
       }
    }
 
-   if (dhglrc) {
-      struct stw_framebuffer *fb = NULL;
-      struct stw_framebuffer *fbRead = NULL;
-      stw_lock_contexts(stw_dev);
-      ctx = stw_lookup_context_locked( dhglrc );
-      stw_unlock_contexts(stw_dev);
-      if (!ctx) {
+   if (ctx) {
+      if (ctx->pfi && fb && fb->pfi != ctx->pfi) {
+         SetLastError(ERROR_INVALID_PIXEL_FORMAT);
          goto fail;
       }
-
-      /* This call locks fb's mutex */
-      fb = stw_framebuffer_from_hdc( hDrawDC );
-      if (fb) {
-         stw_framebuffer_update(fb);
-      }
-      else {
-         /* Applications should call SetPixelFormat before creating a context,
-          * but not all do, and the opengl32 runtime seems to use a default
-          * pixel format in some cases, so we must create a framebuffer for
-          * those here.
-          */
-         int iPixelFormat = get_matching_pixel_format(hDrawDC);
-         if (iPixelFormat)
-            fb = stw_framebuffer_create( hDrawDC, iPixelFormat );
-         if (!fb)
-            goto fail;
-      }
-
-      if (fb->iPixelFormat != ctx->iPixelFormat) {
-         stw_framebuffer_unlock(fb);
+      if (ctx->pfi && fbRead && fbRead->pfi != ctx->pfi) {
          SetLastError(ERROR_INVALID_PIXEL_FORMAT);
          goto fail;
       }
 
-      /* Bind the new framebuffer */
-      ctx->hDrawDC = hDrawDC;
-      ctx->hReadDC = hReadDC;
+      if (fb) {
+         stw_framebuffer_lock(fb);
+         stw_framebuffer_update(fb);
+         stw_framebuffer_reference_locked(fb);
+         stw_framebuffer_unlock(fb);
+      }
+
+      if (fbRead && fbRead != fb) {
+         stw_framebuffer_lock(fbRead);
+         stw_framebuffer_update(fbRead);
+         stw_framebuffer_reference_locked(fbRead);
+         stw_framebuffer_unlock(fbRead);
+      }
 
       struct stw_framebuffer *old_fb = ctx->current_framebuffer;
-      if (old_fb != fb) {
-         stw_framebuffer_reference_locked(fb);
-         ctx->current_framebuffer = fb;
-      }
-      stw_framebuffer_unlock(fb);
+      struct stw_framebuffer *old_fbRead = ctx->current_read_framebuffer;
+      ctx->current_framebuffer = fb;
+      ctx->current_read_framebuffer = fbRead;
 
-      if (hReadDC) {
-         if (hReadDC == hDrawDC) {
-            fbRead = fb;
-         }
-         else {
-            fbRead = stw_framebuffer_from_hdc( hReadDC );
+      ret = st_api_make_current(ctx->st,
+                                fb ? fb->drawable : NULL,
+                                fbRead ? fbRead->drawable : NULL);
 
-            if (fbRead) {
-               stw_framebuffer_update(fbRead);
-            }
-            else {
-               /* Applications should call SetPixelFormat before creating a
-                * context, but not all do, and the opengl32 runtime seems to
-                * use a default pixel format in some cases, so we must create
-                * a framebuffer for those here.
-                */
-               int iPixelFormat = GetPixelFormat(hReadDC);
-               if (iPixelFormat)
-                  fbRead = stw_framebuffer_create( hReadDC, iPixelFormat );
-               if (!fbRead)
-                  goto fail;
-            }
-
-            if (fbRead->iPixelFormat != ctx->iPixelFormat) {
-               stw_framebuffer_unlock(fbRead);
-               SetLastError(ERROR_INVALID_PIXEL_FORMAT);
-               goto fail;
-            }
-            stw_framebuffer_unlock(fbRead);
-         }
-         ret = stw_dev->stapi->make_current(stw_dev->stapi, ctx->st,
-                                            fb->stfb, fbRead->stfb);
-      }
-      else {
-         /* Note: when we call this function we will wind up in the
-          * stw_st_framebuffer_validate_locked() function which will incur
-          * a recursive fb->mutex lock.
-          */
-         ret = stw_dev->stapi->make_current(stw_dev->stapi, ctx->st,
-                                            fb->stfb, fb->stfb);
-      }
-
-      if (old_fb && old_fb != fb) {
-         stw_lock_framebuffers(stw_dev);
-         stw_framebuffer_lock(old_fb);
-         stw_framebuffer_release_locked(old_fb);
-         stw_unlock_framebuffers(stw_dev);
-      }
+      /* Release the old framebuffers from this context. */
+      release_old_framebuffers(old_fb, old_fbRead, ctx);
 
 fail:
-      if (fb) {
-         /* fb must be unlocked at this point. */
+      /* fb and fbRead must be unlocked at this point. */
+      if (fb)
          assert(!stw_own_mutex(&fb->mutex));
-      }
+      if (fbRead)
+         assert(!stw_own_mutex(&fbRead->mutex));
 
       /* On failure, make the thread's current rendering context not current
        * before returning.
        */
       if (!ret) {
-         stw_make_current(NULL, NULL, 0);
+         stw_make_current(NULL, NULL, NULL);
       }
    } else {
-      ret = stw_dev->stapi->make_current(stw_dev->stapi, NULL, NULL, NULL);
+      ret = st_api_make_current(NULL, NULL, NULL);
    }
 
    /* Unreference the previous framebuffer if any. It must be done after
     * make_current, as it can be referenced inside.
     */
    if (old_ctx && old_ctx != ctx) {
-      struct stw_framebuffer *old_fb = old_ctx->current_framebuffer;
-      if (old_fb) {
-         old_ctx->current_framebuffer = NULL;
-         stw_lock_framebuffers(stw_dev);
-         stw_framebuffer_lock(old_fb);
-         stw_framebuffer_release_locked(old_fb);
-         stw_unlock_framebuffers(stw_dev);
-      }
+      release_old_framebuffers(old_ctx->current_framebuffer, old_ctx->current_read_framebuffer, old_ctx);
+      old_ctx->current_framebuffer = NULL;
+      old_ctx->current_read_framebuffer = NULL;
    }
 
    return ret;
+}
+
+static struct stw_framebuffer *
+get_unlocked_refd_framebuffer_from_dc(HDC hDC)
+{
+   if (!hDC)
+      return NULL;
+
+   /* This call locks fb's mutex */
+   struct stw_framebuffer *fb = stw_framebuffer_from_hdc(hDC);
+   if (!fb) {
+      /* Applications should call SetPixelFormat before creating a context,
+       * but not all do, and the opengl32 runtime seems to use a default
+       * pixel format in some cases, so we must create a framebuffer for
+       * those here.
+       */
+      int iPixelFormat = stw_pixelformat_guess(hDC);
+      if (iPixelFormat)
+         fb = stw_framebuffer_create(WindowFromDC(hDC), stw_pixelformat_get_info(iPixelFormat), STW_FRAMEBUFFER_WGL_WINDOW, stw_dev->fscreen);
+      if (!fb)
+         return NULL;
+   }
+   stw_framebuffer_reference_locked(fb);
+   stw_framebuffer_unlock(fb);
+   return fb;
+}
+
+BOOL
+stw_make_current_by_handles(HDC hDrawDC, HDC hReadDC, DHGLRC dhglrc)
+{
+   struct stw_context *ctx = stw_lookup_context(dhglrc);
+   if (dhglrc && !ctx) {
+      stw_make_current_by_handles(NULL, NULL, 0);
+      return false;
+   }
+
+   struct stw_framebuffer *fb = get_unlocked_refd_framebuffer_from_dc(hDrawDC);
+   if (ctx && !fb) {
+      stw_make_current_by_handles(NULL, NULL, 0);
+      return false;
+   }
+
+   struct stw_framebuffer *fbRead = (hDrawDC == hReadDC || hReadDC == NULL) ?
+      fb : get_unlocked_refd_framebuffer_from_dc(hReadDC);
+   if (ctx && !fbRead) {
+      release_old_framebuffers(fb, NULL, ctx);
+      stw_make_current_by_handles(NULL, NULL, 0);
+      return false;
+   }
+
+   BOOL success = stw_make_current(fb, fbRead, ctx);
+
+   if (ctx) {
+      if (success) {
+         ctx->hDrawDC = hDrawDC;
+         ctx->hReadDC = hReadDC;
+      } else {
+         ctx->hDrawDC = NULL;
+         ctx->hReadDC = NULL;
+      }
+   }
+
+   assert(!ctx || (fb && fbRead));
+   if (fb || fbRead) {
+      /* In the success case, the context took extra references on these framebuffers,
+       * so release our local references.
+       */
+      stw_lock_framebuffers(stw_dev);
+      if (fb) {
+         stw_framebuffer_lock(fb);
+         stw_framebuffer_release_locked(fb, ctx ? ctx->st : NULL);
+      }
+      if (fbRead && fbRead != fb) {
+         stw_framebuffer_lock(fbRead);
+         stw_framebuffer_release_locked(fbRead, ctx ? ctx->st : NULL);
+      }
+      stw_unlock_framebuffers(stw_dev);
+   }
+
+   return success;
 }
 
 
@@ -591,7 +615,7 @@ fail:
 void
 stw_notify_current_locked( struct stw_framebuffer *fb )
 {
-   p_atomic_inc(&fb->stfb->stamp);
+   p_atomic_inc(&fb->drawable->stamp);
 }
 
 
@@ -947,7 +971,7 @@ DrvSetContext(HDC hdc, DHGLRC dhglrc, PFN_SETPROCTABLE pfnSetProcTable)
 {
    PGLCLTPROCTABLE r = (PGLCLTPROCTABLE)&cpt;
 
-   if (!stw_make_current(hdc, hdc, dhglrc))
+   if (!stw_make_current_by_handles(hdc, hdc, dhglrc))
       r = NULL;
 
    return r;

@@ -32,14 +32,14 @@
  * which are produced by the "rast" code when it finishes rendering a scene.
  */
 
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "util/u_memory.h"
 #include "lp_scene_queue.h"
 #include "util/u_math.h"
+#include "lp_setup_context.h"
 
 
-
-#define SCENE_QUEUE_SIZE 4
+#define SCENE_QUEUE_SIZE MAX_SCENES
 
 
 
@@ -95,7 +95,7 @@ lp_scene_queue_destroy(struct lp_scene_queue *queue)
 
 /** Remove first lp_scene from head of queue */
 struct lp_scene *
-lp_scene_dequeue(struct lp_scene_queue *queue, boolean wait)
+lp_scene_dequeue(struct lp_scene_queue *queue, bool wait)
 {
    mtx_lock(&queue->mutex);
 

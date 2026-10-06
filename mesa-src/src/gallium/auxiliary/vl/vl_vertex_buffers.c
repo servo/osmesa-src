@@ -47,7 +47,6 @@ vl_vb_upload_quads(struct pipe_context *pipe)
    assert(pipe);
 
    /* create buffer */
-   quad.stride = sizeof(struct vertex2f);
    quad.buffer_offset = 0;
    quad.buffer.resource = pipe_buffer_create
    (
@@ -66,7 +65,7 @@ vl_vb_upload_quads(struct pipe_context *pipe)
    (
       pipe,
       quad.buffer.resource,
-      PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE,
+      PIPE_MAP_WRITE | PIPE_MAP_DISCARD_RANGE,
       &buf_transfer
    );
 
@@ -92,7 +91,6 @@ vl_vb_upload_pos(struct pipe_context *pipe, unsigned width, unsigned height)
    assert(pipe);
 
    /* create buffer */
-   pos.stride = sizeof(struct vertex2s);
    pos.buffer_offset = 0;
    pos.buffer.resource = pipe_buffer_create
    (
@@ -111,7 +109,7 @@ vl_vb_upload_pos(struct pipe_context *pipe, unsigned width, unsigned height)
    (
       pipe,
       pos.buffer.resource,
-      PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE,
+      PIPE_MAP_WRITE | PIPE_MAP_DISCARD_RANGE,
       &buf_transfer
    );
 
@@ -136,6 +134,7 @@ vl_vb_get_quad_vertex_element(void)
    element.src_offset = 0;
    element.instance_divisor = 0;
    element.vertex_buffer_index = 0;
+   element.dual_slot = false;
    element.src_format = PIPE_FORMAT_R32G32_FLOAT;
 
    return element;
@@ -166,14 +165,17 @@ vl_vb_get_ves_ycbcr(struct pipe_context *pipe)
 
    memset(&vertex_elems, 0, sizeof(vertex_elems));
    vertex_elems[VS_I_RECT] = vl_vb_get_quad_vertex_element();
+   vertex_elems[VS_I_RECT].src_stride = sizeof(struct vertex2f);
 
    /* Position element */
    vertex_elems[VS_I_VPOS].src_format = PIPE_FORMAT_R8G8B8A8_USCALED;
 
    /* block num element */
    vertex_elems[VS_I_BLOCK_NUM].src_format = PIPE_FORMAT_R32_FLOAT;
+   vertex_elems[VS_I_BLOCK_NUM].src_stride = sizeof(struct vertex2f);
 
    vl_vb_element_helper(&vertex_elems[VS_I_VPOS], 2, 1);
+   vertex_elems[VS_I_VPOS].src_stride = sizeof(struct vl_ycbcr_block);
 
    return pipe->create_vertex_elements_state(pipe, 3, vertex_elems);
 }
@@ -187,19 +189,24 @@ vl_vb_get_ves_mv(struct pipe_context *pipe)
 
    memset(&vertex_elems, 0, sizeof(vertex_elems));
    vertex_elems[VS_I_RECT] = vl_vb_get_quad_vertex_element();
+   vertex_elems[VS_I_RECT].src_stride = sizeof(struct vertex2f);
 
    /* Position element */
    vertex_elems[VS_I_VPOS].src_format = PIPE_FORMAT_R16G16_SSCALED;
 
    vl_vb_element_helper(&vertex_elems[VS_I_VPOS], 1, 1);
+   vertex_elems[VS_I_VPOS].src_stride = sizeof(struct vertex2s);
 
    /* motion vector TOP element */
    vertex_elems[VS_I_MV_TOP].src_format = PIPE_FORMAT_R16G16B16A16_SSCALED;
+   vertex_elems[VS_I_MV_TOP].src_stride = sizeof(struct vertex2f);
 
    /* motion vector BOTTOM element */
    vertex_elems[VS_I_MV_BOTTOM].src_format = PIPE_FORMAT_R16G16B16A16_SSCALED;
+   vertex_elems[VS_I_MV_BOTTOM].src_stride = sizeof(struct vertex2f);
 
    vl_vb_element_helper(&vertex_elems[VS_I_MV_TOP], 2, 2);
+   vertex_elems[VS_I_MV_TOP].src_stride = sizeof(struct vl_motionvector);
 
    return pipe->create_vertex_elements_state(pipe, NUM_VS_INPUTS, vertex_elems);
 }
@@ -266,7 +273,6 @@ vl_vb_get_ycbcr(struct vl_vertex_buffer *buffer, int component)
 
    assert(buffer);
 
-   buf.stride = sizeof(struct vl_ycbcr_block);
    buf.buffer_offset = 0;
    buf.buffer.resource = buffer->ycbcr[component].resource;
    buf.is_user_buffer = false;
@@ -281,7 +287,6 @@ vl_vb_get_mv(struct vl_vertex_buffer *buffer, int motionvector)
 
    assert(buffer);
 
-   buf.stride = sizeof(struct vl_motionvector);
    buf.buffer_offset = 0;
    buf.buffer.resource = buffer->mv[motionvector].resource;
    buf.is_user_buffer = false;
@@ -301,7 +306,7 @@ vl_vb_map(struct vl_vertex_buffer *buffer, struct pipe_context *pipe)
       (
          pipe,
          buffer->ycbcr[i].resource,
-         PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE,
+         PIPE_MAP_WRITE | PIPE_MAP_DISCARD_RANGE,
          &buffer->ycbcr[i].transfer
       );
    }
@@ -311,7 +316,7 @@ vl_vb_map(struct vl_vertex_buffer *buffer, struct pipe_context *pipe)
       (
          pipe,
          buffer->mv[i].resource,
-         PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE,
+         PIPE_MAP_WRITE | PIPE_MAP_DISCARD_RANGE,
          &buffer->mv[i].transfer
       );
    }
@@ -352,11 +357,13 @@ vl_vb_unmap(struct vl_vertex_buffer *buffer, struct pipe_context *pipe)
    assert(buffer && pipe);
 
    for (i = 0; i < VL_NUM_COMPONENTS; ++i) {
-      pipe_buffer_unmap(pipe, buffer->ycbcr[i].transfer);
+      if (buffer->ycbcr[i].transfer)
+         pipe_buffer_unmap(pipe, buffer->ycbcr[i].transfer);
    }
 
    for (i = 0; i < VL_MAX_REF_FRAMES; ++i) {
-      pipe_buffer_unmap(pipe, buffer->mv[i].transfer);
+      if (buffer->mv[i].transfer)
+         pipe_buffer_unmap(pipe, buffer->mv[i].transfer);
    }
 }
 

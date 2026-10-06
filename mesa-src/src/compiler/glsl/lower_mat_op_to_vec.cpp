@@ -51,15 +51,15 @@ public:
    ir_rvalue *get_element(ir_dereference *val, int col, int row);
 
    void do_mul_mat_mat(ir_dereference *result,
-		       ir_dereference *a, ir_dereference *b);
+                       ir_dereference *a, ir_dereference *b);
    void do_mul_mat_vec(ir_dereference *result,
-		       ir_dereference *a, ir_dereference *b);
+                       ir_dereference *a, ir_dereference *b);
    void do_mul_vec_mat(ir_dereference *result,
-		       ir_dereference *a, ir_dereference *b);
+                       ir_dereference *a, ir_dereference *b);
    void do_mul_mat_scalar(ir_dereference *result,
-			  ir_dereference *a, ir_dereference *b);
+                          ir_dereference *a, ir_dereference *b);
    void do_equal_mat_mat(ir_dereference *result, ir_dereference *a,
-			 ir_dereference *b, bool test_equal);
+                         ir_dereference *b, bool test_equal);
 
    void *mem_ctx;
    bool made_progress;
@@ -77,8 +77,8 @@ mat_op_to_vec_predicate(ir_instruction *ir)
       return false;
 
    for (i = 0; i < expr->num_operands; i++) {
-      if (expr->operands[i]->type->is_matrix())
-	 return true;
+      if (glsl_type_is_matrix(expr->operands[i]->type))
+         return true;
    }
 
    return false;
@@ -113,9 +113,9 @@ ir_mat_op_to_vec_visitor::get_column(ir_dereference *val, int row)
 {
    val = val->clone(mem_ctx, NULL);
 
-   if (val->type->is_matrix()) {
+   if (glsl_type_is_matrix(val->type)) {
       val = new(mem_ctx) ir_dereference_array(val,
-					      new(mem_ctx) ir_constant(row));
+                                              new(mem_ctx) ir_constant(row));
    }
 
    return val;
@@ -123,8 +123,8 @@ ir_mat_op_to_vec_visitor::get_column(ir_dereference *val, int row)
 
 void
 ir_mat_op_to_vec_visitor::do_mul_mat_mat(ir_dereference *result,
-					 ir_dereference *a,
-					 ir_dereference *b)
+                                         ir_dereference *a,
+                                         ir_dereference *b)
 {
    unsigned b_col, i;
    ir_assignment *assign;
@@ -133,19 +133,19 @@ ir_mat_op_to_vec_visitor::do_mul_mat_mat(ir_dereference *result,
    for (b_col = 0; b_col < b->type->matrix_columns; b_col++) {
       /* first column */
       expr = new(mem_ctx) ir_expression(ir_binop_mul,
-					get_column(a, 0),
-					get_element(b, b_col, 0));
+                                        get_column(a, 0),
+                                        get_element(b, b_col, 0));
 
       /* following columns */
       for (i = 1; i < a->type->matrix_columns; i++) {
-	 ir_expression *mul_expr;
+         ir_expression *mul_expr;
 
-	 mul_expr = new(mem_ctx) ir_expression(ir_binop_mul,
-					       get_column(a, i),
-					       get_element(b, b_col, i));
-	 expr = new(mem_ctx) ir_expression(ir_binop_add,
-					   expr,
-					   mul_expr);
+         mul_expr = new(mem_ctx) ir_expression(ir_binop_mul,
+                                               get_column(a, i),
+                                               get_element(b, b_col, i));
+         expr = new(mem_ctx) ir_expression(ir_binop_add,
+                                           expr,
+                                           mul_expr);
       }
 
       assign = new(mem_ctx) ir_assignment(get_column(result, b_col), expr);
@@ -155,8 +155,8 @@ ir_mat_op_to_vec_visitor::do_mul_mat_mat(ir_dereference *result,
 
 void
 ir_mat_op_to_vec_visitor::do_mul_mat_vec(ir_dereference *result,
-					 ir_dereference *a,
-					 ir_dereference *b)
+                                         ir_dereference *a,
+                                         ir_dereference *b)
 {
    unsigned i;
    ir_assignment *assign;
@@ -164,16 +164,16 @@ ir_mat_op_to_vec_visitor::do_mul_mat_vec(ir_dereference *result,
 
    /* first column */
    expr = new(mem_ctx) ir_expression(ir_binop_mul,
-				     get_column(a, 0),
-				     get_element(b, 0, 0));
+                                     get_column(a, 0),
+                                     get_element(b, 0, 0));
 
    /* following columns */
    for (i = 1; i < a->type->matrix_columns; i++) {
       ir_expression *mul_expr;
 
       mul_expr = new(mem_ctx) ir_expression(ir_binop_mul,
-					    get_column(a, i),
-					    get_element(b, 0, i));
+                                            get_column(a, i),
+                                            get_element(b, 0, i));
       expr = new(mem_ctx) ir_expression(ir_binop_add, expr, mul_expr);
    }
 
@@ -184,8 +184,8 @@ ir_mat_op_to_vec_visitor::do_mul_mat_vec(ir_dereference *result,
 
 void
 ir_mat_op_to_vec_visitor::do_mul_vec_mat(ir_dereference *result,
-					 ir_dereference *a,
-					 ir_dereference *b)
+                                         ir_dereference *a,
+                                         ir_dereference *b)
 {
    unsigned i;
 
@@ -198,19 +198,19 @@ ir_mat_op_to_vec_visitor::do_mul_vec_mat(ir_dereference *result,
       column_result = new(mem_ctx) ir_swizzle(column_result, i, 0, 0, 0, 1);
 
       column_expr = new(mem_ctx) ir_expression(ir_binop_dot,
-					       a->clone(mem_ctx, NULL),
-					       get_column(b, i));
+                                               a->clone(mem_ctx, NULL),
+                                               get_column(b, i));
 
       column_assign = new(mem_ctx) ir_assignment(column_result,
-						 column_expr);
+                                                 column_expr);
       base_ir->insert_before(column_assign);
    }
 }
 
 void
 ir_mat_op_to_vec_visitor::do_mul_mat_scalar(ir_dereference *result,
-					    ir_dereference *a,
-					    ir_dereference *b)
+                                            ir_dereference *a,
+                                            ir_dereference *b)
 {
    unsigned i;
 
@@ -219,20 +219,20 @@ ir_mat_op_to_vec_visitor::do_mul_mat_scalar(ir_dereference *result,
       ir_assignment *column_assign;
 
       column_expr = new(mem_ctx) ir_expression(ir_binop_mul,
-					       get_column(a, i),
-					       b->clone(mem_ctx, NULL));
+                                               get_column(a, i),
+                                               b->clone(mem_ctx, NULL));
 
       column_assign = new(mem_ctx) ir_assignment(get_column(result, i),
-						 column_expr);
+                                                 column_expr);
       base_ir->insert_before(column_assign);
    }
 }
 
 void
 ir_mat_op_to_vec_visitor::do_equal_mat_mat(ir_dereference *result,
-					   ir_dereference *a,
-					   ir_dereference *b,
-					   bool test_equal)
+                                           ir_dereference *a,
+                                           ir_dereference *b,
+                                           bool test_equal)
 {
    /* This essentially implements the following GLSL:
     *
@@ -254,24 +254,24 @@ ir_mat_op_to_vec_visitor::do_equal_mat_mat(ir_dereference *result,
     */
    const unsigned columns = a->type->matrix_columns;
    const glsl_type *const bvec_type =
-      glsl_type::get_instance(GLSL_TYPE_BOOL, columns, 1);
+      glsl_simple_type(GLSL_TYPE_BOOL, columns, 1);
 
    ir_variable *const tmp_bvec =
       new(this->mem_ctx) ir_variable(bvec_type, "mat_cmp_bvec",
-				     ir_var_temporary);
+                                     ir_var_temporary);
    this->base_ir->insert_before(tmp_bvec);
 
    for (unsigned i = 0; i < columns; i++) {
       ir_expression *const cmp =
-	 new(this->mem_ctx) ir_expression(ir_binop_any_nequal,
-					  get_column(a, i),
-					  get_column(b, i));
+         new(this->mem_ctx) ir_expression(ir_binop_any_nequal,
+                                          get_column(a, i),
+                                          get_column(b, i));
 
       ir_dereference *const lhs =
-	 new(this->mem_ctx) ir_dereference_variable(tmp_bvec);
+         new(this->mem_ctx) ir_dereference_variable(tmp_bvec);
 
       ir_assignment *const assign =
-	 new(this->mem_ctx) ir_assignment(lhs, cmp, NULL, (1U << i));
+         new(this->mem_ctx) ir_assignment(lhs, cmp, 1U << i);
 
       this->base_ir->insert_before(assign);
    }
@@ -295,9 +295,9 @@ static bool
 has_matrix_operand(const ir_expression *expr, unsigned &columns)
 {
    for (unsigned i = 0; i < expr->num_operands; i++) {
-      if (expr->operands[i]->type->is_matrix()) {
-	 columns = expr->operands[i]->type->matrix_columns;
-	 return true;
+      if (glsl_type_is_matrix(expr->operands[i]->type)) {
+         columns = expr->operands[i]->type->matrix_columns;
+         return true;
       }
    }
 
@@ -335,17 +335,17 @@ ir_mat_op_to_vec_visitor::visit_leave(ir_assignment *orig_assign)
 
       /* Avoid making a temporary if we don't need to to avoid aliasing. */
       if (deref &&
-	  deref->variable_referenced() != result->variable_referenced()) {
-	 op[i] = deref;
-	 continue;
+          deref->variable_referenced() != result->variable_referenced()) {
+         op[i] = deref;
+         continue;
       }
 
       /* Otherwise, store the operand in a temporary generally if it's
        * not a dereference.
        */
       ir_variable *var = new(mem_ctx) ir_variable(orig_expr->operands[i]->type,
-						  "mat_op_to_vec",
-						  ir_var_temporary);
+                                                  "mat_op_to_vec",
+                                                  ir_var_temporary);
       base_ir->insert_before(var);
 
       /* Note that we use this dereference for the assignment.  That means
@@ -366,16 +366,16 @@ ir_mat_op_to_vec_visitor::visit_leave(ir_assignment *orig_assign)
    case ir_unop_neg: {
       /* Apply the operation to each column.*/
       for (i = 0; i < matrix_columns; i++) {
-	 ir_expression *column_expr;
-	 ir_assignment *column_assign;
+         ir_expression *column_expr;
+         ir_assignment *column_assign;
 
-	 column_expr = new(mem_ctx) ir_expression(orig_expr->operation,
-						  get_column(op[0], i));
+         column_expr = new(mem_ctx) ir_expression(orig_expr->operation,
+                                                  get_column(op[0], i));
 
-	 column_assign = new(mem_ctx) ir_assignment(get_column(result, i),
-						    column_expr);
-	 assert(column_assign->write_mask != 0);
-	 base_ir->insert_before(column_assign);
+         column_assign = new(mem_ctx) ir_assignment(get_column(result, i),
+                                                    column_expr);
+         assert(column_assign->write_mask != 0);
+         base_ir->insert_before(column_assign);
       }
       break;
    }
@@ -388,50 +388,50 @@ ir_mat_op_to_vec_visitor::visit_leave(ir_assignment *orig_assign)
        * if available.
        */
       for (i = 0; i < matrix_columns; i++) {
-	 ir_expression *column_expr;
-	 ir_assignment *column_assign;
+         ir_expression *column_expr;
+         ir_assignment *column_assign;
 
-	 column_expr = new(mem_ctx) ir_expression(orig_expr->operation,
-						  get_column(op[0], i),
-						  get_column(op[1], i));
+         column_expr = new(mem_ctx) ir_expression(orig_expr->operation,
+                                                  get_column(op[0], i),
+                                                  get_column(op[1], i));
 
-	 column_assign = new(mem_ctx) ir_assignment(get_column(result, i),
-						    column_expr);
-	 assert(column_assign->write_mask != 0);
-	 base_ir->insert_before(column_assign);
+         column_assign = new(mem_ctx) ir_assignment(get_column(result, i),
+                                                    column_expr);
+         assert(column_assign->write_mask != 0);
+         base_ir->insert_before(column_assign);
       }
       break;
    }
    case ir_binop_mul:
-      if (op[0]->type->is_matrix()) {
-	 if (op[1]->type->is_matrix()) {
-	    do_mul_mat_mat(result, op[0], op[1]);
-	 } else if (op[1]->type->is_vector()) {
-	    do_mul_mat_vec(result, op[0], op[1]);
-	 } else {
-	    assert(op[1]->type->is_scalar());
-	    do_mul_mat_scalar(result, op[0], op[1]);
-	 }
+      if (glsl_type_is_matrix(op[0]->type)) {
+         if (glsl_type_is_matrix(op[1]->type)) {
+            do_mul_mat_mat(result, op[0], op[1]);
+         } else if (glsl_type_is_vector(op[1]->type)) {
+            do_mul_mat_vec(result, op[0], op[1]);
+         } else {
+            assert(glsl_type_is_scalar(op[1]->type));
+            do_mul_mat_scalar(result, op[0], op[1]);
+         }
       } else {
-	 assert(op[1]->type->is_matrix());
-	 if (op[0]->type->is_vector()) {
-	    do_mul_vec_mat(result, op[0], op[1]);
-	 } else {
-	    assert(op[0]->type->is_scalar());
-	    do_mul_mat_scalar(result, op[1], op[0]);
-	 }
+         assert(glsl_type_is_matrix(op[1]->type));
+         if (glsl_type_is_vector(op[0]->type)) {
+            do_mul_vec_mat(result, op[0], op[1]);
+         } else {
+            assert(glsl_type_is_scalar(op[0]->type));
+            do_mul_mat_scalar(result, op[1], op[0]);
+         }
       }
       break;
 
    case ir_binop_all_equal:
    case ir_binop_any_nequal:
       do_equal_mat_mat(result, op[1], op[0],
-		       (orig_expr->operation == ir_binop_all_equal));
+                       (orig_expr->operation == ir_binop_all_equal));
       break;
 
    default:
       printf("FINISHME: Handle matrix operation for %s\n",
-	     ir_expression_operation_strings[orig_expr->operation]);
+             ir_expression_operation_strings[orig_expr->operation]);
       abort();
    }
    orig_assign->remove();

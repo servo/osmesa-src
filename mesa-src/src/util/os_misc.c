@@ -1,6 +1,6 @@
 /**************************************************************************
  *
- * Copyright 2008-2010 Vmware, Inc.
+ * Copyright 2008-2010 VMware, Inc.
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -26,16 +26,18 @@
  **************************************************************************/
 
 
+#include "hash_table.h"
+#include "macros.h"
 #include "os_misc.h"
+#include "os_file.h"
+#include "ralloc.h"
+#include "simple_mtx.h"
 
 #include <stdarg.h>
 
 
 #if DETECT_OS_WINDOWS
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN      // Exclude rarely-used stuff from Windows headers
-#endif
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +46,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <inttypes.h>
 
 #endif
 
@@ -52,14 +56,26 @@
 #  define LOG_TAG "MESA"
 #  include <unistd.h>
 #  include <log/log.h>
-#elif DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD
+#  include <cutils/properties.h>
+#elif DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD || DETECT_OS_MANAGARM
 #  include <unistd.h>
+#elif DETECT_OS_OPENBSD || DETECT_OS_FREEBSD
+#  include <sys/resource.h>
+#  include <sys/sysctl.h>
 #elif DETECT_OS_APPLE || DETECT_OS_BSD
 #  include <sys/sysctl.h>
+#  if DETECT_OS_APPLE
+#    include <mach/mach_host.h>
+#    include <mach/vm_param.h>
+#    include <mach/vm_statistics.h>
+#   endif
 #elif DETECT_OS_HAIKU
 #  include <kernel/OS.h>
 #elif DETECT_OS_WINDOWS
 #  include <windows.h>
+#elif DETECT_OS_FUCHSIA
+#include <unistd.h>
+#include <zircon/syscalls.h>
 #else
 #error unexpected platform in os_sysinfo.c
 #endif
@@ -74,19 +90,23 @@ os_log_message(const char *message)
    static FILE *fout = NULL;
 
    if (!fout) {
-#ifdef DEBUG
+#if MESA_DEBUG
       /* one-time init */
       const char *filename = os_get_option("GALLIUM_LOG_FILE");
       if (filename) {
-         const char *mode = "w";
-         if (filename[0] == '+') {
-            /* If the filename is prefixed with '+' then open the file for
-             * appending instead of normal writing.
-             */
-            mode = "a";
+         if (strcmp(filename, "stdout") == 0) {
+            fout = stdout;
+         } else {
+            const char *mode = "w";
+            if (filename[0] == '+') {
+               /* If the filename is prefixed with '+' then open the file for
+                * appending instead of normal writing.
+                */
+               mode = "a";
             filename++; /* skip the '+' */
+            }
+            fout = fopen(filename, mode);
          }
-         fout = fopen(filename, mode);
       }
 #endif
       if (!fout)
@@ -95,6 +115,7 @@ os_log_message(const char *message)
 
 #if DETECT_OS_WINDOWS
    OutputDebugStringA(message);
+#if !defined(_GAMING_XBOX)
    if(GetConsoleWindow() && !IsDebuggerPresent()) {
       fflush(stdout);
       fputs(message, fout);
@@ -104,6 +125,7 @@ os_log_message(const char *message)
       fputs(message, fout);
       fflush(fout);
    }
+#endif
 #else /* !DETECT_OS_WINDOWS */
    fflush(stdout);
    fputs(message, fout);
@@ -114,15 +136,145 @@ os_log_message(const char *message)
 #endif
 }
 
+#if DETECT_OS_ANDROID
+#  include <ctype.h>
+#  include "c11/threads.h"
 
-#if !defined(EMBEDDED_DEVICE)
+/**
+ * Get an option value from android's property system, as a fallback to
+ * getenv() (which is generally less useful on android due to processes
+ * typically being forked from the zygote.
+ *
+ * The option name used for getenv is translated into a property name
+ * by:
+ *
+ *  1) convert to lowercase
+ *  2) replace '_' with '.'
+ *  3) replace "MESA_" or prepend with "mesa."
+ *  4) look for "debug.mesa." prefix
+ *  5) look for "vendor.mesa." prefix
+ *  6) look for "mesa." prefix
+ *
+ * For example:
+ *  - MESA_EXTENSION_OVERRIDE -> mesa.extension.override
+ *  - GALLIUM_HUD -> mesa.gallium.hud
+ *
+ */
+static char *
+os_get_android_option(const char *name)
+{
+   static thread_local char os_android_option_value[PROPERTY_VALUE_MAX];
+   char key[PROPERTY_KEY_MAX];
+   char *p = key, *end = key + PROPERTY_KEY_MAX;
+   /* add "mesa." prefix if necessary: */
+   if (strstr(name, "MESA_") != name)
+      p += strlcpy(p, "mesa.", end - p);
+   p += strlcpy(p, name, end - p);
+   for (int i = 0; key[i]; i++) {
+      if (key[i] == '_') {
+         key[i] = '.';
+      } else {
+         key[i] = tolower(key[i]);
+      }
+   }
+
+   /* prefixes to search sorted by preference */
+   const char *prefices[] = { "debug.", "vendor.", "" };
+   char full_key[PROPERTY_KEY_MAX];
+   int len = 0;
+   for (int i = 0; i < ARRAY_SIZE(prefices); i++) {
+      strlcpy(full_key, prefices[i], PROPERTY_KEY_MAX);
+      strlcat(full_key, key, PROPERTY_KEY_MAX);
+      len = property_get(full_key, os_android_option_value, NULL);
+      if (len > 0)
+         return os_android_option_value;
+   }
+   return NULL;
+}
+#endif
+
+#if DETECT_OS_WINDOWS
+
+/* getenv doesn't necessarily reflect changes to the environment
+ * that have been made during the process lifetime, if either the
+ * setter uses a different CRT (e.g. due to static linking) or the
+ * setter used the Win32 API directly. */
 const char *
 os_get_option(const char *name)
 {
-   return getenv(name);
+   static thread_local char value[_MAX_ENV];
+   DWORD size = GetEnvironmentVariableA(name, value, _MAX_ENV);
+   return (size > 0 && size < _MAX_ENV) ? value : NULL;
 }
-#endif /* !EMBEDDED_DEVICE */
 
+#else
+
+const char *
+os_get_option(const char *name)
+{
+   const char *opt = getenv(name);
+#if DETECT_OS_ANDROID
+   if (!opt) {
+      opt = os_get_android_option(name);
+   }
+#endif
+   return opt;
+}
+
+#endif
+
+static struct hash_table *options_tbl;
+static bool options_tbl_exited = false;
+static simple_mtx_t options_tbl_mtx = SIMPLE_MTX_INITIALIZER;
+
+/**
+ * NOTE: The strings that allocated with ralloc_strdup(options_tbl, ...)
+ * are freed by _mesa_hash_table_destroy automatically
+ */
+static void
+options_tbl_fini(void)
+{
+   simple_mtx_lock(&options_tbl_mtx);
+   _mesa_hash_table_destroy(options_tbl, NULL);
+   options_tbl = NULL;
+   options_tbl_exited = true;
+   simple_mtx_unlock(&options_tbl_mtx);
+}
+
+const char *
+os_get_option_cached(const char *name)
+{
+   const char *opt = NULL;
+   simple_mtx_lock(&options_tbl_mtx);
+   if (options_tbl_exited) {
+      opt = os_get_option(name);
+      goto exit_mutex;
+   }
+
+   if (!options_tbl) {
+      options_tbl = _mesa_hash_table_create(NULL, _mesa_hash_string,
+            _mesa_key_string_equal);
+      if (options_tbl == NULL) {
+         goto exit_mutex;
+      }
+      atexit(options_tbl_fini);
+   }
+   struct hash_entry *entry = _mesa_hash_table_search(options_tbl, name);
+   if (entry) {
+      opt = entry->data;
+      goto exit_mutex;
+   }
+
+   char *name_dup = ralloc_strdup(options_tbl, name);
+   if (name_dup == NULL) {
+      goto exit_mutex;
+   }
+   opt = ralloc_strdup(options_tbl, os_get_option(name));
+   _mesa_hash_table_insert(options_tbl, name_dup, (void *)opt);
+exit_mutex:
+   simple_mtx_unlock(&options_tbl_mtx);
+   return opt;
+}
 
 /**
  * Return the size of the total physical memory.
@@ -132,7 +284,7 @@ os_get_option(const char *name)
 bool
 os_get_total_physical_memory(uint64_t *size)
 {
-#if DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD
+#if DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD || DETECT_OS_MANAGARM
    const long phys_pages = sysconf(_SC_PHYS_PAGES);
    const long page_size = sysconf(_SC_PAGE_SIZE);
 
@@ -176,7 +328,110 @@ os_get_total_physical_memory(uint64_t *size)
    status.dwLength = sizeof(status);
    ret = GlobalMemoryStatusEx(&status);
    *size = status.ullTotalPhys;
-   return (ret == TRUE);
+   return (ret == true);
+#elif DETECT_OS_FUCHSIA
+   *size = zx_system_get_physmem();
+   return true;
+#else
+#error unexpected platform in os_misc.c
+   return false;
+#endif
+}
+
+bool
+os_get_available_system_memory(uint64_t *size)
+{
+#if DETECT_OS_LINUX
+   char *meminfo = os_read_file("/proc/meminfo", NULL);
+   if (!meminfo)
+      return false;
+
+   char *str = strstr(meminfo, "MemAvailable:");
+   if (!str) {
+      free(meminfo);
+      return false;
+   }
+
+   uint64_t kb_mem_available;
+   if (sscanf(str, "MemAvailable: %" PRIu64, &kb_mem_available) == 1) {
+      free(meminfo);
+      *size = kb_mem_available << 10;
+      return true;
+   }
+
+   free(meminfo);
+   return false;
+#elif DETECT_OS_OPENBSD || DETECT_OS_FREEBSD
+   struct rlimit rl;
+#if DETECT_OS_OPENBSD
+   int mib[] = { CTL_HW, HW_USERMEM64 };
+#elif DETECT_OS_FREEBSD
+   int mib[] = { CTL_HW, HW_USERMEM };
+#endif
+   int64_t mem_available;
+   size_t len = sizeof(mem_available);
+
+   /* physmem - wired */
+   if (sysctl(mib, 2, &mem_available, &len, NULL, 0) == -1)
+      return false;
+
+   /* static login.conf limit */
+   if (getrlimit(RLIMIT_DATA, &rl) == -1)
+      return false;
+
+   *size = MIN2(mem_available, rl.rlim_cur);
+   return true;
+#elif DETECT_OS_WINDOWS
+   MEMORYSTATUSEX status;
+   BOOL ret;
+
+   status.dwLength = sizeof(status);
+   ret = GlobalMemoryStatusEx(&status);
+   *size = status.ullAvailPhys;
+   return (ret == true);
+#elif DETECT_OS_APPLE
+   vm_statistics64_data_t vm_stats;
+   mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+   if (host_statistics64(mach_host_self(), HOST_VM_INFO,
+         (host_info64_t)&vm_stats, &count) != KERN_SUCCESS) {
+      return false;
+   }
+
+   *size = ((uint64_t)vm_stats.free_count + (uint64_t)vm_stats.inactive_count) * PAGE_SIZE;
+   return true;
+#else
+   return false;
+#endif
+}
+
+/**
+ * Return the size of a page
+ * \param size returns the size of a page
+ * \return true for success, or false on failure
+ */
+bool
+os_get_page_size(uint64_t *size)
+{
+#if DETECT_OS_POSIX_LITE && !DETECT_OS_APPLE && !DETECT_OS_HAIKU
+   const long page_size = sysconf(_SC_PAGE_SIZE);
+
+   if (page_size <= 0)
+      return false;
+
+   *size = (uint64_t)page_size;
+   return true;
+#elif DETECT_OS_HAIKU
+   *size = (uint64_t)B_PAGE_SIZE;
+   return true;
+#elif DETECT_OS_WINDOWS
+   SYSTEM_INFO SysInfo;
+
+   GetSystemInfo(&SysInfo);
+   *size = SysInfo.dwPageSize;
+   return true;
+#elif DETECT_OS_APPLE
+   *size = PAGE_SIZE;
+   return true;
 #else
 #error unexpected platform in os_sysinfo.c
    return false;

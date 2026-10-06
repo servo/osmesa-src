@@ -23,20 +23,11 @@
 
 #include "util/set.h"
 #include "util/dag.h"
+#include <stdio.h>
 
-/**
- * Adds a directed edge from the parent node to the child.
- *
- * Both nodes should have been initialized with dag_init_node().  The edge
- * list may contain multiple edges to the same child with different data.
- */
-void
-dag_add_edge(struct dag_node *parent, struct dag_node *child, void *data)
+static void
+append_edge(struct dag_node *parent, struct dag_node *child, uintptr_t data)
 {
-   util_dynarray_foreach(&parent->edges, struct dag_edge, edge) {
-      if (edge->child == child && edge->data == data)
-         return;
-   }
    /* Remove the child as a DAG head. */
    list_delinit(&child->link);
 
@@ -47,6 +38,45 @@ dag_add_edge(struct dag_node *parent, struct dag_node *child, void *data)
 
    util_dynarray_append(&parent->edges, struct dag_edge, edge);
    child->parent_count++;
+}
+
+/**
+ * Adds a directed edge from the parent node to the child.
+ *
+ * Both nodes should have been initialized with dag_init_node().  The edge
+ * list may contain multiple edges to the same child with different data.
+ */
+void
+dag_add_edge(struct dag_node *parent, struct dag_node *child, uintptr_t data)
+{
+   util_dynarray_foreach(&parent->edges, struct dag_edge, edge) {
+      if (edge->child == child && edge->data == data)
+         return;
+   }
+
+   append_edge(parent, child, data);
+}
+
+/**
+ * Adds a directed edge from the parent node to the child.
+ *
+ * Both nodes should have been initialized with dag_init_node(). If there is
+ * already an existing edge, the data is updated to the maximum of the
+ * previous data and the new data. This is useful if the data represents a
+ * delay.
+ */
+void
+dag_add_edge_max_data(struct dag_node *parent, struct dag_node *child,
+                      uintptr_t data)
+{
+   util_dynarray_foreach(&parent->edges, struct dag_edge, edge) {
+      if (edge->child == child) {
+         edge->data = MAX2(edge->data, data);
+         return;
+      }
+   }
+
+   append_edge(parent, child, data);
 }
 
 /* Removes a single edge from the graph, promoting the child to a DAG head.
@@ -67,7 +97,7 @@ dag_remove_edge(struct dag *dag, struct dag_edge *edge)
       list_addtail(&child->link, &dag->heads);
 
    edge->child = NULL;
-   edge->data = NULL;
+   edge->data = 0;
 }
 
 /**
@@ -99,24 +129,61 @@ dag_init_node(struct dag *dag, struct dag_node *node)
 
 struct dag_traverse_bottom_up_state {
    struct set *seen;
+   void (*cb)(struct dag_node *node, void *data);
    void *data;
 };
 
 static void
 dag_traverse_bottom_up_node(struct dag_node *node,
-                            void (*cb)(struct dag_node *node,
-                                       void *data),
                             struct dag_traverse_bottom_up_state *state)
 {
    if (_mesa_set_search(state->seen, node))
       return;
 
-   util_dynarray_foreach(&node->edges, struct dag_edge, edge) {
-      dag_traverse_bottom_up_node(edge->child, cb, state);
-   }
+   struct util_dynarray stack;
+   util_dynarray_init(&stack, NULL);
 
-   cb(node, state->data);
-   _mesa_set_add(state->seen, node);
+   do {
+      assert(node);
+
+      while (node->edges.size != 0) {
+         util_dynarray_append(&stack, struct dag_node *, node);
+
+         /* Push unprocessed children onto stack in reverse order. Note that
+          * it's possible for any of the children nodes to already be on the
+          * stack.
+          */
+         util_dynarray_foreach_reverse(&node->edges, struct dag_edge, edge) {
+            if (!_mesa_set_search(state->seen, edge->child)) {
+               util_dynarray_append(&stack, struct dag_node *, edge->child);
+            }
+         }
+
+         /* Get last element pushed: either left-most child or current node.
+          * If it's the current node, that means that we've processed all its
+          * children already.
+          */
+         struct dag_node *top = util_dynarray_pop(&stack, struct dag_node *);
+         if (top == node)
+            break;
+         node = top;
+      }
+
+      /* Process the node */
+      state->cb(node, state->data);
+      _mesa_set_add(state->seen, node);
+
+      /* Find the next unprocessed node in the stack */
+      do {
+         node = NULL;
+         if (stack.size == 0)
+            break;
+
+         node = util_dynarray_pop(&stack, struct dag_node *);
+      } while (_mesa_set_search(state->seen, node));
+   } while (node);
+
+   util_dynarray_fini(&stack);
 }
 
 /**
@@ -130,10 +197,11 @@ dag_traverse_bottom_up(struct dag *dag, void (*cb)(struct dag_node *node,
    struct dag_traverse_bottom_up_state state = {
       .seen = _mesa_pointer_set_create(NULL),
       .data = data,
+      .cb = cb,
    };
 
    list_for_each_entry(struct dag_node, node, &dag->heads, link) {
-      dag_traverse_bottom_up_node(node, cb, &state);
+      dag_traverse_bottom_up_node(node, &state);
    }
 
    ralloc_free(state.seen);
@@ -152,3 +220,68 @@ dag_create(void *mem_ctx)
    return dag;
 }
 
+struct dag_validate_state {
+   struct util_dynarray stack;
+   struct set *stack_set;
+   struct set *seen;
+   void (*cb)(const struct dag_node *node, void *data);
+   void *data;
+};
+
+static void
+dag_validate_node(struct dag_node *node,
+                  struct dag_validate_state *state)
+{
+   if (_mesa_set_search(state->stack_set, node)) {
+      fprintf(stderr, "DAG validation failed at:\n");
+      fprintf(stderr, "  %p: ", node);
+      state->cb(node, state->data);
+      fprintf(stderr, "\n");
+      fprintf(stderr, "Nodes in stack:\n");
+      util_dynarray_foreach(&state->stack, struct dag_node *, nodep) {
+         struct dag_node *node = *nodep;
+         fprintf(stderr, "  %p: ", node);
+         state->cb(node, state->data);
+         fprintf(stderr, "\n");
+      }
+      abort();
+   }
+
+   if (_mesa_set_search(state->seen, node))
+      return;
+
+   _mesa_set_add(state->stack_set, node);
+   _mesa_set_add(state->seen, node);
+   util_dynarray_append(&state->stack, struct dag_node *, node);
+
+   util_dynarray_foreach(&node->edges, struct dag_edge, edge) {
+      dag_validate_node(edge->child, state);
+   }
+
+   (void)util_dynarray_pop(&state->stack, struct dag_node *);
+   _mesa_set_remove_key(state->stack_set, node);
+}
+
+void
+dag_validate(struct dag *dag, void (*cb)(const struct dag_node *node,
+                                         void *data),
+             void *data)
+{
+   void *mem_ctx = ralloc_context(NULL);
+   struct dag_validate_state state = {
+      .stack_set = _mesa_pointer_set_create(mem_ctx),
+      .seen = _mesa_pointer_set_create(mem_ctx),
+      .cb = cb,
+      .data = data,
+   };
+
+   util_dynarray_init(&state.stack, mem_ctx);
+
+   list_validate(&dag->heads);
+
+   list_for_each_entry(struct dag_node, node, &dag->heads, link) {
+      dag_validate_node(node, &state);
+   }
+
+   ralloc_free(mem_ctx);
+}

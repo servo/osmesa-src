@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 /**
  * @file
@@ -44,7 +26,7 @@
 struct dump_info
 {
    uint32 version;
-   boolean is_ps;
+   bool is_ps;
    int indent;
 };
 
@@ -113,7 +95,7 @@ static void dump_op( struct sh_op op, const char *mnemonic )
       case SVGA3DOPCOMP_LT:
          _debug_printf("_lt");
          break;
-      case SVGA3DOPCOMPC_NE:
+      case SVGA3DOPCOMP_NE:
          _debug_printf("_ne");
          break;
       case SVGA3DOPCOMP_LE:
@@ -273,7 +255,7 @@ static void dump_idata( struct sh_idata idata )
    _debug_printf( "%d, %d, %d, %d", idata.xyzw[0], idata.xyzw[1], idata.xyzw[2], idata.xyzw[3] );
 }
 
-static void dump_bdata( boolean bdata )
+static void dump_bdata( bool bdata )
 {
    _debug_printf( bdata ? "TRUE" : "FALSE" );
 }
@@ -533,7 +515,7 @@ dump_inst(struct dump_info *di,
           const struct sh_opcode_info *info)
 {
    struct dump_op dop;
-   boolean not_first_arg = FALSE;
+   bool not_first_arg = false;
    uint i;
 
    assert(info->num_dst <= 1);
@@ -547,7 +529,7 @@ dump_inst(struct dump_info *di,
    parse_op(di, assem, &dop, info->num_dst, info->num_src);
    if (info->num_dst > 0) {
       dump_dstreg(dop.dst, &dop.dstind, di);
-      not_first_arg = TRUE;
+      not_first_arg = true;
    }
 
    for (i = 0; i < info->num_src; i++) {
@@ -557,7 +539,7 @@ dump_inst(struct dump_info *di,
          _debug_printf(" ");
       }
       dump_srcreg(dop.src[i], &dop.srcind[i], di);
-      not_first_arg = TRUE;
+      not_first_arg = true;
    }
 
    _debug_printf("\n");
@@ -569,7 +551,7 @@ svga_shader_dump(
    unsigned dwords,
    unsigned do_binary )
 {
-   boolean finished = FALSE;
+   bool finished = false;
    struct dump_info di;
 
    di.version = *assem++;
@@ -719,7 +701,7 @@ svga_shader_dump(
          break;
 
       case SVGA3DOP_END:
-         finished = TRUE;
+         finished = true;
          break;
 
       default:

@@ -29,10 +29,12 @@
 #include "postprocess/pp_filters.h"
 #include "postprocess/pp_private.h"
 
+#include "frontend/api.h"
 #include "util/u_inlines.h"
 #include "util/u_sampler.h"
 
 #include "tgsi/tgsi_parse.h"
+#include "tgsi/tgsi_text.h"
 
 
 void
@@ -126,26 +128,22 @@ pp_run(struct pp_queue_t *ppq, struct pipe_resource *in,
                         CSO_BIT_SAMPLE_MASK |
                         CSO_BIT_MIN_SAMPLES |
                         CSO_BIT_FRAGMENT_SAMPLERS |
-                        CSO_BIT_FRAGMENT_SAMPLER_VIEWS |
                         CSO_BIT_STENCIL_REF |
                         CSO_BIT_STREAM_OUTPUTS |
                         CSO_BIT_VERTEX_ELEMENTS |
                         CSO_BIT_VERTEX_SHADER |
                         CSO_BIT_VIEWPORT |
-                        CSO_BIT_AUX_VERTEX_BUFFER_SLOT |
                         CSO_BIT_PAUSE_QUERIES |
                         CSO_BIT_RENDER_CONDITION));
-   cso_save_constant_buffer_slot0(cso, PIPE_SHADER_VERTEX);
-   cso_save_constant_buffer_slot0(cso, PIPE_SHADER_FRAGMENT);
 
    /* set default state */
    cso_set_sample_mask(cso, ~0);
    cso_set_min_samples(cso, 1);
-   cso_set_stream_outputs(cso, 0, NULL, NULL);
+   cso_set_stream_outputs(cso, 0, NULL, NULL, 0);
    cso_set_tessctrl_shader_handle(cso, NULL);
    cso_set_tesseval_shader_handle(cso, NULL);
    cso_set_geometry_shader_handle(cso, NULL);
-   cso_set_render_condition(cso, NULL, FALSE, 0);
+   cso_set_render_condition(cso, NULL, false, 0);
 
    // Kept only for this frame.
    pipe_resource_reference(&ppq->depth, indepth);
@@ -187,9 +185,19 @@ pp_run(struct pp_queue_t *ppq, struct pipe_resource *in,
    }
 
    /* restore state we changed */
-   cso_restore_state(cso);
-   cso_restore_constant_buffer_slot0(cso, PIPE_SHADER_VERTEX);
-   cso_restore_constant_buffer_slot0(cso, PIPE_SHADER_FRAGMENT);
+   cso_restore_state(cso, CSO_UNBIND_FS_SAMPLERVIEWS |
+                          CSO_UNBIND_FS_IMAGE0 |
+                          CSO_UNBIND_VS_CONSTANTS |
+                          CSO_UNBIND_FS_CONSTANTS);
+
+   /* restore states not restored by cso */
+   if (ppq->p->st) {
+      ppq->p->st_invalidate_state(ppq->p->st,
+                                  ST_INVALIDATE_FS_SAMPLER_VIEWS |
+                                  ST_INVALIDATE_FS_CONSTBUF0 |
+                                  ST_INVALIDATE_VS_CONSTBUF0 |
+                                  ST_INVALIDATE_VERTEX_BUFFERS);
+   }
 
    pipe_resource_reference(&ppq->depth, NULL);
    pipe_resource_reference(&refin, NULL);
@@ -250,7 +258,7 @@ pp_tgsi_to_state(struct pipe_context *pipe, const char *text, bool isvs,
       return NULL;
    }
 
-   if (tgsi_text_translate(text, tokens, PP_MAX_TOKENS) == FALSE) {
+   if (tgsi_text_translate(text, tokens, PP_MAX_TOKENS) == false) {
       _debug_printf("pp: Failed to translate a shader for %s\n", name);
       return NULL;
    }
@@ -284,8 +292,8 @@ pp_filter_misc_state(struct pp_program *p)
 void
 pp_filter_draw(struct pp_program *p)
 {
-   util_draw_vertex_buffer(p->pipe, p->cso, p->vbuf, 0, 0,
-                           PIPE_PRIM_QUADS, 4, 2);
+   util_draw_vertex_buffer(p->pipe, p->cso, p->vbuf, 0, false,
+                           MESA_PRIM_QUADS, 4, 2);
 }
 
 /** Set the framebuffer as active. */

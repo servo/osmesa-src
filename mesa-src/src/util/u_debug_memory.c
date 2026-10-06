@@ -32,12 +32,13 @@
  * @author José Fonseca <jfonseca@vmware.com>
  */
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 
 #define DEBUG_MEMORY_IMPLEMENTATION
 
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 
+#include "util/simple_mtx.h"
 #include "util/u_debug.h"
 #include "util/u_debug_stack.h"
 #include "util/list.h"
@@ -72,7 +73,7 @@ struct debug_memory_header
 #endif
    size_t size;
 #if DEBUG_FREED_MEMORY
-   boolean freed;  /**< Is this a freed block? */
+   bool freed;  /**< Is this a freed block? */
 #endif
 
    unsigned magic;
@@ -87,7 +88,7 @@ struct debug_memory_footer
 
 static struct list_head list = { &list, &list };
 
-static mtx_t list_mutex = _MTX_INITIALIZER_NP;
+static simple_mtx_t list_mutex = SIMPLE_MTX_INITIALIZER;
 
 static unsigned long last_no = 0;
 
@@ -143,7 +144,7 @@ debug_malloc(const char *file, unsigned line, const char *function,
    hdr->magic = DEBUG_MEMORY_MAGIC;
    hdr->tag = 0;
 #if DEBUG_FREED_MEMORY
-   hdr->freed = FALSE;
+   hdr->freed = false;
 #endif
 
 #if DEBUG_MEMORY_STACK
@@ -153,9 +154,9 @@ debug_malloc(const char *file, unsigned line, const char *function,
    ftr = footer_from_header(hdr);
    ftr->magic = DEBUG_MEMORY_MAGIC;
 
-   mtx_lock(&list_mutex);
+   simple_mtx_lock(&list_mutex);
    list_addtail(&hdr->head, &list);
-   mtx_unlock(&list_mutex);
+   simple_mtx_unlock(&list_mutex);
 
    return data_from_header(hdr);
 }
@@ -175,7 +176,7 @@ debug_free(const char *file, unsigned line, const char *function,
       debug_printf("%s:%u:%s: freeing bad or corrupted memory %p\n",
                    file, line, function,
                    ptr);
-      debug_assert(0);
+      assert(0);
       return;
    }
 
@@ -184,23 +185,23 @@ debug_free(const char *file, unsigned line, const char *function,
       debug_printf("%s:%u:%s: buffer overflow %p\n",
                    hdr->file, hdr->line, hdr->function,
                    ptr);
-      debug_assert(0);
+      assert(0);
    }
 
 #if DEBUG_FREED_MEMORY
    /* Check for double-free */
    assert(!hdr->freed);
    /* Mark the block as freed but don't really free it */
-   hdr->freed = TRUE;
+   hdr->freed = true;
    /* Save file/line where freed */
    hdr->file = file;
    hdr->line = line;
    /* set freed memory to special value */
    memset(ptr, DEBUG_FREED_BYTE, hdr->size);
 #else
-   mtx_lock(&list_mutex);
+   simple_mtx_lock(&list_mutex);
    list_del(&hdr->head);
-   mtx_unlock(&list_mutex);
+   simple_mtx_unlock(&list_mutex);
    hdr->magic = 0;
    ftr->magic = 0;
 
@@ -239,7 +240,7 @@ debug_realloc(const char *file, unsigned line, const char *function,
       debug_printf("%s:%u:%s: reallocating bad or corrupted memory %p\n",
                    file, line, function,
                    old_ptr);
-      debug_assert(0);
+      assert(0);
       return NULL;
    }
 
@@ -248,7 +249,7 @@ debug_realloc(const char *file, unsigned line, const char *function,
       debug_printf("%s:%u:%s: buffer overflow %p\n",
                    old_hdr->file, old_hdr->line, old_hdr->function,
                    old_ptr);
-      debug_assert(0);
+      assert(0);
    }
 
    /* alloc new */
@@ -267,15 +268,15 @@ debug_realloc(const char *file, unsigned line, const char *function,
    new_hdr->magic = DEBUG_MEMORY_MAGIC;
    new_hdr->tag = 0;
 #if DEBUG_FREED_MEMORY
-   new_hdr->freed = FALSE;
+   new_hdr->freed = false;
 #endif
 
    new_ftr = footer_from_header(new_hdr);
    new_ftr->magic = DEBUG_MEMORY_MAGIC;
 
-   mtx_lock(&list_mutex);
+   simple_mtx_lock(&list_mutex);
    list_replace(&old_hdr->head, &new_hdr->head);
-   mtx_unlock(&list_mutex);
+   simple_mtx_unlock(&list_mutex);
 
    /* copy data */
    new_ptr = data_from_header(new_hdr);
@@ -310,7 +311,7 @@ debug_memory_end(unsigned long start_no)
       void *ptr;
       struct debug_memory_footer *ftr;
 
-      hdr = LIST_ENTRY(struct debug_memory_header, entry, head);
+      hdr = list_entry(entry, struct debug_memory_header, head);
       ptr = data_from_header(hdr);
       ftr = footer_from_header(hdr);
 
@@ -318,7 +319,7 @@ debug_memory_end(unsigned long start_no)
          debug_printf("%s:%u:%s: bad or corrupted memory %p\n",
                       hdr->file, hdr->line, hdr->function,
                       ptr);
-         debug_assert(0);
+         assert(0);
       }
 
       if ((start_no <= hdr->no && hdr->no < last_no) ||
@@ -336,7 +337,7 @@ debug_memory_end(unsigned long start_no)
          debug_printf("%s:%u:%s: buffer overflow %p\n",
                       hdr->file, hdr->line, hdr->function,
                       ptr);
-         debug_assert(0);
+         assert(0);
       }
    }
 
@@ -364,8 +365,8 @@ debug_memory_tag(void *ptr, unsigned tag)
 
    hdr = header_from_data(ptr);
    if (hdr->magic != DEBUG_MEMORY_MAGIC) {
-      debug_printf("%s corrupted memory at %p\n", __FUNCTION__, ptr);
-      debug_assert(0);
+      debug_printf("%s corrupted memory at %p\n", __func__, ptr);
+      assert(0);
    }
 
    hdr->tag = tag;
@@ -390,13 +391,13 @@ debug_memory_check_block(void *ptr)
    if (hdr->magic != DEBUG_MEMORY_MAGIC) {
       debug_printf("%s:%u:%s: bad or corrupted memory %p\n",
                    hdr->file, hdr->line, hdr->function, ptr);
-      debug_assert(0);
+      assert(0);
    }
 
    if (ftr->magic != DEBUG_MEMORY_MAGIC) {
       debug_printf("%s:%u:%s: buffer overflow %p\n",
                    hdr->file, hdr->line, hdr->function, ptr);
-      debug_assert(0);
+      assert(0);
    }
 }
 
@@ -417,20 +418,20 @@ debug_memory_check(void)
       struct debug_memory_footer *ftr;
       const char *ptr;
 
-      hdr = LIST_ENTRY(struct debug_memory_header, entry, head);
+      hdr = list_entry(entry, struct debug_memory_header, head);
       ftr = footer_from_header(hdr);
       ptr = (const char *) data_from_header(hdr);
 
       if (hdr->magic != DEBUG_MEMORY_MAGIC) {
          debug_printf("%s:%u:%s: bad or corrupted memory %p\n",
                       hdr->file, hdr->line, hdr->function, ptr);
-         debug_assert(0);
+         assert(0);
       }
 
       if (ftr->magic != DEBUG_MEMORY_MAGIC) {
          debug_printf("%s:%u:%s: buffer overflow %p\n",
                       hdr->file, hdr->line, hdr->function, ptr);
-         debug_assert(0);
+         assert(0);
       }
 
 #if DEBUG_FREED_MEMORY

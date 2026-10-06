@@ -1,26 +1,8 @@
 /*
- * Copyright (C) 2010-2011 Marcin Kościelnicki <koriakin@0x04.net>
- * Copyright (C) 2010 Francisco Jerez <currojerez@riseup.net>
+ * Copyright © 2010-2011 Marcin Kościelnicki <koriakin@0x04.net>
+ * Copyright © 2010 Francisco Jerez <currojerez@riseup.net>
  * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
- * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
- * OTHER DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "rnndec.h"
@@ -30,6 +12,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include "util.h"
+#include "util/compiler.h"
 
 struct rnndeccontext *rnndec_newcontext(struct rnndb *db) {
 	struct rnndeccontext *res = calloc (sizeof *res, 1);
@@ -47,11 +30,7 @@ int rnndec_varadd(struct rnndeccontext *ctx, char *varset, const char *variant) 
 	int i, j;
 	for (i = 0; i < en->valsnum; i++)
 		if (!strcasecmp(en->vals[i]->name, variant)) {
-			struct rnndecvariant *ci = calloc (sizeof *ci, 1);
-			ci->en = en;
-			ci->variant = i;
-			ADDARRAY(ctx->vars, ci);
-			return 1;
+			break;
 		}
 
 	if (i == en->valsnum) {
@@ -66,7 +45,7 @@ int rnndec_varadd(struct rnndeccontext *ctx, char *varset, const char *variant) 
 		}
 	}
 
-	if (i == ctx->varsnum) {
+	if (j == ctx->varsnum) {
 		struct rnndecvariant *ci = calloc (sizeof *ci, 1);
 		ci->en = en;
 		ci->variant = i;
@@ -165,10 +144,11 @@ char *rnndec_decodeval(struct rnndeccontext *ctx, struct rnntypeinfo *ti, uint64
 	int bitfieldsnum;
 	char *tmp;
 	const char *ctmp;
-	uint64_t mask, value_orig;
+	uint64_t mask;
+
+	uint64_t value_orig = value;
 	if (!ti)
 		goto failhex;
-	value_orig = value;
 	value = (value & typeinfo_mask(ti)) >> ti->low;
 	value <<= ti->shr;
 
@@ -266,7 +246,7 @@ char *rnndec_decodeval(struct rnndeccontext *ctx, struct rnntypeinfo *ti, uint64
 						ctx->colors->reset);
 				break;
 			}
-			/* fallthrough */
+			FALLTHROUGH;
 		case RNN_TTYPE_UFIXED:
 			asprintf (&res, "%s%lf%s", ctx->colors->num,
 					((double)value) / ((double)(1LL << ti->radix)),
@@ -397,7 +377,14 @@ static struct rnndecaddrinfo *trymatch (struct rnndeccontext *ctx, struct rnndel
 				if (elems[i]->length != 1)
 					res->name = appendidx(ctx, res->name, idx, elems[i]->index);
 				if (offset) {
-					asprintf (&tmp, "%s+%s%#"PRIx64"%s", res->name, ctx->colors->err, offset, ctx->colors->reset);
+					/* use _HI suffix for addresses */
+					if (offset == 1 &&
+						(!strcmp(res->typeinfo->name, "address") ||
+						 !strcmp(res->typeinfo->name, "waddress")))  {
+						asprintf (&tmp, "%s_HI", res->name);
+					} else {
+						asprintf (&tmp, "%s+%s%#"PRIx64"%s", res->name, ctx->colors->err, offset, ctx->colors->reset);
+					}
 					free(res->name);
 					res->name = tmp;
 				}
@@ -409,7 +396,7 @@ static struct rnndecaddrinfo *trymatch (struct rnndeccontext *ctx, struct rnndel
 					offset = addr - (elems[i]->offset + elems[i]->stride * idx);
 					int extraidx = (elems[i]->length != 1);
 					int nindnum = (elems[i]->name ? 0 : indicesnum + extraidx);
-					uint64_t nind[nindnum];
+					uint64_t nind[MAX2(nindnum, 1)];
 					if (!elems[i]->name) {
 						for (j = 0; j < indicesnum; j++)
 							nind[j] = indices[j];
@@ -527,6 +514,8 @@ static unsigned tryreg(struct rnndeccontext *ctx, struct rnndelem **elems, int e
 					assert(suffix);
 					ret = tryreg(ctx, elem->subelems, elem->subelemsnum, dwidth, child, offset);
 					if (ret) {
+						if (idx >= elem->length)
+							return 0;
 						*offset += elem->offset + (idx * elem->stride);
 						return 1;
 					}

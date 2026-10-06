@@ -27,8 +27,7 @@
 
 #include <stdint.h>
 
-#include "dev/gen_device_info.h"
-#include "drm-uapi/i915_drm.h"
+#include "dev/intel_device_info.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,6 +41,8 @@ struct aub_read {
 
    void (*info)(void *user_data, int pci_id, const char *app_name);
 
+   void (*comment)(void *user_data, const char *msg);
+
    void (*local_write)(void *user_data, uint64_t phys_addr, const void *data, uint32_t data_len);
    void (*phys_write)(void *user_data, uint64_t phys_addr, const void *data, uint32_t data_len);
    void (*ggtt_write)(void *user_data, uint64_t phys_addr, const void *data, uint32_t data_len);
@@ -50,9 +51,9 @@ struct aub_read {
 
    void (*reg_write)(void *user_data, uint32_t reg_offset, uint32_t reg_value);
 
-   void (*ring_write)(void *user_data, enum drm_i915_gem_engine_class engine,
+   void (*ring_write)(void *user_data, enum intel_engine_class engine,
                       const void *data, uint32_t data_len);
-   void (*execlist_write)(void *user_data, enum drm_i915_gem_engine_class engine,
+   void (*execlist_write)(void *user_data, enum intel_engine_class engine,
                           uint64_t context_descriptor);
 
    /* Reader's data */
@@ -63,7 +64,7 @@ struct aub_read {
    uint32_t blitter_elsp[4];
    int blitter_elsp_index;
 
-   struct gen_device_info devinfo;
+   struct intel_device_info devinfo;
 };
 
 int aub_read_command(struct aub_read *read, const void *data, uint32_t data_len);

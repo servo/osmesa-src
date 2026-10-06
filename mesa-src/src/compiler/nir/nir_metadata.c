@@ -19,9 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
  */
 
 #include "nir.h"
@@ -37,15 +34,28 @@ nir_metadata_require(nir_function_impl *impl, nir_metadata required, ...)
 
    if (NEEDS_UPDATE(nir_metadata_block_index))
       nir_index_blocks(impl);
+   if (NEEDS_UPDATE(nir_metadata_instr_index))
+      nir_index_instrs(impl);
    if (NEEDS_UPDATE(nir_metadata_dominance))
       nir_calc_dominance_impl(impl);
-   if (NEEDS_UPDATE(nir_metadata_live_ssa_defs))
-      nir_live_ssa_defs_impl(impl);
-   if (NEEDS_UPDATE(nir_metadata_loop_analysis)) {
+   if (NEEDS_UPDATE(nir_metadata_live_defs))
+      nir_live_defs_impl(impl);
+   if (required & nir_metadata_loop_analysis) {
       va_list ap;
       va_start(ap, required);
-      nir_loop_analyze_impl(impl, va_arg(ap, nir_variable_mode));
+      /* !! Warning !! Do not move these va_arg() call directly to
+       * nir_loop_analyze_impl() as parameters because the execution order will
+       * become undefined.
+       */
+      nir_variable_mode indirect_mask = va_arg(ap, nir_variable_mode);
+      int force_unroll_sampler_indirect = va_arg(ap, int);
       va_end(ap);
+
+      if (NEEDS_UPDATE(nir_metadata_loop_analysis) ||
+          indirect_mask != impl->loop_analysis_indirect_mask ||
+          force_unroll_sampler_indirect != impl->loop_analysis_force_unroll_sampler_indirect) {
+         nir_loop_analyze_impl(impl, indirect_mask, force_unroll_sampler_indirect);
+      }
    }
 
 #undef NEEDS_UPDATE
@@ -56,15 +66,27 @@ nir_metadata_require(nir_function_impl *impl, nir_metadata required, ...)
 void
 nir_metadata_preserve(nir_function_impl *impl, nir_metadata preserved)
 {
+   /* If we discard valid liveness information, immediately free the
+    * liveness information for each block. For large shaders, it can
+    * consume a huge amount of memory, and it's usually not immediately
+    * needed after dirtying.
+    */
+   if ((impl->valid_metadata & ~preserved) & nir_metadata_live_defs) {
+      nir_foreach_block(block, impl) {
+         ralloc_free(block->live_in);
+         ralloc_free(block->live_out);
+         block->live_in = block->live_out = NULL;
+      }
+   }
+
    impl->valid_metadata &= preserved;
 }
 
 void
 nir_shader_preserve_all_metadata(nir_shader *shader)
 {
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         nir_metadata_preserve(function->impl, nir_metadata_all);
+   nir_foreach_function_impl(impl, shader) {
+      nir_metadata_preserve(impl, nir_metadata_all);
    }
 }
 
@@ -78,10 +100,8 @@ nir_shader_preserve_all_metadata(nir_shader *shader)
 void
 nir_metadata_set_validation_flag(nir_shader *shader)
 {
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         function->impl->valid_metadata |= nir_metadata_not_properly_reset;
-      }
+   nir_foreach_function_impl(impl, shader) {
+      impl->valid_metadata |= nir_metadata_not_properly_reset;
    }
 }
 
@@ -95,11 +115,8 @@ nir_metadata_set_validation_flag(nir_shader *shader)
 void
 nir_metadata_check_validation_flag(nir_shader *shader)
 {
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         assert(!(function->impl->valid_metadata &
-                  nir_metadata_not_properly_reset));
-      }
+   nir_foreach_function_impl(impl, shader) {
+      assert(!(impl->valid_metadata & nir_metadata_not_properly_reset));
    }
 }
 #endif

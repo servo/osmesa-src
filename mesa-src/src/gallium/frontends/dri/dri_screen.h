@@ -34,13 +34,14 @@
 
 #include "dri_util.h"
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "frontend/api.h"
 #include "frontend/opencl_interop.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "postprocess/filters.h"
+#include "kopper_interface.h"
 
 struct dri_context;
 struct dri_drawable;
@@ -49,15 +50,48 @@ struct pipe_loader_device;
 struct dri_screen
 {
    /* st_api */
-   struct st_manager base;
-   struct st_api *st_api;
-
-   /* on old libGL's invalidate doesn't get called as it should */
-   boolean broken_invalidate;
+   struct pipe_frontend_screen base;
 
    /* dri */
-   __DRIscreen *sPriv;
-   boolean throttle;
+   /* Current screen's number */
+   int myNum;
+
+   void *loaderPrivate;
+
+   int max_gl_core_version;
+   int max_gl_compat_version;
+   int max_gl_es1_version;
+   int max_gl_es2_version;
+
+   enum dri_screen_type type;
+
+   const __DRIswrastLoaderExtension *swrast_loader;
+   const __DRIkopperLoaderExtension *kopper_loader;
+
+   struct {
+       /* Flag to indicate that this is a DRI2 screen.  Many of the above
+        * fields will not be valid or initializaed in that case. */
+       const __DRIdri2LoaderExtension *loader;
+       const __DRIimageLookupExtension *image;
+       const __DRIuseInvalidateExtension *useInvalidate;
+       const __DRIbackgroundCallableExtension *backgroundCallable;
+   } dri2;
+
+   struct {
+       const __DRIimageLoaderExtension *loader;
+   } image;
+
+   struct {
+      const __DRImutableRenderBufferLoaderExtension *loader;
+   } mutableRenderBuffer;
+
+   driOptionCache optionInfo;
+   driOptionCache optionCache;
+
+   unsigned int api_mask;
+
+   bool throttle;
+   bool dmabuf_import;
 
    struct st_config_options options;
 
@@ -66,21 +100,24 @@ struct dri_screen
 
    /* drm */
    int fd;
-   boolean can_share_buffer;
+   bool can_share_buffer;
 
    struct pipe_loader_device *dev;
 
    /* gallium */
-   boolean d_depth_bits_last;
-   boolean sd_depth_bits_last;
-   boolean auto_fake_front;
-   boolean has_reset_status_query;
+   bool auto_fake_front;
+   bool has_reset_status_query;
+   bool has_protected_context;
    enum pipe_texture_target target;
 
-   boolean swrast_no_present;
+   bool swrast_no_present;
 
-   /* hooks filled in by dri2 & drisw */
-   __DRIimage * (*lookup_egl_image)(struct dri_screen *ctx, void *handle);
+   /* DRI exts that vary based on gallium pipe_screen caps. */
+   __DRIimageExtension image_extension;
+   __DRI2bufferDamageExtension buffer_damage_extension;
+
+   /* DRI exts on this screen. Populated at init time based on device caps. */
+   const __DRIextension *screen_extensions[14];
 
    /* OpenCL interop */
    mtx_t opencl_func_mutex;
@@ -88,28 +125,37 @@ struct dri_screen
    opencl_dri_event_release_t opencl_dri_event_release;
    opencl_dri_event_wait_t opencl_dri_event_wait;
    opencl_dri_event_get_fence_t opencl_dri_event_get_fence;
+
+   /* kopper */
+   bool has_dmabuf;
+   bool is_sw;
 };
 
-/** cast wrapper */
-static inline struct dri_screen *
-dri_screen(__DRIscreen * sPriv)
+static inline const __DRIkopperLoaderExtension *
+dri_screen_get_kopper(struct dri_screen *screen)
 {
-   return (struct dri_screen *)sPriv->driverPrivate;
+   return screen->kopper_loader;
 }
 
-struct __DRIimageRec {
+struct dri_image {
    struct pipe_resource *texture;
    unsigned level;
    unsigned layer;
    uint32_t dri_format;
    uint32_t dri_fourcc;
    uint32_t dri_components;
+   /* Provided by eglCreateImageKHR if creating from a
+    * texture or a renderbuffer. 0 otherwise.
+    */
+   uint32_t internal_format;
    unsigned use;
    unsigned plane;
 
+   int in_fence_fd;
+
    void *loader_private;
 
-   boolean imported_dmabuf;
+   bool imported_dmabuf;
    /**
     * Provided by EGL_EXT_image_dma_buf_import.
     */
@@ -118,12 +164,13 @@ struct __DRIimageRec {
    enum __DRIChromaSiting horizontal_siting;
    enum __DRIChromaSiting vertical_siting;
 
+   struct dri_screen *screen;
 };
 
-static inline boolean
-dri_with_format(__DRIscreen * sPriv)
+static inline bool
+dri_with_format(struct dri_screen *screen)
 {
-   const __DRIdri2LoaderExtension *loader = sPriv->dri2.loader;
+   const __DRIdri2LoaderExtension *loader = screen->dri2.loader;
 
    return loader
        && (loader->base.version >= 3)
@@ -138,22 +185,34 @@ dri_fill_st_visual(struct st_visual *stvis,
 void
 dri_init_options(struct dri_screen *screen);
 
-const __DRIconfig **
-dri_init_screen_helper(struct dri_screen *screen,
-                       struct pipe_screen *pscreen);
+const struct dri_config **
+dri_init_screen(struct dri_screen *screen,
+                struct pipe_screen *pscreen,
+                bool has_multibuffer);
 
 void
-dri_destroy_screen_helper(struct dri_screen * screen);
+dri_release_screen(struct dri_screen * screen);
 
 void
-dri_destroy_screen(__DRIscreen * sPriv);
+dri_destroy_screen(struct dri_screen *screen);
 
-extern const struct __DriverAPIRec dri_kms_driver_api;
+struct pipe_screen *
+dri2_init_screen(struct dri_screen *screen, bool driver_name_is_inferred);
+struct pipe_screen *
+dri_swrast_kms_init_screen(struct dri_screen *screen, bool driver_name_is_inferred);
+struct pipe_screen *
+kopper_init_screen(struct dri_screen *screen, bool driver_name_is_inferred);
+struct pipe_screen *
+drisw_init_screen(struct dri_screen *screen, bool driver_name_is_inferred);
 
+extern const struct __DriverAPIRec dri_swrast_kms_driver_api;
+extern const __DRIextension *dri_swrast_kms_driver_extensions[];
 extern const struct __DriverAPIRec galliumdrm_driver_api;
 extern const __DRIextension *galliumdrm_driver_extensions[];
 extern const struct __DriverAPIRec galliumsw_driver_api;
 extern const __DRIextension *galliumsw_driver_extensions[];
+extern const struct __DriverAPIRec galliumvk_driver_api;
+extern const __DRIextension *galliumvk_driver_extensions[];
 extern const __DRIconfigOptionsExtension gallium_config_options;
 
 #endif

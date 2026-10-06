@@ -1190,7 +1190,7 @@ img_filter_2d_linear_repeat_POT(const struct sp_sampler_view *sp_sview,
    }
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1225,7 +1225,7 @@ img_filter_2d_nearest_repeat_POT(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1268,7 +1268,7 @@ img_filter_2d_nearest_clamp_POT(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1299,7 +1299,7 @@ img_filter_1d_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1331,7 +1331,7 @@ img_filter_1d_array_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1365,7 +1365,7 @@ img_filter_2d_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1400,7 +1400,7 @@ img_filter_2d_array_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1444,7 +1444,7 @@ img_filter_cube_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1479,7 +1479,7 @@ img_filter_cube_array_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1638,7 +1638,7 @@ get_gather_value(const struct sp_sampler_view *sp_sview,
    case PIPE_SWIZZLE_0:
       return 0.0;
    case PIPE_SWIZZLE_1:
-      return 1.0;
+      return sp_sview->oneval;
    default:
       return tx[chan][swizzle];
    }
@@ -2137,7 +2137,7 @@ mip_filter_linear(const struct sp_sampler_view *sp_sview,
    }
 
    if (DEBUG_TEX) {
-      print_sample_4(__FUNCTION__, rgba);
+      print_sample_4(__func__, rgba);
    }
 }
 
@@ -2204,7 +2204,7 @@ mip_filter_nearest(const struct sp_sampler_view *sp_sview,
    }
 
    if (DEBUG_TEX) {
-      print_sample_4(__FUNCTION__, rgba);
+      print_sample_4(__func__, rgba);
    }
 }
 
@@ -2385,15 +2385,6 @@ img_filter_2d_ewa(const struct sp_sampler_view *sp_sview,
    float weight_buffer[TGSI_QUAD_SIZE];
    int j;
 
-   /* For each quad, the du and dx values are the same and so the ellipse is
-    * also the same. Note that texel/image access can only be performed using
-    * a quad, i.e. it is not possible to get the pixel value for a single
-    * tex coord. In order to have a better performance, the access is buffered
-    * using the s_buffer/t_buffer and weight_buffer. Only when the buffer is
-    * full, then the pixel values are read from the image.
-    */
-   const float ddq = 2 * A;
-
    /* Scale ellipse formula to directly index the Filter Lookup Table.
     * i.e. scale so that F = WEIGHT_LUT_SIZE-1
     */
@@ -2402,6 +2393,15 @@ img_filter_2d_ewa(const struct sp_sampler_view *sp_sview,
    B *= formScale;
    C *= formScale;
    /* F *= formScale; */ /* no need to scale F as we don't use it below here */
+
+   /* For each quad, the du and dx values are the same and so the ellipse is
+    * also the same. Note that texel/image access can only be performed using
+    * a quad, i.e. it is not possible to get the pixel value for a single
+    * tex coord. In order to have a better performance, the access is buffered
+    * using the s_buffer/t_buffer and weight_buffer. Only when the buffer is
+    * full, then the pixel values are read from the image.
+    */
+   const float ddq = 2 * A;
 
    args.level = level;
    args.offset = offset;
@@ -2444,8 +2444,8 @@ img_filter_2d_ewa(const struct sp_sampler_view *sp_sview,
                const float weight = weightLut[qClamped];
 
                weight_buffer[buffer_next] = weight;
-               s_buffer[buffer_next] = u / ((float) width);
-               t_buffer[buffer_next] = v / ((float) height);
+               s_buffer[buffer_next] = (u + 0.5f) / width;
+               t_buffer[buffer_next] = (v + 0.5f) / height;
             
                buffer_next++;
                if (buffer_next == TGSI_QUAD_SIZE) {
@@ -2653,7 +2653,7 @@ mip_filter_linear_aniso(const struct sp_sampler_view *sp_sview,
    }
 
    if (DEBUG_TEX) {
-      print_sample_4(__FUNCTION__, rgba);
+      print_sample_4(__func__, rgba);
    }
 }
 
@@ -2728,7 +2728,7 @@ mip_filter_linear_2d_linear_repeat_POT(
    }
 
    if (DEBUG_TEX) {
-      print_sample_4(__FUNCTION__, rgba);
+      print_sample_4(__func__, rgba);
    }
 }
 
@@ -2884,12 +2884,12 @@ do_swizzling(const struct pipe_sampler_view *sview,
              float in[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE],
              float out[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE])
 {
+   struct sp_sampler_view *sp_sview = (struct sp_sampler_view *)sview;
    int j;
    const unsigned swizzle_r = sview->swizzle_r;
    const unsigned swizzle_g = sview->swizzle_g;
    const unsigned swizzle_b = sview->swizzle_b;
    const unsigned swizzle_a = sview->swizzle_a;
-   float oneval = util_format_is_pure_integer(sview->format) ? uif(1) : 1.0f;
 
    switch (swizzle_r) {
    case PIPE_SWIZZLE_0:
@@ -2898,7 +2898,7 @@ do_swizzling(const struct pipe_sampler_view *sview,
       break;
    case PIPE_SWIZZLE_1:
       for (j = 0; j < 4; j++)
-         out[0][j] = oneval;
+         out[0][j] = sp_sview->oneval;
       break;
    default:
       assert(swizzle_r < 4);
@@ -2913,7 +2913,7 @@ do_swizzling(const struct pipe_sampler_view *sview,
       break;
    case PIPE_SWIZZLE_1:
       for (j = 0; j < 4; j++)
-         out[1][j] = oneval;
+         out[1][j] = sp_sview->oneval;
       break;
    default:
       assert(swizzle_g < 4);
@@ -2928,7 +2928,7 @@ do_swizzling(const struct pipe_sampler_view *sview,
       break;
    case PIPE_SWIZZLE_1:
       for (j = 0; j < 4; j++)
-         out[2][j] = oneval;
+         out[2][j] = sp_sview->oneval;
       break;
    default:
       assert(swizzle_b < 4);
@@ -2943,7 +2943,7 @@ do_swizzling(const struct pipe_sampler_view *sview,
       break;
    case PIPE_SWIZZLE_1:
       for (j = 0; j < 4; j++)
-         out[3][j] = oneval;
+         out[3][j] = sp_sview->oneval;
       break;
    default:
       assert(swizzle_a < 4);
@@ -3079,7 +3079,7 @@ get_img_filter(const struct sp_sampler_view *sp_sview,
        */
       if (!gather && sp_sview->pot2d &&
           sampler->wrap_s == sampler->wrap_t &&
-          sampler->normalized_coords) 
+          !sampler->unnormalized_coords)
       {
          switch (sampler->wrap_s) {
          case PIPE_TEX_WRAP_REPEAT:
@@ -3321,12 +3321,12 @@ sp_get_dims(const struct sp_sampler_view *sp_sview,
    switch (view->target) {
    case PIPE_TEXTURE_1D_ARRAY:
       dims[1] = view->u.tex.last_layer - view->u.tex.first_layer + 1;
-      /* fallthrough */
+      FALLTHROUGH;
    case PIPE_TEXTURE_1D:
       return;
    case PIPE_TEXTURE_2D_ARRAY:
       dims[2] = view->u.tex.last_layer - view->u.tex.first_layer + 1;
-      /* fallthrough */
+      FALLTHROUGH;
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_CUBE:
    case PIPE_TEXTURE_RECT:
@@ -3479,7 +3479,7 @@ softpipe_create_sampler_state(struct pipe_context *pipe,
     * nearest_texcoord_s may be active at the same time, if the
     * sampler min_img_filter differs from its mag_img_filter.
     */
-   if (sampler->normalized_coords) {
+   if (!sampler->unnormalized_coords) {
       samp->linear_texcoord_s = get_linear_wrap( sampler->wrap_s );
       samp->linear_texcoord_t = get_linear_wrap( sampler->wrap_t );
       samp->linear_texcoord_p = get_linear_wrap( sampler->wrap_r );
@@ -3514,12 +3514,12 @@ softpipe_create_sampler_state(struct pipe_context *pipe,
 
    case PIPE_TEX_MIPFILTER_LINEAR:
       if (sampler->min_img_filter == sampler->mag_img_filter &&
-          sampler->normalized_coords &&
+          !sampler->unnormalized_coords &&
           sampler->wrap_s == PIPE_TEX_WRAP_REPEAT &&
           sampler->wrap_t == PIPE_TEX_WRAP_REPEAT &&
           sampler->min_img_filter == PIPE_TEX_FILTER_LINEAR &&
           sampler->max_anisotropy <= 1) {
-         samp->min_mag_equal_repeat_linear = TRUE;
+         samp->min_mag_equal_repeat_linear = true;
       }
       samp->filter_funcs = &funcs_linear;
 
@@ -3545,7 +3545,7 @@ softpipe_create_sampler_state(struct pipe_context *pipe,
       break;
    }
    if (samp->min_img_filter == sampler->mag_img_filter) {
-      samp->min_mag_equal = TRUE;
+      samp->min_mag_equal = true;
    }
 
    return (void *)samp;
@@ -3596,7 +3596,7 @@ softpipe_create_sampler_view(struct pipe_context *pipe,
       pipe_resource_reference(&view->texture, resource);
       view->context = pipe;
 
-#ifdef DEBUG
+#if MESA_DEBUG
      /*
       * This is possibly too lenient, but the primary reason is just
       * to catch gallium frontends which forget to initialize this, so
@@ -3627,7 +3627,7 @@ softpipe_create_sampler_view(struct pipe_context *pipe,
 #endif
 
       if (any_swizzle(view)) {
-         sview->need_swizzle = TRUE;
+         sview->need_swizzle = true;
       }
 
       sview->need_cube_convert = (view->target == PIPE_TEXTURE_CUBE ||
@@ -3638,6 +3638,8 @@ softpipe_create_sampler_view(struct pipe_context *pipe,
 
       sview->xpot = util_logbase2( resource->width0 );
       sview->ypot = util_logbase2( resource->height0 );
+
+      sview->oneval = util_format_is_pure_integer(view->format) ? uif(1) : 1.0f;
    }
 
    return (struct pipe_sampler_view *) sview;

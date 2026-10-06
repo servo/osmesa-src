@@ -1,22 +1,5 @@
 # Copyright © 2017 Intel Corporation
-
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# SPDX-License-Identifier: MIT
 
 files_svga = files(
   'svga_cmd.c',
@@ -26,11 +9,13 @@ files_svga = files(
   'svga_draw.c',
   'svga_draw_elements.c',
   'svga_format.c',
+  'svga_image_view.c',
   'svga_link.c',
   'svga_pipe_blend.c',
   'svga_pipe_blit.c',
   'svga_pipe_clear.c',
   'svga_pipe_constants.c',
+  'svga_pipe_cs.c',
   'svga_pipe_depthstencil.c',
   'svga_pipe_draw.c',
   'svga_pipe_flush.c',
@@ -52,8 +37,10 @@ files_svga = files(
   'svga_screen.c',
   'svga_screen_cache.c',
   'svga_shader.c',
+  'svga_shader_buffer.c',
   'svga_state.c',
   'svga_state_constants.c',
+  'svga_state_cs.c',
   'svga_state_framebuffer.c',
   'svga_state_fs.c',
   'svga_state_gs.c',
@@ -63,6 +50,7 @@ files_svga = files(
   'svga_state_sampler.c',
   'svga_state_tgsi_transform.c',
   'svga_state_tss.c',
+  'svga_state_uav.c',
   'svga_state_vdecl.c',
   'svga_state_vs.c',
   'svga_surface.c',
@@ -87,9 +75,16 @@ libsvga = static_library(
     inc_src, inc_include, inc_gallium, inc_gallium_aux,
     include_directories('include')
   ],
+  link_with : [libglsl],
+  dependencies : [idep_mesautil, idep_nir],
 )
+
+svga_deps = [libsvga]
+if not with_platform_windows
+  svga_deps += libsvgadrm
+endif
 
 driver_svga = declare_dependency(
   compile_args : '-DGALLIUM_VMWGFX',
-  link_with : [libsvga, libsvgadrm],
+  link_with : svga_deps,
 )

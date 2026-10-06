@@ -37,177 +37,101 @@
 #include "util/algorithm.hpp"
 
 #include <llvm/Config/llvm-config.h>
-#if LLVM_VERSION_MAJOR < 4
-#include <llvm/Bitcode/ReaderWriter.h>
-#else
-#include <llvm/Bitcode/BitcodeReader.h>
-#include <llvm/Bitcode/BitcodeWriter.h>
-#endif
 
+#include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Type.h>
 #include <llvm/Linker/Linker.h>
+#include <llvm/Support/CodeGen.h>
+#include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/Utils/Cloning.h>
-#include <llvm/Target/TargetMachine.h>
-#if LLVM_VERSION_MAJOR >= 4
-#include <llvm/Support/Error.h>
-#else
-#include <llvm/Support/ErrorOr.h>
-#endif
-
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/Analysis/TargetLibraryInfo.h>
 
 #include <clang/Basic/TargetInfo.h>
 #include <clang/Frontend/CompilerInstance.h>
+#include <clang/Lex/PreprocessorOptions.h>
 
-#if LLVM_VERSION_MAJOR >= 8
-#include <clang/Basic/CodeGenOptions.h>
+#if LLVM_VERSION_MAJOR >= 14
+#include <llvm/MC/TargetRegistry.h>
 #else
-#include <clang/Frontend/CodeGenOptions.h>
+#include <llvm/Support/TargetRegistry.h>
 #endif
 
-#if LLVM_VERSION_MAJOR >= 10
-#include <llvm/Support/CodeGen.h>
+#if LLVM_VERSION_MAJOR >= 17
+#include <llvm/TargetParser/Triple.h>
+#else
+#include <llvm/ADT/Triple.h>
 #endif
 
 namespace clover {
    namespace llvm {
       namespace compat {
 
-#if LLVM_VERSION_MAJOR >= 10
+#if LLVM_VERSION_MAJOR >= 18
+         const auto CGFT_ObjectFile = ::llvm::CodeGenFileType::ObjectFile;
+         const auto CGFT_AssemblyFile = ::llvm::CodeGenFileType::AssemblyFile;
+#else
          const auto CGFT_ObjectFile = ::llvm::CGFT_ObjectFile;
          const auto CGFT_AssemblyFile = ::llvm::CGFT_AssemblyFile;
+#endif
          typedef ::llvm::CodeGenFileType CodeGenFileType;
-#else
-         const auto CGFT_ObjectFile = ::llvm::TargetMachine::CGFT_ObjectFile;
-         const auto CGFT_AssemblyFile =
-            ::llvm::TargetMachine::CGFT_AssemblyFile;
-         typedef ::llvm::TargetMachine::CodeGenFileType CodeGenFileType;
-#endif
 
-         template<typename T, typename AS>
-         unsigned target_address_space(const T &target, const AS lang_as) {
-            const auto &map = target.getAddressSpaceMap();
-#if LLVM_VERSION_MAJOR >= 5
-            return map[static_cast<unsigned>(lang_as)];
-#else
-            return map[lang_as - clang::LangAS::Offset];
-#endif
-         }
-
-#if LLVM_VERSION_MAJOR >= 10
          const clang::InputKind ik_opencl = clang::Language::OpenCL;
-#elif LLVM_VERSION_MAJOR >= 5
-         const clang::InputKind ik_opencl = clang::InputKind::OpenCL;
-#else
-         const clang::InputKind ik_opencl = clang::IK_OpenCL;
-#endif
-
-#if LLVM_VERSION_MAJOR >= 5
-         const clang::LangStandard::Kind lang_opencl10 = clang::LangStandard::lang_opencl10;
-#else
-         const clang::LangStandard::Kind lang_opencl10 = clang::LangStandard::lang_opencl;
-#endif
-
-         inline void
-         add_link_bitcode_file(clang::CodeGenOptions &opts,
-                               const std::string &path) {
-#if LLVM_VERSION_MAJOR >= 5
-            clang::CodeGenOptions::BitcodeFileToLink F;
-
-            F.Filename = path;
-            F.PropagateAttrs = true;
-            F.LinkFlags = ::llvm::Linker::Flags::None;
-            opts.LinkBitcodeFiles.emplace_back(F);
-#else
-            opts.LinkBitcodeFiles.emplace_back(::llvm::Linker::Flags::None, path);
-#endif
-         }
-
-#if LLVM_VERSION_MAJOR >= 6
-         const auto default_code_model = ::llvm::None;
-#else
-         const auto default_code_model = ::llvm::CodeModel::Default;
-#endif
-
-         template<typename M, typename F> void
-         handle_module_error(M &mod, const F &f) {
-#if LLVM_VERSION_MAJOR >= 4
-            if (::llvm::Error err = mod.takeError())
-               ::llvm::handleAllErrors(std::move(err), [&](::llvm::ErrorInfoBase &eib) {
-                     f(eib.message());
-                  });
-#else
-            if (!mod)
-               f(mod.getError().message());
-#endif
-         }
-
-         template<typename T> void
-         set_diagnostic_handler(::llvm::LLVMContext &ctx,
-                                T *diagnostic_handler, void *data) {
-#if LLVM_VERSION_MAJOR >= 6
-            ctx.setDiagnosticHandlerCallBack(diagnostic_handler, data);
-#else
-            ctx.setDiagnosticHandler(diagnostic_handler, data);
-#endif
-         }
-
-         inline std::unique_ptr< ::llvm::Module>
-         clone_module(const ::llvm::Module &mod)
-         {
-#if LLVM_VERSION_MAJOR >= 7
-            return ::llvm::CloneModule(mod);
-#else
-            return ::llvm::CloneModule(&mod);
-#endif
-         }
-
-         template<typename T> void
-         write_bitcode_to_file(const ::llvm::Module &mod, T &os)
-         {
-#if LLVM_VERSION_MAJOR >= 7
-            ::llvm::WriteBitcodeToFile(mod, os);
-#else
-            ::llvm::WriteBitcodeToFile(&mod, os);
-#endif
-         }
-
-         template<typename TM, typename PM, typename OS, typename FT>
-         bool add_passes_to_emit_file(TM &tm, PM &pm, OS &os, FT &ft)
-         {
-#if LLVM_VERSION_MAJOR >= 7
-            return tm.addPassesToEmitFile(pm, os, nullptr, ft);
-#else
-            return tm.addPassesToEmitFile(pm, os, ft);
-#endif
-         }
 
          template<typename T> inline bool
          create_compiler_invocation_from_args(clang::CompilerInvocation &cinv,
                                               T copts,
                                               clang::DiagnosticsEngine &diag)
          {
-#if LLVM_VERSION_MAJOR >= 10
             return clang::CompilerInvocation::CreateFromArgs(
                cinv, copts, diag);
+         }
+
+         static inline void
+         compiler_set_lang_defaults(std::unique_ptr<clang::CompilerInstance> &c,
+                                    clang::InputKind ik, const ::llvm::Triple& triple,
+                                    clang::LangStandard::Kind d)
+         {
+#if LLVM_VERSION_MAJOR >= 15
+            c->getLangOpts().setLangDefaults(c->getLangOpts(), ik.getLanguage(), triple,
 #else
-            return clang::CompilerInvocation::CreateFromArgs(
-               cinv, copts.data(), copts.data() + copts.size(), diag);
+            c->getInvocation().setLangDefaults(c->getLangOpts(), ik, triple,
+#endif
+#if LLVM_VERSION_MAJOR >= 12
+                                               c->getPreprocessorOpts().Includes,
+#else
+                                               c->getPreprocessorOpts(),
+#endif
+                                               d);
+         }
+
+         static inline unsigned
+         get_abi_type_alignment(::llvm::DataLayout dl, ::llvm::Type *type)
+         {
+#if LLVM_VERSION_MAJOR >= 16
+            return dl.getABITypeAlign(type).value();
+#else
+            return dl.getABITypeAlignment(type);
 #endif
          }
 
-         template<typename T, typename M>
-         T get_abi_type(const T &arg_type, const M &mod) {
-#if LLVM_VERSION_MAJOR >= 7
-            return arg_type;
-#else
-            ::llvm::DataLayout dl(&mod);
-            const unsigned arg_store_size = dl.getTypeStoreSize(arg_type);
-            return !arg_type->isIntegerTy() ? arg_type :
-               dl.getSmallestLegalIntType(mod.getContext(), arg_store_size * 8);
-#endif
+         static inline bool
+         is_scalable_vector(const ::llvm::Type *type)
+         {
+            return ::llvm::isa<::llvm::ScalableVectorType>(type);
+         }
+
+         static inline bool
+         is_fixed_vector(const ::llvm::Type *type)
+         {
+            return ::llvm::isa<::llvm::FixedVectorType>(type);
+         }
+
+         static inline unsigned
+         get_fixed_vector_elements(const ::llvm::Type *type)
+         {
+            return ::llvm::cast<::llvm::FixedVectorType>(type)->getNumElements();
          }
       }
    }

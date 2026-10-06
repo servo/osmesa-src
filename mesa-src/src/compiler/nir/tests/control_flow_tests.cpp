@@ -20,31 +20,16 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
-#include <gtest/gtest.h>
-#include "nir.h"
-#include "nir_builder.h"
 
-class nir_cf_test : public ::testing::Test {
+#include "nir_test.h"
+
+class nir_cf_test : public nir_test {
 protected:
-   nir_cf_test();
-   ~nir_cf_test();
-
-   nir_builder b;
+   nir_cf_test()
+      : nir_test::nir_test("nir_cf_test")
+   {
+   }
 };
-
-nir_cf_test::nir_cf_test()
-{
-   glsl_type_singleton_init_or_ref();
-
-   static const nir_shader_compiler_options options = { };
-   nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_VERTEX, &options);
-}
-
-nir_cf_test::~nir_cf_test()
-{
-   ralloc_free(b.shader);
-   glsl_type_singleton_decref();
-}
 
 TEST_F(nir_cf_test, delete_break_in_loop)
 {
@@ -52,13 +37,13 @@ TEST_F(nir_cf_test, delete_break_in_loop)
     *
     * while (...) { break; }
     */
-   nir_loop *loop = nir_loop_create(b.shader);
-   nir_cf_node_insert(nir_after_cf_list(&b.impl->body), &loop->cf_node);
+   nir_loop *loop = nir_loop_create(b->shader);
+   nir_cf_node_insert(nir_after_cf_list(&b->impl->body), &loop->cf_node);
 
-   b.cursor = nir_after_cf_list(&loop->body);
+   b->cursor = nir_after_cf_list(&loop->body);
 
-   nir_jump_instr *jump = nir_jump_instr_create(b.shader, nir_jump_break);
-   nir_builder_instr_insert(&b, &jump->instr);
+   nir_jump_instr *jump = nir_jump_instr_create(b->shader, nir_jump_break);
+   nir_builder_instr_insert(b, &jump->instr);
 
    /* At this point, we should have:
     *
@@ -78,10 +63,10 @@ TEST_F(nir_cf_test, delete_break_in_loop)
     *         block block_3:
     * }
     */
-   nir_block *block_0 = nir_start_block(b.impl);
+   nir_block *block_0 = nir_start_block(b->impl);
    nir_block *block_1 = nir_loop_first_block(loop);
    nir_block *block_2 = nir_cf_node_as_block(nir_cf_node_next(&loop->cf_node));
-   nir_block *block_3 = b.impl->end_block;
+   nir_block *block_3 = b->impl->end_block;
    ASSERT_EQ(nir_cf_node_block, block_0->cf_node.type);
    ASSERT_EQ(nir_cf_node_block, block_1->cf_node.type);
    ASSERT_EQ(nir_cf_node_block, block_2->cf_node.type);
@@ -104,12 +89,8 @@ TEST_F(nir_cf_test, delete_break_in_loop)
    EXPECT_TRUE(_mesa_set_search(block_2->predecessors, block_1));
    EXPECT_TRUE(_mesa_set_search(block_3->predecessors, block_2));
 
-   nir_print_shader(b.shader, stderr);
-
    /* Now remove the break. */
    nir_instr_remove(&jump->instr);
-
-   nir_print_shader(b.shader, stderr);
 
    /* At this point, we should have:
     *
@@ -147,5 +128,40 @@ TEST_F(nir_cf_test, delete_break_in_loop)
    EXPECT_FALSE(_mesa_set_search(block_2->predecessors, block_1));
    EXPECT_TRUE(_mesa_set_search(block_3->predecessors, block_2));
 
-   nir_metadata_require(b.impl, nir_metadata_dominance);
+   nir_metadata_require(b->impl, nir_metadata_dominance);
+}
+
+/* This tests a bug in nir_convert_loop_to_lcssa, two consecutive deref
+ * instructions can cause the function's loop to exit prematurely if
+ * rematerializing the second causes the first to also be rematerialized. */
+TEST_F(nir_cf_test, lcssa_iter_safety_during_deref_remat)
+{
+   nir_variable *ubo_var_array = nir_variable_create(
+      b->shader, nir_var_mem_ubo, glsl_array_type(glsl_int_type(), 4, 0), "ubo_array");
+   nir_variable *out_var = nir_variable_create(
+      b->shader, nir_var_shader_out, glsl_int_type(), "out");
+
+   nir_loop *loop = nir_push_loop(b);
+
+   nir_def *index = nir_imm_int(b, 2);
+   nir_deref_instr *deref = nir_build_deref_var(b, ubo_var_array);
+   deref = nir_build_deref_array(b, deref, index);
+   nir_jump(b, nir_jump_break);
+
+   nir_pop_loop(b, loop);
+
+   nir_def *val = nir_load_deref(b, deref);
+   nir_store_deref(b, nir_build_deref_var(b, out_var), val, 0x1);
+
+   nir_convert_loop_to_lcssa(loop);
+
+   nir_block *block_after_loop = nir_cf_node_as_block(nir_cf_node_next(&loop->cf_node));
+
+   EXPECT_FALSE(nir_def_is_unused(index));
+   nir_foreach_use_including_if(src, index)
+      EXPECT_TRUE(!nir_src_is_if(src) && nir_src_parent_instr(src)->type == nir_instr_type_phi &&
+                  nir_src_parent_instr(src)->block == block_after_loop);
+
+   nir_validate_shader(b->shader, NULL);
+   nir_validate_ssa_dominance(b->shader, NULL);
 }

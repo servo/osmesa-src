@@ -1,28 +1,11 @@
 /*
- * Copyright © 2007-2019 Advanced Micro Devices, Inc.
- * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS
- * AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- */
+************************************************************************************************************************
+*
+*  Copyright (C) 2007-2024 Advanced Micro Devices, Inc. All rights reserved.
+*  SPDX-License-Identifier: MIT
+*
+***********************************************************************************************************************/
+
 
 /**
 ************************************************************************************************************************
@@ -46,30 +29,36 @@ namespace V2
 * @brief Flags for SwizzleModeTable
 ************************************************************************************************************************
 */
-struct SwizzleModeFlags
+union SwizzleModeFlags
 {
-    // Swizzle mode
-    UINT_32 isLinear        : 1;    // Linear
+    struct
+    {
+        // Swizzle mode
+        UINT_32 isLinear        : 1;    // Linear
 
-    // Block size
-    UINT_32 is256b          : 1;    // Block size is 256B
-    UINT_32 is4kb           : 1;    // Block size is 4KB
-    UINT_32 is64kb          : 1;    // Block size is 64KB
-    UINT_32 isVar           : 1;    // Block size is variable
+        // Block size
+        UINT_32 is256b          : 1;    // Block size is 256B
+        UINT_32 is4kb           : 1;    // Block size is 4KB
+        UINT_32 is64kb          : 1;    // Block size is 64KB
+        UINT_32 isVar           : 1;    // Block size is variable
 
-    UINT_32 isZ             : 1;    // Z order swizzle mode
-    UINT_32 isStd           : 1;    // Standard swizzle mode
-    UINT_32 isDisp          : 1;    // Display swizzle mode
-    UINT_32 isRot           : 1;    // Rotate swizzle mode
+        UINT_32 isZ             : 1;    // Z order swizzle mode
+        UINT_32 isStd           : 1;    // Standard swizzle mode
+        UINT_32 isDisp          : 1;    // Display swizzle mode
+        UINT_32 isRot           : 1;    // Rotate swizzle mode
 
-    // XOR mode
-    UINT_32 isXor           : 1;    // XOR after swizzle if set
+        // XOR mode
+        UINT_32 isXor           : 1;    // XOR after swizzle if set
 
-    UINT_32 isT             : 1;    // T mode
+        UINT_32 isT             : 1;    // T mode
 
-    UINT_32 isRtOpt         : 1;    // mode opt for render target
+        // GFX10
+        UINT_32 isRtOpt         : 1;    // mode opt for render target
 
-    UINT_32 reserved        : 20;   // Reserved bits
+        UINT_32 reserved        : 20;   // Reserved bits
+    };
+
+    UINT_32 u32All;
 };
 
 struct Dim2d
@@ -83,20 +72,6 @@ struct Dim3d
     UINT_32 w;
     UINT_32 h;
     UINT_32 d;
-};
-
-// Macro define resource block type
-enum AddrBlockType
-{
-    AddrBlockMicro     = 0, // Resource uses 256B block
-    AddrBlockThin4KB   = 1, // Resource uses thin 4KB block
-    AddrBlockThick4KB  = 2, // Resource uses thick 4KB block
-    AddrBlockThin64KB  = 3, // Resource uses thin 64KB block
-    AddrBlockThick64KB = 4, // Resource uses thick 64KB block
-    AddrBlockVar       = 5, // Resource uses var block, only valid for GFX9
-    AddrBlockLinear    = 6, // Resource uses linear swizzle mode
-
-    AddrBlockMaxTiledType = AddrBlockVar + 1,
 };
 
 enum AddrSwSet
@@ -119,6 +94,23 @@ const UINT_32 Log2Size64K = 16u;
 
 /**
 ************************************************************************************************************************
+* @brief Swizzle pattern information
+************************************************************************************************************************
+*/
+// Accessed by index representing the logbase2 of (8bpp/16bpp/32bpp/64bpp/128bpp)
+// contains the indices which map to 2D arrays SW_PATTERN_NIBBLE[0-9] which contain sections of an index equation. They are dependant on pipe# and bpe #
+struct ADDR_SW_PATINFO
+{
+    UINT_8  maxItemCount;
+    UINT_8  nibble01Idx;
+    UINT_16 nibble2Idx;
+    UINT_16 nibble3Idx;
+    UINT_8  nibble4Idx;
+};
+
+
+/**
+************************************************************************************************************************
 * @brief This class contains asic independent address lib functionalities
 ************************************************************************************************************************
 */
@@ -130,6 +122,10 @@ public:
     static Lib* GetLib(
         ADDR_HANDLE hLib);
 
+    virtual UINT_32 GetInterfaceVersion() const
+    {
+        return 2;
+    }
     //
     // Interface stubs
     //
@@ -146,6 +142,16 @@ public:
     ADDR_E_RETURNCODE ComputeSurfaceCoordFromAddr(
         const ADDR2_COMPUTE_SURFACE_COORDFROMADDR_INPUT* pIn,
         ADDR2_COMPUTE_SURFACE_COORDFROMADDR_OUTPUT*      pOut) const;
+    
+    ADDR_E_RETURNCODE CopyMemToSurface(
+        const ADDR2_COPY_MEMSURFACE_INPUT*  pIn,
+        const ADDR2_COPY_MEMSURFACE_REGION* pRegions,
+        UINT_32                            regionCount) const;
+
+    ADDR_E_RETURNCODE CopySurfaceToMem(
+        const ADDR2_COPY_MEMSURFACE_INPUT*  pIn,
+        const ADDR2_COPY_MEMSURFACE_REGION* pRegions,
+        UINT_32                             regionCount) const;
 
     // For HTile
     ADDR_E_RETURNCODE ComputeHtileInfo(
@@ -208,9 +214,17 @@ public:
         const ADDR2_COMPUTE_SUBRESOURCE_OFFSET_FORSWIZZLEPATTERN_INPUT* pIn,
         ADDR2_COMPUTE_SUBRESOURCE_OFFSET_FORSWIZZLEPATTERN_OUTPUT*      pOut);
 
+    ADDR_E_RETURNCODE ComputeNonBlockCompressedView(
+        const ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_INPUT* pIn,
+        ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_OUTPUT*      pOut);
+
     ADDR_E_RETURNCODE Addr2GetPreferredSurfaceSetting(
         const ADDR2_GET_PREFERRED_SURF_SETTING_INPUT* pIn,
         ADDR2_GET_PREFERRED_SURF_SETTING_OUTPUT*      pOut) const;
+
+    ADDR_E_RETURNCODE GetPossibleSwizzleModes(
+        const ADDR2_GET_PREFERRED_SURF_SETTING_INPUT* pIn,
+        ADDR2_GET_PREFERRED_SURF_SETTING_OUTPUT* pOut) const;
 
     virtual BOOL_32 IsValidDisplaySwizzleMode(
         const ADDR2_COMPUTE_SURFACE_INFO_INPUT* pIn) const
@@ -219,11 +233,21 @@ public:
         return ADDR_NOTIMPLEMENTED;
     }
 
+    ADDR_E_RETURNCODE GetAllowedBlockSet(
+        ADDR2_SWMODE_SET allowedSwModeSet,
+        AddrResourceType rsrcType,
+        ADDR2_BLOCK_SET* pAllowedBlockSet) const;
+
+    ADDR_E_RETURNCODE GetAllowedSwSet(
+        ADDR2_SWMODE_SET  allowedSwModeSet,
+        ADDR2_SWTYPE_SET* pAllowedSwSet) const;
+
 protected:
     Lib();  // Constructor is protected
     Lib(const Client* pClient);
 
     static const UINT_32 MaxNumOfBpp = 5;
+    static const UINT_32 MaxNumOfBppCMask = 4;
     static const UINT_32 MaxNumOfAA  = 4;
 
     static const Dim2d Block256_2d[MaxNumOfBpp];
@@ -236,11 +260,7 @@ protected:
 
     BOOL_32 IsValidSwMode(AddrSwizzleMode swizzleMode) const
     {
-        // Don't dereference a reinterpret_cast pointer so as not to break
-        // strict-aliasing rules.
-        UINT_32 mode;
-        memcpy(&mode, &m_swizzleModeTable[swizzleMode], sizeof(UINT_32));
-        return mode != 0;
+        return (m_swizzleModeTable[swizzleMode].u32All != 0);
     }
 
     // Checking block size
@@ -384,7 +404,7 @@ protected:
         sample = (sample == 0) ? 1 : sample;
         frag   = (frag   == 0) ? sample : frag;
 
-        UINT_32 fmaskBpp = QLog2(frag);
+        UINT_32 fmaskBpp = Log2(frag);
 
         if (sample > frag)
         {
@@ -457,12 +477,18 @@ protected:
         return ADDR_NOTSUPPORTED;
     }
 
-    virtual ADDR_E_RETURNCODE HwlComputeDccAddrFromCoord(
+    virtual ADDR_E_RETURNCODE HwlSupportComputeDccAddrFromCoord(
+        const ADDR2_COMPUTE_DCC_ADDRFROMCOORD_INPUT* pIn)
+    {
+        ADDR_NOT_IMPLEMENTED();
+        return ADDR_NOTSUPPORTED;
+    }
+
+    virtual VOID HwlComputeDccAddrFromCoord(
         const ADDR2_COMPUTE_DCC_ADDRFROMCOORD_INPUT* pIn,
         ADDR2_COMPUTE_DCC_ADDRFROMCOORD_OUTPUT*      pOut)
     {
         ADDR_NOT_IMPLEMENTED();
-        return ADDR_NOTSUPPORTED;
     }
 
     virtual ADDR_E_RETURNCODE HwlComputeCmaskAddrFromCoord(
@@ -558,12 +584,45 @@ protected:
         return ADDR_NOTSUPPORTED;
     }
 
+    virtual ADDR_E_RETURNCODE HwlComputeNonBlockCompressedView(
+        const ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_INPUT* pIn,
+        ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_OUTPUT*      pOut) const
+    {
+        ADDR_NOT_IMPLEMENTED();
+        return ADDR_NOTSUPPORTED;
+    }
+
     virtual ADDR_E_RETURNCODE HwlGetPreferredSurfaceSetting(
         const ADDR2_GET_PREFERRED_SURF_SETTING_INPUT* pIn,
         ADDR2_GET_PREFERRED_SURF_SETTING_OUTPUT*      pOut) const
     {
         ADDR_NOT_IMPLEMENTED();
         return ADDR_NOTSUPPORTED;
+    }
+
+    virtual ADDR_E_RETURNCODE HwlGetPossibleSwizzleModes(
+        const ADDR2_GET_PREFERRED_SURF_SETTING_INPUT* pIn,
+        ADDR2_GET_PREFERRED_SURF_SETTING_OUTPUT*      pOut) const
+    {
+        ADDR_NOT_IMPLEMENTED();
+        return ADDR_NOTSUPPORTED;
+    }
+
+    virtual ADDR_E_RETURNCODE HwlGetAllowedBlockSet(
+        ADDR2_SWMODE_SET allowedSwModeSet,
+        AddrResourceType rsrcType,
+        ADDR2_BLOCK_SET* pAllowedBlockSet) const
+    {
+        ADDR_NOT_IMPLEMENTED();
+        return ADDR_NOTIMPLEMENTED;
+    }
+
+    virtual ADDR_E_RETURNCODE HwlGetAllowedSwSet(
+        ADDR2_SWMODE_SET  allowedSwModeSet,
+        ADDR2_SWTYPE_SET* pAllowedSwSet) const
+    {
+        ADDR_NOT_IMPLEMENTED();
+        return ADDR_NOTIMPLEMENTED;
     }
 
     virtual ADDR_E_RETURNCODE HwlComputeSurfaceInfoSanityCheck(
@@ -597,6 +656,24 @@ protected:
         return ADDR_NOTIMPLEMENTED;
     }
 
+    virtual ADDR_E_RETURNCODE HwlCopyMemToSurface(
+        const ADDR2_COPY_MEMSURFACE_INPUT*  pIn,
+        const ADDR2_COPY_MEMSURFACE_REGION* pRegions,
+        UINT_32                             regionCount) const
+    {
+        ADDR_NOT_IMPLEMENTED();
+        return ADDR_NOTSUPPORTED;
+    }
+
+    virtual ADDR_E_RETURNCODE HwlCopySurfaceToMem(
+        const ADDR2_COPY_MEMSURFACE_INPUT*  pIn,
+        const ADDR2_COPY_MEMSURFACE_REGION* pRegions,
+        UINT_32                             regionCount) const
+    {
+        ADDR_NOT_IMPLEMENTED();
+        return ADDR_NOTSUPPORTED;
+    }
+
     ADDR_E_RETURNCODE ComputeBlock256Equation(
         AddrResourceType rsrcType,
         AddrSwizzleMode swMode,
@@ -625,6 +702,12 @@ protected:
     ADDR_E_RETURNCODE ComputeSurfaceInfoTiled(
         const ADDR2_COMPUTE_SURFACE_INFO_INPUT* pIn,
         ADDR2_COMPUTE_SURFACE_INFO_OUTPUT*      pOut) const;
+
+    ADDR_E_RETURNCODE CopyLinearSurface(
+        const ADDR2_COPY_MEMSURFACE_INPUT*  pIn,
+        const ADDR2_COPY_MEMSURFACE_REGION* pRegions,
+        UINT_32                             regionCount,
+        bool                                surfaceIsDst) const;
 
     ADDR_E_RETURNCODE ComputeSurfaceAddrFromCoordLinear(
         const ADDR2_COMPUTE_SURFACE_ADDRFROMCOORD_INPUT* pIn,
@@ -764,13 +847,13 @@ protected:
             {
                 case ADDR_RSRC_TEX_3D:
                     // Fall through to share 2D case
-                    actualMipLevels = Max(actualMipLevels, Log2NonPow2(pIn->numSlices) + 1);
+                    actualMipLevels = Max(actualMipLevels, Log2(pIn->numSlices) + 1);
                 case ADDR_RSRC_TEX_2D:
                     // Fall through to share 1D case
-                    actualMipLevels = Max(actualMipLevels, Log2NonPow2(pIn->height) + 1);
+                    actualMipLevels = Max(actualMipLevels, Log2(pIn->height) + 1);
                 case ADDR_RSRC_TEX_1D:
                     // Base 1D case
-                    actualMipLevels = Max(actualMipLevels, Log2NonPow2(pIn->width) + 1);
+                    actualMipLevels = Max(actualMipLevels, Log2(pIn->width) + 1);
                     break;
                 default:
                     ADDR_ASSERT_ALWAYS();
@@ -819,7 +902,14 @@ protected:
     VOID FilterInvalidEqSwizzleMode(
         ADDR2_SWMODE_SET& allowedSwModeSet,
         AddrResourceType  resourceType,
-        UINT_32           elemLog2) const;
+        UINT_32           elemLog2,
+        UINT_32           maxComponents) const;
+
+#if DEBUG
+    VOID ValidateStereoInfo(
+        const ADDR2_COMPUTE_SURFACE_INFO_INPUT* pIn,
+        const ADDR2_COMPUTE_SURFACE_INFO_OUTPUT* pOut) const;
+#endif
 
     UINT_32 m_se;                       ///< Number of shader engine
     UINT_32 m_rbPerSe;                  ///< Number of render backend per shader engine
@@ -841,8 +931,6 @@ protected:
     static const UINT_32    MaxSwModeType = 32;
     // Max number of resource type (2D/3D) supported for equation
     static const UINT_32    MaxRsrcType = 2;
-    // Max number of bpp (8bpp/16bpp/32bpp/64bpp/128bpp)
-    static const UINT_32    MaxElementBytesLog2  = 5;
     // Almost all swizzle mode + resource type support equation
     static const UINT_32    EquationTableSize = MaxElementBytesLog2 * MaxSwModeType * MaxRsrcType;
     // Equation table

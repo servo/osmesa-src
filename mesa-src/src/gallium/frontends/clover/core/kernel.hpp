@@ -23,9 +23,11 @@
 #ifndef CLOVER_CORE_KERNEL_HPP
 #define CLOVER_CORE_KERNEL_HPP
 
+#include <map>
 #include <memory>
 
 #include "core/object.hpp"
+#include "core/printf.hpp"
 #include "core/program.hpp"
 #include "core/memory.hpp"
 #include "core/sampler.hpp"
@@ -52,10 +54,12 @@ namespace clover {
 
          kernel &kern;
          intrusive_ptr<command_queue> q;
+         std::unique_ptr<printf_handler> print_handler;
 
          std::vector<uint8_t> input;
          std::vector<void *> samplers;
          std::vector<pipe_sampler_view *> sviews;
+         std::vector<pipe_image_view> iviews;
          std::vector<pipe_surface *> resources;
          std::vector<pipe_resource *> g_buffers;
          std::vector<size_t> g_handles;
@@ -70,7 +74,7 @@ namespace clover {
       class argument {
       public:
          static std::unique_ptr<argument>
-         create(const module::argument &marg);
+         create(const binary::argument &barg);
 
          argument(const argument &arg) = delete;
          argument &
@@ -93,7 +97,7 @@ namespace clover {
          /// Allocate the necessary resources to bind the specified
          /// object to this argument, and update \a ctx accordingly.
          virtual void bind(exec_context &ctx,
-                           const module::argument &marg) = 0;
+                           const binary::argument &barg) = 0;
 
          /// Free any resources that were allocated in bind().
          virtual void unbind(exec_context &ctx) = 0;
@@ -116,7 +120,7 @@ namespace clover {
 
    public:
       kernel(clover::program &prog, const std::string &name,
-             const std::vector<clover::module::argument> &margs);
+             const std::vector<clover::binary::argument> &bargs);
 
       kernel(const kernel &kern) = delete;
       kernel &
@@ -140,11 +144,12 @@ namespace clover {
 
       argument_range args();
       const_argument_range args() const;
+      std::vector<clover::binary::arg_info> args_infos();
 
       const intrusive_ref<clover::program> program;
 
    private:
-      const clover::module &module(const command_queue &q) const;
+      const clover::binary &binary(const command_queue &q) const;
 
       class scalar_argument : public argument {
       public:
@@ -152,7 +157,7 @@ namespace clover {
 
          virtual void set(size_t size, const void *value);
          virtual void bind(exec_context &ctx,
-                           const module::argument &marg);
+                           const binary::argument &barg);
          virtual void unbind(exec_context &ctx);
 
       private:
@@ -162,10 +167,12 @@ namespace clover {
 
       class global_argument : public argument {
       public:
+         global_argument();
+
          virtual void set(size_t size, const void *value);
          virtual void set_svm(const void *value);
          virtual void bind(exec_context &ctx,
-                           const module::argument &marg);
+                           const binary::argument &barg);
          virtual void unbind(exec_context &ctx);
 
       private:
@@ -179,7 +186,7 @@ namespace clover {
 
          virtual void set(size_t size, const void *value);
          virtual void bind(exec_context &ctx,
-                           const module::argument &marg);
+                           const binary::argument &barg);
          virtual void unbind(exec_context &ctx);
 
       private:
@@ -188,9 +195,11 @@ namespace clover {
 
       class constant_argument : public argument {
       public:
+         constant_argument();
+
          virtual void set(size_t size, const void *value);
          virtual void bind(exec_context &ctx,
-                           const module::argument &marg);
+                           const binary::argument &barg);
          virtual void unbind(exec_context &ctx);
 
       private:
@@ -209,9 +218,11 @@ namespace clover {
 
       class image_rd_argument : public image_argument {
       public:
+         image_rd_argument();
+
          virtual void set(size_t size, const void *value);
          virtual void bind(exec_context &ctx,
-                           const module::argument &marg);
+                           const binary::argument &barg);
          virtual void unbind(exec_context &ctx);
 
       private:
@@ -222,18 +233,17 @@ namespace clover {
       public:
          virtual void set(size_t size, const void *value);
          virtual void bind(exec_context &ctx,
-                           const module::argument &marg);
+                           const binary::argument &barg);
          virtual void unbind(exec_context &ctx);
-
-      private:
-         pipe_surface *st;
       };
 
       class sampler_argument : public argument {
       public:
+         sampler_argument();
+
          virtual void set(size_t size, const void *value);
          virtual void bind(exec_context &ctx,
-                           const module::argument &marg);
+                           const binary::argument &barg);
          virtual void unbind(exec_context &ctx);
 
       private:
@@ -242,6 +252,7 @@ namespace clover {
       };
 
       std::vector<std::unique_ptr<argument>> _args;
+      std::map<device *, std::unique_ptr<root_buffer> > _constant_buffers;
       std::string _name;
       exec_context exec;
       const ref_holder program_ref;

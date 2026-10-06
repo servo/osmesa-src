@@ -27,25 +27,26 @@
  * Based on weston shared/os-compatibility.c
  */
 
-#ifndef _WIN32
 #include "anon_file.h"
+#include "detect_os.h"
+
+#ifndef _WIN32
 
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <stdlib.h>
 
-#ifdef __FreeBSD__
+#if defined(HAVE_MEMFD_CREATE) || defined(__FreeBSD__) || defined(__OpenBSD__)
 #include <sys/mman.h>
-#elif defined(HAVE_MEMFD_CREATE) || defined(ANDROID)
+#elif DETECT_OS_ANDROID
 #include <sys/syscall.h>
 #include <linux/memfd.h>
-#include <stdlib.h>
 #else
 #include <stdio.h>
-#include <stdlib.h>
 #endif
 
-#if !(defined(__FreeBSD__) || defined(HAVE_MEMFD_CREATE) || defined(HAVE_MKOSTEMP) || defined(ANDROID))
+#if !(defined(__FreeBSD__) || defined(HAVE_MEMFD_CREATE) || defined(HAVE_MKOSTEMP) || DETECT_OS_ANDROID)
 static int
 set_cloexec_or_close(int fd)
 {
@@ -69,7 +70,7 @@ err:
 }
 #endif
 
-#if !(defined(__FreeBSD__) || defined(HAVE_MEMFD_CREATE) || defined(ANDROID))
+#if !(defined(__FreeBSD__) || defined(HAVE_MEMFD_CREATE) || DETECT_OS_ANDROID)
 static int
 create_tmpfile_cloexec(char *tmpname)
 {
@@ -113,16 +114,24 @@ create_tmpfile_cloexec(char *tmpname)
  * SCM_RIGHTS methods.
  */
 int
-os_create_anonymous_file(off_t size, const char *debug_name)
+os_create_anonymous_file(int64_t size, const char *debug_name)
 {
    int fd, ret;
-#ifdef __FreeBSD__
-   (void*)debug_name;
-   fd = shm_open(SHM_ANON, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-#elif defined(HAVE_MEMFD_CREATE) || defined(ANDROID)
+#if defined(HAVE_MEMFD_CREATE)
    if (!debug_name)
       debug_name = "mesa-shared";
-   fd = syscall(SYS_memfd_create, debug_name, MFD_CLOEXEC);
+   fd = memfd_create(debug_name, MFD_CLOEXEC | MFD_ALLOW_SEALING);
+#elif DETECT_OS_ANDROID
+   if (!debug_name)
+      debug_name = "mesa-shared";
+   fd = syscall(SYS_memfd_create, debug_name, MFD_CLOEXEC | MFD_ALLOW_SEALING);
+#elif defined(__FreeBSD__)
+   fd = shm_open(SHM_ANON, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+#elif defined(__OpenBSD__)
+   char template[] = "/tmp/mesa-XXXXXXXXXX";
+   fd = shm_mkstemp(template);
+   if (fd != -1)
+      shm_unlink(template);
 #else
    const char *path;
    char *name;
@@ -148,12 +157,25 @@ os_create_anonymous_file(off_t size, const char *debug_name)
    if (fd < 0)
       return -1;
 
-   ret = ftruncate(fd, size);
+   ret = ftruncate(fd, (off_t)size);
    if (ret < 0) {
       close(fd);
       return -1;
    }
 
    return fd;
+}
+#else
+
+#include <windows.h>
+#include <io.h>
+
+int
+os_create_anonymous_file(int64_t size, const char *debug_name)
+{
+   (void)debug_name;
+   HANDLE h = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL,
+      PAGE_READWRITE, (size >> 32), size & 0xFFFFFFFF, NULL);
+   return _open_osfhandle((intptr_t)h, 0);
 }
 #endif

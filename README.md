@@ -1,4 +1,8 @@
 # osmesa-src
 OSMesa source code and cargo build scripts to compile on Linux and Mac
 
-Patches that have been applied to upstream osmesa are in the patches directory.
+The bundled source is Mesa 25.0.7, which is the last Mesa version before
+OSMesa was removed.
+
+Building requires Meson 1.1 or newer, Ninja, Python 3 with Mako and PyYAML,
+Flex, Bison, a C++17 compiler, and LLVM development libraries.

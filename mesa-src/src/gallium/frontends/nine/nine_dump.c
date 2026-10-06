@@ -1,16 +1,21 @@
+/*
+ * Copyright 2011 Joakim Sindholt <opensource@zhasha.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "nine_debug.h"
 #include "nine_pipe.h"
 
 #include <stdio.h>
+#include "c11/threads.h"
 #include "util/u_memory.h"
 #include "util/u_math.h"
 
 #include "nine_dump.h"
 
-#if defined(DEBUG) || !defined(NDEBUG)
+#if MESA_DEBUG || !defined(NDEBUG)
 
-static char __thread tls[128];
+static char thread_local tls[128];
 
 const char *nine_D3DDEVTYPE_to_str(D3DDEVTYPE type)
 {
@@ -810,4 +815,4 @@ nine_dump_D3DCAPS9(unsigned ch, const D3DCAPS9 *caps)
     FREE(s);
 }
 
-#endif /* DEBUG || !NDEBUG */
+#endif /* MESA_DEBUG || !NDEBUG */

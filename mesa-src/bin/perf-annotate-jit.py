@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Copyright 2012 VMware Inc
 # Copyright 2008-2009 Jose Fonseca
@@ -25,7 +25,7 @@
 """Perf annotate for JIT code.
 
 Linux `perf annotate` does not work with JIT code.  This script takes the data
-produced by `perf script` command, plus the diassemblies outputed by gallivm
+produced by `perf script` command, plus the diassemblies outputted by gallivm
 into /tmp/perf-XXXXX.map.asm and produces output similar to `perf annotate`.
 
 See docs/llvmpipe.rst for usage instructions.
@@ -104,7 +104,7 @@ def lookupMap(filename, matchSymbol):
 
 def lookupAsm(filename, desiredFunction):
     stream = open(filename + '.asm', 'rt')
-    while stream.readline() != desiredFunction + ':\n':
+    while not stream.readline().startswith(desiredFunction + ' '):
         pass
 
     asm = []
@@ -165,7 +165,7 @@ class PerfParser(LineParser):
                 sys.stdout.write('%6u' % (sample))
                 total_samples += sample
             sys.stdout.write('%6u: %s\n' % (address, instr))
-        print 'total:', total_samples
+        print('total:', total_samples)
         assert len(samples) == 0
 
         sys.exit(0)
@@ -221,7 +221,7 @@ class PerfParser(LineParser):
         start_address = lookupMap(module, function_name)
         address -= start_address
 
-        #print function_name, module, address
+        #print(function_name, module, address)
 
         samples[address] = samples.get(address, 0) + 1
 

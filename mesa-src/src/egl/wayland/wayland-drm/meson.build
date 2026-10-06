@@ -1,22 +1,5 @@
 # Copyright © 2017 Intel Corporation
-
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# SPDX-License-Identifier: MIT
 
 inc_wayland_drm = include_directories('.')
 
@@ -57,16 +40,28 @@ libwayland_drm = static_library(
 #
 # Moving these to a src/wsi/ was suggested but shot down, so put these
 # here for now as the maybe-least-bad solution.
-linux_dmabuf_unstable_v1_protocol_c = custom_target(
-  'linux-dmabuf-unstable-v1-protocol.c',
-  input : wayland_dmabuf_xml,
-  output : 'linux-dmabuf-unstable-v1-protocol.c',
-  command : [prog_wl_scanner, wl_scanner_arg, '@INPUT@', '@OUTPUT@'],
-)
-
-linux_dmabuf_unstable_v1_client_protocol_h = custom_target(
-  'linux-dmabuf-unstable-v1-client-protocol.h',
-  input : wayland_dmabuf_xml,
-  output : 'linux-dmabuf-unstable-v1-client-protocol.h',
-  command : [prog_wl_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
+wp_dir = dep_wl_protocols.get_variable(pkgconfig : 'pkgdatadir', internal : 'pkgdatadir')
+wp_protos = {
+  'fifo-v1': 'staging/fifo/fifo-v1.xml',
+  'commit-timing-v1': 'staging/commit-timing/commit-timing-v1.xml',
+  'linux-dmabuf-unstable-v1': 'unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml',
+  'presentation-time': 'stable/presentation-time/presentation-time.xml',
+  'tearing-control-v1': 'staging/tearing-control/tearing-control-v1.xml',
+  'linux-drm-syncobj-v1': 'staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml',
+}
+wp_files = {}
+foreach name, xml : wp_protos
+  code = custom_target(
+    name + '-protocol.c',
+    input : files(join_paths(wp_dir, xml)),
+    output : name + '-protocol.c',
+    command : [prog_wl_scanner, wl_scanner_arg, '@INPUT@', '@OUTPUT@'],
+  )
+  header = custom_target(
+    name + '-client-protocol.h',
+    input : files(join_paths(wp_dir, xml)),
+    output : name + '-client-protocol.h',
+    command : [prog_wl_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+  )
+  wp_files += { name: [code, header] }
+endforeach

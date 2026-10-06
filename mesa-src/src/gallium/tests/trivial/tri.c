@@ -84,14 +84,14 @@ struct program
 static void init_prog(struct program *p)
 {
 	struct pipe_surface surf_tmpl;
-	int ret;
+	ASSERTED int ret;
 
 	/* find a hardware device */
-	ret = pipe_loader_probe(&p->dev, 1);
+	ret = pipe_loader_probe(&p->dev, 1, false);
 	assert(ret);
 
 	/* init a pipe screen */
-	p->screen = pipe_loader_create_screen(p->dev);
+	p->screen = pipe_loader_create_screen(p->dev, false);
 	assert(p->screen);
 
 	/* create the pipe driver context and cso context */
@@ -193,6 +193,11 @@ static void init_prog(struct program *p)
 		p->viewport.translate[0] = half_width + x;
 		p->viewport.translate[1] = (half_height + y) * scale + bias;
 		p->viewport.translate[2] = half_depth + z;
+
+		p->viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+		p->viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+		p->viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+		p->viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 	}
 
 	/* vertex elements state */
@@ -203,23 +208,25 @@ static void init_prog(struct program *p)
 	p->velem.velems[0].instance_divisor = 0;
 	p->velem.velems[0].vertex_buffer_index = 0;
 	p->velem.velems[0].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+   p->velem.velems[0].src_stride = 2 * 4 * sizeof(float);
 
 	p->velem.velems[1].src_offset = 1 * 4 * sizeof(float); /* offset 16, second element */
 	p->velem.velems[1].instance_divisor = 0;
 	p->velem.velems[1].vertex_buffer_index = 0;
 	p->velem.velems[1].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+   p->velem.velems[1].src_stride = 2 * 4 * sizeof(float);
 
 	/* vertex shader */
 	{
 		const enum tgsi_semantic semantic_names[] =
 			{ TGSI_SEMANTIC_POSITION, TGSI_SEMANTIC_COLOR };
 		const uint semantic_indexes[] = { 0, 0 };
-		p->vs = util_make_vertex_passthrough_shader(p->pipe, 2, semantic_names, semantic_indexes, FALSE);
+		p->vs = util_make_vertex_passthrough_shader(p->pipe, 2, semantic_names, semantic_indexes, false);
 	}
 
 	/* fragment shader */
 	p->fs = util_make_fragment_passthrough_shader(p->pipe,
-                    TGSI_SEMANTIC_COLOR, TGSI_INTERPOLATE_PERSPECTIVE, TRUE);
+                    TGSI_SEMANTIC_COLOR, TGSI_INTERPOLATE_PERSPECTIVE, true);
 }
 
 static void close_prog(struct program *p)
@@ -262,8 +269,8 @@ static void draw(struct program *p)
 	cso_set_vertex_elements(p->cso, &p->velem);
 
 	util_draw_vertex_buffer(p->pipe, p->cso,
-	                        p->vbuf, 0, 0,
-	                        PIPE_PRIM_TRIANGLES,
+	                        p->vbuf, 0, false,
+	                        MESA_PRIM_TRIANGLES,
 	                        3,  /* verts */
 	                        2); /* attribs/vert */
 

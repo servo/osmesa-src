@@ -44,17 +44,15 @@
  * corrupt, etc) we will use a fallback path to compile and link the IR.
  */
 
+#include "util/os_misc.h"
+
 #include "compiler/shader_info.h"
 #include "glsl_symbol_table.h"
 #include "glsl_parser_extras.h"
 #include "ir.h"
 #include "ir_optimization.h"
 #include "ir_rvalue_visitor.h"
-#include "ir_uniform.h"
-#include "linker.h"
-#include "link_varyings.h"
 #include "nir.h"
-#include "program.h"
 #include "serialize.h"
 #include "shader_cache.h"
 #include "util/mesa-sha1.h"
@@ -70,7 +68,8 @@ extern "C" {
 static void
 compile_shaders(struct gl_context *ctx, struct gl_shader_program *prog) {
    for (unsigned i = 0; i < prog->NumShaders; i++) {
-      _mesa_glsl_compile_shader(ctx, prog->Shaders[i], false, false, true);
+      _mesa_glsl_compile_shader(ctx, prog->Shaders[i], NULL,
+                                false, false, true);
    }
 }
 
@@ -122,7 +121,7 @@ shader_cache_write_program_metadata(struct gl_context *ctx,
       goto fail;
 
    for (unsigned i = 0; i < prog->NumShaders; i++) {
-      memcpy(cache_item_metadata.keys[i], prog->Shaders[i]->sha1,
+      memcpy(cache_item_metadata.keys[i], prog->Shaders[i]->disk_cache_sha1,
              sizeof(cache_key));
    }
 
@@ -188,7 +187,7 @@ shader_cache_read_program_metadata(struct gl_context *ctx,
     * preprocessor could result in different output and we could load the
     * wrong shader.
     */
-   char *ext_override = getenv("MESA_EXTENSION_OVERRIDE");
+   const char *ext_override = os_get_option("MESA_EXTENSION_OVERRIDE");
    if (ext_override) {
       ralloc_asprintf_append(&buf, "ext:%s", ext_override);
    }
@@ -202,7 +201,7 @@ shader_cache_read_program_metadata(struct gl_context *ctx,
 
    for (unsigned i = 0; i < prog->NumShaders; i++) {
       struct gl_shader *sh = prog->Shaders[i];
-      _mesa_sha1_format(sha1buf, sh->sha1);
+      _mesa_sha1_format(sha1buf, sh->disk_cache_sha1);
       ralloc_asprintf_append(&buf, "%s: %s\n",
                              _mesa_shader_stage_to_abbrev(sh->Stage), sha1buf);
    }

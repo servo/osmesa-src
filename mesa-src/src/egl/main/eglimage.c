@@ -26,7 +26,6 @@
  *
  **************************************************************************/
 
-
 #include <assert.h>
 #include <string.h>
 
@@ -57,6 +56,13 @@ _eglParseKHRImageAttribs(_EGLImageAttribs *attrs, _EGLDisplay *disp,
          return EGL_BAD_PARAMETER;
 
       attrs->GLTextureZOffset = val;
+      break;
+   case EGL_PROTECTED_CONTENT_EXT:
+      if (!disp->Extensions.EXT_protected_content &&
+          !disp->Extensions.EXT_protected_surface)
+         return EGL_BAD_PARAMETER;
+
+      attrs->ProtectedContent = val;
       break;
    default:
       return EGL_BAD_PARAMETER;
@@ -207,8 +213,8 @@ _eglParseEXTImageDmaBufImportAttribs(_EGLImageAttribs *attrs, _EGLDisplay *disp,
 
 static EGLint
 _eglParseEXTImageDmaBufImportModifiersAttribs(_EGLImageAttribs *attrs,
-                                              _EGLDisplay *disp,
-                                              EGLint attr, EGLint val)
+                                              _EGLDisplay *disp, EGLint attr,
+                                              EGLint val)
 {
    if (!disp->Extensions.EXT_image_dma_buf_import_modifiers)
       return EGL_BAD_PARAMETER;
@@ -309,7 +315,8 @@ _eglParseImageAttribList(_EGLImageAttribs *attrs, _EGLDisplay *disp,
       if (err == EGL_BAD_ATTRIBUTE)
          return _eglError(err, __func__);
 
-      err = _eglParseEXTImageDmaBufImportModifiersAttribs(attrs, disp, attr, val);
+      err =
+         _eglParseEXTImageDmaBufImportModifiersAttribs(attrs, disp, attr, val);
       if (err == EGL_SUCCESS)
          continue;
 

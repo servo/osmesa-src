@@ -31,20 +31,20 @@
   *   Brian Paul
   */
 
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/macros.h"
 #include "main/context.h"
 #include "st_context.h"
 #include "st_cb_bitmap.h"
 #include "st_cb_flush.h"
 #include "st_cb_clear.h"
-#include "st_cb_fbo.h"
 #include "st_context.h"
 #include "st_manager.h"
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
 #include "util/u_gen_mipmap.h"
+#include "util/perf/cpu_trace.h"
 
 
 void
@@ -52,11 +52,14 @@ st_flush(struct st_context *st,
          struct pipe_fence_handle **fence,
          unsigned flags)
 {
+   MESA_TRACE_FUNC();
+
    /* We want to call this function periodically.
     * Typically, it has nothing to do so it shouldn't be expensive.
     */
    st_context_free_zombie_objects(st);
 
+   st_flush_bitmap_cache(st);
    st->pipe->flush(st->pipe, fence, flags);
 }
 
@@ -69,45 +72,36 @@ st_finish(struct st_context *st)
 {
    struct pipe_fence_handle *fence = NULL;
 
-   st_flush_bitmap_cache(st);
+   MESA_TRACE_FUNC();
+
    st_flush(st, &fence, PIPE_FLUSH_ASYNC | PIPE_FLUSH_HINT_FINISH);
 
    if (fence) {
-      st->pipe->screen->fence_finish(st->pipe->screen, NULL, fence,
-                                     PIPE_TIMEOUT_INFINITE);
-      st->pipe->screen->fence_reference(st->pipe->screen, &fence, NULL);
+      st->screen->fence_finish(st->screen, NULL, fence,
+                               OS_TIMEOUT_INFINITE);
+      st->screen->fence_reference(st->screen, &fence, NULL);
    }
 
    st_manager_flush_swapbuffers();
 }
 
 
-
-/**
- * Called via ctx->Driver.Flush()
- */
-static void
-st_glFlush(struct gl_context *ctx)
+void
+st_glFlush(struct gl_context *ctx, unsigned gallium_flush_flags)
 {
    struct st_context *st = st_context(ctx);
-
-   st_flush_bitmap_cache(st);
 
    /* Don't call st_finish() here.  It is not the state tracker's
     * responsibilty to inject sleeps in the hope of avoiding buffer
     * synchronization issues.  Calling finish() here will just hide
     * problems that need to be fixed elsewhere.
     */
-   st_flush(st, NULL, 0);
+   st_flush(st, NULL, gallium_flush_flags);
 
    st_manager_flush_frontbuffer(st);
 }
 
-
-/**
- * Called via ctx->Driver.Finish()
- */
-static void
+void
 st_glFinish(struct gl_context *ctx)
 {
    struct st_context *st = st_context(ctx);
@@ -189,9 +183,6 @@ void
 st_init_flush_functions(struct pipe_screen *screen,
                         struct dd_function_table *functions)
 {
-   functions->Flush = st_glFlush;
-   functions->Finish = st_glFinish;
-
-   if (screen->get_param(screen, PIPE_CAP_DEVICE_RESET_STATUS_QUERY))
+   if (screen->caps.device_reset_status_query)
       functions->GetGraphicsResetStatus = st_get_graphics_reset_status;
 }

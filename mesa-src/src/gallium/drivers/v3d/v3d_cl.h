@@ -21,8 +21,8 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef VC5_CL_H
-#define VC5_CL_H
+#ifndef V3D_CL_H
+#define V3D_CL_H
 
 #include <stdint.h>
 
@@ -200,15 +200,7 @@ void v3d_cl_ensure_space_with_branch(struct v3d_cl *cl, uint32_t size);
 #define cl_packet_pack(packet)   V3DX(packet ## _pack)
 #define cl_packet_struct(packet) V3DX(packet)
 
-static inline void *
-cl_get_emit_space(struct v3d_cl_out **cl, size_t size)
-{
-        void *addr = *cl;
-        cl_advance(cl, size);
-        return addr;
-}
-
-/* Macro for setting up an emit of a CL struct.  A temporary unpacked struct
+/* Macro for setting up and emit of a CL struct.  A temporary unpacked struct
  * is created, which you get to set fields in of the form:
  *
  * cl_emit(bcl, FLAT_SHADE_FLAGS, flags) {
@@ -234,8 +226,18 @@ cl_get_emit_space(struct v3d_cl_out **cl, size_t size)
                 cl_advance(&cl_out, cl_packet_length(packet));   \
                 cl_end(cl, cl_out);                              \
                 _loop_terminate = NULL;                          \
+                assert(cl_offset(cl) <= (cl)->size);             \
         }))                                                      \
 
+/* Macro for setting up and emit of a CL struct, where part of the setting up
+ * comes from a prepacked buffer. So the use is similar to cl_emit, where you
+ * set individual values, and the rest of values come from prepacked.
+ *
+ * Note that setting a value with this macro will not override the values
+ * coming from the prepacked buffer, as it does an OR operation. That means
+ * that the prepacked buffer is usually reserved for values that we know that
+ * will not change in advance before the emission.
+ */
 #define cl_emit_with_prepacked(cl, packet, prepacked, name)      \
         for (struct cl_packet_struct(packet) name = {            \
                 cl_packet_header(packet)                         \
@@ -253,9 +255,10 @@ cl_get_emit_space(struct v3d_cl_out **cl, size_t size)
                 _loop_terminate = NULL;                          \
         }))                                                      \
 
-#define cl_emit_prepacked_sized(cl, packet, size) do {                \
-        memcpy((cl)->next, packet, size);             \
-        cl_advance(&(cl)->next, size);                \
+#define cl_emit_prepacked_sized(cl, packet, psize) do {          \
+        memcpy((cl)->next, packet, psize);                       \
+        cl_advance(&(cl)->next, psize);                          \
+        assert(cl_offset(cl) <= (cl)->size);                     \
 } while (0)
 
 #define cl_emit_prepacked(cl, packet) \
@@ -278,7 +281,7 @@ cl_get_emit_space(struct v3d_cl_out **cl, size_t size)
  * Helper function called by the XML-generated pack functions for filling in
  * an address field in shader records.
  *
- * Since we have a private address space as of VC5, our BOs can have lifelong
+ * Since we have a private address space as of V3D, our BOs can have lifelong
  * offsets, and all the kernel needs to know is which BOs need to be paged in
  * for this exec.
  */
@@ -289,4 +292,4 @@ cl_pack_emit_reloc(struct v3d_cl *cl, const struct v3d_cl_reloc *reloc)
                 v3d_job_add_bo(cl->job, reloc->bo);
 }
 
-#endif /* VC5_CL_H */
+#endif /* V3D_CL_H */

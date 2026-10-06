@@ -24,12 +24,11 @@
 #ifndef _ROUNDING_H
 #define _ROUNDING_H
 
-#include "c99_math.h"
-
 #include <limits.h>
 #include <stdint.h>
+#include <math.h>
 
-#if defined(__SSE__) || (defined(_M_IX86_FP) && (_M_IX86_FP >= 1)) || defined(_M_X64)
+#if defined(__SSE__) || (defined(_M_IX86_FP) && (_M_IX86_FP >= 1)) || (defined(_M_X64) && !defined(_M_ARM64EC))
 #include <xmmintrin.h>
 #include <emmintrin.h>
 #endif
@@ -95,7 +94,7 @@ _mesa_roundeven(double x)
 static inline long
 _mesa_lroundevenf(float x)
 {
-#if defined(__SSE__) || (defined(_M_IX86_FP) && (_M_IX86_FP >= 1)) || defined(_M_X64)
+#if defined(__SSE__) || (defined(_M_IX86_FP) && (_M_IX86_FP >= 1)) || (defined(_M_X64) && !defined(_M_ARM64EC))
 #if LONG_MAX == INT64_MAX
    return _mm_cvtss_si64(_mm_load_ss(&x));
 #elif LONG_MAX == INT32_MAX
@@ -108,7 +107,6 @@ _mesa_lroundevenf(float x)
 #endif
 }
 
-
 /**
  * \brief Rounds \c x to the nearest integer, with ties to the even integer,
  * and returns the value as a long int.
@@ -116,7 +114,7 @@ _mesa_lroundevenf(float x)
 static inline long
 _mesa_lroundeven(double x)
 {
-#if defined(__SSE2__) || (defined(_M_IX86_FP) && (_M_IX86_FP >= 2)) || defined(_M_X64)
+#if defined(__SSE2__) || (defined(_M_IX86_FP) && (_M_IX86_FP >= 2)) || (defined(_M_X64) && !defined(_M_ARM64EC))
 #if LONG_MAX == INT64_MAX
    return _mm_cvtsd_si64(_mm_load_sd(&x));
 #elif LONG_MAX == INT32_MAX

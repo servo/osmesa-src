@@ -49,25 +49,27 @@ applegl_destroy_context(struct glx_context *gc)
 }
 
 static int
-applegl_bind_context(struct glx_context *gc, struct glx_context *old,
-		     GLXDrawable draw, GLXDrawable read)
+applegl_bind_context(
+    struct glx_context *gc,
+    GLXDrawable draw, GLXDrawable read)
 {
    Display *dpy = gc->psc->dpy;
-   bool error = apple_glx_make_current_context(dpy,
-					       (old && old != &dummyContext) ? old->driContext : NULL,
-					       gc ? gc->driContext : NULL, draw);
+   bool error = apple_glx_make_current_context(
+       dpy,
+       NULL,
+       gc ? gc->driContext : NULL, draw);
 
    apple_glx_diagnostic("%s: error %s\n", __func__, error ? "YES" : "NO");
    if (error)
       return 1; /* GLXBadContext is the same as Success (0) */
 
-   apple_glapi_set_dispatch();
+   apple_mesa_glapi_set_dispatch();
 
    return Success;
 }
 
 static void
-applegl_unbind_context(struct glx_context *gc, struct glx_context *new)
+applegl_unbind_context(struct glx_context *gc)
 {
    Display *dpy;
    bool error;
@@ -76,15 +78,12 @@ applegl_unbind_context(struct glx_context *gc, struct glx_context *new)
    if (!gc)
       return;
 
-   /* If we have a new context, keep this one around and remove it during bind. */
-   if (new)
-      return;
-
    dpy = gc->psc->dpy;
 
-   error = apple_glx_make_current_context(dpy,
-					  (gc != &dummyContext) ? gc->driContext : NULL,
-					  NULL, None);
+   error = apple_glx_make_current_context(
+       dpy,
+       (gc != &dummyContext) ? gc->driContext : NULL,
+       NULL, None);
 
    apple_glx_diagnostic("%s: error %s\n", __func__, error ? "YES" : "NO");
 }
@@ -102,7 +101,7 @@ applegl_wait_x(struct glx_context *gc)
    apple_glx_waitx(dpy, gc->driContext);
 }
 
-static void *
+void *
 applegl_get_proc_address(const char *symbol)
 {
    return dlsym(apple_cgl_get_dl_handle(), symbol);
@@ -114,16 +113,13 @@ static const struct glx_context_vtable applegl_context_vtable = {
    .unbind              = applegl_unbind_context,
    .wait_gl             = applegl_wait_gl,
    .wait_x              = applegl_wait_x,
-   .use_x_font          = DRI_glXUseXFont,
-   .bind_tex_image      = NULL,
-   .release_tex_image   = NULL,
-   .get_proc_address    = applegl_get_proc_address,
 };
 
 struct glx_context *
-applegl_create_context(struct glx_screen *psc,
-		       struct glx_config *config,
-		       struct glx_context *shareList, int renderType)
+applegl_create_context(
+    struct glx_screen *psc,
+    struct glx_config *config,
+    struct glx_context *shareList, int renderType)
 {
    struct glx_context *gc;
    int errorcode;
@@ -133,6 +129,9 @@ applegl_create_context(struct glx_screen *psc,
 
    /* TODO: Integrate this with apple_glx_create_context and make
     * struct apple_glx_context inherit from struct glx_context. */
+
+   if (!config)
+      return NULL;
 
    gc = calloc(1, sizeof(*gc));
    if (gc == NULL)
@@ -147,9 +146,9 @@ applegl_create_context(struct glx_screen *psc,
    gc->driContext = NULL;
 
    /* TODO: darwin: Integrate with above to do indirect */
-   if(apple_glx_create_context(&gc->driContext, dpy, screen, config, 
-			       shareList ? shareList->driContext : NULL,
-			       &errorcode, &x11error)) {
+   if (apple_glx_create_context(&gc->driContext, dpy, screen, config,
+                                shareList ? shareList->driContext : NULL,
+                                &errorcode, &x11error)) {
       __glXSendError(dpy, errorcode, 0, X_GLXCreateContext, x11error);
       gc->vtable->destroy(gc);
       return NULL;
@@ -159,7 +158,7 @@ applegl_create_context(struct glx_screen *psc,
    gc->config = config;
    gc->isDirect = GL_TRUE;
    gc->xid = 1; /* Just something not None, so we know when to destroy
-		 * it in MakeContextCurrent. */
+                 * it in MakeContextCurrent. */
 
    return gc;
 }

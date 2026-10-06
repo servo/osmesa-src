@@ -43,27 +43,29 @@
 #include <stddef.h>
 
 #include <llvm/Config/llvm-config.h>
-
-#if LLVM_VERSION_MAJOR < 7
-// Workaround http://llvm.org/PR23628
-#pragma push_macro("DEBUG")
-#undef DEBUG
-#endif
-
-#include <llvm/Config/llvm-config.h>
 #include <llvm-c/Core.h>
 #include <llvm-c/Support.h>
 #include <llvm-c/ExecutionEngine.h>
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/ADT/Triple.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
 #include <llvm/Support/CommandLine.h>
-#include <llvm/Support/Host.h>
 #include <llvm/Support/PrettyStackTrace.h>
 #include <llvm/ExecutionEngine/ObjectCache.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/CodeGen/SelectionDAGNodes.h>
+#if LLVM_VERSION_MAJOR >= 15
+#include <llvm/Support/MemoryBuffer.h>
+#endif
+
+#if LLVM_VERSION_MAJOR >= 17
+#include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
+#else
+#include <llvm/Support/Host.h>
+#include <llvm/ADT/Triple.h>
+#endif
 
 #if LLVM_VERSION_MAJOR < 11
 #include <llvm/IR/CallSite.h>
@@ -77,19 +79,16 @@
 #include <llvm/ExecutionEngine/JITEventListener.h>
 #endif
 
-#if LLVM_VERSION_MAJOR < 7
-// Workaround http://llvm.org/PR23628
-#pragma pop_macro("DEBUG")
-#endif
-
 #include "c11/threads.h"
-#include "os/os_thread.h"
-#include "pipe/p_config.h"
+#include "util/u_thread.h"
+#include "util/detect.h"
 #include "util/u_debug.h"
 #include "util/u_cpu_detect.h"
 
 #include "lp_bld_misc.h"
 #include "lp_bld_debug.h"
+
+static void lp_run_atexit_for_destructors(void);
 
 namespace {
 
@@ -109,7 +108,7 @@ static LLVMEnsureMultithreaded lLVMEnsureMultithreaded;
 
 static once_flag init_native_targets_once_flag = ONCE_FLAG_INIT;
 
-static void init_native_targets()
+void lp_bld_init_native_targets()
 {
    // If we have a native target, initialize it to ensure it is linked in and
    // usable by the JIT.
@@ -118,7 +117,7 @@ static void init_native_targets()
    llvm::InitializeNativeTargetAsmPrinter();
 
    llvm::InitializeNativeTargetDisassembler();
-#if DEBUG
+#if MESA_DEBUG
    {
       char *env_llc_options = getenv("GALLIVM_LLC_OPTIONS");
       if (env_llc_options) {
@@ -138,6 +137,7 @@ static void init_native_targets()
       }
    }
 #endif
+   lp_run_atexit_for_destructors();
 }
 
 extern "C" void
@@ -150,7 +150,7 @@ lp_set_target_options(void)
     * LLVM targets should be initialized before the driver or gallium frontend tries
     * to access the registry.
     */
-   call_once(&init_native_targets_once_flag, init_native_targets);
+   call_once(&init_native_targets_once_flag, lp_bld_init_native_targets);
 }
 
 extern "C"
@@ -320,6 +320,148 @@ public:
 
 };
 
+void
+lp_build_fill_mattrs(std::vector<std::string> &MAttrs)
+{
+
+#if DETECT_ARCH_ARM
+   /* llvm-3.3+ implements sys::getHostCPUFeatures for Arm,
+    * which allows us to enable/disable code generation based
+    * on the results of cpuid on these architectures.
+    */
+   #if LLVM_VERSION_MAJOR >= 19
+      /* llvm-19+ returns StringMap from getHostCPUFeatures.
+      */
+      auto features = llvm::sys::getHostCPUFeatures();
+   #else
+      llvm::StringMap<bool> features;
+      llvm::sys::getHostCPUFeatures(features);
+   #endif
+
+   for (llvm::StringMapIterator<bool> f = features.begin();
+        f != features.end();
+        ++f) {
+      MAttrs.push_back(((*f).second ? "+" : "-") + (*f).first().str());
+   }
+#elif DETECT_ARCH_X86 || DETECT_ARCH_X86_64
+   /*
+    * Because we can override cpu caps with environment variables,
+    * so we do not use llvm::sys::getHostCPUFeatures to detect cpu features
+    * but using util_get_cpu_caps() instead.
+    */
+#if DETECT_ARCH_X86_64
+   /*
+    * Without this, on some "buggy" qemu cpu setup, LLVM could crash
+    * if LLVM detects the wrong CPU type.
+    */
+   MAttrs.push_back("+64bit");
+#endif
+   MAttrs.push_back(util_get_cpu_caps()->has_sse    ? "+sse"    : "-sse"   );
+   MAttrs.push_back(util_get_cpu_caps()->has_sse2   ? "+sse2"   : "-sse2"  );
+   MAttrs.push_back(util_get_cpu_caps()->has_sse3   ? "+sse3"   : "-sse3"  );
+   MAttrs.push_back(util_get_cpu_caps()->has_ssse3  ? "+ssse3"  : "-ssse3" );
+   MAttrs.push_back(util_get_cpu_caps()->has_sse4_1 ? "+sse4.1" : "-sse4.1");
+   MAttrs.push_back(util_get_cpu_caps()->has_sse4_2 ? "+sse4.2" : "-sse4.2");
+   /*
+    * AVX feature is not automatically detected from CPUID by the X86 target
+    * yet, because the old (yet default) JIT engine is not capable of
+    * emitting the opcodes. On newer llvm versions it is and at least some
+    * versions (tested with 3.3) will emit avx opcodes without this anyway.
+    */
+   MAttrs.push_back(util_get_cpu_caps()->has_avx  ? "+avx"  : "-avx");
+   MAttrs.push_back(util_get_cpu_caps()->has_f16c ? "+f16c" : "-f16c");
+   MAttrs.push_back(util_get_cpu_caps()->has_fma  ? "+fma"  : "-fma");
+   MAttrs.push_back(util_get_cpu_caps()->has_avx2 ? "+avx2" : "-avx2");
+
+   /* All avx512 have avx512f */
+   MAttrs.push_back(util_get_cpu_caps()->has_avx512f ? "+avx512f"  : "-avx512f");
+   MAttrs.push_back(util_get_cpu_caps()->has_avx512cd ? "+avx512cd"  : "-avx512cd");
+#if LLVM_VERSION_MAJOR < 19
+   MAttrs.push_back(util_get_cpu_caps()->has_avx512er ? "+avx512er"  : "-avx512er");
+   MAttrs.push_back(util_get_cpu_caps()->has_avx512pf ? "+avx512pf"  : "-avx512pf");
+#endif
+   MAttrs.push_back(util_get_cpu_caps()->has_avx512bw ? "+avx512bw"  : "-avx512bw");
+   MAttrs.push_back(util_get_cpu_caps()->has_avx512dq ? "+avx512dq"  : "-avx512dq");
+   MAttrs.push_back(util_get_cpu_caps()->has_avx512vl ? "+avx512vl"  : "-avx512vl");
+   MAttrs.push_back(util_get_cpu_caps()->has_avx512vbmi ? "+avx512vbmi"  : "-avx512vbmi");
+#endif
+#if DETECT_ARCH_ARM
+   if (!util_get_cpu_caps()->has_neon) {
+      MAttrs.push_back("-neon");
+      MAttrs.push_back("-crypto");
+      MAttrs.push_back("-vfp2");
+   }
+#endif
+
+#if DETECT_ARCH_PPC
+   MAttrs.push_back(util_get_cpu_caps()->has_altivec ? "+altivec" : "-altivec");
+   /*
+    * Bug 25503 is fixed, by the same fix that fixed
+    * bug 26775, in versions of LLVM later than 3.8 (starting with 3.8.1).
+    * BZ 33531 actually comprises more than one bug, all of
+    * which are fixed in LLVM 4.0.
+    *
+    * With LLVM 4.0 or higher:
+    * Make sure VSX instructions are ENABLED (if supported), unless
+    * VSX instructions are explicitly enabled/disabled via GALLIVM_VSX=1 or 0.
+    */
+   if (util_get_cpu_caps()->has_altivec) {
+      MAttrs.push_back(util_get_cpu_caps()->has_vsx ? "+vsx" : "-vsx");
+   }
+#endif
+
+#if DETECT_ARCH_MIPS64
+   MAttrs.push_back(util_get_cpu_caps()->has_msa ? "+msa" : "-msa");
+   /* MSA requires a 64-bit FPU register file */
+   MAttrs.push_back("+fp64");
+#endif
+
+#if DETECT_ARCH_RISCV64 == 1
+   /* Before riscv is more matured and util_get_cpu_caps() is implemented,
+    * assume this for now since most of linux capable riscv machine are
+    * riscv64gc
+    */
+   MAttrs = {"+m","+c","+a","+d","+f"};
+#endif
+
+#if DETECT_ARCH_LOONGARCH64 == 1
+   /*
+    * No FPU-less LoongArch64 systems are ever shipped yet, and LP64D is
+    * the default ABI, so FPU is enabled here.
+    *
+    * The Software development convention defaults to have "128-bit
+    * vector", so LSX is enabled here, see
+    * https://github.com/loongson/la-softdev-convention/releases/download/v0.1/la-softdev-convention.pdf
+    */
+   MAttrs = {"+f","+d"};
+#if LLVM_VERSION_MAJOR >= 18
+   MAttrs.push_back(util_get_cpu_caps()->has_lsx ? "+lsx" : "-lsx");
+   MAttrs.push_back(util_get_cpu_caps()->has_lasx ? "+lasx" : "-lasx");
+#else
+   /*
+    * LLVM 17's LSX support is incomplete, and LLVM 16 isn't supported
+    * LSX and LASX. So explicitly mask it.
+    */
+   MAttrs.push_back("-lsx");
+   MAttrs.push_back("-lasx");
+#endif
+#endif
+}
+
+void
+lp_build_dump_mattrs(std::vector<std::string> &MAttrs)
+{
+   if (gallivm_debug & (GALLIVM_DEBUG_IR | GALLIVM_DEBUG_ASM | GALLIVM_DEBUG_DUMP_BC)) {
+      int n = MAttrs.size();
+      if (n > 0) {
+         debug_printf("llc -mattr option(s): ");
+         for (int i = 0; i < n; i++)
+            debug_printf("%s%s", MAttrs[i].c_str(), (i < n - 1) ? "," : "");
+         debug_printf("\n");
+      }
+   }
+}
+
 /**
  * Same as LLVMCreateJITCompilerForModule, but:
  * - allows using MCJIT and enabling AVX feature where available.
@@ -350,16 +492,20 @@ lp_build_create_jit_compiler_for_module(LLVMExecutionEngineRef *OutJIT,
     * friends for configuring code generation options, like stack alignment.
     */
    TargetOptions options;
-#if defined(PIPE_ARCH_X86)
+#if DETECT_ARCH_X86 && LLVM_VERSION_MAJOR < 13
    options.StackAlignmentOverride = 4;
 #endif
 
    builder.setEngineKind(EngineKind::JIT)
           .setErrorStr(&Error)
           .setTargetOptions(options)
+#if LLVM_VERSION_MAJOR >= 18
+          .setOptLevel((CodeGenOptLevel)OptLevel);
+#else
           .setOptLevel((CodeGenOpt::Level)OptLevel);
+#endif
 
-#ifdef _WIN32
+#if DETECT_OS_WINDOWS
     /*
      * MCJIT works on Windows, but currently only through ELF object format.
      *
@@ -367,114 +513,24 @@ lp_build_create_jit_compiler_for_module(LLVMExecutionEngineRef *OutJIT,
      * different strings for MinGW/MSVC, so better play it safe and be
      * explicit.
      */
-#  ifdef _WIN64
+#  if DETECT_ARCH_X86_64
     LLVMSetTarget(M, "x86_64-pc-win32-elf");
-#  else
+#  elif DETECT_ARCH_X86
     LLVMSetTarget(M, "i686-pc-win32-elf");
+#  elif DETECT_ARCH_AARCH64
+    LLVMSetTarget(M, "aarch64-pc-win32-elf");
+#  else
+#    error Unsupported architecture for MCJIT on Windows.
 #  endif
 #endif
 
-   llvm::SmallVector<std::string, 16> MAttrs;
+   std::vector<std::string> MAttrs;
 
-#if LLVM_VERSION_MAJOR >= 4 && (defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64) || defined(PIPE_ARCH_ARM))
-   /* llvm-3.3+ implements sys::getHostCPUFeatures for Arm
-    * and llvm-3.7+ for x86, which allows us to enable/disable
-    * code generation based on the results of cpuid on these
-    * architectures.
-    */
-   llvm::StringMap<bool> features;
-   llvm::sys::getHostCPUFeatures(features);
-
-   for (StringMapIterator<bool> f = features.begin();
-        f != features.end();
-        ++f) {
-      MAttrs.push_back(((*f).second ? "+" : "-") + (*f).first().str());
-   }
-#elif defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
-   /*
-    * We need to unset attributes because sometimes LLVM mistakenly assumes
-    * certain features are present given the processor name.
-    *
-    * https://bugs.freedesktop.org/show_bug.cgi?id=92214
-    * http://llvm.org/PR25021
-    * http://llvm.org/PR19429
-    * http://llvm.org/PR16721
-    */
-   MAttrs.push_back(util_cpu_caps.has_sse    ? "+sse"    : "-sse"   );
-   MAttrs.push_back(util_cpu_caps.has_sse2   ? "+sse2"   : "-sse2"  );
-   MAttrs.push_back(util_cpu_caps.has_sse3   ? "+sse3"   : "-sse3"  );
-   MAttrs.push_back(util_cpu_caps.has_ssse3  ? "+ssse3"  : "-ssse3" );
-   MAttrs.push_back(util_cpu_caps.has_sse4_1 ? "+sse4.1" : "-sse4.1");
-   MAttrs.push_back(util_cpu_caps.has_sse4_2 ? "+sse4.2" : "-sse4.2");
-   /*
-    * AVX feature is not automatically detected from CPUID by the X86 target
-    * yet, because the old (yet default) JIT engine is not capable of
-    * emitting the opcodes. On newer llvm versions it is and at least some
-    * versions (tested with 3.3) will emit avx opcodes without this anyway.
-    */
-   MAttrs.push_back(util_cpu_caps.has_avx  ? "+avx"  : "-avx");
-   MAttrs.push_back(util_cpu_caps.has_f16c ? "+f16c" : "-f16c");
-   MAttrs.push_back(util_cpu_caps.has_fma  ? "+fma"  : "-fma");
-   MAttrs.push_back(util_cpu_caps.has_avx2 ? "+avx2" : "-avx2");
-   /* disable avx512 and all subvariants */
-   MAttrs.push_back("-avx512cd");
-   MAttrs.push_back("-avx512er");
-   MAttrs.push_back("-avx512f");
-   MAttrs.push_back("-avx512pf");
-   MAttrs.push_back("-avx512bw");
-   MAttrs.push_back("-avx512dq");
-   MAttrs.push_back("-avx512vl");
-#endif
-#if defined(PIPE_ARCH_ARM)
-   if (!util_cpu_caps.has_neon) {
-      MAttrs.push_back("-neon");
-      MAttrs.push_back("-crypto");
-      MAttrs.push_back("-vfp2");
-   }
-#endif
-
-#if defined(PIPE_ARCH_PPC)
-   MAttrs.push_back(util_cpu_caps.has_altivec ? "+altivec" : "-altivec");
-#if (LLVM_VERSION_MAJOR < 4)
-   /*
-    * Make sure VSX instructions are disabled
-    * See LLVM bugs:
-    * https://llvm.org/bugs/show_bug.cgi?id=25503#c7 (fixed in 3.8.1)
-    * https://llvm.org/bugs/show_bug.cgi?id=26775 (fixed in 3.8.1)
-    * https://llvm.org/bugs/show_bug.cgi?id=33531 (fixed in 4.0)
-    * https://llvm.org/bugs/show_bug.cgi?id=34647 (llc performance on certain unusual shader IR; intro'd in 4.0, pending as of 5.0)
-    */
-   if (util_cpu_caps.has_altivec) {
-      MAttrs.push_back("-vsx");
-   }
-#else
-   /*
-    * Bug 25503 is fixed, by the same fix that fixed
-    * bug 26775, in versions of LLVM later than 3.8 (starting with 3.8.1).
-    * BZ 33531 actually comprises more than one bug, all of
-    * which are fixed in LLVM 4.0.
-    *
-    * With LLVM 4.0 or higher:
-    * Make sure VSX instructions are ENABLED (if supported), unless
-    * VSX instructions are explicitly enabled/disabled via GALLIVM_VSX=1 or 0.
-    */
-   if (util_cpu_caps.has_altivec) {
-      MAttrs.push_back(util_cpu_caps.has_vsx ? "+vsx" : "-vsx");
-   }
-#endif
-#endif
+   lp_build_fill_mattrs(MAttrs);
 
    builder.setMAttrs(MAttrs);
 
-   if (gallivm_debug & (GALLIVM_DEBUG_IR | GALLIVM_DEBUG_ASM | GALLIVM_DEBUG_DUMP_BC)) {
-      int n = MAttrs.size();
-      if (n > 0) {
-         debug_printf("llc -mattr option(s): ");
-         for (int i = 0; i < n; i++)
-            debug_printf("%s%s", MAttrs[i].c_str(), (i < n - 1) ? "," : "");
-         debug_printf("\n");
-      }
-   }
+   lp_build_dump_mattrs(MAttrs);
 
    StringRef MCPU = llvm::sys::getHostCPUName();
    /*
@@ -490,7 +546,7 @@ lp_build_create_jit_compiler_for_module(LLVMExecutionEngineRef *OutJIT,
     * can't handle. Not entirely sure if we really need to do anything yet.
     */
 
-#ifdef PIPE_ARCH_PPC_64
+#if DETECT_ARCH_PPC_64
    /*
     * Large programs, e.g. gnome-shell and firefox, may tax the addressability
     * of the Medium code model once dynamically generated JIT-compiled shader
@@ -516,6 +572,19 @@ lp_build_create_jit_compiler_for_module(LLVMExecutionEngineRef *OutJIT,
       MCPU = "pwr8";
 #endif
 #endif
+
+#if DETECT_ARCH_MIPS64
+      /*
+       * ls3a4000 CPU and ls2k1000 SoC is a mips64r5 compatible with MSA SIMD
+       * instruction set implemented, while ls3a3000 is mips64r2 compatible
+       * only. getHostCPUName() return "generic" on all loongson
+       * mips CPU currently. So we override the MCPU to mips64r5 if MSA is
+       * implemented, feedback to mips64r2 for all other ordinary mips64 cpu.
+       */
+   if (MCPU == "generic")
+      MCPU = util_get_cpu_caps()->has_msa ? "mips64r5" : "mips64r2";
+#endif
+
    builder.setMCPU(MCPU);
    if (gallivm_debug & (GALLIVM_DEBUG_IR | GALLIVM_DEBUG_ASM | GALLIVM_DEBUG_DUMP_BC)) {
       debug_printf("llc -mcpu option: %s\n", MCPU.str().c_str());
@@ -595,4 +664,43 @@ extern "C" bool
 lp_is_function(LLVMValueRef v)
 {
 	return LLVMGetValueKind(v) == LLVMFunctionValueKind;
+}
+
+extern "C" void
+lp_set_module_stack_alignment_override(LLVMModuleRef MRef, unsigned align)
+{
+#if LLVM_VERSION_MAJOR >= 13
+   llvm::Module *M = llvm::unwrap(MRef);
+   M->setOverrideStackAlignment(align);
+#endif
+}
+
+using namespace llvm;
+
+class GallivmRunAtExitForStaticDestructors : public SDNode
+{
+public:
+   /* getSDVTList (protected) calls getValueTypeList (private), which contains static variables. */
+   GallivmRunAtExitForStaticDestructors(): SDNode(0, 0, DebugLoc(), getSDVTList(MVT::Other))
+   {
+   }
+};
+
+static void
+lp_run_atexit_for_destructors(void)
+{
+   /* LLVM >= 16 registers static variable destructors on the first compile, which gcc
+    * implements by calling atexit there. Before that, u_queue registers its atexit
+    * handler to kill all threads. Since exit() runs atexit handlers in the reverse order,
+    * the LLVM destructors are called first while shader compiler threads may still be
+    * running, which crashes in LLVM in SelectionDAG.cpp.
+    *
+    * The solution is to run the code that declares the LLVM static variables first,
+    * so that atexit for LLVM is registered first and u_queue is registered after that,
+    * which ensures that all u_queue threads are terminated before LLVM destructors are
+    * called.
+    *
+    * This just executes the code that declares static variables.
+    */
+   GallivmRunAtExitForStaticDestructors();
 }

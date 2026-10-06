@@ -58,6 +58,18 @@ static bool ppir_do_node_to_instr_try_insert(ppir_block *block, ppir_node *node)
       return ppir_instr_insert_node(succ->instr, node);
    }
 
+   if (ppir_node_has_single_succ(node) &&
+      ppir_node_has_single_pred(ppir_node_first_succ(node)) &&
+      (ppir_node_first_succ(node)->type == ppir_node_type_branch)) {
+
+      assert(ppir_node_has_single_succ(node));
+      ppir_node *succ = ppir_node_first_succ(node);
+      assert(succ);
+      assert(succ->instr);
+
+      return ppir_instr_insert_node(succ->instr, node);
+   }
+
    switch (node->type) {
       case ppir_node_type_load:
          break;
@@ -88,6 +100,7 @@ static bool ppir_do_one_node_to_instr(ppir_block *block, ppir_node *node)
        * by using pipeline reg ^vmul/^fmul */
       ppir_alu_node *alu = ppir_node_to_alu(node);
       if (alu->dest.type == ppir_target_ssa &&
+          ppir_node_has_single_succ(node) &&
           ppir_node_has_single_src_succ(node)) {
          ppir_node *succ = ppir_node_first_succ(node);
          if (succ->instr_pos == PPIR_INSTR_SLOT_ALU_VEC_ADD) {
@@ -202,7 +215,7 @@ static bool ppir_do_one_node_to_instr(ppir_block *block, ppir_node *node)
    case ppir_node_type_discard:
       if (!create_new_instr(block, node))
          return false;
-      node->instr->is_end = true;
+      block->stop = true;
       break;
    case ppir_node_type_branch:
       if (!create_new_instr(block, node))
@@ -275,8 +288,13 @@ static bool ppir_do_node_to_instr(ppir_block *block, ppir_node *root)
          if (!ppir_do_one_node_to_instr(block, node))
             return false;
 
-      if (node->is_end)
-         node->instr->is_end = true;
+      /* The node writes output register. We can't stop at this exact
+       * instruction because there may be another node that writes another
+       * output, so set stop flag for the block. We will set stop flag on
+       * the last instruction of the block during codegen
+       */
+      if (node->is_out)
+         block->stop = true;
 
       ppir_node_foreach_pred(node, dep) {
          ppir_node *pred = dep->pred;

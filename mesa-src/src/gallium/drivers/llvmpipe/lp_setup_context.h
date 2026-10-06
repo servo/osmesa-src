@@ -43,6 +43,7 @@
 #include "draw/draw_vbuf.h"
 #include "util/u_rect.h"
 #include "util/u_pack_color.h"
+#include "util/slab.h"
 
 #define LP_SETUP_NEW_FS          0x01
 #define LP_SETUP_NEW_CONSTANTS   0x02
@@ -55,8 +56,8 @@ struct lp_setup_variant;
 
 
 /** Max number of scenes */
-/* XXX: make multiple scenes per context work, see lp_setup_rasterize_scene */
-#define MAX_SCENES 1
+#define INITIAL_SCENES 4
+#define MAX_SCENES 64
 
 
 
@@ -75,7 +76,8 @@ struct lp_setup_context
 
    struct pipe_context *pipe;
    struct vertex_info *vertex_info;
-   uint prim;
+   uint view_index;
+   enum mesa_prim prim;
    uint vertex_size;
    uint nr_vertices;
    uint sprite_coord_enable, sprite_coord_origin;
@@ -88,20 +90,26 @@ struct lp_setup_context
    struct draw_stage *vbuf;
    unsigned num_threads;
    unsigned scene_idx;
+
+   struct slab_mempool scene_slab;
+   int num_active_scenes;
    struct lp_scene *scenes[MAX_SCENES];  /**< all the scenes */
    struct lp_scene *scene;               /**< current scene being built */
 
-   struct lp_fence *last_fence;
    struct llvmpipe_query *active_queries[LP_MAX_ACTIVE_BINNED_QUERIES];
    unsigned active_binned_queries;
 
-   boolean flatshade_first;
-   boolean ccw_is_frontface;
-   boolean scissor_test;
-   boolean point_size_per_vertex;
-   boolean rasterizer_discard;
-   boolean multisample;
-   unsigned cullmode;
+   unsigned flatshade_first:1;
+   unsigned ccw_is_frontface:1;
+   unsigned scissor_test:1;
+   unsigned point_line_tri_clip:1;
+   unsigned point_size_per_vertex:1;
+   unsigned legacy_points:1;
+   unsigned rasterizer_discard:1;
+   unsigned permit_linear_rasterizer:1;
+   unsigned multisample:1;
+   unsigned rectangular_lines:1;
+   unsigned cullmode:2; /**< PIPE_FACE_x */
    unsigned bottom_edge_rule;
    float pixel_offset;
    float line_width;
@@ -114,6 +122,7 @@ struct lp_setup_context
    struct pipe_framebuffer_state fb;
    struct u_rect framebuffer;
    struct u_rect scissors[PIPE_MAX_VIEWPORTS];
+   struct u_rect vpwh;
    struct u_rect draw_regions[PIPE_MAX_VIEWPORTS];   /* intersection of fb & scissor */
    struct lp_jit_viewport viewports[PIPE_MAX_VIEWPORTS];
 
@@ -129,7 +138,7 @@ struct lp_setup_context
       SETUP_CLEARED,    /**< scene exists but has only clears */
       SETUP_ACTIVE      /**< scene exists and has at least one draw/query */
    } state;
-   
+
    struct {
       const struct lp_rast_state *stored; /**< what's in the scene */
       struct lp_rast_state current;  /**< currently set state */
@@ -148,6 +157,7 @@ struct lp_setup_context
    struct {
       struct pipe_shader_buffer current;
    } ssbos[LP_MAX_TGSI_SHADER_BUFFERS];
+   uint32_t ssbo_write_mask;
 
    struct {
       struct pipe_image_view current;
@@ -158,28 +168,37 @@ struct lp_setup_context
       uint8_t *stored;
    } blend_color;
 
-
    struct {
       const struct lp_setup_variant *variant;
    } setup;
 
    unsigned dirty;   /**< bitmask of LP_SETUP_NEW_x bits */
 
-   void (*point)( struct lp_setup_context *,
-                  const float (*v0)[4]);
+   void (*point)(struct lp_setup_context *,
+                 const float (*v0)[4]);
 
-   void (*line)( struct lp_setup_context *,
-                 const float (*v0)[4],
-                 const float (*v1)[4]);
+   void (*line)(struct lp_setup_context *,
+                const float (*v0)[4],
+                const float (*v1)[4]);
 
-   void (*triangle)( struct lp_setup_context *,
-                     const float (*v0)[4],
-                     const float (*v1)[4],
-                     const float (*v2)[4]);
+   void (*triangle)(struct lp_setup_context *,
+                    const float (*v0)[4],
+                    const float (*v1)[4],
+                    const float (*v2)[4]);
+
+   bool
+   (*rect)(struct lp_setup_context *,
+           const float (*v0)[4],
+           const float (*v1)[4],
+           const float (*v2)[4],
+           const float (*v3)[4],
+           const float (*v4)[4],
+           const float (*v5)[4]);
 };
 
+
 static inline void
-scissor_planes_needed(boolean scis_planes[4], const struct u_rect *bbox,
+scissor_planes_needed(bool scis_planes[4], const struct u_rect *bbox,
                       const struct u_rect *scissor)
 {
    /* left */
@@ -193,18 +212,44 @@ scissor_planes_needed(boolean scis_planes[4], const struct u_rect *bbox,
 }
 
 
-void lp_setup_choose_triangle( struct lp_setup_context *setup );
-void lp_setup_choose_line( struct lp_setup_context *setup );
-void lp_setup_choose_point( struct lp_setup_context *setup );
+void
+lp_setup_add_scissor_planes(const struct u_rect *scissor,
+                            struct lp_rast_plane *plane_s,
+                            bool s_planes[4], bool multisample);
 
-void lp_setup_init_vbuf(struct lp_setup_context *setup);
+void
+lp_setup_choose_triangle(struct lp_setup_context *setup);
 
-boolean lp_setup_update_state( struct lp_setup_context *setup,
-                            boolean update_scene);
+void
+lp_setup_choose_line(struct lp_setup_context *setup);
 
-void lp_setup_destroy( struct lp_setup_context *setup );
+void
+lp_setup_choose_point(struct lp_setup_context *setup);
 
-boolean lp_setup_flush_and_restart(struct lp_setup_context *setup);
+void
+lp_setup_choose_rect(struct lp_setup_context *setup);
+
+void
+lp_setup_init_vbuf(struct lp_setup_context *setup);
+
+bool
+lp_setup_update_state(struct lp_setup_context *setup,
+                      bool update_scene);
+
+void
+lp_setup_destroy(struct lp_setup_context *setup);
+
+bool
+lp_setup_flush_and_restart(struct lp_setup_context *setup);
+
+bool
+lp_setup_whole_tile(struct lp_setup_context *setup,
+                    const struct lp_rast_shader_inputs *inputs,
+                    int tx, int ty, bool opaque);
+
+bool
+lp_setup_is_blit(const struct lp_setup_context *setup,
+                 const struct lp_rast_shader_inputs *inputs);
 
 void
 lp_setup_print_triangle(struct lp_setup_context *setup,
@@ -217,19 +262,56 @@ lp_setup_print_vertex(struct lp_setup_context *setup,
                       const char *name,
                       const float (*v)[4]);
 
+void
+lp_rect_cw(struct lp_setup_context *setup,
+           const float (*v0)[4],
+           const float (*v1)[4],
+           const float (*v2)[4],
+           bool frontfacing);
+
+void
+lp_setup_triangle_ccw(struct lp_setup_context *setup,
+                      const float (*v0)[4],
+                      const float (*v1)[4],
+                      const float (*v2)[4],
+                      bool front);
 
 struct lp_rast_triangle *
 lp_setup_alloc_triangle(struct lp_scene *scene,
                         unsigned num_inputs,
-                        unsigned nr_planes,
-                        unsigned *tri_size);
+                        unsigned nr_planes);
 
-boolean
+struct lp_rast_rectangle *
+lp_setup_alloc_rectangle(struct lp_scene *scene,
+                         unsigned nr_inputs);
+
+bool
+lp_setup_analyse_triangles(struct lp_setup_context *setup,
+                           const void *vb,
+                           int stride,
+                           int nr);
+
+bool
 lp_setup_bin_triangle(struct lp_setup_context *setup,
                       struct lp_rast_triangle *tri,
-                      const struct u_rect *bboxorig,
+                      bool use_32bits,
+                      bool opaque,
                       const struct u_rect *bbox,
                       int nr_planes,
                       unsigned scissor_index);
+
+bool
+lp_setup_bin_rectangle(struct lp_setup_context *setup,
+                       struct lp_rast_rectangle *rect,
+                       bool opaque);
+
+static inline bool
+lp_setup_zero_sample_mask(struct lp_setup_context *setup)
+{
+   uint32_t sample_mask = setup->fs.current.jit_context.sample_mask;
+   return sample_mask == 0 ||
+          (!setup->multisample && (sample_mask & 1) == 0);
+}
+
 
 #endif

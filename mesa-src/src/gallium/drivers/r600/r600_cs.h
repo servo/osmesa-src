@@ -1,26 +1,7 @@
 /*
  * Copyright 2013 Advanced Micro Devices, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
  * Authors: Marek Olšák <maraeo@gmail.com>
+ * SPDX-License-Identifier: MIT
  */
 
 /**
@@ -45,15 +26,15 @@ radeon_cs_memory_below_limit(struct r600_common_screen *screen,
 			     struct radeon_cmdbuf *cs,
 			     uint64_t vram, uint64_t gtt)
 {
-	vram += cs->used_vram;
-	gtt += cs->used_gart;
+	vram += (uint64_t)cs->used_vram_kb * 1024;
+	gtt += (uint64_t)cs->used_gart_kb * 1024;
 
 	/* Anything that goes above the VRAM size should go to GTT. */
-	if (vram > screen->info.vram_size)
-		gtt += vram - screen->info.vram_size;
+	if (vram > (uint64_t)screen->info.vram_size_kb * 1024)
+		gtt += vram - (uint64_t)screen->info.vram_size_kb * 1024;
 
 	/* Now we just need to check if we have enough GTT. */
-	return gtt < screen->info.gart_size * 0.7;
+	return gtt < (uint64_t)screen->info.gart_size_kb * 1024 * 0.7;
 }
 
 /**
@@ -69,14 +50,13 @@ radeon_cs_memory_below_limit(struct r600_common_screen *screen,
 static inline unsigned radeon_add_to_buffer_list(struct r600_common_context *rctx,
 						 struct r600_ring *ring,
 						 struct r600_resource *rbo,
-						 enum radeon_bo_usage usage,
-						 enum radeon_bo_priority priority)
+						 unsigned usage)
 {
 	assert(usage);
 	return rctx->ws->cs_add_buffer(
-		ring->cs, rbo->buf,
-		(enum radeon_bo_usage)(usage | RADEON_USAGE_SYNCHRONIZED),
-		rbo->domains, priority) * 4;
+		&ring->cs, rbo->buf,
+		usage | RADEON_USAGE_SYNCHRONIZED,
+		rbo->domains) * 4;
 }
 
 /**
@@ -100,27 +80,25 @@ static inline unsigned
 radeon_add_to_buffer_list_check_mem(struct r600_common_context *rctx,
 				    struct r600_ring *ring,
 				    struct r600_resource *rbo,
-				    enum radeon_bo_usage usage,
-				    enum radeon_bo_priority priority,
+				    unsigned usage,
 				    bool check_mem)
 {
 	if (check_mem &&
-	    !radeon_cs_memory_below_limit(rctx->screen, ring->cs,
+	    !radeon_cs_memory_below_limit(rctx->screen, &ring->cs,
 					  rctx->vram + rbo->vram_usage,
 					  rctx->gtt + rbo->gart_usage))
 		ring->flush(rctx, PIPE_FLUSH_ASYNC, NULL);
 
-	return radeon_add_to_buffer_list(rctx, ring, rbo, usage, priority);
+	return radeon_add_to_buffer_list(rctx, ring, rbo, usage);
 }
 
 static inline void r600_emit_reloc(struct r600_common_context *rctx,
 				   struct r600_ring *ring, struct r600_resource *rbo,
-				   enum radeon_bo_usage usage,
-				   enum radeon_bo_priority priority)
+				   unsigned usage)
 {
-	struct radeon_cmdbuf *cs = ring->cs;
+	struct radeon_cmdbuf *cs = &ring->cs;
 	bool has_vm = ((struct r600_common_screen*)rctx->b.screen)->info.r600_has_virtual_memory;
-	unsigned reloc = radeon_add_to_buffer_list(rctx, ring, rbo, usage, priority);
+	unsigned reloc = radeon_add_to_buffer_list(rctx, ring, rbo, usage);
 
 	if (!has_vm) {
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));

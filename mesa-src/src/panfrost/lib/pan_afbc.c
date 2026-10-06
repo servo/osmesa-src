@@ -50,8 +50,8 @@
  * must also be cache-line aligned, so there can sometimes be a bit of padding
  * between the header and body.
  *
- * As an example, a 64x64 RGBA framebuffer contains 64/16 = 4 tiles horizontally and
- * 4 tiles vertically. There are 4*4=16 tiles in total, each containing 16
+ * As an example, a 64x64 RGBA framebuffer contains 64/16 = 4 tiles horizontally
+ * and 4 tiles vertically. There are 4*4=16 tiles in total, each containing 16
  * bytes of metadata, so there is a 16*16=256 byte header. 64x64 is already
  * tile aligned, so the body is 64*64 * 4 bytes per pixel = 16384 bytes of
  * body.
@@ -64,69 +64,107 @@
  * and the driver never needs to know the internal data. For edge cases where
  * the driver really does need to read/write from the AFBC resource, we
  * generate a linear staging buffer and use the GPU to blit AFBC<--->linear.
- * TODO: Implement me. */
+ */
 
-#define AFBC_TILE_WIDTH 16
-#define AFBC_TILE_HEIGHT 16
-#define AFBC_HEADER_BYTES_PER_TILE 16
-#define AFBC_CACHE_ALIGN 64
-
-/* Is it possible to AFBC compress a particular format? Common formats (and
- * YUV) are compressible. Some obscure formats are not and fallback on linear,
- * at a performance hit. Also, if you need to disable AFBC entirely in the
- * driver for debug/profiling, just always return false here. */
-
-bool
-panfrost_format_supports_afbc(enum pipe_format format)
+static enum pipe_format
+unswizzled_format(unsigned arch, enum pipe_format format)
 {
-        const struct util_format_description *desc =
-                util_format_description(format);
+   switch (format) {
+   case PIPE_FORMAT_A8_UNORM:
+   case PIPE_FORMAT_L8_UNORM:
+   case PIPE_FORMAT_I8_UNORM:
+      return PIPE_FORMAT_R8_UNORM;
 
-        /* sRGB cannot be AFBC, but it can be tiled. TODO: Verify. The blob
-         * does not do AFBC for SRGB8_ALPHA8, but it's not clear why it
-         * shouldn't be able to. */
+   case PIPE_FORMAT_L8A8_UNORM:
+      return PIPE_FORMAT_R8G8_UNORM;
 
-        if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
-                return false;
+   case PIPE_FORMAT_B8G8R8_UNORM:
+      return PIPE_FORMAT_R8G8B8_UNORM;
 
-        if (util_format_is_rgba8_variant(desc))
-                return true;
+   case PIPE_FORMAT_R8G8B8X8_UNORM:
+   case PIPE_FORMAT_B8G8R8A8_UNORM:
+   case PIPE_FORMAT_B8G8R8X8_UNORM:
+      return PIPE_FORMAT_R8G8B8A8_UNORM;
+   case PIPE_FORMAT_A8R8G8B8_UNORM:
+   case PIPE_FORMAT_X8R8G8B8_UNORM:
+   case PIPE_FORMAT_X8B8G8R8_UNORM:
+   case PIPE_FORMAT_A8B8G8R8_UNORM:
+      /* v7 can only support AFBC for RGB and BGR */
+      return arch == 7 ? format : PIPE_FORMAT_R8G8B8A8_UNORM;
 
-        /* Only Z24S8 variants are compressible as Z/S */
+   case PIPE_FORMAT_B5G6R5_UNORM:
+      return PIPE_FORMAT_R5G6B5_UNORM;
 
-        if (panfrost_is_z24s8_variant(format))
-                return true;
+   case PIPE_FORMAT_B5G5R5A1_UNORM:
+      return PIPE_FORMAT_R5G5B5A1_UNORM;
 
-        /* Lookup special formats */
-        switch (format) {
-        case PIPE_FORMAT_R8G8B8_UNORM:
-        case PIPE_FORMAT_B8G8R8_UNORM:
-        case PIPE_FORMAT_R5G6B5_UNORM:
-        case PIPE_FORMAT_B5G6R5_UNORM:
-                return true;
-        default:
-                return false;
-        }
+   case PIPE_FORMAT_R10G10B10X2_UNORM:
+   case PIPE_FORMAT_B10G10R10A2_UNORM:
+   case PIPE_FORMAT_B10G10R10X2_UNORM:
+      return PIPE_FORMAT_R10G10B10A2_UNORM;
+
+   case PIPE_FORMAT_B4G4R4A4_UNORM:
+      return PIPE_FORMAT_R4G4B4A4_UNORM;
+   case PIPE_FORMAT_A4B4G4R4_UNORM:
+      /* v7 can only support AFBC for RGB and BGR */
+      return arch == 7 ? format : PIPE_FORMAT_R4G4B4A4_UNORM;
+
+   default:
+      return format;
+   }
 }
 
-unsigned
-panfrost_afbc_header_size(unsigned width, unsigned height)
+/* AFBC supports compressing a few canonical formats. Additional formats are
+ * available by using a canonical internal format. Given a PIPE format, find
+ * the canonical AFBC internal format if it exists, or NONE if the format
+ * cannot be compressed. */
+
+enum pan_afbc_mode
+panfrost_afbc_format(unsigned arch, enum pipe_format format)
 {
-        /* Align to tile */
-        unsigned aligned_width  = ALIGN_POT(width,  AFBC_TILE_WIDTH);
-        unsigned aligned_height = ALIGN_POT(height, AFBC_TILE_HEIGHT);
+   /* sRGB does not change the pixel format itself, only the
+    * interpretation. The interpretation is handled by conversion hardware
+    * independent to the compression hardware, so we can compress sRGB
+    * formats by using the corresponding linear format.
+    */
+   format = util_format_linear(format);
 
-        /* Compute size in tiles, rather than pixels */
-        unsigned tile_count_x = aligned_width  / AFBC_TILE_WIDTH;
-        unsigned tile_count_y = aligned_height / AFBC_TILE_HEIGHT;
-        unsigned tile_count = tile_count_x * tile_count_y;
+   /* Luminance-alpha not supported for AFBC on v7+ */
+   switch (format) {
+   case PIPE_FORMAT_A8_UNORM:
+   case PIPE_FORMAT_L8_UNORM:
+   case PIPE_FORMAT_I8_UNORM:
+   case PIPE_FORMAT_L8A8_UNORM:
+      if (arch >= 7)
+         return PAN_AFBC_MODE_INVALID;
+      else
+         break;
+   default:
+      break;
+   }
 
-        /* Multiply to find the header size */
-        unsigned header_bytes = tile_count * AFBC_HEADER_BYTES_PER_TILE;
+   /* We handle swizzling orthogonally to AFBC */
+   format = unswizzled_format(arch, format);
 
-        /* Align and go */
-        return ALIGN_POT(header_bytes, AFBC_CACHE_ALIGN);
+   /* clang-format off */
+   switch (format) {
+   case PIPE_FORMAT_R8_UNORM:          return PAN_AFBC_MODE_R8;
+   case PIPE_FORMAT_R8G8_UNORM:        return PAN_AFBC_MODE_R8G8;
+   case PIPE_FORMAT_R8G8B8_UNORM:      return PAN_AFBC_MODE_R8G8B8;
+   case PIPE_FORMAT_R8G8B8A8_UNORM:    return PAN_AFBC_MODE_R8G8B8A8;
+   case PIPE_FORMAT_R5G6B5_UNORM:      return PAN_AFBC_MODE_R5G6B5;
+   case PIPE_FORMAT_R5G5B5A1_UNORM:    return PAN_AFBC_MODE_R5G5B5A1;
+   case PIPE_FORMAT_R10G10B10A2_UNORM: return PAN_AFBC_MODE_R10G10B10A2;
+   case PIPE_FORMAT_R4G4B4A4_UNORM:    return PAN_AFBC_MODE_R4G4B4A4;
+   case PIPE_FORMAT_Z16_UNORM:         return PAN_AFBC_MODE_R8G8;
 
+   case PIPE_FORMAT_Z24_UNORM_S8_UINT: return PAN_AFBC_MODE_R8G8B8A8;
+   case PIPE_FORMAT_Z24X8_UNORM:       return PAN_AFBC_MODE_R8G8B8A8;
+   case PIPE_FORMAT_X24S8_UINT:        return PAN_AFBC_MODE_R8G8B8A8;
+
+   default:                            return PAN_AFBC_MODE_INVALID;
+   }
+   /* clang-format on */
 }
 
 /* The lossless colour transform (AFBC_FORMAT_MOD_YTR) requires RGB. */
@@ -134,13 +172,57 @@ panfrost_afbc_header_size(unsigned width, unsigned height)
 bool
 panfrost_afbc_can_ytr(enum pipe_format format)
 {
-        const struct util_format_description *desc =
-                util_format_description(format);
+   const struct util_format_description *desc = util_format_description(format);
 
-        /* YTR is only defined for RGB(A) */
-        if (desc->nr_channels != 3 && desc->nr_channels != 4)
-                return false;
+   /* YTR is only defined for RGB(A) */
+   if (desc->nr_channels != 3 && desc->nr_channels != 4)
+      return false;
 
-        /* The fourth channel if it exists doesn't matter */
-        return desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB;
+   /* The fourth channel if it exists doesn't matter */
+   return desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB;
+}
+
+bool
+panfrost_afbc_can_split(unsigned arch, enum pipe_format format,
+                        uint64_t modifier)
+{
+   unsigned block_width = panfrost_afbc_superblock_width(modifier);
+
+   if (arch < 6)
+      return false;
+
+   if (block_width == 16) {
+      return true;
+   } else if (block_width == 32) {
+      enum pan_afbc_mode mode = panfrost_afbc_format(arch, format);
+      return (mode == PAN_AFBC_MODE_R8G8B8A8 ||
+              mode == PAN_AFBC_MODE_R10G10B10A2);
+   }
+
+   return false;
+}
+
+/* Only support packing for RGB formats for now. */
+
+bool
+panfrost_afbc_can_pack(enum pipe_format format)
+{
+   const struct util_format_description *desc = util_format_description(format);
+
+   return desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB;
+}
+
+/* check for whether a format can be used with MTK_16L32S format */
+
+bool panfrost_format_supports_mtk_tiled(enum pipe_format format)
+{
+   switch (format) {
+   case PIPE_FORMAT_NV12:
+   case PIPE_FORMAT_R8_G8B8_420_UNORM:
+   case PIPE_FORMAT_R8_UNORM:
+   case PIPE_FORMAT_R8G8_UNORM:
+      return true;
+   default:
+      return false;
+   }
 }

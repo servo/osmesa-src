@@ -39,6 +39,7 @@
 
 #include "fast_idiv_by_const.h"
 #include "u_math.h"
+#include "util/macros.h"
 #include <limits.h>
 #include <assert.h>
 
@@ -65,8 +66,7 @@ util_compute_fast_udiv_info(uint64_t D, unsigned num_bits, unsigned UINT_BITS)
       } else {
          /* Dividing by 1. */
          /* Assuming: floor((num + 1) * (2^32 - 1) / 2^32) = num */
-         result.multiplier = UINT_BITS == 64 ? UINT64_MAX :
-                                               (1ull << UINT_BITS) - 1;
+         result.multiplier = u_uintN_max(UINT_BITS);
          result.pre_shift = 0;
          result.post_shift = 0;
          result.increment = 1;
@@ -169,12 +169,6 @@ util_compute_fast_udiv_info(uint64_t D, unsigned num_bits, unsigned UINT_BITS)
    return result;
 }
 
-static inline int64_t
-sign_extend(int64_t x, unsigned SINT_BITS)
-{
-   return (int64_t)((uint64_t)x << (64 - SINT_BITS)) >> (64 - SINT_BITS);
-}
-
 struct util_fast_sdiv_info
 util_compute_fast_sdiv_info(int64_t D, unsigned SINT_BITS)
 {
@@ -236,7 +230,7 @@ util_compute_fast_sdiv_info(int64_t D, unsigned SINT_BITS)
       delta = abs_d - remainder2;
    } while (quotient1 < delta || (quotient1 == delta && remainder1 == 0));
 
-   result.multiplier = sign_extend(quotient2 + 1, SINT_BITS);
+   result.multiplier = util_sign_extend(quotient2 + 1, SINT_BITS);
    if (D < 0) result.multiplier = -result.multiplier;
    result.shift = exponent - SINT_BITS;
    return result;

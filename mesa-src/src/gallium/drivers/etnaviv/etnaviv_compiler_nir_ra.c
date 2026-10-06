@@ -90,11 +90,12 @@ etna_ra_setup(void *mem_ctx)
    /* classes always be created from index 0, so equal to the class enum
     * which represents a register with (c+1) components
     */
+   struct ra_class *classes[NUM_REG_CLASSES];
    for (int c = 0; c < NUM_REG_CLASSES; c++)
-      ra_alloc_reg_class(regs);
+      classes[c] = ra_alloc_reg_class(regs);
    /* add each register of each class */
    for (int r = 0; r < NUM_REG_TYPES * ETNA_MAX_TEMPS; r++)
-      ra_class_add_reg(regs, reg_get_class(r), r);
+      ra_class_add_reg(classes[reg_get_class(r)], r);
    /* set conflicts */
    for (int r = 0; r < ETNA_MAX_TEMPS; r++) {
       for (int i = 0; i < NUM_REG_TYPES; i++) {
@@ -123,15 +124,19 @@ etna_ra_assign(struct etna_compile *c, nir_shader *shader)
 
    nir_index_blocks(impl);
    nir_index_ssa_defs(impl);
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr(instr, block)
-         instr->pass_flags = 0;
+
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            instr->pass_flags &= ~PASS_FLAGS_IS_DEAD_MASK;
+         }
+      }
    }
 
    /* this gives an approximation/upper limit on how many nodes are needed
     * (some ssa values do not represent an allocated register)
     */
-   unsigned max_nodes = impl->ssa_alloc + impl->reg_alloc;
+   unsigned max_nodes = impl->ssa_alloc;
    unsigned *live_map = ralloc_array(NULL, unsigned, max_nodes);
    memset(live_map, 0xff, sizeof(unsigned) * max_nodes);
    struct live_def *defs = rzalloc_array(NULL, struct live_def, max_nodes);
@@ -142,8 +147,8 @@ etna_ra_assign(struct etna_compile *c, nir_shader *shader)
    /* set classes from num_components */
    for (unsigned i = 0; i < num_nodes; i++) {
       nir_instr *instr = defs[i].instr;
-      nir_dest *dest = defs[i].dest;
-      unsigned comp = nir_dest_num_components(*dest) - 1;
+      nir_def *def = defs[i].def;
+      unsigned comp = def->num_components - 1;
 
       if (instr->type == nir_instr_type_alu &&
           c->specs->has_new_transcendentals) {
@@ -152,8 +157,8 @@ etna_ra_assign(struct etna_compile *c, nir_shader *shader)
          case nir_op_flog2:
          case nir_op_fsin:
          case nir_op_fcos:
-            assert(dest->is_ssa);
             comp = REG_CLASS_VIRT_VEC2T;
+            break;
          default:
             break;
          }
@@ -163,15 +168,15 @@ etna_ra_assign(struct etna_compile *c, nir_shader *shader)
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
          /* can't have dst swizzle or sparse writemask on UBO loads */
          if (intr->intrinsic == nir_intrinsic_load_ubo) {
-            assert(dest == &intr->dest);
-            if (dest->ssa.num_components == 2)
+            assert(def == &intr->def);
+            if (def->num_components == 2)
                comp = REG_CLASS_VIRT_VEC2C;
-            if (dest->ssa.num_components == 3)
+            if (def->num_components == 3)
                comp = REG_CLASS_VIRT_VEC3C;
          }
       }
 
-      ra_set_node_class(g, i, comp);
+      ra_set_node_class(g, i, ra_get_class_from_index(regs, comp));
    }
 
    nir_foreach_block(block, impl) {
@@ -179,7 +184,7 @@ etna_ra_assign(struct etna_compile *c, nir_shader *shader)
          if (instr->type != nir_instr_type_intrinsic)
             continue;
 
-         nir_dest *dest = dest_for_instr(instr);
+         nir_def *def = def_for_instr(instr);
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
          unsigned reg;
 
@@ -196,7 +201,7 @@ etna_ra_assign(struct etna_compile *c, nir_shader *shader)
                 deref->var->data.location == FRAG_RESULT_DEPTH) {
                ra_set_node_reg(g, index, REG_FRAG_DEPTH);
             } else {
-               ra_set_node_class(g, index, REG_CLASS_VEC4);
+               ra_set_node_class(g, index, ra_get_class_from_index(regs, REG_CLASS_VEC4));
             }
          } continue;
          case nir_intrinsic_load_input:
@@ -205,16 +210,19 @@ etna_ra_assign(struct etna_compile *c, nir_shader *shader)
                REG_TYPE_VIRT_VEC2_XY,
                REG_TYPE_VIRT_VEC3_XYZ,
                REG_TYPE_VEC4,
-            }[nir_dest_num_components(*dest) - 1];
+            }[def->num_components - 1];
             break;
          case nir_intrinsic_load_instance_id:
             reg = c->variant->infile.num_reg * NUM_REG_TYPES + REG_TYPE_VIRT_SCALAR_Y;
+            break;
+         case nir_intrinsic_load_vertex_id:
+            reg = c->variant->infile.num_reg * NUM_REG_TYPES + REG_TYPE_VIRT_SCALAR_X;
             break;
          default:
             continue;
          }
 
-         ra_set_node_reg(g, live_map[dest_index(impl, dest)], reg);
+         ra_set_node_reg(g, live_map[def_index(impl, def)], reg);
       }
    }
 

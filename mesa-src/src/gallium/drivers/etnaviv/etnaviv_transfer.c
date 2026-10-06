@@ -32,7 +32,7 @@
 #include "etnaviv_screen.h"
 
 #include "pipe/p_defines.h"
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_screen.h"
 #include "pipe/p_state.h"
 #include "util/format/u_format.h"
@@ -44,6 +44,8 @@
 #include "hw/common_3d.xml.h"
 
 #include "drm-uapi/drm_fourcc.h"
+
+#define ETNA_PIPE_MAP_DISCARD_LEVEL   (PIPE_MAP_DRV_PRV << 0)
 
 /* Compute offset into a 1D/2D/3D buffer of a certain box.
  * This box must be aligned to the block width and height of the
@@ -104,14 +106,7 @@ etna_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    struct etna_context *ctx = etna_context(pctx);
    struct etna_transfer *trans = etna_transfer(ptrans);
    struct etna_resource *rsc = etna_resource(ptrans->resource);
-
-   /* XXX
-    * When writing to a resource that is already in use, replace the resource
-    * with a completely new buffer
-    * and free the old one using a fenced free.
-    * The most tricky case to implement will be: tiled or supertiled surface,
-    * partial write, target not aligned to 4/64. */
-   assert(ptrans->level <= rsc->base.last_level);
+   struct etna_resource_level *res_level = &rsc->levels[ptrans->level];
 
    if (rsc->texture && !etna_resource_newer(rsc, etna_resource(rsc->texture)))
       rsc = etna_resource(rsc->texture); /* switch to using the texture resource */
@@ -123,16 +118,22 @@ etna_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    if (trans->rsc)
       etna_bo_cpu_fini(etna_resource(trans->rsc)->bo);
 
-   if (ptrans->usage & PIPE_TRANSFER_WRITE) {
+   if (ptrans->usage & PIPE_MAP_WRITE) {
+      if (etna_resource_level_needs_flush(res_level)) {
+         if (ptrans->usage & ETNA_PIPE_MAP_DISCARD_LEVEL)
+            etna_resource_level_mark_flushed(res_level);
+         else
+            etna_copy_resource(pctx, &rsc->base, &rsc->base, ptrans->level, ptrans->level);
+      }
+
       if (trans->rsc) {
          /* We have a temporary resource due to either tile status or
           * tiling format. Write back the updated buffer contents.
-          * FIXME: we need to invalidate the tile status. */
-         etna_copy_resource_box(pctx, ptrans->resource, trans->rsc, ptrans->level, &ptrans->box);
+          */
+         etna_copy_resource_box(pctx, ptrans->resource, trans->rsc,
+                                ptrans->level, 0, &ptrans->box);
       } else if (trans->staging) {
          /* map buffer object */
-         struct etna_resource_level *res_level = &rsc->levels[ptrans->level];
-
          if (rsc->layout == ETNA_LAYOUT_TILED) {
             for (unsigned z = 0; z < ptrans->box.depth; z++) {
                etna_texture_tile(
@@ -152,15 +153,19 @@ etna_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
          } else {
             BUG("unsupported tiling %i", rsc->layout);
          }
-
-         FREE(trans->staging);
       }
 
-      rsc->seqno++;
+      if (ptrans->resource->target == PIPE_BUFFER)
+         util_range_add(&rsc->base, &rsc->valid_buffer_range,
+                        ptrans->box.x, ptrans->box.x + ptrans->box.width);
 
-      if (rsc->base.bind & PIPE_BIND_SAMPLER_VIEW) {
+      etna_resource_level_ts_mark_invalid(res_level);
+      etna_resource_level_mark_changed(res_level);
+
+      if (rsc->base.bind & PIPE_BIND_SAMPLER_VIEW)
          ctx->dirty |= ETNA_DIRTY_TEXTURE_CACHES;
-      }
+      if (rsc->base.bind & PIPE_BIND_CONSTANT_BUFFER)
+         ctx->dirty |= ETNA_DIRTY_SHADER_CACHES;
    }
 
    /* We need to have the patched data ready for the GPU. */
@@ -171,17 +176,10 @@ etna_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
     * are not mapped unsynchronized. If they are, must push them back into GPU
     * domain after CPU access is finished.
     */
-   if (!trans->rsc && !(ptrans->usage & PIPE_TRANSFER_UNSYNCHRONIZED))
+   if (!trans->rsc && !(ptrans->usage & PIPE_MAP_UNSYNCHRONIZED))
       etna_bo_cpu_fini(rsc->bo);
 
-   if ((ptrans->resource->target == PIPE_BUFFER) &&
-       (ptrans->usage & PIPE_TRANSFER_WRITE)) {
-      util_range_add(&rsc->base,
-                     &rsc->valid_buffer_range,
-                     ptrans->box.x,
-                     ptrans->box.x + ptrans->box.width);
-      }
-
+   FREE(trans->staging);
    pipe_resource_reference(&trans->rsc, NULL);
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, trans);
@@ -197,49 +195,55 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
    struct etna_context *ctx = etna_context(pctx);
    struct etna_screen *screen = ctx->screen;
    struct etna_resource *rsc = etna_resource(prsc);
+   struct etna_resource_level *res_level = &rsc->levels[level];
    struct etna_transfer *trans;
    struct pipe_transfer *ptrans;
    enum pipe_format format = prsc->format;
 
-   trans = slab_alloc(&ctx->transfer_pool);
+   trans = slab_zalloc(&ctx->transfer_pool);
    if (!trans)
       return NULL;
 
-   /* slab_alloc() doesn't zero */
-   memset(trans, 0, sizeof(*trans));
+   assert(level <= prsc->last_level);
 
    /*
     * Upgrade to UNSYNCHRONIZED if target is PIPE_BUFFER and range is uninitialized.
     */
-   if ((usage & PIPE_TRANSFER_WRITE) &&
+   if ((usage & PIPE_MAP_WRITE) &&
        (prsc->target == PIPE_BUFFER) &&
        !util_ranges_intersect(&rsc->valid_buffer_range,
                               box->x,
                               box->x + box->width)) {
-      usage |= PIPE_TRANSFER_UNSYNCHRONIZED;
+      usage |= PIPE_MAP_UNSYNCHRONIZED;
    }
 
    /* Upgrade DISCARD_RANGE to WHOLE_RESOURCE if the whole resource is
     * being mapped. If we add buffer reallocation to avoid CPU/GPU sync this
     * check needs to be extended to coherent mappings and shared resources.
     */
-   if ((usage & PIPE_TRANSFER_DISCARD_RANGE) &&
-       !(usage & PIPE_TRANSFER_UNSYNCHRONIZED) &&
+   if ((usage & PIPE_MAP_DISCARD_RANGE) &&
+       !(usage & PIPE_MAP_UNSYNCHRONIZED) &&
+       !(prsc->flags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT) &&
        prsc->last_level == 0 &&
        prsc->width0 == box->width &&
        prsc->height0 == box->height &&
        prsc->depth0 == box->depth &&
        prsc->array_size == 1) {
-      usage |= PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE;
+      usage |= PIPE_MAP_DISCARD_WHOLE_RESOURCE;
    }
+
+   if ((usage & PIPE_MAP_DISCARD_WHOLE_RESOURCE) ||
+       ((usage & PIPE_MAP_DISCARD_RANGE) &&
+        util_texrange_covers_whole_level(prsc, level, box->x, box->y, box->z,
+                                         box->width, box->height, box->depth)))
+      usage |= ETNA_PIPE_MAP_DISCARD_LEVEL;
+
 
    ptrans = &trans->base;
    pipe_resource_reference(&ptrans->resource, prsc);
    ptrans->level = level;
    ptrans->usage = usage;
    ptrans->box = *box;
-
-   assert(level <= prsc->last_level);
 
    /* This one is a little tricky: if we have a separate render resource, which
     * is newer than the base resource we want the transfer to target this one,
@@ -257,30 +261,28 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
        * render resource. Use the texture resource, which avoids bouncing
        * pixels between the two resources, and we can de-tile it in s/w. */
       rsc = etna_resource(rsc->texture);
-   } else if (rsc->ts_bo ||
+   } else if (etna_resource_level_ts_valid(res_level) ||
               (rsc->layout != ETNA_LAYOUT_LINEAR &&
                etna_resource_hw_tileable(screen->specs.use_blt, prsc) &&
                /* HALIGN 4 resources are incompatible with the resolve engine,
                 * so fall back to using software to detile this resource. */
                rsc->halign != TEXTURE_HALIGN_FOUR)) {
-      /* If the surface has tile status, we need to resolve it first.
-       * The strategy we implement here is to use the RS to copy the
-       * depth buffer, filling in the "holes" where the tile status
-       * indicates that it's clear. We also do this for tiled
-       * resources, but only if the RS can blit them. */
-      if (usage & PIPE_TRANSFER_MAP_DIRECTLY) {
-         slab_free(&ctx->transfer_pool, trans);
-         BUG("unsupported transfer flags %#x with tile status/tiled layout", usage);
-         return NULL;
-      }
 
-      if (prsc->depth0 > 1 && rsc->ts_bo) {
+      /* If the resource level has valid tile status, we copy the transfer
+       * region to a staging resource using the BLT or RS engine, which will
+       * resolve the TS information. We also do this for tiled resources without
+       * TS, but only if the dedicated blit engines can handle them. */
+
+      if (usage & PIPE_MAP_DIRECTLY) {
          slab_free(&ctx->transfer_pool, trans);
-         BUG("resource has depth >1 with tile status");
+         BUG("unsupported map flags %#x with tile status/tiled layout", usage);
          return NULL;
       }
 
       struct pipe_resource templ = *prsc;
+      templ.last_level = 0;
+      templ.width0 = res_level->width;
+      templ.height0 = res_level->height;
       templ.nr_samples = 0;
       templ.bind = PIPE_BIND_RENDER_TARGET;
 
@@ -313,70 +315,28 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
          ptrans->box.height = align(ptrans->box.height, ETNA_RS_HEIGHT_MASK + 1);
       }
 
-      if (!(usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE))
-         etna_copy_resource_box(pctx, trans->rsc, &rsc->base, level, &ptrans->box);
+      if ((usage & PIPE_MAP_READ) || !(usage & ETNA_PIPE_MAP_DISCARD_LEVEL))
+         etna_copy_resource_box(pctx, trans->rsc, &rsc->base, 0, level, &ptrans->box);
 
       /* Switch to using the temporary resource instead */
       rsc = etna_resource(trans->rsc);
+      res_level = &rsc->levels[0];
    }
 
-   struct etna_resource_level *res_level = &rsc->levels[level];
-
-   /* XXX we don't handle PIPE_TRANSFER_FLUSH_EXPLICIT; this flag can be ignored
+   /* XXX we don't handle PIPE_MAP_FLUSH_EXPLICIT; this flag can be ignored
     * when mapping in-place,
     * but when not in place we need to fire off the copy operation in
     * transfer_flush_region (currently
     * a no-op) instead of unmap. Need to handle this to support
     * ARB_map_buffer_range extension at least.
     */
-   /* XXX we don't take care of current operations on the resource; which can
-      be, at some point in the pipeline
-      which is not yet executed:
-
-      - bound as surface
-      - bound through vertex buffer
-      - bound through index buffer
-      - bound in sampler view
-      - used in clear_render_target / clear_depth_stencil operation
-      - used in blit
-      - used in resource_copy_region
-
-      How do other drivers record this information over course of the rendering
-      pipeline?
-      Is it necessary at all? Only in case we want to provide a fast path and
-      map the resource directly
-      (and for PIPE_TRANSFER_MAP_DIRECTLY) and we don't want to force a sync.
-      We also need to know whether the resource is in use to determine if a sync
-      is needed (or just do it
-      always, but that comes at the expense of performance).
-
-      A conservative approximation without too much overhead would be to mark
-      all resources that have
-      been bound at some point as busy. A drawback would be that accessing
-      resources that have
-      been bound but are no longer in use for a while still carry a performance
-      penalty. On the other hand,
-      the program could be using PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE or
-      PIPE_TRANSFER_UNSYNCHRONIZED to
-      avoid this in the first place...
-
-      A) We use an in-pipe copy engine, and queue the copy operation after unmap
-      so that the copy
-         will be performed when all current commands have been executed.
-         Using the RS is possible, not sure if always efficient. This can also
-      do any kind of tiling for us.
-         Only possible when PIPE_TRANSFER_DISCARD_RANGE is set.
-      B) We discard the entire resource (or at least, the mipmap level) and
-      allocate new memory for it.
-         Only possible when mapping the entire resource or
-      PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE is set.
-    */
 
    /*
     * Pull resources into the CPU domain. Only skipped for unsynchronized
     * transfers without a temporary resource.
     */
-   if (trans->rsc || !(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
+   if (trans->rsc || !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
+      enum etna_resource_status status = etna_resource_status(ctx, rsc);
       uint32_t prep_flags = 0;
 
       /*
@@ -385,27 +345,16 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
        * current GPU usage (reads must wait for GPU writes, writes must have
        * exclusive access to the buffer).
        */
-      mtx_lock(&ctx->lock);
-
-      if ((trans->rsc && (etna_resource(trans->rsc)->status & ETNA_PENDING_WRITE)) ||
+      if ((trans->rsc && (status & ETNA_PENDING_WRITE)) ||
           (!trans->rsc &&
-           (((usage & PIPE_TRANSFER_READ) && (rsc->status & ETNA_PENDING_WRITE)) ||
-           ((usage & PIPE_TRANSFER_WRITE) && rsc->status)))) {
-         mtx_lock(&rsc->lock);
-         set_foreach(rsc->pending_ctx, entry) {
-            struct etna_context *pend_ctx = (struct etna_context *)entry->key;
-            struct pipe_context *pend_pctx = &pend_ctx->base;
-
-            pend_pctx->flush(pend_pctx, NULL, 0);
-         }
-         mtx_unlock(&rsc->lock);
+           (((usage & PIPE_MAP_READ) && (status & ETNA_PENDING_WRITE)) ||
+           ((usage & PIPE_MAP_WRITE) && status)))) {
+         etna_flush(pctx, NULL, 0, true);
       }
 
-      mtx_unlock(&ctx->lock);
-
-      if (usage & PIPE_TRANSFER_READ)
+      if (usage & PIPE_MAP_READ)
          prep_flags |= DRM_ETNA_PREP_READ;
-      if (usage & PIPE_TRANSFER_WRITE)
+      if (usage & PIPE_MAP_WRITE)
          prep_flags |= DRM_ETNA_PREP_WRITE;
 
       /*
@@ -413,7 +362,7 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
        * get written even on read-only transfers. This blocks the GPU to sample
        * from this resource.
        */
-      if ((usage & PIPE_TRANSFER_READ) && etna_etc2_needs_patching(prsc))
+      if ((usage & PIPE_MAP_READ) && etna_etc2_needs_patching(prsc))
          prep_flags |= DRM_ETNA_PREP_WRITE;
 
       if (etna_bo_cpu_prep(rsc->bo, prep_flags))
@@ -436,7 +385,7 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
                                  res_level->layer_stride);
 
       /* We need to have the unpatched data ready for the gfx stack. */
-      if (usage & PIPE_TRANSFER_READ)
+      if (usage & PIPE_MAP_READ)
          etna_unpatch_data(trans->mapped, ptrans);
 
       return trans->mapped;
@@ -447,7 +396,7 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
       /* No direct mappings of tiled, since we need to manually
        * tile/untile.
        */
-      if (usage & PIPE_TRANSFER_MAP_DIRECTLY)
+      if (usage & PIPE_MAP_DIRECTLY)
          goto fail;
 
       trans->mapped += res_level->offset;
@@ -459,7 +408,7 @@ etna_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
       if (!trans->staging)
          goto fail;
 
-      if (usage & PIPE_TRANSFER_READ) {
+      if (usage & PIPE_MAP_READ) {
          if (rsc->layout == ETNA_LAYOUT_TILED) {
             for (unsigned z = 0; z < ptrans->box.depth; z++) {
                etna_texture_untile(trans->staging + z * ptrans->layer_stride,
@@ -508,9 +457,11 @@ etna_transfer_flush_region(struct pipe_context *pctx,
 void
 etna_transfer_init(struct pipe_context *pctx)
 {
-   pctx->transfer_map = etna_transfer_map;
+   pctx->buffer_map = etna_transfer_map;
+   pctx->texture_map = etna_transfer_map;
    pctx->transfer_flush_region = etna_transfer_flush_region;
-   pctx->transfer_unmap = etna_transfer_unmap;
+   pctx->buffer_unmap = etna_transfer_unmap;
+   pctx->texture_unmap = etna_transfer_unmap;
    pctx->buffer_subdata = u_default_buffer_subdata;
    pctx->texture_subdata = u_default_texture_subdata;
 }

@@ -594,7 +594,8 @@ vl_mpeg12_begin_frame(struct pipe_video_codec *decoder,
    struct vl_mpeg12_buffer *buf;
 
    struct pipe_resource *tex;
-   struct pipe_box rect = { 0, 0, 0, 1, 1, 1 };
+   struct pipe_box rect;
+   u_box_3d(0, 0, 0, 1, 1, 1, &rect);
 
    uint8_t intra_matrix[64];
    uint8_t non_intra_matrix[64];
@@ -628,9 +629,9 @@ vl_mpeg12_begin_frame(struct pipe_video_codec *decoder,
    rect.height = tex->height0;
 
    buf->texels =
-      dec->context->transfer_map(dec->context, tex, 0,
-                                 PIPE_TRANSFER_WRITE |
-                                 PIPE_TRANSFER_DISCARD_RANGE,
+      dec->context->texture_map(dec->context, tex, 0,
+                                 PIPE_MAP_WRITE |
+                                 PIPE_MAP_DISCARD_RANGE,
                                  &rect, &buf->tex_transfer);
 
    buf->block_num = 0;
@@ -745,7 +746,7 @@ vl_mpeg12_decode_bitstream(struct pipe_video_codec *decoder,
    vl_mpg12_bs_decode(&buf->bs, target, desc, num_buffers, buffers, sizes);
 }
 
-static void
+static int
 vl_mpeg12_end_frame(struct pipe_video_codec *decoder,
                     struct pipe_video_buffer *target,
                     struct pipe_picture_desc *picture)
@@ -769,7 +770,8 @@ vl_mpeg12_end_frame(struct pipe_video_codec *decoder,
 
    vl_vb_unmap(&buf->vertex_stream, dec->context);
 
-   dec->context->transfer_unmap(dec->context, buf->tex_transfer);
+   if (buf->tex_transfer)
+      dec->context->texture_unmap(dec->context, buf->tex_transfer);
 
    vb[0] = dec->quads;
    vb[1] = dec->pos;
@@ -793,7 +795,7 @@ vl_mpeg12_end_frame(struct pipe_video_codec *decoder,
          if (!ref_frames[j] || !ref_frames[j][i]) continue;
 
          vb[2] = vl_vb_get_mv(&buf->vertex_stream, j);
-         dec->context->set_vertex_buffers(dec->context, 0, 3, vb);
+         util_set_vertex_buffers(dec->context, 3, false, vb);
 
          vl_mc_render_ref(i ? &dec->mc_c : &dec->mc_y, &buf->mc[i], ref_frames[j][i]);
       }
@@ -804,7 +806,7 @@ vl_mpeg12_end_frame(struct pipe_video_codec *decoder,
       if (!buf->num_ycbcr_blocks[i]) continue;
 
       vb[1] = vl_vb_get_ycbcr(&buf->vertex_stream, i);
-      dec->context->set_vertex_buffers(dec->context, 0, 2, vb);
+      util_set_vertex_buffers(dec->context, 2, false, vb);
 
       vl_zscan_render(i ? &dec->zscan_c : & dec->zscan_y, &buf->zscan[i] , buf->num_ycbcr_blocks[i]);
 
@@ -823,13 +825,13 @@ vl_mpeg12_end_frame(struct pipe_video_codec *decoder,
          if (!buf->num_ycbcr_blocks[plane]) continue;
 
          vb[1] = vl_vb_get_ycbcr(&buf->vertex_stream, plane);
-         dec->context->set_vertex_buffers(dec->context, 0, 2, vb);
+         util_set_vertex_buffers(dec->context, 2, false, vb);
 
          if (dec->base.entrypoint <= PIPE_VIDEO_ENTRYPOINT_IDCT)
             vl_idct_prepare_stage2(i ? &dec->idct_c : &dec->idct_y, &buf->idct[plane]);
          else {
             dec->context->set_sampler_views(dec->context,
-                                            PIPE_SHADER_FRAGMENT, 0, 1,
+                                            PIPE_SHADER_FRAGMENT, 0, 1, 0, false,
                                             &mc_source_sv[plane]);
             dec->context->bind_sampler_states(dec->context,
                                               PIPE_SHADER_FRAGMENT,
@@ -841,6 +843,7 @@ vl_mpeg12_end_frame(struct pipe_video_codec *decoder,
    dec->context->flush(dec->context, NULL, 0);
    ++dec->current_buffer;
    dec->current_buffer %= 4;
+   return 0;
 }
 
 static void
@@ -861,9 +864,9 @@ init_pipe_state(struct vl_mpeg12_decoder *dec)
    assert(dec);
 
    memset(&dsa, 0, sizeof dsa);
-   dsa.depth.enabled = 0;
-   dsa.depth.writemask = 0;
-   dsa.depth.func = PIPE_FUNC_ALWAYS;
+   dsa.depth_enabled = 0;
+   dsa.depth_writemask = 0;
+   dsa.depth_func = PIPE_FUNC_ALWAYS;
    for (i = 0; i < 2; ++i) {
       dsa.stencil[i].enabled = 0;
       dsa.stencil[i].func = PIPE_FUNC_ALWAYS;
@@ -873,9 +876,9 @@ init_pipe_state(struct vl_mpeg12_decoder *dec)
       dsa.stencil[i].valuemask = 0;
       dsa.stencil[i].writemask = 0;
    }
-   dsa.alpha.enabled = 0;
-   dsa.alpha.func = PIPE_FUNC_ALWAYS;
-   dsa.alpha.ref_value = 0;
+   dsa.alpha_enabled = 0;
+   dsa.alpha_func = PIPE_FUNC_ALWAYS;
+   dsa.alpha_ref_value = 0;
    dec->dsa = dec->context->create_depth_stencil_alpha_state(dec->context, &dsa);
    dec->context->bind_depth_stencil_alpha_state(dec->context, dec->dsa);
 
@@ -888,7 +891,6 @@ init_pipe_state(struct vl_mpeg12_decoder *dec)
    sampler.mag_img_filter = PIPE_TEX_FILTER_NEAREST;
    sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
    sampler.compare_func = PIPE_FUNC_ALWAYS;
-   sampler.normalized_coords = 1;
    dec->sampler_ycbcr = dec->context->create_sampler_state(dec->context, &sampler);
    if (!dec->sampler_ycbcr)
       return false;
@@ -964,11 +966,8 @@ init_idct(struct vl_mpeg12_decoder *dec, const struct format_config* format_conf
 
    struct pipe_sampler_view *matrix = NULL;
 
-   nr_of_idct_render_targets = dec->context->screen->get_param
-   (
-      dec->context->screen, PIPE_CAP_MAX_RENDER_TARGETS
-   );
-   
+   nr_of_idct_render_targets = dec->context->screen->caps.max_render_targets;
+
    max_inst = dec->context->screen->get_shader_param
    (
       dec->context->screen, PIPE_SHADER_FRAGMENT, PIPE_SHADER_CAP_MAX_INSTRUCTIONS
@@ -982,28 +981,28 @@ init_idct(struct vl_mpeg12_decoder *dec, const struct format_config* format_conf
       nr_of_idct_render_targets = 1;
 
    formats[0] = formats[1] = formats[2] = format_config->idct_source_format;
-   assert(pipe_format_to_chroma_format(formats[0]) == dec->base.chroma_format);
    memset(&templat, 0, sizeof(templat));
    templat.width = dec->base.width / 4;
    templat.height = dec->base.height;
    dec->idct_source = vl_video_buffer_create_ex
    (
       dec->context, &templat,
-      formats, 1, 1, PIPE_USAGE_DEFAULT
+      formats, 1, 1, PIPE_USAGE_DEFAULT,
+      PIPE_VIDEO_CHROMA_FORMAT_420
    );
 
    if (!dec->idct_source)
       goto error_idct_source;
 
    formats[0] = formats[1] = formats[2] = format_config->mc_source_format;
-   assert(pipe_format_to_chroma_format(formats[0]) == dec->base.chroma_format);
    memset(&templat, 0, sizeof(templat));
    templat.width = dec->base.width / nr_of_idct_render_targets;
    templat.height = dec->base.height / 4;
    dec->mc_source = vl_video_buffer_create_ex
    (
       dec->context, &templat,
-      formats, nr_of_idct_render_targets, 1, PIPE_USAGE_DEFAULT
+      formats, nr_of_idct_render_targets, 1, PIPE_USAGE_DEFAULT,
+      PIPE_VIDEO_CHROMA_FORMAT_420
    );
 
    if (!dec->mc_source)
@@ -1054,9 +1053,10 @@ init_mc_source_widthout_idct(struct vl_mpeg12_decoder *dec, const struct format_
    dec->mc_source = vl_video_buffer_create_ex
    (
       dec->context, &templat,
-      formats, 1, 1, PIPE_USAGE_DEFAULT
+      formats, 1, 1, PIPE_USAGE_DEFAULT,
+      PIPE_VIDEO_CHROMA_FORMAT_420
    );
-      
+
    return dec->mc_source != NULL;
 }
 
@@ -1120,7 +1120,7 @@ vl_create_mpeg12_decoder(struct pipe_context *context,
 
    dec->base = *templat;
    dec->base.context = context;
-   dec->context = pipe_create_multimedia_context(context->screen);
+   dec->context = pipe_create_multimedia_context(context->screen, false);
 
    dec->base.destroy = vl_mpeg12_destroy;
    dec->base.begin_frame = vl_mpeg12_begin_frame;

@@ -25,9 +25,12 @@
 #include "iris_context.h"
 #include "iris_perf.h"
 
+#include "main/mtypes.h"
+
 struct iris_perf_query {
    struct gl_perf_query_object base;
-   struct gen_perf_query_object *query;
+   struct intel_perf_query_object *query;
+   bool begin_succeeded;
 };
 
 static unsigned
@@ -35,45 +38,48 @@ iris_init_perf_query_info(struct pipe_context *pipe)
 {
    struct iris_context *ice = (void *) pipe;
    struct iris_screen *screen = (struct iris_screen *) ice->ctx.screen;
-   struct gen_perf_config *perf_cfg = NULL;
+   struct intel_perf_config *perf_cfg = NULL;
 
-   /* make sure pipe perf counter type/data-type enums are matched with gen_perf's */
-   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_EVENT == (enum pipe_perf_counter_type)GEN_PERF_COUNTER_TYPE_EVENT);
-   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_DURATION_NORM == (enum pipe_perf_counter_type)GEN_PERF_COUNTER_TYPE_DURATION_NORM);
-   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_DURATION_RAW == (enum pipe_perf_counter_type)GEN_PERF_COUNTER_TYPE_DURATION_RAW);
-   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_THROUGHPUT == (enum pipe_perf_counter_type)GEN_PERF_COUNTER_TYPE_THROUGHPUT);
-   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_RAW == (enum pipe_perf_counter_type)GEN_PERF_COUNTER_TYPE_RAW);
+   /* make sure pipe perf counter type/data-type enums are matched with intel_perf's */
+   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_EVENT == (enum pipe_perf_counter_type)INTEL_PERF_COUNTER_TYPE_EVENT);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_DURATION_NORM == (enum pipe_perf_counter_type)INTEL_PERF_COUNTER_TYPE_DURATION_NORM);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_DURATION_RAW == (enum pipe_perf_counter_type)INTEL_PERF_COUNTER_TYPE_DURATION_RAW);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_THROUGHPUT == (enum pipe_perf_counter_type)INTEL_PERF_COUNTER_TYPE_THROUGHPUT);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_TYPE_RAW == (enum pipe_perf_counter_type)INTEL_PERF_COUNTER_TYPE_RAW);
 
-   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_BOOL32 == (enum pipe_perf_counter_data_type)GEN_PERF_COUNTER_DATA_TYPE_BOOL32);
-   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_UINT32 == (enum pipe_perf_counter_data_type)GEN_PERF_COUNTER_DATA_TYPE_UINT32);
-   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_UINT64 == (enum pipe_perf_counter_data_type)GEN_PERF_COUNTER_DATA_TYPE_UINT64);
-   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_FLOAT == (enum pipe_perf_counter_data_type)GEN_PERF_COUNTER_DATA_TYPE_FLOAT);
-   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_DOUBLE == (enum pipe_perf_counter_data_type)GEN_PERF_COUNTER_DATA_TYPE_DOUBLE);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_BOOL32 == (enum pipe_perf_counter_data_type)INTEL_PERF_COUNTER_DATA_TYPE_BOOL32);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_UINT32 == (enum pipe_perf_counter_data_type)INTEL_PERF_COUNTER_DATA_TYPE_UINT32);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_UINT64 == (enum pipe_perf_counter_data_type)INTEL_PERF_COUNTER_DATA_TYPE_UINT64);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_FLOAT == (enum pipe_perf_counter_data_type)INTEL_PERF_COUNTER_DATA_TYPE_FLOAT);
+   STATIC_ASSERT(PIPE_PERF_COUNTER_DATA_TYPE_DOUBLE == (enum pipe_perf_counter_data_type)INTEL_PERF_COUNTER_DATA_TYPE_DOUBLE);
 
    if (!ice->perf_ctx)
-      ice->perf_ctx = gen_perf_new_context(ice);
+      ice->perf_ctx = intel_perf_new_context(ice);
 
    if (unlikely(!ice->perf_ctx))
       return 0;
 
-   perf_cfg = gen_perf_config(ice->perf_ctx);
+   perf_cfg = intel_perf_config(ice->perf_ctx);
 
    if (perf_cfg)
       return perf_cfg->n_queries;
 
-   perf_cfg = gen_perf_new(ice->perf_ctx);
+   perf_cfg = intel_perf_new(ice->perf_ctx);
 
    iris_perf_init_vtbl(perf_cfg);
 
-   gen_perf_init_context(ice->perf_ctx,
+   intel_perf_init_metrics(perf_cfg, screen->devinfo, screen->fd,
+                           true /* pipeline_statistics */,
+                           true /* register snapshots */);
+
+   intel_perf_init_context(ice->perf_ctx,
                          perf_cfg,
                          ice,
+                         ice,
                          screen->bufmgr,
-                         &screen->devinfo,
-                         ice->batches[IRIS_BATCH_RENDER].hw_ctx_id,
+                         screen->devinfo,
+                         ice->batches[IRIS_BATCH_RENDER].i915.ctx_id,
                          screen->fd);
-
-   gen_perf_init_metrics(perf_cfg, &screen->devinfo, screen->fd, true /* pipeline_statistics */);
 
    return perf_cfg->n_queries;
 }
@@ -82,14 +88,15 @@ static struct pipe_query *
 iris_new_perf_query_obj(struct pipe_context *pipe, unsigned query_index)
 {
    struct iris_context *ice = (void *) pipe;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
-   struct gen_perf_query_object * obj = gen_perf_new_query(perf_ctx, query_index);
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_query_object * obj =
+      intel_perf_new_query(perf_ctx, query_index);
    if (unlikely(!obj))
       return NULL;
 
    struct iris_perf_query *q = calloc(1, sizeof(struct iris_perf_query));
    if (unlikely(!q)) {
-      gen_perf_delete_query(perf_ctx, obj);
+      intel_perf_delete_query(perf_ctx, obj);
       return NULL;
    }
 
@@ -102,10 +109,10 @@ iris_begin_perf_query(struct pipe_context *pipe, struct pipe_query *q)
 {
    struct iris_context *ice = (void *) pipe;
    struct iris_perf_query *perf_query= (struct iris_perf_query *) q;
-   struct gen_perf_query_object *obj = perf_query->query;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_query_object *obj = perf_query->query;
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
 
-   return gen_perf_begin_query(perf_ctx, obj);
+   return (perf_query->begin_succeeded = intel_perf_begin_query(perf_ctx, obj));
 }
 
 static void
@@ -113,10 +120,11 @@ iris_end_perf_query(struct pipe_context *pipe, struct pipe_query *q)
 {
    struct iris_context *ice = (void *) pipe;
    struct iris_perf_query *perf_query = (struct iris_perf_query *) q;
-   struct gen_perf_query_object *obj = perf_query->query;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_query_object *obj = perf_query->query;
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
 
-   gen_perf_end_query(perf_ctx, obj);
+   if (perf_query->begin_succeeded)
+      intel_perf_end_query(perf_ctx, obj);
 }
 
 static void
@@ -124,10 +132,10 @@ iris_delete_perf_query(struct pipe_context *pipe, struct pipe_query *q)
 {
    struct iris_context *ice = (void *) pipe;
    struct iris_perf_query *perf_query = (struct iris_perf_query *) q;
-   struct gen_perf_query_object *obj = perf_query->query;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_query_object *obj = perf_query->query;
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
 
-   gen_perf_delete_query(perf_ctx, obj);
+   intel_perf_delete_query(perf_ctx, obj);
    free(q);
 }
 
@@ -140,14 +148,14 @@ iris_get_perf_query_info(struct pipe_context *pipe,
                          uint32_t *n_active)
 {
    struct iris_context *ice = (void *) pipe;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
-   struct gen_perf_config *perf_cfg = gen_perf_config(perf_ctx);
-   const struct gen_perf_query_info *info = &perf_cfg->queries[query_index];
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_config *perf_cfg = intel_perf_config(perf_ctx);
+   const struct intel_perf_query_info *info = &perf_cfg->queries[query_index];
 
    *name = info->name;
    *data_size = info->data_size;
    *n_counters = info->n_counters;
-   *n_active = gen_perf_active_queries(perf_ctx, info);
+   *n_active = intel_perf_active_queries(perf_ctx, info);
 }
 
 static void
@@ -163,18 +171,32 @@ iris_get_perf_counter_info(struct pipe_context *pipe,
                            uint64_t *raw_max)
 {
    struct iris_context *ice = (void *) pipe;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
-   struct gen_perf_config *perf_cfg = gen_perf_config(perf_ctx);
-   const struct gen_perf_query_info *info = &perf_cfg->queries[query_index];
-   const struct gen_perf_query_counter *counter = &info->counters[counter_index];
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_config *perf_cfg = intel_perf_config(perf_ctx);
+   const struct intel_perf_query_info *info = &perf_cfg->queries[query_index];
+   const struct intel_perf_query_counter *counter =
+      &info->counters[counter_index];
+   struct intel_perf_query_result results;
 
-   *name = counter->name;
+   intel_perf_query_result_clear(&results);
+
+   *name = INTEL_DEBUG(DEBUG_PERF_SYMBOL_NAMES) ?
+      counter->symbol_name : counter->name;
    *desc = counter->desc;
    *offset = counter->offset;
-   *data_size = gen_perf_query_counter_get_size(counter);
+   *data_size = intel_perf_query_counter_get_size(counter);
    *type_enum = counter->type;
    *data_type_enum = counter->data_type;
-   *raw_max = counter->raw_max;
+
+   if (counter->oa_counter_max_uint64) {
+      if (counter->data_type == INTEL_PERF_COUNTER_DATA_TYPE_FLOAT ||
+          counter->data_type == INTEL_PERF_COUNTER_DATA_TYPE_DOUBLE)
+         *raw_max = counter->oa_counter_max_float(perf_cfg, info, &results);
+      else
+         *raw_max = counter->oa_counter_max_uint64(perf_cfg, info, &results);
+   } else {
+      *raw_max = 0;
+   }
 }
 
 static void
@@ -182,10 +204,11 @@ iris_wait_perf_query(struct pipe_context *pipe, struct pipe_query *q)
 {
    struct iris_context *ice = (void *) pipe;
    struct iris_perf_query *perf_query = (struct iris_perf_query *) q;
-   struct gen_perf_query_object *obj = perf_query->query;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_query_object *obj = perf_query->query;
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
 
-   gen_perf_wait_query(perf_ctx, obj, &ice->batches[IRIS_BATCH_RENDER]);
+   if (perf_query->begin_succeeded)
+      intel_perf_wait_query(perf_ctx, obj, &ice->batches[IRIS_BATCH_RENDER]);
 }
 
 static bool
@@ -193,16 +216,19 @@ iris_is_perf_query_ready(struct pipe_context *pipe, struct pipe_query *q)
 {
    struct iris_context *ice = (void *) pipe;
    struct iris_perf_query *perf_query = (struct iris_perf_query *) q;
-   struct gen_perf_query_object *obj = perf_query->query;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_query_object *obj = perf_query->query;
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
 
    if (perf_query->base.Ready)
       return true;
+   if (!perf_query->begin_succeeded)
+      return true;
 
-   return gen_perf_is_query_ready(perf_ctx, obj, &ice->batches[IRIS_BATCH_RENDER]);
+   return intel_perf_is_query_ready(perf_ctx, obj,
+                                    &ice->batches[IRIS_BATCH_RENDER]);
 }
 
-static void
+static bool
 iris_get_perf_query_data(struct pipe_context *pipe,
                          struct pipe_query *q,
                          size_t data_size,
@@ -211,11 +237,15 @@ iris_get_perf_query_data(struct pipe_context *pipe,
 {
    struct iris_context *ice = (void *) pipe;
    struct iris_perf_query *perf_query = (struct iris_perf_query *) q;
-   struct gen_perf_query_object *obj = perf_query->query;
-   struct gen_perf_context *perf_ctx = ice->perf_ctx;
+   struct intel_perf_query_object *obj = perf_query->query;
+   struct intel_perf_context *perf_ctx = ice->perf_ctx;
 
-   gen_perf_get_query_data(perf_ctx, obj, &ice->batches[IRIS_BATCH_RENDER],
-         data_size, data, bytes_written);
+   if (perf_query->begin_succeeded) {
+      intel_perf_get_query_data(perf_ctx, obj, &ice->batches[IRIS_BATCH_RENDER],
+            data_size, data, bytes_written);
+   }
+
+   return perf_query->begin_succeeded;
 }
 
 void

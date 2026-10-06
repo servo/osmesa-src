@@ -30,30 +30,7 @@ int
 nvc0_screen_compute_setup(struct nvc0_screen *screen,
                           struct nouveau_pushbuf *push)
 {
-   struct nouveau_object *chan = screen->base.channel;
-   struct nouveau_device *dev = screen->base.device;
-   uint32_t obj_class;
-   int ret;
    int i;
-
-   switch (dev->chipset & ~0xf) {
-   case 0xc0:
-   case 0xd0:
-      /* In theory, GF110+ should also support NVC8_COMPUTE_CLASS but,
-       * in practice, a ILLEGAL_CLASS dmesg fail appears when using it. */
-      obj_class = NVC0_COMPUTE_CLASS;
-      break;
-   default:
-      NOUVEAU_ERR("unsupported chipset: NV%02x\n", dev->chipset);
-      return -1;
-   }
-
-   ret = nouveau_object_new(chan, 0xbeef90c0, obj_class, NULL, 0,
-                            &screen->compute);
-   if (ret) {
-      NOUVEAU_ERR("Failed to allocate compute object: %d\n", ret);
-      return ret;
-   }
 
    BEGIN_NVC0(push, SUBC_CP(NV01_SUBCHAN_OBJECT), 1);
    PUSH_DATA (push, screen->compute->oclass);
@@ -428,10 +405,11 @@ nvc0_launch_grid(struct pipe_context *pipe, const struct pipe_grid_info *info)
    struct nvc0_program *cp = nvc0->compprog;
    int ret;
 
+   simple_mtx_lock(&screen->state_lock);
    ret = !nvc0_state_validate_cp(nvc0, ~0);
    if (ret) {
       NOUVEAU_ERR("Failed to launch grid !\n");
-      return;
+      goto out;
    }
 
    nvc0_compute_upload_input(nvc0, info);
@@ -440,12 +418,12 @@ nvc0_launch_grid(struct pipe_context *pipe, const struct pipe_grid_info *info)
    PUSH_DATA (push, cp->code_base);
 
    BEGIN_NVC0(push, NVC0_CP(LOCAL_POS_ALLOC), 3);
-   PUSH_DATA (push, (cp->hdr[1] & 0xfffff0) + align(cp->cp.lmem_size, 0x10));
+   PUSH_DATA (push, cp->hdr[1] & 0xfffff0);
    PUSH_DATA (push, 0);
    PUSH_DATA (push, 0x800); /* WARP_CSTACK_SIZE */
 
    BEGIN_NVC0(push, NVC0_CP(SHARED_SIZE), 3);
-   PUSH_DATA (push, align(cp->cp.smem_size, 0x100));
+   PUSH_DATA (push, align(cp->cp.smem_size + info->variable_shared_mem, 0x100));
    PUSH_DATA (push, info->block[0] * info->block[1] * info->block[2]);
    PUSH_DATA (push, cp->num_barriers);
    BEGIN_NVC0(push, NVC0_CP(CP_GPR_ALLOC), 1);
@@ -464,15 +442,15 @@ nvc0_launch_grid(struct pipe_context *pipe, const struct pipe_grid_info *info)
    PUSH_DATA (push, (info->block[1] << 16) | info->block[0]);
    PUSH_DATA (push, info->block[2]);
 
-   nouveau_pushbuf_space(push, 32, 2, 1);
-   PUSH_REFN(push, screen->text, NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_RD);
+   PUSH_SPACE_EX(push, 32, 2, 1);
+   PUSH_REF1(push, screen->text, NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_RD);
 
    if (unlikely(info->indirect)) {
       struct nv04_resource *res = nv04_resource(info->indirect);
       uint32_t offset = res->offset + info->indirect_offset;
       unsigned macro = NVC0_CP_MACRO_LAUNCH_GRID_INDIRECT;
 
-      PUSH_REFN(push, res->bo, NOUVEAU_BO_RD | res->domain);
+      PUSH_REF1(push, res->bo, NOUVEAU_BO_RD | res->domain);
       PUSH_DATA(push, NVC0_FIFO_PKHDR_1I(1, macro, 3));
       nouveau_pushbuf_data(push, res->bo, offset,
                            NVC0_IB_ENTRY_1_NO_PREFETCH | 3 * 4);
@@ -502,6 +480,10 @@ nvc0_launch_grid(struct pipe_context *pipe, const struct pipe_grid_info *info)
    nvc0->images_dirty[5] |= nvc0->images_valid[5];
 
    nvc0_update_compute_invocations_counter(nvc0, info);
+
+out:
+   PUSH_KICK(push);
+   simple_mtx_unlock(&screen->state_lock);
 }
 
 static void
@@ -511,8 +493,8 @@ nvc0_compute_update_indirect_invocations(struct nvc0_context *nvc0,
    struct nv04_resource *res = nv04_resource(info->indirect);
    uint32_t offset = res->offset + info->indirect_offset;
 
-   nouveau_pushbuf_space(push, 16, 0, 8);
-   PUSH_REFN(push, res->bo, NOUVEAU_BO_RD | res->domain);
+   PUSH_SPACE_EX(push, 16, 0, 8);
+   PUSH_REF1(push, res->bo, NOUVEAU_BO_RD | res->domain);
    BEGIN_1IC0(push, NVC0_3D(MACRO_COMPUTE_COUNTER), 7);
    PUSH_DATA(push, 6);
    PUSH_DATA(push, info->block[0]);

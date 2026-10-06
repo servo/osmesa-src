@@ -42,10 +42,10 @@ insert_stage_at_head(struct softpipe_context *sp, struct quad_stage *quad)
 void
 sp_build_quad_pipeline(struct softpipe_context *sp)
 {
-   boolean early_depth_test =
-      (sp->depth_stencil->depth.enabled &&
+   bool early_depth_test =
+      (sp->depth_stencil->depth_enabled &&
       sp->framebuffer.zsbuf &&
-      !sp->depth_stencil->alpha.enabled &&
+      !sp->depth_stencil->alpha_enabled &&
       !sp->fs_variant->info.uses_kill &&
       !sp->fs_variant->info.writes_z &&
        !sp->fs_variant->info.writes_stencil) ||
@@ -62,10 +62,5 @@ sp_build_quad_pipeline(struct softpipe_context *sp)
       insert_stage_at_head( sp, sp->quad.depth_test );
       insert_stage_at_head( sp, sp->quad.shade );
    }
-
-#if !DO_PSTIPPLE_IN_DRAW_MODULE && !DO_PSTIPPLE_IN_HELPER_MODULE
-   if (sp->rasterizer->poly_stipple_enable)
-      insert_stage_at_head( sp, sp->quad.pstipple );
-#endif
 }
 

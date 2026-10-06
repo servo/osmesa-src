@@ -42,6 +42,10 @@ struct pp_program
    struct pipe_context *pipe;
    struct cso_context *cso;
 
+   /* For notifying st_context to rebind states that we clobbered. */
+   struct st_context *st;
+   pp_st_invalidate_state_func st_invalidate_state;
+
    struct pipe_blend_state blend;
    struct pipe_depth_stencil_alpha_state depthstencil;
    struct pipe_rasterizer_state rasterizer;
@@ -94,7 +98,8 @@ void pp_free_fbos(struct pp_queue_t *);
 void pp_debug(const char *, ...);
 
 struct pp_program *pp_init_prog(struct pp_queue_t *, struct pipe_context *pipe,
-                                struct cso_context *);
+                                struct cso_context *, struct st_context *st,
+                                pp_st_invalidate_state_func st_invalidate_state);
 
 void pp_blit(struct pipe_context *pipe,
              struct pipe_resource *src_tex,

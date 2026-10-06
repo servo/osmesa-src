@@ -25,7 +25,7 @@
  *
  **************************************************************************/
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 #include "util/u_memory.h"
 #include "util/u_debug.h"
@@ -64,21 +64,31 @@ vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device,
    pipe_reference_init(&dev->reference, 1);
 
    dev->vscreen = vl_dri3_screen_create(display, screen);
+#ifdef HAVE_X11_DRI2
    if (!dev->vscreen)
       dev->vscreen = vl_dri2_screen_create(display, screen);
+#endif
+   if (!dev->vscreen)
+      dev->vscreen = vl_xlib_swrast_screen_create(display, screen);
    if (!dev->vscreen) {
       ret = VDP_STATUS_RESOURCES;
       goto no_vscreen;
    }
 
    pscreen = dev->vscreen->pscreen;
-   dev->context = pipe_create_multimedia_context(pscreen);
+   /* video cannot work if these are not supported */
+   if (!pscreen->get_video_param || !pscreen->is_video_format_supported) {
+      ret = VDP_STATUS_RESOURCES;
+      goto no_vscreen;
+   }
+
+   dev->context = pipe_create_multimedia_context(pscreen, false);
    if (!dev->context) {
       ret = VDP_STATUS_RESOURCES;
       goto no_context;
    }
 
-   if (!pscreen->get_param(pscreen, PIPE_CAP_NPOT_TEXTURES)) {
+   if (!pscreen->caps.npot_textures) {
       ret = VDP_STATUS_NO_IMPLEMENTATION;
       goto no_context;
    }
@@ -126,7 +136,7 @@ vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device,
       goto no_handle;
    }
 
-   if (!vl_compositor_init(&dev->compositor, dev->context)) {
+   if (!vl_compositor_init(&dev->compositor, dev->context, false)) {
        ret = VDP_STATUS_ERROR;
        goto no_compositor;
    }

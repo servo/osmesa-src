@@ -53,6 +53,7 @@
 #include "vl_video_buffer.h"
 #include "vl_vertex_buffers.h"
 #include "vl_deint_filter.h"
+#include "vl_deint_filter_cs.h"
 
 enum VS_OUTPUT
 {
@@ -84,7 +85,8 @@ create_vert_shader(struct vl_deint_filter *filter)
 }
 
 static void *
-create_copy_frag_shader(struct vl_deint_filter *filter, unsigned field)
+create_copy_frag_shader(struct vl_deint_filter *filter, unsigned field,
+                        struct vertex2f *sizes)
 {
    struct ureg_program *shader;
    struct ureg_src i_vtex;
@@ -104,9 +106,15 @@ create_copy_frag_shader(struct vl_deint_filter *filter, unsigned field)
 
    ureg_MOV(shader, t_tex, i_vtex);
    if (field) {
+      if (filter->interleaved)
+         ureg_ADD(shader, t_tex, ureg_src(t_tex),
+                  ureg_imm4f(shader, 0, sizes->y * 0.5f, 0, 0));
       ureg_MOV(shader, ureg_writemask(t_tex, TGSI_WRITEMASK_ZW),
                ureg_imm4f(shader, 0, 0, 1.0f, 0));
    } else {
+      if (filter->interleaved)
+         ureg_ADD(shader, t_tex, ureg_src(t_tex),
+                  ureg_imm4f(shader, 0, sizes->y * -0.5f, 0, 0));
       ureg_MOV(shader, ureg_writemask(t_tex, TGSI_WRITEMASK_ZW),
                ureg_imm1f(shader, 0));
    }
@@ -196,16 +204,24 @@ create_deint_frag_shader(struct vl_deint_filter *filter, unsigned field,
 
    if (field == 0) {
       /* weave with prev top field */
+      if (filter->interleaved)
+         ureg_ADD(shader, t_tex, ureg_src(t_tex),
+                  ureg_imm4f(shader, 0, sizes->y * -0.5f, 0, 0));
       ureg_TEX(shader, t_weave, TGSI_TEXTURE_2D_ARRAY, ureg_src(t_tex), sampler_prev);
       /* get linear interpolation from current bottom field */
-      ureg_ADD(shader, t_comp_top, ureg_src(t_tex), ureg_imm4f(shader, 0, sizes->y * -1.0f, 1.0f, 0));
+      ureg_ADD(shader, t_comp_top, ureg_src(t_tex),
+               ureg_imm4f(shader, 0, sizes->y * (filter->interleaved ? 1.0f : -1.0f), 1.0f, 0));
       ureg_TEX(shader, t_linear, TGSI_TEXTURE_2D_ARRAY, ureg_src(t_comp_top), sampler_cur);
    } else {
       /* weave with prev bottom field */
+      if (filter->interleaved)
+         ureg_ADD(shader, t_tex, ureg_src(t_tex),
+                  ureg_imm4f(shader, 0, sizes->y * 0.5f, 0, 0));
       ureg_ADD(shader, t_comp_bot, ureg_src(t_tex), ureg_imm4f(shader, 0, 0, 1.0f, 0));
       ureg_TEX(shader, t_weave, TGSI_TEXTURE_2D_ARRAY, ureg_src(t_comp_bot), sampler_prev);
       /* get linear interpolation from current top field */
-      ureg_ADD(shader, t_comp_bot, ureg_src(t_tex), ureg_imm4f(shader, 0, sizes->y * 1.0f, 0, 0));
+      ureg_ADD(shader, t_comp_bot, ureg_src(t_tex),
+               ureg_imm4f(shader, 0, sizes->y * (filter->interleaved ? -1.0f : 1.0f), 0, 0));
       ureg_TEX(shader, t_linear, TGSI_TEXTURE_2D_ARRAY, ureg_src(t_comp_bot), sampler_cur);
    }
 
@@ -235,7 +251,7 @@ create_deint_frag_shader(struct vl_deint_filter *filter, unsigned field,
 bool
 vl_deint_filter_init(struct vl_deint_filter *filter, struct pipe_context *pipe,
                      unsigned video_width, unsigned video_height,
-                     bool skip_chroma, bool spatial_filter)
+                     bool skip_chroma, bool spatial_filter, bool interleaved)
 {
    struct pipe_rasterizer_state rs_state;
    struct pipe_blend_state blend;
@@ -250,8 +266,12 @@ vl_deint_filter_init(struct vl_deint_filter *filter, struct pipe_context *pipe,
    memset(filter, 0, sizeof(*filter));
    filter->pipe = pipe;
    filter->skip_chroma = skip_chroma;
+   filter->interleaved = interleaved;
    filter->video_width = video_width;
    filter->video_height = video_height;
+
+   if (pipe->screen->caps.prefer_compute_for_multimedia)
+      return vl_deint_filter_cs_init(filter);
 
    /* TODO: handle other than 4:2:0 subsampling */
    memset(&templ, 0, sizeof(templ));
@@ -259,7 +279,7 @@ vl_deint_filter_init(struct vl_deint_filter *filter, struct pipe_context *pipe,
    (
       pipe->screen,
       PIPE_VIDEO_PROFILE_UNKNOWN,
-      PIPE_VIDEO_ENTRYPOINT_UNKNOWN,
+      PIPE_VIDEO_ENTRYPOINT_PROCESSING,
       PIPE_VIDEO_CAP_PREFERED_FORMAT
    );
    templ.width = video_width;
@@ -302,7 +322,6 @@ vl_deint_filter_init(struct vl_deint_filter *filter, struct pipe_context *pipe,
    sampler.min_img_filter = PIPE_TEX_FILTER_LINEAR;
    sampler.min_mip_filter = PIPE_TEX_MIPFILTER_NONE;
    sampler.mag_img_filter = PIPE_TEX_FILTER_LINEAR;
-   sampler.normalized_coords = 1;
    filter->sampler[0] = pipe->create_sampler_state(pipe, &sampler);
    filter->sampler[1] = filter->sampler[2] = filter->sampler[3] = filter->sampler[0];
    if (!filter->sampler[0])
@@ -314,6 +333,7 @@ vl_deint_filter_init(struct vl_deint_filter *filter, struct pipe_context *pipe,
 
    memset(&ve, 0, sizeof(ve));
    ve.src_offset = 0;
+   ve.src_stride = sizeof(struct vertex2f);
    ve.instance_divisor = 0;
    ve.vertex_buffer_index = 0;
    ve.src_format = PIPE_FORMAT_R32G32_FLOAT;
@@ -328,11 +348,11 @@ vl_deint_filter_init(struct vl_deint_filter *filter, struct pipe_context *pipe,
    if (!filter->vs)
       goto error_vs;
 
-   filter->fs_copy_top = create_copy_frag_shader(filter, 0);
+   filter->fs_copy_top = create_copy_frag_shader(filter, 0, &sizes);
    if (!filter->fs_copy_top)
       goto error_fs_copy_top;
 
-   filter->fs_copy_bottom = create_copy_frag_shader(filter, 1);
+   filter->fs_copy_bottom = create_copy_frag_shader(filter, 1, &sizes);
    if (!filter->fs_copy_bottom)
       goto error_fs_copy_bottom;
 
@@ -391,6 +411,11 @@ vl_deint_filter_cleanup(struct vl_deint_filter *filter)
 {
    assert(filter);
 
+   if (filter->pipe->screen->caps.prefer_compute_for_multimedia) {
+      vl_deint_filter_cs_cleanup(filter);
+      return;
+   }
+
    filter->pipe->delete_sampler_state(filter->pipe, filter->sampler[0]);
    filter->pipe->delete_blend_state(filter->pipe, filter->blend[0]);
    filter->pipe->delete_blend_state(filter->pipe, filter->blend[1]);
@@ -424,7 +449,7 @@ vl_deint_filter_check_buffers(struct vl_deint_filter *filter,
       if (bufs[i]->width < filter->video_width ||
           bufs[i]->height < filter->video_height)
          return false;
-      if (!bufs[i]->interlaced)
+      if (bufs[i]->interlaced != !filter->interleaved)
          return false;
    }
 
@@ -453,6 +478,11 @@ vl_deint_filter_render(struct vl_deint_filter *filter,
 
    assert(filter && prevprev && prev && cur && next && field <= 1);
 
+   if (filter->pipe->screen->caps.prefer_compute_for_multimedia) {
+      vl_deint_filter_cs_render(filter, prevprev, prev, cur, next, field);
+      return;
+   }
+
    /* set up destination and source */
    dst_surfaces = filter->video_buffer->get_surfaces(filter->video_buffer);
    plane_order = vl_video_buffer_plane_order(filter->video_buffer->buffer_format);
@@ -463,8 +493,8 @@ vl_deint_filter_render(struct vl_deint_filter *filter,
 
    /* set up pipe state */
    filter->pipe->bind_rasterizer_state(filter->pipe, filter->rs_state);
-   filter->pipe->set_vertex_buffers(filter->pipe, 0, 1, &filter->quad);
    filter->pipe->bind_vertex_elements_state(filter->pipe, filter->ves);
+   util_set_vertex_buffers(filter->pipe, 1, false, &filter->quad);
    filter->pipe->bind_vs_state(filter->pipe, filter->vs);
    filter->pipe->bind_sampler_states(filter->pipe, PIPE_SHADER_FRAGMENT,
                                      0, 4, filter->sampler);
@@ -472,6 +502,10 @@ vl_deint_filter_render(struct vl_deint_filter *filter,
    /* prepare viewport */
    memset(&viewport, 0, sizeof(viewport));
    viewport.scale[2] = 1;
+   viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+   viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+   viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+   viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
    /* prepare framebuffer */
    memset(&fb_state, 0, sizeof(fb_state));
@@ -497,23 +531,24 @@ vl_deint_filter_render(struct vl_deint_filter *filter,
       sampler_views[1] = prev_sv[k];
       sampler_views[2] = cur_sv[k];
       sampler_views[3] = next_sv[k];
-      filter->pipe->set_sampler_views(filter->pipe, PIPE_SHADER_FRAGMENT, 0, 4, sampler_views);
+      filter->pipe->set_sampler_views(filter->pipe, PIPE_SHADER_FRAGMENT,
+                                      0, 4, 0, false, sampler_views);
 
       /* blit current field */
       fb_state.cbufs[0] = blit_surf;
       filter->pipe->bind_fs_state(filter->pipe, field ? filter->fs_copy_bottom : filter->fs_copy_top);
       filter->pipe->set_framebuffer_state(filter->pipe, &fb_state);
       filter->pipe->set_viewport_states(filter->pipe, 0, 1, &viewport);
-      util_draw_arrays(filter->pipe, PIPE_PRIM_QUADS, 0, 4);
+      util_draw_arrays(filter->pipe, MESA_PRIM_QUADS, 0, 4);
 
       /* blit or interpolate other field */
       fb_state.cbufs[0] = dst_surf;
       filter->pipe->set_framebuffer_state(filter->pipe, &fb_state);
       if (i > 0 && filter->skip_chroma) {
-         util_draw_arrays(filter->pipe, PIPE_PRIM_QUADS, 0, 4);
+         util_draw_arrays(filter->pipe, MESA_PRIM_QUADS, 0, 4);
       } else {
          filter->pipe->bind_fs_state(filter->pipe, field ? filter->fs_deint_top : filter->fs_deint_bottom);
-         util_draw_arrays(filter->pipe, PIPE_PRIM_QUADS, 0, 4);
+         util_draw_arrays(filter->pipe, MESA_PRIM_QUADS, 0, 4);
       }
 
       if (++j >= util_format_get_nr_components(dst_surf->format)) {

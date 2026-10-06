@@ -44,7 +44,7 @@ nv84_copy_firmware(const char *path, void *dest, ssize_t len)
    close(fd);
 
    if (r != len) {
-      fprintf(stderr, "reading firwmare file %s failed: %m\n", path);
+      fprintf(stderr, "reading firmware file %s failed: %m\n", path);
       return 1;
    }
 
@@ -69,6 +69,7 @@ nv84_load_firmwares(struct nouveau_device *dev, struct nv84_decoder *dec,
 {
    int ret, size1, size2 = 0;
    struct nouveau_bo *fw;
+   struct nouveau_screen *screen = nouveau_screen(dec->base.context->screen);
 
    size1 = filesize(fw1);
    if (fw2)
@@ -81,7 +82,7 @@ nv84_load_firmwares(struct nouveau_device *dev, struct nv84_decoder *dec,
    ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, dec->vp_fw2_offset + size2, NULL, &fw);
    if (ret)
       return NULL;
-   ret = nouveau_bo_map(fw, NOUVEAU_BO_WR, dec->client);
+   ret = BO_MAP(screen, fw, NOUVEAU_BO_WR, dec->client);
    if (ret)
       goto error;
 
@@ -151,11 +152,12 @@ nv84_decoder_begin_frame_h264(struct pipe_video_codec *decoder,
 {
 }
 
-static void
+static int
 nv84_decoder_end_frame_h264(struct pipe_video_codec *decoder,
                             struct pipe_video_buffer *target,
                             struct pipe_picture_desc *picture)
 {
+   return 0;
 }
 
 static void
@@ -183,11 +185,12 @@ nv84_decoder_begin_frame_mpeg12(struct pipe_video_codec *decoder,
                               struct pipe_video_buffer *target,
                               struct pipe_picture_desc *picture)
 {
+   struct nouveau_screen *screen = nouveau_screen(decoder->context->screen);
    struct nv84_decoder *dec = (struct nv84_decoder *)decoder;
    struct pipe_mpeg12_picture_desc *desc = (struct pipe_mpeg12_picture_desc *)picture;
    int i;
 
-   nouveau_bo_wait(dec->mpeg12_bo, NOUVEAU_BO_RDWR, dec->client);
+   BO_WAIT(screen, dec->mpeg12_bo, NOUVEAU_BO_RDWR, dec->client);
    dec->mpeg12_mb_info = dec->mpeg12_bo->map + 0x100;
    dec->mpeg12_data = dec->mpeg12_bo->map + 0x100 +
       align(0x20 * mb(dec->base.width) * mb(dec->base.height), 0x100);
@@ -201,7 +204,7 @@ nv84_decoder_begin_frame_mpeg12(struct pipe_video_codec *decoder,
    }
 }
 
-static void
+static int
 nv84_decoder_end_frame_mpeg12(struct pipe_video_codec *decoder,
                               struct pipe_video_buffer *target,
                               struct pipe_picture_desc *picture)
@@ -210,6 +213,7 @@ nv84_decoder_end_frame_mpeg12(struct pipe_video_codec *decoder,
          (struct nv84_decoder *)decoder,
          (struct pipe_mpeg12_picture_desc *)picture,
          (struct nv84_video_buffer *)target);
+   return 0;
 }
 
 static void
@@ -247,11 +251,11 @@ nv84_decoder_destroy(struct pipe_video_codec *decoder)
    nouveau_object_del(&dec->vp);
 
    nouveau_bufctx_del(&dec->bsp_bufctx);
-   nouveau_pushbuf_del(&dec->bsp_pushbuf);
+   nouveau_pushbuf_destroy(&dec->bsp_pushbuf);
    nouveau_object_del(&dec->bsp_channel);
 
    nouveau_bufctx_del(&dec->vp_bufctx);
-   nouveau_pushbuf_del(&dec->vp_pushbuf);
+   nouveau_pushbuf_destroy(&dec->vp_pushbuf);
    nouveau_object_del(&dec->vp_channel);
 
    nouveau_client_del(&dec->client);
@@ -275,9 +279,6 @@ nv84_create_decoder(struct pipe_context *context,
    int ret, i;
    int is_h264 = u_reduce_video_profile(templ->profile) == PIPE_VIDEO_FORMAT_MPEG4_AVC;
    int is_mpeg12 = u_reduce_video_profile(templ->profile) == PIPE_VIDEO_FORMAT_MPEG12;
-
-   if (getenv("XVMC_VL"))
-      return vl_create_decoder(context, templ);
 
    if ((is_h264 && templ->entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM) ||
        (is_mpeg12 && templ->entrypoint > PIPE_VIDEO_ENTRYPOINT_IDCT)) {
@@ -335,8 +336,8 @@ nv84_create_decoder(struct pipe_context *context,
       if (ret)
          goto fail;
 
-      ret = nouveau_pushbuf_new(dec->client, dec->bsp_channel, 4,
-                                32 * 1024, true, &dec->bsp_pushbuf);
+      ret = nouveau_pushbuf_create(screen, &nv50->base, dec->client, dec->bsp_channel,
+                                   4, 32 * 1024, &dec->bsp_pushbuf);
       if (ret)
          goto fail;
 
@@ -350,8 +351,8 @@ nv84_create_decoder(struct pipe_context *context,
                             &nv04_data, sizeof(nv04_data), &dec->vp_channel);
    if (ret)
       goto fail;
-   ret = nouveau_pushbuf_new(dec->client, dec->vp_channel, 4,
-                             32 * 1024, true, &dec->vp_pushbuf);
+   ret = nouveau_pushbuf_create(screen, &nv50->base, dec->client, dec->vp_channel,
+                                4, 32 * 1024, &dec->vp_pushbuf);
    if (ret)
       goto fail;
 
@@ -406,14 +407,14 @@ nv84_create_decoder(struct pipe_context *context,
                            NULL, &dec->bitstream);
       if (ret)
          goto fail;
-      ret = nouveau_bo_map(dec->bitstream, NOUVEAU_BO_WR, dec->client);
+      ret = BO_MAP(screen, dec->bitstream, NOUVEAU_BO_WR, dec->client);
       if (ret)
          goto fail;
       ret = nouveau_bo_new(screen->device, NOUVEAU_BO_GART,
                            0, 0x2000, NULL, &dec->vp_params);
       if (ret)
          goto fail;
-      ret = nouveau_bo_map(dec->vp_params, NOUVEAU_BO_WR, dec->client);
+      ret = BO_MAP(screen, dec->vp_params, NOUVEAU_BO_WR, dec->client);
       if (ret)
          goto fail;
    }
@@ -425,7 +426,7 @@ nv84_create_decoder(struct pipe_context *context,
                            NULL, &dec->mpeg12_bo);
       if (ret)
          goto fail;
-      ret = nouveau_bo_map(dec->mpeg12_bo, NOUVEAU_BO_WR, dec->client);
+      ret = BO_MAP(screen, dec->mpeg12_bo, NOUVEAU_BO_WR, dec->client);
       if (ret)
          goto fail;
    }
@@ -434,7 +435,7 @@ nv84_create_decoder(struct pipe_context *context,
                         0, 0x1000, NULL, &dec->fence);
    if (ret)
       goto fail;
-   ret = nouveau_bo_map(dec->fence, NOUVEAU_BO_WR, dec->client);
+   ret = BO_MAP(screen, dec->fence, NOUVEAU_BO_WR, dec->client);
    if (ret)
       goto fail;
    *(uint32_t *)dec->fence->map = 0;
@@ -493,17 +494,17 @@ nv84_create_decoder(struct pipe_context *context,
       surf.offset = dec->vpring->size - 0x1000;
       context->clear_render_target(context, &surf.base, &color, 0, 0, 1024, 1, false);
 
-      PUSH_SPACE(screen->pushbuf, 5);
-      PUSH_REFN(screen->pushbuf, dec->fence, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
+      PUSH_SPACE(nv50->base.pushbuf, 5);
+      PUSH_REF1(nv50->base.pushbuf, dec->fence, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
       /* The clear_render_target is done via 3D engine, so use it to write to a
        * sempahore to indicate that it's done.
        */
-      BEGIN_NV04(screen->pushbuf, NV50_3D(QUERY_ADDRESS_HIGH), 4);
-      PUSH_DATAh(screen->pushbuf, dec->fence->offset);
-      PUSH_DATA (screen->pushbuf, dec->fence->offset);
-      PUSH_DATA (screen->pushbuf, 1);
-      PUSH_DATA (screen->pushbuf, 0xf010);
-      PUSH_KICK (screen->pushbuf);
+      BEGIN_NV04(nv50->base.pushbuf, NV50_3D(QUERY_ADDRESS_HIGH), 4);
+      PUSH_DATAh(nv50->base.pushbuf, dec->fence->offset);
+      PUSH_DATA (nv50->base.pushbuf, dec->fence->offset);
+      PUSH_DATA (nv50->base.pushbuf, 1);
+      PUSH_DATA (nv50->base.pushbuf, 0xf010);
+      PUSH_KICK (nv50->base.pushbuf);
 
       PUSH_SPACE(bsp_push, 2 + 12 + 2 + 4 + 3);
 
@@ -553,6 +554,21 @@ nv84_create_decoder(struct pipe_context *context,
 fail:
    nv84_decoder_destroy(&dec->base);
    return NULL;
+}
+
+static void
+nv84_video_buffer_resources(struct pipe_video_buffer *buffer,
+                            struct pipe_resource **resources)
+{
+   struct nv84_video_buffer *buf = (struct nv84_video_buffer *)buffer;
+   unsigned num_planes = util_format_get_num_planes(buffer->buffer_format);
+   unsigned i;
+
+   assert(buf);
+
+   for (i = 0; i < num_planes; ++i) {
+      resources[i] = buf->resources[i];
+   }
 }
 
 static struct pipe_sampler_view **
@@ -612,7 +628,7 @@ nv84_video_buffer_create(struct pipe_context *pipe,
    union nouveau_bo_config cfg;
    unsigned bo_size;
 
-   if (getenv("XVMC_VL") || template->buffer_format != PIPE_FORMAT_NV12)
+   if (template->buffer_format != PIPE_FORMAT_NV12)
       return vl_video_buffer_create(pipe, template);
 
    if (!template->interlaced) {
@@ -640,6 +656,7 @@ nv84_video_buffer_create(struct pipe_context *pipe,
    buffer->base.destroy = nv84_video_buffer_destroy;
    buffer->base.width = template->width;
    buffer->base.height = template->height;
+   buffer->base.get_resources = nv84_video_buffer_resources;
    buffer->base.get_sampler_view_planes = nv84_video_buffer_sampler_view_planes;
    buffer->base.get_sampler_view_components = nv84_video_buffer_sampler_view_components;
    buffer->base.get_surfaces = nv84_video_buffer_surfaces;
@@ -838,6 +855,8 @@ nv84_screen_get_video_param(struct pipe_screen *pscreen,
          debug_printf("unknown video profile: %d\n", profile);
          return 0;
       }
+   case PIPE_VIDEO_CAP_MAX_MACROBLOCKS:
+      return 8192; /* vc-1 actually has 8190, but this is not supported */
    default:
       debug_printf("unknown video param: %d\n", param);
       return 0;

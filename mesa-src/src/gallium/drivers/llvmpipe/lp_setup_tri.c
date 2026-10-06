@@ -29,6 +29,21 @@
  * Binning code for triangles
  */
 
+#include "util/detect.h"
+
+#if DETECT_ARCH_SSE
+#include <emmintrin.h>
+#elif defined(_ARCH_PWR8) && UTIL_ARCH_LITTLE_ENDIAN
+#include <altivec.h>
+/*
+altivec.h inclusion in -std=c++98..11 causes bool to be redefined
+ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=58241
+*/
+#undef bool
+#endif
+
+#include <stdbool.h>
+
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/u_rect.h"
@@ -42,16 +57,11 @@
 
 #include <inttypes.h>
 
-#define NUM_CHANNELS 4
-
-#if defined(PIPE_ARCH_SSE)
-#include <emmintrin.h>
-#elif defined(_ARCH_PWR8) && UTIL_ARCH_LITTLE_ENDIAN
-#include <altivec.h>
+#if defined(_ARCH_PWR8) && UTIL_ARCH_LITTLE_ENDIAN
 #include "util/u_pwr8.h"
 #endif
 
-#if !defined(PIPE_ARCH_SSE)
+#if !DETECT_ARCH_SSE
 
 static inline int
 subpixel_snap(float a)
@@ -69,7 +79,6 @@ struct fixed_position {
    int32_t dy01;
    int32_t dx20;
    int32_t dy20;
-   int64_t area;
 };
 
 
@@ -77,40 +86,40 @@ struct fixed_position {
  * Alloc space for a new triangle plus the input.a0/dadx/dady arrays
  * immediately after it.
  * The memory is allocated from the per-scene pool, not per-tile.
- * \param tri_size  returns number of bytes allocated
  * \param num_inputs  number of fragment shader inputs
  * \return pointer to triangle space
  */
 struct lp_rast_triangle *
 lp_setup_alloc_triangle(struct lp_scene *scene,
                         unsigned nr_inputs,
-                        unsigned nr_planes,
-                        unsigned *tri_size)
+                        unsigned nr_planes)
 {
-   unsigned input_array_sz = NUM_CHANNELS * (nr_inputs + 1) * sizeof(float);
+   // add 1 for XYZW position
+   unsigned input_array_sz = (nr_inputs + 1) * sizeof(float[4]);
    unsigned plane_sz = nr_planes * sizeof(struct lp_rast_plane);
-   struct lp_rast_triangle *tri;
 
    STATIC_ASSERT(sizeof(struct lp_rast_plane) % 8 == 0);
 
-   *tri_size = (sizeof(struct lp_rast_triangle) +
-                3 * input_array_sz +
-                plane_sz);
+   const unsigned tri_size  = sizeof(struct lp_rast_triangle)
+      + 3 * input_array_sz +   // 3 = da + dadx + dady
+      + plane_sz;
 
-   tri = lp_scene_alloc_aligned( scene, *tri_size, 16 );
+   struct lp_rast_triangle *tri = lp_scene_alloc_aligned(scene, tri_size, 16);
    if (!tri)
       return NULL;
 
    tri->inputs.stride = input_array_sz;
 
    {
-      char *a = (char *)tri;
-      char *b = (char *)&GET_PLANES(tri)[nr_planes];
-      assert(b - a == *tri_size);
+      ASSERTED char *a = (char *)tri;
+      ASSERTED char *b = (char *)&GET_PLANES(tri)[nr_planes];
+
+      assert(b - a == tri_size);
    }
 
    return tri;
 }
+
 
 void
 lp_setup_print_vertex(struct lp_setup_context *setup,
@@ -118,24 +127,23 @@ lp_setup_print_vertex(struct lp_setup_context *setup,
                       const float (*v)[4])
 {
    const struct lp_setup_variant_key *key = &setup->setup.variant->key;
-   int i, j;
 
    debug_printf("   wpos (%s[0]) xyzw %f %f %f %f\n",
                 name,
                 v[0][0], v[0][1], v[0][2], v[0][3]);
 
-   for (i = 0; i < key->num_inputs; i++) {
+   for (int i = 0; i < key->num_inputs; i++) {
       const float *in = v[key->inputs[i].src_index];
 
       debug_printf("  in[%d] (%s[%d]) %s%s%s%s ",
-                   i, 
+                   i,
                    name, key->inputs[i].src_index,
                    (key->inputs[i].usage_mask & 0x1) ? "x" : " ",
                    (key->inputs[i].usage_mask & 0x2) ? "y" : " ",
                    (key->inputs[i].usage_mask & 0x4) ? "z" : " ",
                    (key->inputs[i].usage_mask & 0x8) ? "w" : " ");
 
-      for (j = 0; j < 4; j++)
+      for (int j = 0; j < 4; j++)
          if (key->inputs[i].usage_mask & (1<<j))
             debug_printf("%.5f ", in[j]);
 
@@ -163,7 +171,7 @@ lp_setup_print_triangle(struct lp_setup_context *setup,
 
       /* det = cross(e,f).z */
       const float det = ex * fy - ey * fx;
-      if (det < 0.0f) 
+      if (det < 0.0f)
          debug_printf("   - ccw\n");
       else if (det > 0.0f)
          debug_printf("   - cw\n");
@@ -204,6 +212,7 @@ lp_rast_32_tri_tab[MAX_PLANES+1] = {
    LP_RAST_OP_TRIANGLE_32_8
 };
 
+
 static unsigned
 lp_rast_ms_tri_tab[MAX_PLANES+1] = {
    0,               /* should be impossible */
@@ -217,53 +226,43 @@ lp_rast_ms_tri_tab[MAX_PLANES+1] = {
    LP_RAST_OP_MS_TRIANGLE_8
 };
 
-/**
- * The primitive covers the whole tile- shade whole tile.
+
+/*
+ * Detect big primitives drawn with an alpha == 1.0.
  *
- * \param tx, ty  the tile position in tiles, not pixels
+ * This is used when simulating anti-aliasing primitives in shaders, e.g.,
+ * when drawing the windows client area in Aero's flip-3d effect.
  */
-static boolean
-lp_setup_whole_tile(struct lp_setup_context *setup,
-                    const struct lp_rast_shader_inputs *inputs,
-                    int tx, int ty)
+static bool
+check_opaque(const struct lp_setup_context *setup,
+             const float (*v1)[4],
+             const float (*v2)[4],
+             const float (*v3)[4])
 {
-   struct lp_scene *scene = setup->scene;
+   const struct lp_fragment_shader_variant *variant =
+      setup->fs.current.variant;
 
-   LP_COUNT(nr_fully_covered_64);
+   if (variant->opaque)
+      return true;
 
-   /* if variant is opaque and scissor doesn't effect the tile */
-   if (inputs->opaque) {
-      /* Several things prevent this optimization from working:
-       * - For layered rendering we can't determine if this covers the same layer
-       * as previous rendering (or in case of clears those actually always cover
-       * all layers so optimization is impossible). Need to use fb_max_layer and
-       * not setup->layer_slot to determine this since even if there's currently
-       * no slot assigned previous rendering could have used one.
-       * - If there were any Begin/End query commands in the scene then those
-       * would get removed which would be very wrong. Furthermore, if queries
-       * were just active we also can't do the optimization since to get
-       * accurate query results we unfortunately need to execute the rendering
-       * commands.
-       */
-      if (!scene->fb.zsbuf && scene->fb_max_layer == 0 && !scene->had_queries) {
-         /*
-          * All previous rendering will be overwritten so reset the bin.
-          */
-         lp_scene_bin_reset( scene, tx, ty );
-      }
+   if (!variant->potentially_opaque)
+      return false;
 
-      LP_COUNT(nr_shade_opaque_64);
-      return lp_scene_bin_cmd_with_state( scene, tx, ty,
-                                          setup->fs.stored,
-                                          LP_RAST_OP_SHADE_TILE_OPAQUE,
-                                          lp_rast_arg_inputs(inputs) );
-   } else {
-      LP_COUNT(nr_shade_64);
-      return lp_scene_bin_cmd_with_state( scene, tx, ty,
-                                          setup->fs.stored,
-                                          LP_RAST_OP_SHADE_TILE,
-                                          lp_rast_arg_inputs(inputs) );
+   const struct lp_tgsi_channel_info *alpha_info = &variant->shader->info.cbuf[0][3];
+   if (alpha_info->file == TGSI_FILE_CONSTANT) {
+      const float *constants = setup->fs.current.jit_resources.constants[0].f;
+      float alpha = constants[alpha_info->u.index*4 +
+                              alpha_info->swizzle];
+      return alpha == 1.0f;
    }
+
+   if (alpha_info->file == TGSI_FILE_INPUT) {
+      return (v1[1 + alpha_info->u.index][alpha_info->swizzle] == 1.0f &&
+              v2[1 + alpha_info->u.index][alpha_info->swizzle] == 1.0f &&
+              v3[1 + alpha_info->u.index][alpha_info->swizzle] == 1.0f);
+   }
+
+   return false;
 }
 
 
@@ -272,49 +271,37 @@ lp_setup_whole_tile(struct lp_setup_context *setup,
  * framebuffer tiles are touched.  Put the triangle in the scene's
  * bins for the tiles which we overlap.
  */
-static boolean
+static bool
 do_triangle_ccw(struct lp_setup_context *setup,
-                struct fixed_position* position,
+                struct fixed_position *position,
                 const float (*v0)[4],
                 const float (*v1)[4],
                 const float (*v2)[4],
-                boolean frontfacing )
+                bool frontfacing)
 {
    struct lp_scene *scene = setup->scene;
-   const struct lp_setup_variant_key *key = &setup->setup.variant->key;
-   struct lp_rast_triangle *tri;
-   struct lp_rast_plane *plane;
-   const struct u_rect *scissor = NULL;
-   struct u_rect bbox, bboxpos;
-   boolean s_planes[4];
-   unsigned tri_bytes;
-   int nr_planes = 3;
-   unsigned viewport_index = 0;
-   unsigned layer = 0;
+
    const float (*pv)[4];
-
-   /* Area should always be positive here */
-   assert(position->area > 0);
-
-   if (0)
-      lp_setup_print_triangle(setup, v0, v1, v2);
-
    if (setup->flatshade_first) {
       pv = v0;
-   }
-   else {
+   } else {
       pv = v2;
    }
+
+   unsigned viewport_index = 0;
    if (setup->viewport_index_slot > 0) {
       unsigned *udata = (unsigned*)pv[setup->viewport_index_slot];
       viewport_index = lp_clamp_viewport_idx(*udata);
    }
+
+   unsigned layer = 0;
    if (setup->layer_slot > 0) {
       layer = *(unsigned*)pv[setup->layer_slot];
       layer = MIN2(layer, scene->fb_max_layer);
    }
 
    /* Bounding rectangle (in pixels) */
+   struct u_rect bbox;
    {
       /* Yes this is necessary to accurately calculate bounding boxes
        * with the two fill-conventions we support.  GL (normally) ends
@@ -324,60 +311,57 @@ do_triangle_ccw(struct lp_setup_context *setup,
       int adj = (setup->bottom_edge_rule != 0) ? 1 : 0;
 
       /* Inclusive x0, exclusive x1 */
-      bbox.x0 =  MIN3(position->x[0], position->x[1], position->x[2]) >> FIXED_ORDER;
-      bbox.x1 = (MAX3(position->x[0], position->x[1], position->x[2]) - 1) >> FIXED_ORDER;
+      bbox.x0 =  MIN3(position->x[0], position->x[1],
+                      position->x[2]) >> FIXED_ORDER;
+      bbox.x1 = (MAX3(position->x[0], position->x[1],
+                      position->x[2]) - 1) >> FIXED_ORDER;
 
       /* Inclusive / exclusive depending upon adj (bottom-left or top-right) */
-      bbox.y0 = (MIN3(position->y[0], position->y[1], position->y[2]) + adj) >> FIXED_ORDER;
-      bbox.y1 = (MAX3(position->y[0], position->y[1], position->y[2]) - 1 + adj) >> FIXED_ORDER;
-   }
-
-   if (bbox.x1 < bbox.x0 ||
-       bbox.y1 < bbox.y0) {
-      if (0) debug_printf("empty bounding box\n");
-      LP_COUNT(nr_culled_tris);
-      return TRUE;
+      bbox.y0 = (MIN3(position->y[0], position->y[1],
+                      position->y[2]) + adj) >> FIXED_ORDER;
+      bbox.y1 = (MAX3(position->y[0], position->y[1],
+                      position->y[2]) - 1 + adj) >> FIXED_ORDER;
    }
 
    if (!u_rect_test_intersection(&setup->draw_regions[viewport_index], &bbox)) {
-      if (0) debug_printf("offscreen\n");
+      if (0) debug_printf("no intersection\n");
       LP_COUNT(nr_culled_tris);
-      return TRUE;
+      return true;
    }
 
-   bboxpos = bbox;
+   int max_szorig = ((bbox.x1 - (bbox.x0 & ~3)) |
+                     (bbox.y1 - (bbox.y0 & ~3)));
+   bool use_32bits = max_szorig <= MAX_FIXED_LENGTH32;
+#if defined(_ARCH_PWR8) && UTIL_ARCH_LITTLE_ENDIAN
+   bool pwr8_limit_check = (bbox.x1 - bbox.x0) <= MAX_FIXED_LENGTH32 &&
+      (bbox.y1 - bbox.y0) <= MAX_FIXED_LENGTH32;
+#endif
 
    /* Can safely discard negative regions, but need to keep hold of
     * information about when the triangle extends past screen
     * boundaries.  See trimmed_box in lp_setup_bin_triangle().
     */
-   bboxpos.x0 = MAX2(bboxpos.x0, 0);
-   bboxpos.y0 = MAX2(bboxpos.y0, 0);
+   bbox.x0 = MAX2(bbox.x0, 0);
+   bbox.y0 = MAX2(bbox.y0, 0);
 
-   nr_planes = 3;
+   int nr_planes = 3;
+
    /*
     * Determine how many scissor planes we need, that is drop scissor
     * edges if the bounding box of the tri is fully inside that edge.
     */
-   if (setup->scissor_test) {
-      /* why not just use draw_regions */
-      scissor = &setup->scissors[viewport_index];
-      scissor_planes_needed(s_planes, &bboxpos, scissor);
-      nr_planes += s_planes[0] + s_planes[1] + s_planes[2] + s_planes[3];
-   } else {
-      scissor = &setup->draw_regions[viewport_index];
-      scissor_planes_needed(s_planes, &bboxpos, scissor);
-      nr_planes += s_planes[0] + s_planes[1] + s_planes[2] + s_planes[3];
-   }
+   const struct u_rect *scissor = &setup->draw_regions[viewport_index];
+   bool s_planes[4];
+   scissor_planes_needed(s_planes, &bbox, scissor);
+   nr_planes += s_planes[0] + s_planes[1] + s_planes[2] + s_planes[3];
 
-   tri = lp_setup_alloc_triangle(scene,
-                                 key->num_inputs,
-                                 nr_planes,
-                                 &tri_bytes);
+   const struct lp_setup_variant_key *key = &setup->setup.variant->key;
+   struct lp_rast_triangle *tri =
+      lp_setup_alloc_triangle(scene, key->num_inputs, nr_planes);
    if (!tri)
-      return FALSE;
+      return false;
 
-#ifdef DEBUG
+#if MESA_DEBUG
    tri->v[0][0] = v0[0][0];
    tri->v[1][0] = v1[0][0];
    tri->v[2][0] = v2[0][0];
@@ -388,29 +372,110 @@ do_triangle_ccw(struct lp_setup_context *setup,
 
    LP_COUNT(nr_tris);
 
+   /*
+    * Rotate the tri such that v0 is closest to the fb origin.
+    * This can give more accurate a0 value (which is at fb origin)
+    * when calculating the interpolants.
+    * It can't work when there's flat shading for instance in one
+    * of the attributes, hence restrict this to just a single attribute
+    * which is what causes some test failures.
+    * (This does not address the problem that interpolation may be
+    * inaccurate if gradients are relatively steep in small tris far
+    * away from the origin. It does however fix the (silly) wgf11rasterizer
+    * Interpolator test.)
+    * XXX This causes problems with mipgen -EmuTexture for not yet really
+    * understood reasons (if the vertices would be submitted in a different
+    * order, we'd also generate the same "wrong" results here without
+    * rotation). In any case, that we generate different values if a prim
+    * has the vertices rotated but is otherwise the same (which is due to
+    * numerical issues) is not a nice property. An additional problem by
+    * swapping the vertices here (which is possibly worse) is that
+    * the same primitive coming in twice might generate different values
+    * (in particular for z) due to the swapping potentially not happening
+    * both times, if the attributes to be interpolated are different. For now,
+    * just restrict this to not get used with dx9 (by checking pixel offset),
+    * could also restrict it further to only trigger with wgf11Interpolator
+    * Rasterizer test (the only place which needs it, with always the same
+    * vertices even).
+    */
+   if ((LP_DEBUG & DEBUG_ACCURATE_A0) &&
+       setup->pixel_offset == 0.5f &&
+       key->num_inputs == 1 &&
+       (key->inputs[0].interp == LP_INTERP_LINEAR ||
+        key->inputs[0].interp == LP_INTERP_PERSPECTIVE) &&
+        setup->fs.current_tex_num == 0 &&
+        setup->cullmode == 0) {
+      float dist0 = v0[0][0] * v0[0][0] + v0[0][1] * v0[0][1];
+      float dist1 = v1[0][0] * v1[0][0] + v1[0][1] * v1[0][1];
+      float dist2 = v2[0][0] * v2[0][0] + v2[0][1] * v2[0][1];
+      if (dist0 > dist1 && dist1 < dist2) {
+         const float (*vt)[4];
+         vt = v0;
+         v0 = v1;
+         v1 = v2;
+         v2 = vt;
+         // rotate positions
+         int x = position->x[0];
+         int y = position->y[0];
+         position->x[0] = position->x[1];
+         position->y[0] = position->y[1];
+         position->x[1] = position->x[2];
+         position->y[1] = position->y[2];
+         position->x[2] = x;
+         position->y[2] = y;
+
+         position->dx20 = position->dx01;
+         position->dy20 = position->dy01;
+         position->dx01 = position->x[0] - position->x[1];
+         position->dy01 = position->y[0] - position->y[1];
+      } else if (dist0 > dist2) {
+         const float (*vt)[4];
+         vt = v0;
+         v0 = v2;
+         v2 = v1;
+         v1 = vt;
+         // rotate positions
+         int x = position->x[0];
+         int y = position->y[0];
+         position->x[0] = position->x[2];
+         position->y[0] = position->y[2];
+         position->x[2] = position->x[1];
+         position->y[2] = position->y[1];
+         position->x[1] = x;
+         position->y[1] = y;
+
+         position->dx01 = position->dx20;
+         position->dy01 = position->dy20;
+         position->dx20 = position->x[2] - position->x[0];
+         position->dy20 = position->y[2] - position->y[0];
+      }
+   }
+
    /* Setup parameter interpolants:
     */
    setup->setup.variant->jit_function(v0, v1, v2,
                                       frontfacing,
                                       GET_A0(&tri->inputs),
                                       GET_DADX(&tri->inputs),
-                                      GET_DADY(&tri->inputs));
+                                      GET_DADY(&tri->inputs),
+                                      &setup->setup.variant->key);
 
    tri->inputs.frontfacing = frontfacing;
-   tri->inputs.disable = FALSE;
-   tri->inputs.opaque = setup->fs.current.variant->opaque;
+   tri->inputs.disable = false;
+   tri->inputs.is_blit = false;
    tri->inputs.layer = layer;
    tri->inputs.viewport_index = viewport_index;
+   tri->inputs.view_index = setup->view_index;
 
    if (0)
       lp_dump_setup_coef(&setup->setup.variant->key,
-                         (const float (*)[4])GET_A0(&tri->inputs),
-                         (const float (*)[4])GET_DADX(&tri->inputs),
-                         (const float (*)[4])GET_DADY(&tri->inputs));
+                         GET_A0(&tri->inputs),
+                         GET_DADX(&tri->inputs),
+                         GET_DADY(&tri->inputs));
 
-   plane = GET_PLANES(tri);
+   struct lp_rast_plane *plane = GET_PLANES(tri);
 
-#if defined(PIPE_ARCH_SSE)
+#if DETECT_ARCH_SSE
    if (1) {
       __m128i vertx, verty;
       __m128i shufx, shufy;
@@ -511,8 +576,7 @@ do_triangle_ccw(struct lp_setup_context *setup,
     */
    if (setup->fb.width <= MAX_FIXED_LENGTH32 &&
        setup->fb.height <= MAX_FIXED_LENGTH32 &&
-       (bbox.x1 - bbox.x0) <= MAX_FIXED_LENGTH32 &&
-       (bbox.y1 - bbox.y0) <= MAX_FIXED_LENGTH32) {
+       pwr8_limit_check) {
       unsigned int bottom_edge;
       __m128i vertx, verty;
       __m128i shufx, shufy;
@@ -526,7 +590,7 @@ do_triangle_ccw(struct lp_setup_context *setup,
       __m128i eo, p0, p1, p2;
       __m128i_union vshuf_mask;
       __m128i zero = vec_splats((unsigned char) 0);
-      PIPE_ALIGN_VAR(16) int32_t temp_vec[4];
+      alignas(16) int32_t temp_vec[4];
 
 #if UTIL_ARCH_LITTLE_ENDIAN
       vshuf_mask.i[0] = 0x07060504;
@@ -603,15 +667,14 @@ do_triangle_ccw(struct lp_setup_context *setup,
    } else
 #endif
    {
-      int i;
       plane[0].dcdy = position->dx01;
       plane[1].dcdy = position->x[1] - position->x[2];
       plane[2].dcdy = position->dx20;
       plane[0].dcdx = position->dy01;
       plane[1].dcdx = position->y[1] - position->y[2];
       plane[2].dcdx = position->dy20;
-  
-      for (i = 0; i < 3; i++) {
+
+      for (int i = 0; i < 3; i++) {
          /* half-edge constants, will be iterated over the whole render
           * target.
           */
@@ -625,15 +688,16 @@ do_triangle_ccw(struct lp_setup_context *setup,
             plane[i].c++;
          }
          else if (plane[i].dcdx == 0) {
-            if (setup->bottom_edge_rule == 0){
+            if (setup->bottom_edge_rule == 0) {
                /* correct for top-left fill convention:
                 */
-               if (plane[i].dcdy > 0) plane[i].c++;
-            }
-            else {
+               if (plane[i].dcdy > 0)
+                  plane[i].c++;
+            } else {
                /* correct for bottom-left fill convention:
                 */
-               if (plane[i].dcdy < 0) plane[i].c++;
+               if (plane[i].dcdy < 0)
+                  plane[i].c++;
             }
          }
 
@@ -675,64 +739,14 @@ do_triangle_ccw(struct lp_setup_context *setup,
                    plane[2].eo);
    }
 
-
-   /* 
-    * When rasterizing scissored tris, use the intersection of the
-    * triangle bounding box and the scissor rect to generate the
-    * scissor planes.
-    *
-    * This permits us to cut off the triangle "tails" that are present
-    * in the intermediate recursive levels caused when two of the
-    * triangles edges don't diverge quickly enough to trivially reject
-    * exterior blocks from the triangle.
-    *
-    * It's not really clear if it's worth worrying about these tails,
-    * but since we generate the planes for each scissored tri, it's
-    * free to trim them in this case.
-    * 
-    * Note that otherwise, the scissor planes only vary in 'C' value,
-    * and even then only on state-changes.  Could alternatively store
-    * these planes elsewhere.
-    * (Or only store the c value together with a bit indicating which
-    * scissor edge this is, so rasterization would treat them differently
-    * (easier to evaluate) to ordinary planes.)
-    */
    if (nr_planes > 3) {
-      /* why not just use draw_regions */
-      struct lp_rast_plane *plane_s = &plane[3];
-
-      if (s_planes[0]) {
-         plane_s->dcdx = ~0U << 8;
-         plane_s->dcdy = 0;
-         plane_s->c = (1-scissor->x0) << 8;
-         plane_s->eo = 1 << 8;
-         plane_s++;
-      }
-      if (s_planes[1]) {
-         plane_s->dcdx = 1 << 8;
-         plane_s->dcdy = 0;
-         plane_s->c = (scissor->x1+1) << 8;
-         plane_s->eo = 0 << 8;
-         plane_s++;
-      }
-      if (s_planes[2]) {
-         plane_s->dcdx = 0;
-         plane_s->dcdy = 1 << 8;
-         plane_s->c = (1-scissor->y0) << 8;
-         plane_s->eo = 1 << 8;
-         plane_s++;
-      }
-      if (s_planes[3]) {
-         plane_s->dcdx = 0;
-         plane_s->dcdy = ~0U << 8;
-         plane_s->c = (scissor->y1+1) << 8;
-         plane_s->eo = 0;
-         plane_s++;
-      }
-      assert(plane_s == &plane[nr_planes]);
+      lp_setup_add_scissor_planes(scissor, &plane[3],
+                                  s_planes, setup->multisample);
    }
 
-   return lp_setup_bin_triangle(setup, tri, &bbox, &bboxpos, nr_planes, viewport_index);
+   return lp_setup_bin_triangle(setup, tri, use_32bits,
+                                check_opaque(setup, v0, v1, v2),
+                                &bbox, nr_planes, viewport_index);
 }
 
 /*
@@ -740,10 +754,10 @@ do_triangle_ccw(struct lp_setup_context *setup,
  *
  * Undefined if no bit set exists, so code should check against 0 first.
  */
-static inline uint32_t 
+static inline uint32_t
 floor_pot(uint32_t n)
 {
-#if defined(PIPE_CC_GCC) && (defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64))
+#if DETECT_CC_GCC && (DETECT_ARCH_X86 || DETECT_ARCH_X86_64)
    if (n == 0)
       return 0;
 
@@ -763,30 +777,29 @@ floor_pot(uint32_t n)
 }
 
 
-boolean
+bool
 lp_setup_bin_triangle(struct lp_setup_context *setup,
                       struct lp_rast_triangle *tri,
-                      const struct u_rect *bboxorig,
+                      bool use_32bits,
+                      bool opaque,
                       const struct u_rect *bbox,
                       int nr_planes,
                       unsigned viewport_index)
 {
    struct lp_scene *scene = setup->scene;
-   struct u_rect trimmed_box = *bbox;   
-   int i;
    unsigned cmd;
 
    /* What is the largest power-of-two boundary this triangle crosses:
     */
-   int dx = floor_pot((bbox->x0 ^ bbox->x1) |
-		      (bbox->y0 ^ bbox->y1));
+   const int dx = floor_pot((bbox->x0 ^ bbox->x1) |
+                            (bbox->y0 ^ bbox->y1));
 
    /* The largest dimension of the rasterized area of the triangle
     * (aligned to a 4x4 grid), rounded down to the nearest power of two:
     */
-   int max_sz = ((bbox->x1 - (bbox->x0 & ~3)) |
-                 (bbox->y1 - (bbox->y0 & ~3)));
-   int sz = floor_pot(max_sz);
+   const int max_sz = ((bbox->x1 - (bbox->x0 & ~3)) |
+                       (bbox->y1 - (bbox->y0 & ~3)));
+   const int sz = floor_pot(max_sz);
 
    /*
     * NOTE: It is important to use the original bounding box
@@ -794,33 +807,29 @@ lp_setup_bin_triangle(struct lp_setup_context *setup,
     * plane math may overflow or not with the 32bit rasterization
     * functions depends on the original extent of the triangle.
     */
-   int max_szorig = ((bboxorig->x1 - (bboxorig->x0 & ~3)) |
-                     (bboxorig->y1 - (bboxorig->y0 & ~3)));
-   boolean use_32bits = max_szorig <= MAX_FIXED_LENGTH32;
 
    /* Now apply scissor, etc to the bounding box.  Could do this
     * earlier, but it confuses the logic for tri-16 and would force
     * the rasterizer to also respect scissor, etc, just for the rare
     * cases where a small triangle extends beyond the scissor.
     */
+   struct u_rect trimmed_box = *bbox;
    u_rect_find_intersection(&setup->draw_regions[viewport_index],
                             &trimmed_box);
 
    /* Determine which tile(s) intersect the triangle's bounding box
     */
-   if (dx < TILE_SIZE)
-   {
-      int ix0 = bbox->x0 / TILE_SIZE;
-      int iy0 = bbox->y0 / TILE_SIZE;
+   if (dx < TILE_SIZE) {
+      const int ix0 = bbox->x0 / TILE_SIZE;
+      const int iy0 = bbox->y0 / TILE_SIZE;
       unsigned px = bbox->x0 & 63 & ~3;
       unsigned py = bbox->y0 & 63 & ~3;
 
       assert(iy0 == bbox->y1 / TILE_SIZE &&
-	     ix0 == bbox->x1 / TILE_SIZE);
+             ix0 == bbox->x1 / TILE_SIZE);
 
       if (nr_planes == 3) {
-         if (sz < 4)
-         {
+         if (sz < 4) {
             /* Triangle is contained in a single 4x4 stamp:
              */
             assert(px + 4 <= TILE_SIZE);
@@ -829,13 +838,12 @@ lp_setup_bin_triangle(struct lp_setup_context *setup,
                cmd = LP_RAST_OP_MS_TRIANGLE_3_4;
             else
                cmd = use_32bits ? LP_RAST_OP_TRIANGLE_32_3_4 : LP_RAST_OP_TRIANGLE_3_4;
-            return lp_scene_bin_cmd_with_state( scene, ix0, iy0,
-                                                setup->fs.stored, cmd,
-                                                lp_rast_arg_triangle_contained(tri, px, py) );
+            return lp_scene_bin_cmd_with_state(scene, ix0, iy0,
+                                               setup->fs.stored, cmd,
+                                               lp_rast_arg_triangle_contained(tri, px, py));
          }
 
-         if (sz < 16)
-         {
+         if (sz < 16) {
             /* Triangle is contained in a single 16x16 block:
              */
 
@@ -854,13 +862,11 @@ lp_setup_bin_triangle(struct lp_setup_context *setup,
                cmd = LP_RAST_OP_MS_TRIANGLE_3_16;
             else
                cmd = use_32bits ? LP_RAST_OP_TRIANGLE_32_3_16 : LP_RAST_OP_TRIANGLE_3_16;
-            return lp_scene_bin_cmd_with_state( scene, ix0, iy0,
-                                                setup->fs.stored, cmd,
-                                                lp_rast_arg_triangle_contained(tri, px, py) );
+            return lp_scene_bin_cmd_with_state(scene, ix0, iy0,
+                                               setup->fs.stored, cmd,
+                                               lp_rast_arg_triangle_contained(tri, px, py));
          }
-      }
-      else if (nr_planes == 4 && sz < 16) 
-      {
+      } else if (nr_planes == 4 && sz < 16) {
          px = MIN2(px, TILE_SIZE - 16);
          py = MIN2(py, TILE_SIZE - 16);
 
@@ -876,19 +882,17 @@ lp_setup_bin_triangle(struct lp_setup_context *setup,
                                             lp_rast_arg_triangle_contained(tri, px, py));
       }
 
-
       /* Triangle is contained in a single tile:
        */
       if (setup->multisample)
          cmd = lp_rast_ms_tri_tab[nr_planes];
       else
          cmd = use_32bits ? lp_rast_32_tri_tab[nr_planes] : lp_rast_tri_tab[nr_planes];
-      return lp_scene_bin_cmd_with_state(
-         scene, ix0, iy0, setup->fs.stored, cmd,
-         lp_rast_arg_triangle(tri, (1<<nr_planes)-1));
-   }
-   else
-   {
+      return lp_scene_bin_cmd_with_state(scene, ix0, iy0, setup->fs.stored,
+                                         cmd,
+                                         lp_rast_arg_triangle(tri,
+                                                              (1<<nr_planes)-1));
+   } else {
       struct lp_rast_plane *plane = GET_PLANES(tri);
       int64_t c[MAX_PLANES];
       int64_t ei[MAX_PLANES];
@@ -896,20 +900,19 @@ lp_setup_bin_triangle(struct lp_setup_context *setup,
       int64_t eo[MAX_PLANES];
       int64_t xstep[MAX_PLANES];
       int64_t ystep[MAX_PLANES];
-      int x, y;
 
-      int ix0 = trimmed_box.x0 / TILE_SIZE;
-      int iy0 = trimmed_box.y0 / TILE_SIZE;
-      int ix1 = trimmed_box.x1 / TILE_SIZE;
-      int iy1 = trimmed_box.y1 / TILE_SIZE;
-      
-      for (i = 0; i < nr_planes; i++) {
-         c[i] = (plane[i].c + 
+      const int ix0 = trimmed_box.x0 / TILE_SIZE;
+      const int iy0 = trimmed_box.y0 / TILE_SIZE;
+      const int ix1 = trimmed_box.x1 / TILE_SIZE;
+      const int iy1 = trimmed_box.y1 / TILE_SIZE;
+
+      for (int i = 0; i < nr_planes; i++) {
+         c[i] = (plane[i].c +
                  IMUL64(plane[i].dcdy, iy0) * TILE_SIZE -
                  IMUL64(plane[i].dcdx, ix0) * TILE_SIZE);
 
-         ei[i] = (plane[i].dcdy - 
-                  plane[i].dcdx - 
+         ei[i] = (plane[i].dcdy -
+                  plane[i].dcdx -
                   (int64_t)plane[i].eo) << TILE_ORDER;
 
          eo[i] = (int64_t)plane[i].eo << TILE_ORDER;
@@ -917,27 +920,24 @@ lp_setup_bin_triangle(struct lp_setup_context *setup,
          ystep[i] = ((int64_t)plane[i].dcdy) << TILE_ORDER;
       }
 
-
+      tri->inputs.is_blit = lp_setup_is_blit(setup, &tri->inputs);
 
       /* Test tile-sized blocks against the triangle.
        * Discard blocks fully outside the tri.  If the block is fully
        * contained inside the tri, bin an lp_rast_shade_tile command.
        * Else, bin a lp_rast_triangle command.
        */
-      for (y = iy0; y <= iy1; y++)
-      {
-         boolean in = FALSE;  /* are we inside the triangle? */
+      for (int y = iy0; y <= iy1; y++) {
+         bool in = false;  /* are we inside the triangle? */
          int64_t cx[MAX_PLANES];
 
-         for (i = 0; i < nr_planes; i++)
+         for (int i = 0; i < nr_planes; i++)
             cx[i] = c[i];
 
-         for (x = ix0; x <= ix1; x++)
-         {
-            int out = 0;
-            int partial = 0;
+         for (int x = ix0; x <= ix1; x++) {
+            int out = 0, partial = 0;
 
-            for (i = 0; i < nr_planes; i++) {
+            for (int i = 0; i < nr_planes; i++) {
                int64_t planeout = cx[i] + eo[i];
                int64_t planepartial = cx[i] + ei[i] - 1;
                out |= (int) (planeout >> 63);
@@ -949,75 +949,83 @@ lp_setup_bin_triangle(struct lp_setup_context *setup,
                if (in)
                   break;  /* exiting triangle, all done with this row */
                LP_COUNT(nr_empty_64);
-            }
-            else if (partial) {
+            } else if (partial) {
                /* Not trivially accepted by at least one plane -
                 * rasterize/shade partial tile
                 */
                int count = util_bitcount(partial);
-               in = TRUE;
+               in = true;
 
                if (setup->multisample)
                   cmd = lp_rast_ms_tri_tab[count];
                else
                   cmd = use_32bits ? lp_rast_32_tri_tab[count] : lp_rast_tri_tab[count];
-               if (!lp_scene_bin_cmd_with_state( scene, x, y,
-                                                 setup->fs.stored, cmd,
-                                                 lp_rast_arg_triangle(tri, partial) ))
+               if (!lp_scene_bin_cmd_with_state(scene, x, y,
+                                                setup->fs.stored, cmd,
+                                                lp_rast_arg_triangle(tri, partial)))
                   goto fail;
 
                LP_COUNT(nr_partially_covered_64);
-            }
-            else {
+            } else {
                /* triangle covers the whole tile- shade whole tile */
                LP_COUNT(nr_fully_covered_64);
-               in = TRUE;
-               if (!lp_setup_whole_tile(setup, &tri->inputs, x, y))
+               in = true;
+               if (!lp_setup_whole_tile(setup, &tri->inputs, x, y, opaque))
                   goto fail;
             }
 
             /* Iterate cx values across the region: */
-            for (i = 0; i < nr_planes; i++)
+            for (int i = 0; i < nr_planes; i++)
                cx[i] += xstep[i];
          }
 
          /* Iterate c values down the region: */
-         for (i = 0; i < nr_planes; i++)
+         for (int i = 0; i < nr_planes; i++)
             c[i] += ystep[i];
       }
    }
 
-   return TRUE;
+   return true;
 
 fail:
    /* Need to disable any partially binned triangle.  This is easier
     * than trying to locate all the triangle, shade-tile, etc,
     * commands which may have been binned.
     */
-   tri->inputs.disable = TRUE;
-   return FALSE;
+   tri->inputs.disable = true;
+   return false;
 }
 
 
 /**
  * Try to draw the triangle, restart the scene on failure.
  */
-static void retry_triangle_ccw( struct lp_setup_context *setup,
-                                struct fixed_position* position,
-                                const float (*v0)[4],
-                                const float (*v1)[4],
-                                const float (*v2)[4],
-                                boolean front)
+static inline void
+retry_triangle_ccw(struct lp_setup_context *setup,
+                   struct fixed_position *position,
+                   const float (*v0)[4],
+                   const float (*v1)[4],
+                   const float (*v2)[4],
+                   bool front)
 {
-   if (!do_triangle_ccw( setup, position, v0, v1, v2, front ))
-   {
+   if (0)
+      lp_setup_print_triangle(setup, v0, v1, v2);
+
+   if (lp_setup_zero_sample_mask(setup)) {
+      if (0) debug_printf("zero sample mask\n");
+      LP_COUNT(nr_culled_tris);
+      return;
+   }
+
+   if (!do_triangle_ccw(setup, position, v0, v1, v2, front)) {
       if (!lp_setup_flush_and_restart(setup))
          return;
 
-      if (!do_triangle_ccw( setup, position, v0, v1, v2, front ))
+      if (!do_triangle_ccw(setup, position, v0, v1, v2, front))
          return;
    }
 }
+
 
 /**
  * Calculate fixed position data for a triangle
@@ -1025,7 +1033,7 @@ static void retry_triangle_ccw( struct lp_setup_context *setup,
  * calculated in fixed point), as there's quite some code duplication
  * to what is done in the jit setup prog.
  */
-static inline void
+static inline int8_t
 calc_fixed_position(struct lp_setup_context *setup,
                     struct fixed_position* position,
                     const float (*v0)[4],
@@ -1034,12 +1042,12 @@ calc_fixed_position(struct lp_setup_context *setup,
 {
    float pixel_offset = setup->multisample ? 0.0 : setup->pixel_offset;
    /*
-    * The rounding may not be quite the same with PIPE_ARCH_SSE
+    * The rounding may not be quite the same with DETECT_ARCH_SSE
     * (util_iround right now only does nearest/even on x87,
     * otherwise nearest/away-from-zero).
     * Both should be acceptable, I think.
     */
-#if defined(PIPE_ARCH_SSE)
+#if DETECT_ARCH_SSE
    __m128 v0r, v1r;
    __m128 vxy0xy2, vxy1xy0;
    __m128i vxy0xy2i, vxy1xy0i;
@@ -1087,8 +1095,9 @@ calc_fixed_position(struct lp_setup_context *setup,
    position->dy20 = position->y[2] - position->y[0];
 #endif
 
-   position->area = IMUL64(position->dx01, position->dy20) -
-         IMUL64(position->dx20, position->dy01);
+   uint64_t area = IMUL64(position->dx01, position->dy20) -
+      IMUL64(position->dx20, position->dy01);
+   return area == 0 ? 0 : (area & (1ULL << 63)) ? -1 : 1;
 }
 
 
@@ -1097,12 +1106,11 @@ calc_fixed_position(struct lp_setup_context *setup,
  * Swaps values for xy[0] and xy[1]
  */
 static inline void
-rotate_fixed_position_01( struct fixed_position* position )
+rotate_fixed_position_01(struct fixed_position* position)
 {
-   int x, y;
+   int x = position->x[1];
+   int y = position->y[1];
 
-   x = position->x[1];
-   y = position->y[1];
    position->x[1] = position->x[0];
    position->y[1] = position->y[0];
    position->x[0] = x;
@@ -1112,8 +1120,6 @@ rotate_fixed_position_01( struct fixed_position* position )
    position->dy01 = -position->dy01;
    position->dx20 = position->x[2] - position->x[0];
    position->dy20 = position->y[2] - position->y[0];
-
-   position->area = -position->area;
 }
 
 
@@ -1122,12 +1128,11 @@ rotate_fixed_position_01( struct fixed_position* position )
  * Swaps values for xy[1] and xy[2]
  */
 static inline void
-rotate_fixed_position_12( struct fixed_position* position )
+rotate_fixed_position_12(struct fixed_position* position)
 {
-   int x, y;
+   int x = position->x[2];
+   int y = position->y[2];
 
-   x = position->x[2];
-   y = position->y[2];
    position->x[2] = position->x[1];
    position->y[2] = position->y[1];
    position->x[1] = x;
@@ -1139,74 +1144,78 @@ rotate_fixed_position_12( struct fixed_position* position )
    position->dy01 = -position->dy20;
    position->dx20 = -x;
    position->dy20 = -y;
-
-   position->area = -position->area;
 }
 
 
 /**
  * Draw triangle if it's CW, cull otherwise.
  */
-static void triangle_cw(struct lp_setup_context *setup,
-                        const float (*v0)[4],
-                        const float (*v1)[4],
-                        const float (*v2)[4])
+static void
+triangle_cw(struct lp_setup_context *setup,
+            const float (*v0)[4],
+            const float (*v1)[4],
+            const float (*v2)[4])
 {
-   PIPE_ALIGN_VAR(16) struct fixed_position position;
-   struct llvmpipe_context *lp_context = (struct llvmpipe_context *)setup->pipe;
+   alignas(16) struct fixed_position position;
+   struct llvmpipe_context *lp_context = llvmpipe_context(setup->pipe);
 
    if (lp_context->active_statistics_queries) {
       lp_context->pipeline_statistics.c_primitives++;
    }
 
-   calc_fixed_position(setup, &position, v0, v1, v2);
+   int8_t area_sign = calc_fixed_position(setup, &position, v0, v1, v2);
 
-   if (position.area < 0) {
+   if (area_sign < 0) {
       if (setup->flatshade_first) {
          rotate_fixed_position_12(&position);
-         retry_triangle_ccw(setup, &position, v0, v2, v1, !setup->ccw_is_frontface);
+         retry_triangle_ccw(setup, &position, v0, v2, v1,
+                            !setup->ccw_is_frontface);
       } else {
          rotate_fixed_position_01(&position);
-         retry_triangle_ccw(setup, &position, v1, v0, v2, !setup->ccw_is_frontface);
+         retry_triangle_ccw(setup, &position, v1, v0, v2,
+                            !setup->ccw_is_frontface);
       }
    }
 }
 
 
-static void triangle_ccw(struct lp_setup_context *setup,
-                         const float (*v0)[4],
-                         const float (*v1)[4],
-                         const float (*v2)[4])
+static void
+triangle_ccw(struct lp_setup_context *setup,
+             const float (*v0)[4],
+             const float (*v1)[4],
+             const float (*v2)[4])
 {
-   PIPE_ALIGN_VAR(16) struct fixed_position position;
-   struct llvmpipe_context *lp_context = (struct llvmpipe_context *)setup->pipe;
+   alignas(16) struct fixed_position position;
+   struct llvmpipe_context *lp_context = llvmpipe_context(setup->pipe);
 
    if (lp_context->active_statistics_queries) {
       lp_context->pipeline_statistics.c_primitives++;
    }
 
-   calc_fixed_position(setup, &position, v0, v1, v2);
+   int8_t area_sign = calc_fixed_position(setup, &position, v0, v1, v2);
 
-   if (position.area > 0)
+   if (area_sign > 0)
       retry_triangle_ccw(setup, &position, v0, v1, v2, setup->ccw_is_frontface);
 }
+
 
 /**
  * Draw triangle whether it's CW or CCW.
  */
-static void triangle_both(struct lp_setup_context *setup,
-                          const float (*v0)[4],
-                          const float (*v1)[4],
-                          const float (*v2)[4])
+static void
+triangle_both(struct lp_setup_context *setup,
+              const float (*v0)[4],
+              const float (*v1)[4],
+              const float (*v2)[4])
 {
-   PIPE_ALIGN_VAR(16) struct fixed_position position;
-   struct llvmpipe_context *lp_context = (struct llvmpipe_context *)setup->pipe;
+   alignas(16) struct fixed_position position;
+   struct llvmpipe_context *lp_context = llvmpipe_context(setup->pipe);
 
    if (lp_context->active_statistics_queries) {
       lp_context->pipeline_statistics.c_primitives++;
    }
 
-   calc_fixed_position(setup, &position, v0, v1, v2);
+   int8_t area_sign = calc_fixed_position(setup, &position, v0, v1, v2);
 
    if (0) {
       assert(!util_is_inf_or_nan(v0[0][0]));
@@ -1217,29 +1226,33 @@ static void triangle_both(struct lp_setup_context *setup,
       assert(!util_is_inf_or_nan(v2[0][1]));
    }
 
-   if (position.area > 0)
-      retry_triangle_ccw( setup, &position, v0, v1, v2, setup->ccw_is_frontface );
-   else if (position.area < 0) {
+   if (area_sign > 0) {
+      retry_triangle_ccw(setup, &position, v0, v1, v2,
+                         setup->ccw_is_frontface);
+   } else if (area_sign < 0) {
       if (setup->flatshade_first) {
-         rotate_fixed_position_12( &position );
-         retry_triangle_ccw( setup, &position, v0, v2, v1, !setup->ccw_is_frontface );
+         rotate_fixed_position_12(&position);
+         retry_triangle_ccw(setup, &position, v0, v2, v1,
+                            !setup->ccw_is_frontface);
       } else {
-         rotate_fixed_position_01( &position );
-         retry_triangle_ccw( setup, &position, v1, v0, v2, !setup->ccw_is_frontface );
+         rotate_fixed_position_01(&position);
+         retry_triangle_ccw(setup, &position, v1, v0, v2,
+                            !setup->ccw_is_frontface);
       }
    }
 }
 
 
-static void triangle_noop(struct lp_setup_context *setup,
-                          const float (*v0)[4],
-                          const float (*v1)[4],
-                          const float (*v2)[4])
+static void
+triangle_noop(struct lp_setup_context *setup,
+              const float (*v0)[4],
+              const float (*v1)[4],
+              const float (*v2)[4])
 {
 }
 
 
-void 
+void
 lp_setup_choose_triangle(struct lp_setup_context *setup)
 {
    if (setup->rasterizer_discard) {

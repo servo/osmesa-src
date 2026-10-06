@@ -7,36 +7,37 @@ set -o pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 rm -rf mesa-tmp mesa-src
-git clone git://anongit.freedesktop.org/git/mesa/mesa mesa-tmp --depth 1
+if [ -n "${1:-}" ]; then
+  git clone -n https://gitlab.freedesktop.org/mesa/mesa mesa-tmp
+  git -C mesa-tmp checkout $1
+else
+  git clone https://gitlab.freedesktop.org/mesa/mesa mesa-tmp --depth 1
+fi
 mkdir mesa-tmp/build
 pushd mesa-tmp/build
 
 VERSION=$(cat ../VERSION)
 
-meson ..                   \
-   -Dplatforms=            \
-   -Ddri3=disabled         \
-   -Dglx-direct=false      \
-   -Dgallium-drivers=swrast\
-   -Ddri-drivers=          \
-   -Dvulkan-drivers=       \
-   -Dgles1=disabled        \
-   -Dgles2=disabled        \
-   -Dosmesa=gallium        \
-   -Degl=disabled          \
-   -Dgbm=disabled          \
-   -Dglx=disabled
+if [ $(llvm-config --has-rtti) = NO ]; then
+  RTTI=-Dcpp_rtti=false
+else
+  RTTI=
+fi
+
+meson setup ..                        \
+   -Dplatforms=                       \
+   -Dgallium-drivers=softpipe,llvmpipe\
+   -Dvulkan-drivers=                  \
+   -Dgles1=disabled                   \
+   -Dgles2=disabled                   \
+   -Dosmesa=true                      \
+   -Degl=disabled                     \
+   -Dgbm=disabled                     \
+   -Dglx=disabled                     \
+   $RTTI
 
 meson dist
 popd
 tar -xvf mesa-tmp/build/meson-dist/mesa-${VERSION}.tar.xz
 mv mesa-${VERSION} mesa-src
 rm -rf mesa-tmp
-
-# apply local patches necessary for Servo or wrench cross-compilation
-patch -i patches/1.diff -p1
-patch -i patches/2-mesa-issue-2034.diff -p1
-patch -i patches/3-mesa-issue-2035.diff -p1
-patch -i patches/4-mesa-issue-1020.diff -p1
-patch -i patches/5.diff -p1
-patch -i patches/6.diff -p1

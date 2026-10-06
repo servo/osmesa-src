@@ -1,27 +1,7 @@
 /*
  * Copyright 2013 Advanced Micro Devices, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
  * Authors: Marek Olšák <maraeo@gmail.com>
- *
+ * SPDX-License-Identifier: MIT
  */
 
 /**
@@ -34,7 +14,7 @@
 
 #include <stdio.h>
 
-#include "radeon/radeon_winsys.h"
+#include "winsys/radeon_winsys.h"
 
 #include "util/disk_cache.h"
 #include "util/u_blitter.h"
@@ -44,6 +24,8 @@
 #include "util/u_suballoc.h"
 #include "util/u_transfer.h"
 #include "util/u_threaded_context.h"
+
+#include "compiler/nir/nir.h"
 
 struct u_log_context;
 #define ATI_VENDOR_ID 0x1002
@@ -61,7 +43,7 @@ struct u_log_context;
 #define R600_CONTEXT_PRIVATE_FLAG		(1u << 4)
 
 /* special primitive types */
-#define R600_PRIM_RECTANGLE_LIST	PIPE_PRIM_MAX
+#define R600_PRIM_RECTANGLE_LIST	MESA_PRIM_COUNT
 
 #define R600_NOT_QUERY		0xffffffff
 
@@ -79,13 +61,8 @@ struct u_log_context;
 #define DBG_COMPUTE		(1 << 9)
 /* gap */
 #define DBG_VM			(1 << 11)
-#define DBG_NO_IR		(1 << 12)
-#define DBG_NO_TGSI		(1 << 13)
-#define DBG_NO_ASM		(1 << 14)
 #define DBG_PREOPT_IR		(1 << 15)
 #define DBG_CHECK_IR		(1 << 16)
-#define DBG_NO_OPT_VARIANT	(1 << 17)
-#define DBG_FS_CORRECT_DERIVS_AFTER_KILL (1 << 18)
 /* gaps */
 #define DBG_TEST_DMA		(1 << 20)
 /* Bits 21-31 are reserved for the r600g driver. */
@@ -97,12 +74,10 @@ struct u_log_context;
 #define DBG_NO_TILING		(1ull << 36)
 #define DBG_SWITCH_ON_EOP	(1ull << 37)
 #define DBG_FORCE_DMA		(1ull << 38)
-#define DBG_PRECOMPILE		(1ull << 39)
 #define DBG_INFO		(1ull << 40)
 #define DBG_NO_WC		(1ull << 41)
 #define DBG_CHECK_VM		(1ull << 42)
 /* gap */
-#define DBG_UNSAFE_MATH		(1ull << 49)
 #define DBG_TEST_VMFAULT_CP	(1ull << 51)
 #define DBG_TEST_VMFAULT_SDMA	(1ull << 52)
 #define DBG_TEST_VMFAULT_SHADER	(1ull << 53)
@@ -118,12 +93,6 @@ enum r600_coherency {
 	R600_COHERENCY_CB_META,
 };
 
-#if UTIL_ARCH_BIG_ENDIAN
-#define R600_BIG_ENDIAN 1
-#else
-#define R600_BIG_ENDIAN 0
-#endif
-
 struct r600_common_context;
 struct r600_perfcounters;
 struct tgsi_shader_info;
@@ -136,7 +105,7 @@ struct r600_resource {
 	struct threaded_resource	b;
 
 	/* Winsys objects. */
-	struct pb_buffer		*buf;
+	struct pb_buffer_lean		*buf;
 	uint64_t			gpu_address;
 	/* Memory usage if the buffer placement is optimal. */
 	uint64_t			vram_usage;
@@ -153,7 +122,7 @@ struct r600_resource {
 	 * streamout, DMA, or as a random access target). The rest of
 	 * the buffer is considered invalid and can be mapped unsynchronized.
 	 *
-	 * This allows unsychronized mapping of a buffer range which hasn't
+	 * This allows unsynchronized mapping of a buffer range which hasn't
 	 * been used yet. It's for applications which forget to use
 	 * the unsynchronized map flag and expect the driver to figure it out.
          */
@@ -165,6 +134,7 @@ struct r600_resource {
 	/* Whether this resource is referenced by bindless handles. */
 	bool				texture_handle_allocated;
 	bool				image_handle_allocated;
+	bool                            compute_global_bo;
 
 	/*
 	 * EG/Cayman only - for RAT operations hw need an immediate buffer
@@ -176,7 +146,6 @@ struct r600_resource {
 struct r600_transfer {
 	struct threaded_transfer	b;
 	struct r600_resource		*staging;
-	unsigned			offset;
 };
 
 struct r600_fmask_info {
@@ -325,7 +294,7 @@ union r600_mmio_counters {
 
 struct r600_memory_object {
 	struct pipe_memory_object	b;
-	struct pb_buffer		*buf;
+	struct pb_buffer_lean		*buf;
 	uint32_t			stride;
 	uint32_t			offset;
 };
@@ -334,7 +303,7 @@ struct r600_common_screen {
 	struct pipe_screen		b;
 	struct radeon_winsys		*ws;
 	enum radeon_family		family;
-	enum chip_class			chip_class;
+	enum amd_gfx_level			gfx_level;
 	struct radeon_info		info;
 	uint64_t			debug_flags;
 	bool				has_cp_dma;
@@ -365,6 +334,7 @@ struct r600_common_screen {
 	/* GPU load thread. */
 	mtx_t				gpu_load_mutex;
 	thrd_t				gpu_load_thread;
+	bool				gpu_load_thread_created;
 	union r600_mmio_counters	mmio_counters;
 	volatile unsigned		gpu_load_stop_thread; /* bool */
 
@@ -404,6 +374,9 @@ struct r600_common_screen {
 		 */
 		unsigned compute_to_L2;
 	} barrier_flags;
+
+	struct nir_shader_compiler_options nir_options;
+	struct nir_shader_compiler_options nir_options_fs;
 };
 
 /* This encapsulates a state or an operation which can emitted into the GPU
@@ -474,7 +447,7 @@ struct r600_viewports {
 };
 
 struct r600_ring {
-	struct radeon_cmdbuf		*cs;
+	struct radeon_cmdbuf		cs;
 	void (*flush)(void *ctx, unsigned flags,
 		      struct pipe_fence_handle **fence);
 };
@@ -495,7 +468,7 @@ struct r600_common_context {
 	struct radeon_winsys		*ws;
 	struct radeon_winsys_ctx	*ctx;
 	enum radeon_family		family;
-	enum chip_class			chip_class;
+	enum amd_gfx_level			gfx_level;
 	struct r600_ring		gfx;
 	struct r600_ring		dma;
 	struct pipe_fence_handle	*last_gfx_fence;
@@ -508,7 +481,7 @@ struct r600_common_context {
 	unsigned			last_num_draw_calls;
 
 	struct threaded_context		*tc;
-	struct u_suballocator		*allocator_zeroed_memory;
+	struct u_suballocator		allocator_zeroed_memory;
 	struct slab_child_pool		pool_transfers;
 	struct slab_child_pool		pool_transfers_unsync; /* for threaded_context */
 
@@ -524,6 +497,23 @@ struct r600_common_context {
 	bool				clip_halfz;
 	bool				vs_writes_viewport_index;
 	bool				vs_disables_clipping_viewport;
+
+	/* The number of pixels outside the viewport that are not culled by the clipper.
+	 * Normally, the clipper clips everything outside the viewport, however, points and lines
+	 * can have vertices outside the viewport, but their edges can be inside the viewport. Those
+	 * shouldn't be culled. The problem is that the register setting (PA_CL_GB_*_DISC_ADJ) that
+	 * controls the discard distance, which depends on the point size and line width, applies to
+	 * all primitive types, and we would have to set 0 distance for triangles and non-zero for
+	 * points and lines whenever the primitive type changes, which would add overhead and cause
+	 * context rolls.
+	 *
+	 * To reduce that, whenever the discard distance changes for points and lines, we keep it
+	 * at that higher value up to a certain small number for all primitive types including all
+	 * points and lines within a specific size. This is slightly inefficient, but it eliminates
+	 * a lot of guardband state updates and context register changes.
+	 */
+	float min_clip_discard_distance_watermark;
+	float current_clip_discard_distance;
 
 	/* Additional context states. */
 	unsigned flags; /* flush flags */
@@ -568,7 +558,7 @@ struct r600_common_context {
 	float				sample_locations_8x[8][2];
 	float				sample_locations_16x[16][2];
 
-	struct pipe_debug_callback	debug;
+	struct util_debug_callback	debug;
 	struct pipe_device_reset_callback device_reset_callback;
 	struct u_log_context		*log;
 
@@ -618,13 +608,46 @@ struct r600_common_context {
 
 	void (*check_vm_faults)(struct r600_common_context *ctx,
 				struct radeon_saved_cs *saved,
-				enum ring_type ring);
+				enum amd_ip_type ring);
 };
+
+#define R600_ALL_PRIM_LINE_MODES                                                                   \
+	((1 << MESA_PRIM_LINES) | (1 << MESA_PRIM_LINE_LOOP) | (1 << MESA_PRIM_LINE_STRIP) |       \
+	 (1 << MESA_PRIM_LINES_ADJACENCY) | (1 << MESA_PRIM_LINE_STRIP_ADJACENCY))
+
+static inline bool r600_prim_is_lines(unsigned prim)
+{
+	return ((1 << prim) & R600_ALL_PRIM_LINE_MODES) != 0;
+}
+
+static inline void r600_set_clip_discard_distance(struct r600_common_context *rctx,
+						  float distance)
+{
+	/* Determine whether the guardband registers change.
+	 *
+	 * When we see a value greater than min_clip_discard_distance_watermark, we increase it
+	 * up to a certain number to eliminate those state changes next time they happen.
+	 * See the comment at min_clip_discard_distance_watermark.
+	 */
+	if (distance > rctx->min_clip_discard_distance_watermark) {
+		/* The maximum number was determined from Viewperf. The number is in units of half-pixels. */
+		rctx->min_clip_discard_distance_watermark = MIN2(distance, 6);
+
+		float old_distance = rctx->current_clip_discard_distance;
+		float new_distance = MAX2(distance, rctx->min_clip_discard_distance_watermark);
+
+		if (old_distance != new_distance) {
+			rctx->current_clip_discard_distance = new_distance;
+			rctx->scissors.dirty_mask = (1 << R600_MAX_VIEWPORTS) - 1;
+			rctx->set_atom_dirty(rctx, &rctx->scissors.atom, true);
+		}
+	}
+}
 
 /* r600_buffer_common.c */
 bool r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
-				     struct pb_buffer *buf,
-				     enum radeon_bo_usage usage);
+				     struct pb_buffer_lean *buf,
+				     unsigned usage);
 void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
                                       struct r600_resource *resource,
                                       unsigned usage);
@@ -637,6 +660,10 @@ void r600_init_resource_fields(struct r600_common_screen *rscreen,
 			       uint64_t size, unsigned alignment);
 bool r600_alloc_resource(struct r600_common_screen *rscreen,
 			 struct r600_resource *res);
+void r600_buffer_destroy(struct pipe_screen *screen, struct pipe_resource *buf);
+void r600_buffer_flush_region(struct pipe_context *ctx,
+			      struct pipe_transfer *transfer,
+			      const struct pipe_box *rel_box);
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ,
 					 unsigned alignment);
@@ -655,6 +682,14 @@ r600_invalidate_resource(struct pipe_context *ctx,
 void r600_replace_buffer_storage(struct pipe_context *ctx,
 				 struct pipe_resource *dst,
 				 struct pipe_resource *src);
+void *r600_buffer_transfer_map(struct pipe_context *ctx,
+                               struct pipe_resource *resource,
+                               unsigned level,
+                               unsigned usage,
+                               const struct pipe_box *box,
+                               struct pipe_transfer **ptransfer);
+void r600_buffer_transfer_unmap(struct pipe_context *ctx,
+				struct pipe_transfer *transfer);
 
 /* r600_common_pipe.c */
 void r600_gfx_write_event_eop(struct r600_common_context *ctx,
@@ -719,7 +754,8 @@ void r600_streamout_buffers_dirty(struct r600_common_context *rctx);
 void r600_set_streamout_targets(struct pipe_context *ctx,
 				unsigned num_targets,
 				struct pipe_stream_output_target **targets,
-				const unsigned *offset);
+				const unsigned *offset,
+                                enum mesa_prim output_prim);
 void r600_emit_streamout_end(struct r600_common_context *rctx);
 void r600_update_prims_generated_query_state(struct r600_common_context *rctx,
 					     unsigned type, int diff);
@@ -736,6 +772,7 @@ bool r600_prepare_for_dma_blit(struct r600_common_context *rctx,
 				struct r600_texture *rsrc,
 				unsigned src_level,
 				const struct pipe_box *src_box);
+void r600_texture_destroy(struct pipe_screen *screen, struct pipe_resource *ptex);
 void r600_texture_get_fmask_info(struct r600_common_screen *rscreen,
 				 struct r600_texture *rtex,
 				 unsigned nr_samples,
@@ -759,19 +796,25 @@ unsigned r600_translate_colorswap(enum pipe_format format, bool do_endian_swap);
 void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 				   struct pipe_framebuffer_state *fb,
 				   struct r600_atom *fb_state,
-				   unsigned *buffers, ubyte *dirty_cbufs,
+				   unsigned *buffers, uint8_t *dirty_cbufs,
 				   const union pipe_color_union *color);
 void r600_init_screen_texture_functions(struct r600_common_screen *rscreen);
 void r600_init_context_texture_functions(struct r600_common_context *rctx);
 void eg_resource_alloc_immed(struct r600_common_screen *rscreen,
 			     struct r600_resource *res,
 			     unsigned immed_size);
+void *r600_texture_transfer_map(struct pipe_context *ctx,
+			       struct pipe_resource *texture,
+			       unsigned level,
+			       unsigned usage,
+			       const struct pipe_box *box,
+			       struct pipe_transfer **ptransfer);
+void r600_texture_transfer_unmap(struct pipe_context *ctx,
+				struct pipe_transfer* transfer);
 
 /* r600_viewport.c */
 void evergreen_apply_scissor_bug_workaround(struct r600_common_context *rctx,
 					    struct pipe_scissor_state *scissor);
-void r600_viewport_set_rast_deps(struct r600_common_context *rctx,
-				 bool scissor_enable, bool clip_halfz);
 void r600_update_vs_writes_viewport_index(struct r600_common_context *rctx,
 					  struct tgsi_shader_info *info);
 void r600_init_viewport_functions(struct r600_common_context *rctx);
@@ -875,7 +918,7 @@ static inline unsigned r600_wavefront_size(enum radeon_family family)
 	}
 }
 
-static inline enum radeon_bo_priority
+static inline unsigned
 r600_get_sampler_view_priority(struct r600_resource *res)
 {
 	if (res->b.b.target == PIPE_BUFFER)

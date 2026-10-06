@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <database xmlns="http://nouveau.freedesktop.org/"
 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
+xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 <import file="freedreno_copyright.xml"/>
+<import file="adreno/adreno_common.xml"/>
 
-<domain name="A6XX" width="32">
+<domain name="A6XX" width="32" prefix="variant" varset="chip">
 
 	<bitset name="A6XX_GMU_GPU_IDLE_STATUS">
 		<bitfield name="BUSY_IGN_AHB" pos="23"/>
@@ -51,6 +52,11 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0x23fd" name="GMU_DCVS_PERF_SETTING"/>
 	<reg32 offset="0x23fe" name="GMU_DCVS_BW_SETTING"/>
 	<reg32 offset="0x23ff" name="GMU_DCVS_RETURN"/>
+	<reg32 offset="0x2bf8" name="GMU_CORE_FW_VERSION">
+		<bitfield name="MAJOR" low="28" high="31"/>
+		<bitfield name="MINOR" low="16" high="27"/>
+		<bitfield name="STEP" low="0" high="15"/>
+	</reg32>
 	<reg32 offset="0x4c00" name="GMU_ICACHE_CONFIG"/>
 	<reg32 offset="0x4c01" name="GMU_DCACHE_CONFIG"/>
 	<reg32 offset="0x4c0f" name="GMU_SYS_BUS_CONFIG"/>
@@ -112,6 +118,7 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0x50e9" name="GMU_RPMH_HYST_CTRL"/>
 	<reg32 offset="0x50ec" name="GPU_GMU_CX_GMU_RPMH_POWER_STATE"/>
 	<reg32 offset="0x50f0" name="GPU_GMU_CX_GMU_CX_FAL_INTF"/>
+	<reg32 offset="0x50f1" name="GPU_GMU_CX_GMU_CX_FALNEXT_INTF"/>
 	<reg32 offset="0x5100" name="GPU_GMU_CX_GMU_PWR_COL_CP_MSG"/>
 	<reg32 offset="0x5101" name="GPU_GMU_CX_GMU_PWR_COL_CP_RESP"/>
 	<reg32 offset="0x51f0" name="GMU_BOOT_KMD_LM_HANDSHAKE"/>
@@ -145,8 +152,13 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0x519c" name="GMU_HOST2GMU_INTR_INFO_1"/>
 	<reg32 offset="0x519d" name="GMU_HOST2GMU_INTR_INFO_2"/>
 	<reg32 offset="0x519e" name="GMU_HOST2GMU_INTR_INFO_3"/>
+	<reg32 offset="0x51c5" name="GMU_GENERAL_0"/>
 	<reg32 offset="0x51c6" name="GMU_GENERAL_1"/>
+	<reg32 offset="0x51cb" name="GMU_GENERAL_6"/>
 	<reg32 offset="0x51cc" name="GMU_GENERAL_7"/>
+	<reg32 offset="0x51cd" name="GMU_GENERAL_8" variants="A7XX"/>
+	<reg32 offset="0x51ce" name="GMU_GENERAL_9" variants="A7XX"/>
+	<reg32 offset="0x51cf" name="GMU_GENERAL_10" variants="A7XX"/>
 	<reg32 offset="0x515d" name="GMU_ISENSE_CTRL"/>
 	<reg32 offset="0x8920" name="GPU_CS_ENABLE_REG"/>
 	<reg32 offset="0x515d" name="GPU_GMU_CX_GMU_ISENSE_CTRL"/>
@@ -185,6 +197,7 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0x930e" name="GPU_GMU_AO_GPU_CX_BUSY_MASK"/>
 	<reg32 offset="0x9310" name="GMU_AO_AHB_FENCE_CTRL"/>
 	<reg32 offset="0x9313" name="GMU_AHB_FENCE_STATUS"/>
+	<reg32 offset="0x9314" name="GMU_AHB_FENCE_STATUS_CLR"/>
 	<reg32 offset="0x9315" name="GMU_RBBM_INT_UNMASKED_STATUS"/>
 	<reg32 offset="0x9316" name="GMU_AO_SPARE_CNTL"/>
 	<reg32 offset="0x9307" name="GMU_RSCC_CONTROL_REQ"/>
@@ -193,6 +206,7 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0x9312" name="GMU_AHB_FENCE_RANGE_1"/>
 	<reg32 offset="0x9c03" name="GPU_CC_GX_GDSCR"/>
 	<reg32 offset="0x9d42" name="GPU_CC_GX_DOMAIN_MISC"/>
+	<reg32 offset="0xc001" name="GPU_CPR_FSM_CTL"/>
 
 	<!-- starts at offset 0x8c00 on most gpus -->
 	<reg32 offset="0x0004" name="GPU_RSCC_RSC_STATUS0_DRV0"/>
@@ -208,6 +222,7 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0x008c" name="RSCC_TIMESTAMP_UNIT1_OUTPUT_DRV0"/>
 	<reg32 offset="0x0100" name="RSCC_OVERRIDE_START_ADDR"/>
 	<reg32 offset="0x0101" name="RSCC_SEQ_BUSY_DRV0"/>
+	<reg32 offset="0x0154" name="RSCC_SEQ_MEM_0_DRV0_A740" variants="A7XX"/>
 	<reg32 offset="0x0180" name="RSCC_SEQ_MEM_0_DRV0"/>
 	<reg32 offset="0x0346" name="RSCC_TCS0_DRV0_STATUS"/>
 	<reg32 offset="0x03ee" name="RSCC_TCS1_DRV0_STATUS"/>

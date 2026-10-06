@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 /**
  * @file
@@ -35,12 +17,11 @@
 #ifndef SVGA_WINSYS_H_
 #define SVGA_WINSYS_H_
 
-#include "svga_types.h"
 #include "svga3d_types.h"
 #include "svga_reg.h"
 #include "svga3d_reg.h"
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_defines.h"
 
 #include "svga_mksstats.h"
@@ -49,7 +30,7 @@ struct svga_winsys_screen;
 struct svga_winsys_buffer;
 struct pipe_screen;
 struct pipe_context;
-struct pipe_debug_callback;
+struct util_debug_callback;
 struct pipe_fence_handle;
 struct pipe_resource;
 struct svga_region;
@@ -99,6 +80,9 @@ struct svga_winsys_stats_timeframe {
    uint64 startTime;
    uint64 adjustedStartTime;
    struct svga_winsys_stats_timeframe *enclosing;
+
+   struct svga_winsys_screen *sws;
+   int32 slot;
 };
 
 enum svga_stats_count {
@@ -106,6 +90,7 @@ enum svga_stats_count {
    SVGA_STATS_COUNT_BLITBLITTERCOPY,
    SVGA_STATS_COUNT_DEPTHSTENCILSTATE,
    SVGA_STATS_COUNT_RASTERIZERSTATE,
+   SVGA_STATS_COUNT_RAWBUFFERSRVIEW,
    SVGA_STATS_COUNT_SAMPLER,
    SVGA_STATS_COUNT_SAMPLERVIEW,
    SVGA_STATS_COUNT_SURFACEWRITEFLUSH,
@@ -128,6 +113,7 @@ enum svga_stats_time {
    SVGA_STATS_TIME_CREATEBACKEDSURFACEVIEW,
    SVGA_STATS_TIME_CREATEBUFFER,
    SVGA_STATS_TIME_CREATECONTEXT,
+   SVGA_STATS_TIME_CREATECS,
    SVGA_STATS_TIME_CREATEFS,
    SVGA_STATS_TIME_CREATEGS,
    SVGA_STATS_TIME_CREATESURFACE,
@@ -141,8 +127,10 @@ enum svga_stats_time {
    SVGA_STATS_TIME_DRAWVBO,
    SVGA_STATS_TIME_DRAWARRAYS,
    SVGA_STATS_TIME_DRAWELEMENTS,
+   SVGA_STATS_TIME_EMITCS,
    SVGA_STATS_TIME_EMITFS,
    SVGA_STATS_TIME_EMITGS,
+   SVGA_STATS_TIME_EMITRAWBUFFER,
    SVGA_STATS_TIME_EMITTCS,
    SVGA_STATS_TIME_EMITTES,
    SVGA_STATS_TIME_EMITVS,
@@ -153,6 +141,7 @@ enum svga_stats_time {
    SVGA_STATS_TIME_HWTNLDRAWELEMENTS,
    SVGA_STATS_TIME_HWTNLFLUSH,
    SVGA_STATS_TIME_HWTNLPRIM,
+   SVGA_STATS_TIME_LAUNCHGRID,
    SVGA_STATS_TIME_PROPAGATESURFACE,
    SVGA_STATS_TIME_SETSAMPLERVIEWS,
    SVGA_STATS_TIME_SURFACEFLUSH,
@@ -163,7 +152,9 @@ enum svga_stats_time {
    SVGA_STATS_TIME_TEXTRANSFERUNMAP,
    SVGA_STATS_TIME_TGSIVGPU10TRANSLATE,
    SVGA_STATS_TIME_TGSIVGPU9TRANSLATE,
+   SVGA_STATS_TIME_UPDATECSUAV,
    SVGA_STATS_TIME_UPDATESTATE,
+   SVGA_STATS_TIME_UPDATEUAV,
    SVGA_STATS_TIME_VALIDATESURFACEVIEW,
    SVGA_STATS_TIME_VBUFDRAWARRAYS,
    SVGA_STATS_TIME_VBUFDRAWELEMENTS,
@@ -181,6 +172,7 @@ enum svga_stats_time {
    SVGA_STATS_PREFIX "BlitBlitterCopy",       \
    SVGA_STATS_PREFIX "DepthStencilState",     \
    SVGA_STATS_PREFIX "RasterizerState",       \
+   SVGA_STATS_PREFIX "RawBufferSRView",       \
    SVGA_STATS_PREFIX "Sampler",               \
    SVGA_STATS_PREFIX "SamplerView",           \
    SVGA_STATS_PREFIX "SurfaceWriteFlush",     \
@@ -201,6 +193,7 @@ enum svga_stats_time {
    SVGA_STATS_PREFIX "CreateBackedSurfaceView",     \
    SVGA_STATS_PREFIX "CreateBuffer",                \
    SVGA_STATS_PREFIX "CreateContext",               \
+   SVGA_STATS_PREFIX "CreateCS",                    \
    SVGA_STATS_PREFIX "CreateFS",                    \
    SVGA_STATS_PREFIX "CreateGS",                    \
    SVGA_STATS_PREFIX "CreateSurface",               \
@@ -214,8 +207,10 @@ enum svga_stats_time {
    SVGA_STATS_PREFIX "DrawVBO",                     \
    SVGA_STATS_PREFIX "DrawArrays",                  \
    SVGA_STATS_PREFIX "DrawElements",                \
+   SVGA_STATS_PREFIX "EmitCS",                      \
    SVGA_STATS_PREFIX "EmitFS",                      \
    SVGA_STATS_PREFIX "EmitGS",                      \
+   SVGA_STATS_PREFIX "EmitRawBuffer",               \
    SVGA_STATS_PREFIX "EmitTCS",                     \
    SVGA_STATS_PREFIX "EmitTES",                     \
    SVGA_STATS_PREFIX "EmitVS",                      \
@@ -226,6 +221,7 @@ enum svga_stats_time {
    SVGA_STATS_PREFIX "HWtnlDrawElements",           \
    SVGA_STATS_PREFIX "HWtnlFlush",                  \
    SVGA_STATS_PREFIX "HWtnlPrim",                   \
+   SVGA_STATS_PREFIX "LaunchGrid",                  \
    SVGA_STATS_PREFIX "PropagateSurface",            \
    SVGA_STATS_PREFIX "SetSamplerViews",             \
    SVGA_STATS_PREFIX "SurfaceFlush",                \
@@ -236,7 +232,9 @@ enum svga_stats_time {
    SVGA_STATS_PREFIX "TextureTransferUnmap",        \
    SVGA_STATS_PREFIX "TGSIVGPU10Translate",         \
    SVGA_STATS_PREFIX "TGSIVGPU9Translate",          \
+   SVGA_STATS_PREFIX "UpdateCSUAV",                 \
    SVGA_STATS_PREFIX "UpdateState",                 \
+   SVGA_STATS_PREFIX "UpdateUAV",                   \
    SVGA_STATS_PREFIX "ValidateSurfaceView",         \
    SVGA_STATS_PREFIX "VbufDrawArrays",              \
    SVGA_STATS_PREFIX "VbufDrawElements",            \
@@ -393,28 +391,28 @@ struct svga_winsys_context
     ** BEGIN new functions for guest-backed surfaces.
     **/
 
-   boolean have_gb_objects;
-   boolean force_coherent;
+   bool have_gb_objects;
+   bool force_coherent;
 
    /**
     * Map a guest-backed surface.
     * \param swc The winsys context
     * \param surface The surface to map
-    * \param flags  bitmaks of PIPE_TRANSFER_x flags
+    * \param flags  bitmask of PIPE_MAP_x flags
     * \param retry Whether to flush and retry the map
     * \param rebind Whether to issue an immediate rebind and flush.
     *
     * The surface_map() member is allowed to fail due to a
     * shortage of command buffer space, if the
-    * PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE bit is set in flags.
+    * PIPE_MAP_DISCARD_WHOLE_RESOURCE bit is set in flags.
     * In that case, the caller must flush the current command
     * buffer and reissue the map.
     */
    void *
    (*surface_map)(struct svga_winsys_context *swc,
                   struct svga_winsys_surface *surface,
-                  unsigned flags, boolean *retry,
-                  boolean *rebind);
+                  unsigned flags, bool *retry,
+                  bool *rebind);
 
    /**
     * Unmap a guest-backed surface.
@@ -424,7 +422,7 @@ struct svga_winsys_context
    void
    (*surface_unmap)(struct svga_winsys_context *swc,
                     struct svga_winsys_surface *surface,
-                    boolean *rebind);
+                    bool *rebind);
 
    /**
     * Create and define a DX GB shader that resides in the device COTable.
@@ -460,7 +458,7 @@ struct svga_winsys_context
                       unsigned flags);
 
    /** To report perf/conformance/etc issues to the gallium frontend */
-   struct pipe_debug_callback *debug_callback;
+   struct util_debug_callback *debug_callback;
 
    /** The more recent command issued to command buffer */
    SVGAFifo3dCmdId last_command;
@@ -488,7 +486,10 @@ struct svga_winsys_screen
    SVGA3dHardwareVersion
    (*get_hw_version)(struct svga_winsys_screen *sws);
 
-   boolean
+   int
+   (*get_fd)(struct svga_winsys_screen *sws);
+
+   bool
    (*get_cap)(struct svga_winsys_screen *sws,
               SVGA3dDevCapIndex index,
               SVGA3dDevCapResult *result);
@@ -567,7 +568,7 @@ struct svga_winsys_screen
     * Get a winsys_handle from a surface.
     * Used to implement pipe_screen::resource_get_handle.
     */
-   boolean
+   bool
    (*surface_get_handle)(struct svga_winsys_screen *sws,
                          struct svga_winsys_surface *surface,
                          unsigned stride,
@@ -576,7 +577,7 @@ struct svga_winsys_screen
    /**
     * Whether this surface is sitting in a validate list
     */
-   boolean
+   bool
    (*surface_is_flushed)(struct svga_winsys_screen *sws,
                          struct svga_winsys_surface *surface);
 
@@ -594,7 +595,7 @@ struct svga_winsys_screen
     * and format can be created.
     * \Return TRUE if OK, FALSE if too large.
     */
-   boolean
+   bool
    (*surface_can_create)(struct svga_winsys_screen *sws,
                          SVGA3dSurfaceFormat format,
                          SVGA3dSize size,
@@ -623,7 +624,7 @@ struct svga_winsys_screen
 
    /**
     * Map the entire data store of a buffer object into the client's address.
-    * usage is a bitmask of PIPE_TRANSFER_*
+    * usage is a bitmask of PIPE_MAP_*
     */
    void *
    (*buffer_map)( struct svga_winsys_screen *sws,
@@ -658,7 +659,7 @@ struct svga_winsys_screen
 
    /**
     * Wait for the fence to finish.
-    * \param timeout in nanoseconds (may be PIPE_TIMEOUT_INFINITE).
+    * \param timeout in nanoseconds (may be OS_TIMEOUT_INFINITE).
     *                0 to return immediately, if the API suports it.
     * \param flags  driver-specific meaning
     * \return zero on success.
@@ -675,7 +676,7 @@ struct svga_winsys_screen
     */
    int (*fence_get_fd)( struct svga_winsys_screen *sws,
                         struct pipe_fence_handle *fence,
-                        boolean duplicate );
+                        bool duplicate );
 
    /**
     * Create a fence using the given file descriptor
@@ -762,19 +763,19 @@ struct svga_winsys_screen
     * Increment a statistic counter
     */
    void
-   (*stats_inc)(enum svga_stats_count);
+   (*stats_inc)(struct svga_winsys_screen *, enum svga_stats_count);
 
    /**
     * Push a time frame onto the stack
     */
    void
-   (*stats_time_push)(enum svga_stats_time, struct svga_winsys_stats_timeframe *);
+   (*stats_time_push)(struct svga_winsys_screen *, enum svga_stats_time, struct svga_winsys_stats_timeframe *);
 
    /**
     * Pop a time frame.
     */
    void
-   (*stats_time_pop)();
+   (*stats_time_pop)(struct svga_winsys_screen *);
 
    /**
     * Send a host log message
@@ -783,23 +784,33 @@ struct svga_winsys_screen
    (*host_log)(struct svga_winsys_screen *sws, const char *message);
 
    /** Have VGPU v10 hardware? */
-   boolean have_vgpu10;
+   bool have_vgpu10;
 
    /** Have SM4_1 hardware? */
-   boolean have_sm4_1;
+   bool have_sm4_1;
 
    /** Have SM5 hardware? */
-   boolean have_sm5;
+   bool have_sm5;
 
-   /** To rebind resources at the beginnning of a new command buffer */
-   boolean need_to_rebind_resources;
+   /** To rebind resources at the beginning of a new command buffer */
+   bool need_to_rebind_resources;
 
-   boolean have_generate_mipmap_cmd;
-   boolean have_set_predication_cmd;
-   boolean have_transfer_from_buffer_cmd;
-   boolean have_fence_fd;
-   boolean have_intra_surface_copy;
-   boolean have_constant_buffer_offset_cmd;
+   bool have_generate_mipmap_cmd;
+   bool have_set_predication_cmd;
+   bool have_transfer_from_buffer_cmd;
+   bool have_fence_fd;
+   bool have_intra_surface_copy;
+   bool have_constant_buffer_offset_cmd;
+   bool have_index_vertex_buffer_offset_cmd;
+
+   /* Have rasterizer state v2 command support */
+   bool have_rasterizer_state_v2_cmd;
+
+   /** Have GL43 capable device */
+   bool have_gl43;
+
+   /** SVGA device_id version we're running on */
+   uint16_t device_id;
 };
 
 

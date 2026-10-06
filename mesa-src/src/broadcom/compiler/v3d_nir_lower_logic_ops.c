@@ -36,8 +36,8 @@
 #include "v3d_compiler.h"
 
 
-typedef nir_ssa_def *(*nir_pack_func)(nir_builder *b, nir_ssa_def *c);
-typedef nir_ssa_def *(*nir_unpack_func)(nir_builder *b, nir_ssa_def *c);
+typedef nir_def *(*nir_pack_func)(nir_builder *b, nir_def *c);
+typedef nir_def *(*nir_unpack_func)(nir_builder *b, nir_def *c);
 
 static bool
 logicop_depends_on_dst_color(int logicop_func)
@@ -53,9 +53,9 @@ logicop_depends_on_dst_color(int logicop_func)
         }
 }
 
-static nir_ssa_def *
+static nir_def *
 v3d_logicop(nir_builder *b, int logicop_func,
-            nir_ssa_def *src, nir_ssa_def *dst)
+            nir_def *src, nir_def *dst)
 {
         switch (logicop_func) {
         case PIPE_LOGICOP_CLEAR:
@@ -90,20 +90,20 @@ v3d_logicop(nir_builder *b, int logicop_func,
                 return nir_imm_int(b, ~0);
         default:
                 fprintf(stderr, "Unknown logic op %d\n", logicop_func);
-                /* FALLTHROUGH */
+                FALLTHROUGH;
         case PIPE_LOGICOP_COPY:
                 return src;
         }
 }
 
-static nir_ssa_def *
-v3d_nir_get_swizzled_channel(nir_builder *b, nir_ssa_def **srcs, int swiz)
+static nir_def *
+v3d_nir_get_swizzled_channel(nir_builder *b, nir_def **srcs, int swiz)
 {
         switch (swiz) {
         default:
         case PIPE_SWIZZLE_NONE:
                 fprintf(stderr, "warning: unknown swizzle\n");
-                /* FALLTHROUGH */
+                FALLTHROUGH;
         case PIPE_SWIZZLE_0:
                 return nir_imm_float(b, 0.0);
         case PIPE_SWIZZLE_1:
@@ -116,69 +116,69 @@ v3d_nir_get_swizzled_channel(nir_builder *b, nir_ssa_def **srcs, int swiz)
         }
 }
 
-static nir_ssa_def *
-v3d_nir_swizzle_and_pack(nir_builder *b, nir_ssa_def **chans,
+static nir_def *
+v3d_nir_swizzle_and_pack(nir_builder *b, nir_def **chans,
                          const uint8_t *swiz, nir_pack_func pack_func)
 {
-        nir_ssa_def *c[4];
+        nir_def *c[4];
         for (int i = 0; i < 4; i++)
                 c[i] = v3d_nir_get_swizzled_channel(b, chans, swiz[i]);
 
         return pack_func(b, nir_vec4(b, c[0], c[1], c[2], c[3]));
 }
 
-static nir_ssa_def *
-v3d_nir_unpack_and_swizzle(nir_builder *b, nir_ssa_def *packed,
+static nir_def *
+v3d_nir_unpack_and_swizzle(nir_builder *b, nir_def *packed,
                            const uint8_t *swiz, nir_unpack_func unpack_func)
 {
-        nir_ssa_def *unpacked = unpack_func(b, packed);
+        nir_def *unpacked = unpack_func(b, packed);
 
-        nir_ssa_def *unpacked_chans[4];
+        nir_def *unpacked_chans[4];
         for (int i = 0; i < 4; i++)
                 unpacked_chans[i] = nir_channel(b, unpacked, i);
 
-        nir_ssa_def *c[4];
+        nir_def *c[4];
         for (int i = 0; i < 4; i++)
                 c[i] = v3d_nir_get_swizzled_channel(b, unpacked_chans, swiz[i]);
 
         return nir_vec4(b, c[0], c[1], c[2], c[3]);
 }
 
-static nir_ssa_def *
-pack_unorm_rgb10a2(nir_builder *b, nir_ssa_def *c)
+static nir_def *
+pack_unorm_rgb10a2(nir_builder *b, nir_def *c)
 {
-        const unsigned bits[4] = { 10, 10, 10, 2 };
-        nir_ssa_def *unorm = nir_format_float_to_unorm(b, c, bits);
+        static const unsigned bits[4] = { 10, 10, 10, 2 };
+        nir_def *unorm = nir_format_float_to_unorm(b, c, bits);
 
-        nir_ssa_def *chans[4];
+        nir_def *chans[4];
         for (int i = 0; i < 4; i++)
                 chans[i] = nir_channel(b, unorm, i);
 
-        nir_ssa_def *result = nir_mov(b, chans[0]);
+        nir_def *result = nir_mov(b, chans[0]);
         int offset = bits[0];
         for (int i = 1; i < 4; i++) {
-                nir_ssa_def *shifted_chan =
-                        nir_ishl(b, chans[i], nir_imm_int(b, offset));
+                nir_def *shifted_chan =
+                        nir_ishl_imm(b, chans[i], offset);
                 result = nir_ior(b, result, shifted_chan);
                 offset += bits[i];
         }
         return result;
 }
 
-static nir_ssa_def *
-unpack_unorm_rgb10a2(nir_builder *b, nir_ssa_def *c)
+static nir_def *
+unpack_unorm_rgb10a2(nir_builder *b, nir_def *c)
 {
-        const unsigned bits[4] = { 10, 10, 10, 2 };
+        static const unsigned bits[4] = { 10, 10, 10, 2 };
         const unsigned masks[4] = { BITFIELD_MASK(bits[0]),
                                     BITFIELD_MASK(bits[1]),
                                     BITFIELD_MASK(bits[2]),
                                     BITFIELD_MASK(bits[3]) };
 
-        nir_ssa_def *chans[4];
+        nir_def *chans[4];
         for (int i = 0; i < 4; i++) {
-                nir_ssa_def *unorm = nir_iand(b, c, nir_imm_int(b, masks[i]));
+                nir_def *unorm = nir_iand_imm(b, c, masks[i]);
                 chans[i] = nir_format_unorm_to_float(b, unorm, &bits[i]);
-                c = nir_ushr(b, c, nir_imm_int(b, bits[i]));
+                c = nir_ushr_imm(b, c, bits[i]);
         }
 
         return nir_vec4(b, chans[0], chans[1], chans[2], chans[3]);
@@ -201,75 +201,90 @@ v3d_get_format_swizzle_for_rt(struct v3d_compile *c, int rt)
         }
 }
 
-static nir_ssa_def *
-v3d_nir_get_tlb_color(nir_builder *b, int rt, int sample)
+static nir_def *
+v3d_nir_get_tlb_color(nir_builder *b, struct v3d_compile *c, int rt, int sample)
 {
-        nir_ssa_def *color[4];
-        for (int i = 0; i < 4; i++) {
-                nir_intrinsic_instr *load =
-                        nir_intrinsic_instr_create(b->shader,
-                                                   nir_intrinsic_load_tlb_color_v3d);
-                load->num_components = 1;
-                nir_intrinsic_set_base(load, sample);
-                nir_intrinsic_set_component(load, i);
-                load->src[0] = nir_src_for_ssa(nir_imm_int(b, rt));
-                nir_ssa_dest_init(&load->instr, &load->dest, 1, 32, NULL);
-                nir_builder_instr_insert(b, &load->instr);
-                color[i] = &load->dest.ssa;
-        }
+        uint32_t num_components =
+                util_format_get_nr_components(c->fs_key->color_fmt[rt].format);
 
+        nir_def *color[4];
+        for (int i = 0; i < 4; i++) {
+                if (i < num_components) {
+                        color[i] =
+                                nir_load_tlb_color_brcm(b, 1, 32,
+                                                        nir_imm_int(b, rt),
+                                                        .base = sample,
+                                                        .component = i);
+                } else {
+                        /* These will be DCEd */
+                        color[i] = nir_imm_int(b, 0);
+                }
+        }
         return nir_vec4(b, color[0], color[1], color[2], color[3]);
 }
 
-static nir_ssa_def *
+static nir_def *
 v3d_emit_logic_op_raw(struct v3d_compile *c, nir_builder *b,
-                      nir_ssa_def **src_chans, nir_ssa_def **dst_chans,
+                      nir_def **src_chans, nir_def **dst_chans,
                       int rt, int sample)
 {
         const uint8_t *fmt_swz = v3d_get_format_swizzle_for_rt(c, rt);
 
-        nir_ssa_def *op_res[4];
+        nir_def *op_res[4];
         for (int i = 0; i < 4; i++) {
-                nir_ssa_def *src = src_chans[i];
-                nir_ssa_def *dst =
+                nir_def *src = src_chans[i];
+                nir_def *dst =
                         v3d_nir_get_swizzled_channel(b, dst_chans, fmt_swz[i]);
                 op_res[i] = v3d_logicop(b, c->fs_key->logicop_func, src, dst);
+
+                /* We configure our integer RTs to clamp, so we need to ignore
+                 * result bits that don't fit in the destination RT component
+                 * size.
+                 */
+                uint32_t bits =
+                        util_format_get_component_bits(
+                                c->fs_key->color_fmt[rt].format,
+                                UTIL_FORMAT_COLORSPACE_RGB, i);
+                if (bits > 0 && bits < 32) {
+                        op_res[i] =
+                                nir_iand_imm(b, op_res[i], (1u << bits) - 1);
+                }
         }
 
-        nir_ssa_def *r[4];
+        nir_def *r[4];
         for (int i = 0; i < 4; i++)
                 r[i] = v3d_nir_get_swizzled_channel(b, op_res, fmt_swz[i]);
 
         return nir_vec4(b, r[0], r[1], r[2], r[3]);
 }
 
-static nir_ssa_def *
+static nir_def *
 v3d_emit_logic_op_unorm(struct v3d_compile *c, nir_builder *b,
-                        nir_ssa_def **src_chans, nir_ssa_def **dst_chans,
+                        nir_def **src_chans, nir_def **dst_chans,
                         int rt, int sample,
                         nir_pack_func pack_func, nir_unpack_func unpack_func)
 {
-        const uint8_t src_swz[4] = { 0, 1, 2, 3 };
-        nir_ssa_def *packed_src =
+        static const uint8_t src_swz[4] = { 0, 1, 2, 3 };
+        nir_def *packed_src =
                 v3d_nir_swizzle_and_pack(b, src_chans, src_swz, pack_func);
 
         const uint8_t *fmt_swz = v3d_get_format_swizzle_for_rt(c, rt);
-        nir_ssa_def *packed_dst =
+        nir_def *packed_dst =
                 v3d_nir_swizzle_and_pack(b, dst_chans, fmt_swz, pack_func);
 
-        nir_ssa_def *packed_result =
+        nir_def *packed_result =
                 v3d_logicop(b, c->fs_key->logicop_func, packed_src, packed_dst);
 
         return v3d_nir_unpack_and_swizzle(b, packed_result, fmt_swz, unpack_func);
 }
 
-static nir_ssa_def *
+static nir_def *
 v3d_nir_emit_logic_op(struct v3d_compile *c, nir_builder *b,
-                      nir_ssa_def *src, int rt, int sample)
+                      nir_def *src, int rt, int sample)
 {
-        nir_ssa_def *dst = v3d_nir_get_tlb_color(b, rt, sample);
+        nir_def *dst = v3d_nir_get_tlb_color(b, c, rt, sample);
 
-        nir_ssa_def *src_chans[4], *dst_chans[4];
+        nir_def *src_chans[4], *dst_chans[4];
         for (unsigned i = 0; i < 4; i++) {
                 src_chans[i] = nir_channel(b, src, i);
                 dst_chans[i] = nir_channel(b, dst, i);
@@ -291,21 +306,11 @@ v3d_nir_emit_logic_op(struct v3d_compile *c, nir_builder *b,
 }
 
 static void
-v3d_emit_ms_output(struct v3d_compile *c, nir_builder *b,
-                   nir_ssa_def *color, nir_src *offset,
+v3d_emit_ms_output(nir_builder *b,
+                   nir_def *color, nir_src *offset,
                    nir_alu_type type, int rt, int sample)
 {
-
-        nir_intrinsic_instr *store =
-                nir_intrinsic_instr_create(b->shader,
-                                           nir_intrinsic_store_tlb_sample_color_v3d);
-        store->num_components = 4;
-        nir_intrinsic_set_base(store, sample);
-        nir_intrinsic_set_component(store, 0);
-        nir_intrinsic_set_type(store, type);
-        store->src[0] = nir_src_for_ssa(color);
-        store->src[1] = nir_src_for_ssa(nir_imm_int(b, rt));
-        nir_builder_instr_insert(b, &store->instr);
+        nir_store_tlb_sample_color_v3d(b, color, nir_imm_int(b, rt), .base = sample, .component = 0, .src_type = type);
 }
 
 static void
@@ -314,7 +319,7 @@ v3d_nir_lower_logic_op_instr(struct v3d_compile *c,
                              nir_intrinsic_instr *intr,
                              int rt)
 {
-        nir_ssa_def *frag_color = intr->src[0].ssa;
+        nir_def *frag_color = intr->src[0].ssa;
 
 
         const int logic_op = c->fs_key->logicop_func;
@@ -322,21 +327,20 @@ v3d_nir_lower_logic_op_instr(struct v3d_compile *c,
                 c->msaa_per_sample_output = true;
 
                 nir_src *offset = &intr->src[1];
-                nir_alu_type type = nir_intrinsic_type(intr);
+                nir_alu_type type = nir_intrinsic_src_type(intr);
                 for (int i = 0; i < V3D_MAX_SAMPLES; i++) {
-                        nir_ssa_def *sample =
+                        nir_def *sample =
                                 v3d_nir_emit_logic_op(c, b, frag_color, rt, i);
 
-                        v3d_emit_ms_output(c, b, sample, offset, type, rt, i);
+                        v3d_emit_ms_output(b, sample, offset, type, rt, i);
                 }
 
                 nir_instr_remove(&intr->instr);
         } else {
-                nir_ssa_def *result =
+                nir_def *result =
                         v3d_nir_emit_logic_op(c, b, frag_color, rt, 0);
 
-                nir_instr_rewrite_src(&intr->instr, &intr->src[0],
-                                      nir_src_for_ssa(result));
+                nir_src_rewrite(&intr->src[0], result);
                 intr->num_components = result->num_components;
         }
 }
@@ -344,6 +348,8 @@ v3d_nir_lower_logic_op_instr(struct v3d_compile *c,
 static bool
 v3d_nir_lower_logic_ops_block(nir_block *block, struct v3d_compile *c)
 {
+        bool progress = false;
+
         nir_foreach_instr_safe(instr, block) {
                 if (instr->type != nir_instr_type_intrinsic)
                         continue;
@@ -377,35 +383,39 @@ v3d_nir_lower_logic_ops_block(nir_block *block, struct v3d_compile *c)
                                 continue;
                         }
 
-                        nir_function_impl *impl =
-                                nir_cf_node_get_function(&block->cf_node);
-                        nir_builder b;
-                        nir_builder_init(&b, impl);
-                        b.cursor = nir_before_instr(&intr->instr);
+                        nir_builder b = nir_builder_at(nir_before_instr(&intr->instr));
                         v3d_nir_lower_logic_op_instr(c, &b, intr, rt);
+
+                        progress = true;
                 }
         }
 
-        return true;
+        return progress;
 }
 
-void
+bool
 v3d_nir_lower_logic_ops(nir_shader *s, struct v3d_compile *c)
 {
+        bool progress = false;
+
         /* Nothing to do if logic op is 'copy src to dst' or if logic ops are
          * disabled (we set the logic op to copy in that case).
          */
         if (c->fs_key->logicop_func == PIPE_LOGICOP_COPY)
-                return;
+                return false;
 
-        nir_foreach_function(function, s) {
-                if (function->impl) {
-                        nir_foreach_block(block, function->impl)
-                                v3d_nir_lower_logic_ops_block(block, c);
+        nir_foreach_function_impl(impl, s) {
+                nir_foreach_block(block, impl)
+                        progress |= v3d_nir_lower_logic_ops_block(block, c);
 
-                        nir_metadata_preserve(function->impl,
-                                              nir_metadata_block_index |
-                                              nir_metadata_dominance);
+                if (progress) {
+                        nir_metadata_preserve(impl,
+                                              nir_metadata_control_flow);
+                } else {
+                        nir_metadata_preserve(impl,
+                                              nir_metadata_all);
                 }
         }
+
+        return progress;
 }

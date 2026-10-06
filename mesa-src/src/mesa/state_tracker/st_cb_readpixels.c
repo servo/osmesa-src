@@ -36,7 +36,6 @@
 #include "util/format/u_format.h"
 #include "cso_cache/cso_context.h"
 
-#include "st_cb_fbo.h"
 #include "st_atom.h"
 #include "st_context.h"
 #include "st_cb_bitmap.h"
@@ -59,7 +58,7 @@
  *     blits (because the smaller blits cannot be batched, and we have to wait
  *     for the GPU after each one).
  *
- * (2) transfer_map implicitly involves a blit as well (for de-tiling, copy
+ * (2) texture_map implicitly involves a blit as well (for de-tiling, copy
  *     from VRAM, etc.), so that it is beneficial to replace the
  *     _mesa_readpixels path as well when possible.
  *
@@ -68,7 +67,7 @@
  */
 #define ALWAYS_READPIXELS_CACHE false
 
-static boolean
+static bool
 needs_integer_signed_unsigned_conversion(const struct gl_context *ctx,
                                          GLenum format, GLenum type)
 {
@@ -87,29 +86,36 @@ needs_integer_signed_unsigned_conversion(const struct gl_context *ctx,
         (type == GL_INT ||
          type == GL_SHORT ||
          type == GL_BYTE))) {
-      return TRUE;
+      return true;
    }
 
-   return FALSE;
+   return false;
 }
 
 static bool
-try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
+try_pbo_readpixels(struct st_context *st, struct gl_renderbuffer *rb,
                    bool invert_y,
                    GLint x, GLint y, GLsizei width, GLsizei height,
+                   GLenum gl_format,
                    enum pipe_format src_format, enum pipe_format dst_format,
                    const struct gl_pixelstore_attrib *pack, void *pixels)
 {
    struct pipe_context *pipe = st->pipe;
-   struct pipe_screen *screen = pipe->screen;
+   struct pipe_screen *screen = st->screen;
    struct cso_context *cso = st->cso_context;
-   struct pipe_surface *surface = strb->surface;
-   struct pipe_resource *texture = strb->texture;
+   struct pipe_surface *surface = rb->surface;
+   struct pipe_resource *texture = rb->texture;
    const struct util_format_description *desc;
    struct st_pbo_addresses addr;
    struct pipe_framebuffer_state fb;
    enum pipe_texture_target view_target;
    bool success = false;
+
+   /* Make sure we have stencil format in case of GL_STENCIL_INDEX to
+    * create correct type of a sampler view.
+    */
+   if (gl_format == GL_STENCIL_INDEX)
+      src_format = util_format_stencil_only(src_format);
 
    if (texture->nr_samples > 1)
       return false;
@@ -130,12 +136,9 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
    if (!st_pbo_addresses_pixelstore(st, GL_TEXTURE_2D, false, pack, pixels, &addr))
       return false;
 
-   cso_save_state(cso, (CSO_BIT_FRAGMENT_SAMPLER_VIEWS |
-                        CSO_BIT_FRAGMENT_SAMPLERS |
-                        CSO_BIT_FRAGMENT_IMAGE0 |
+   cso_save_state(cso, (CSO_BIT_FRAGMENT_SAMPLERS |
                         CSO_BIT_BLEND |
                         CSO_BIT_VERTEX_ELEMENTS |
-                        CSO_BIT_AUX_VERTEX_BUFFER_SLOT |
                         CSO_BIT_FRAMEBUFFER |
                         CSO_BIT_VIEWPORT |
                         CSO_BIT_RASTERIZER |
@@ -146,11 +149,10 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
                         CSO_BIT_MIN_SAMPLES |
                         CSO_BIT_RENDER_CONDITION |
                         CSO_BITS_ALL_SHADERS));
-   cso_save_constant_buffer_slot0(cso, PIPE_SHADER_FRAGMENT);
 
    cso_set_sample_mask(cso, ~0);
    cso_set_min_samples(cso, 1);
-   cso_set_render_condition(cso, NULL, FALSE, 0);
+   cso_set_render_condition(cso, NULL, false, 0);
 
    /* Set up the sampler_view */
    {
@@ -186,7 +188,10 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
       if (sampler_view == NULL)
          goto fail;
 
-      cso_set_sampler_views(cso, PIPE_SHADER_FRAGMENT, 1, &sampler_view);
+      pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, 1, 0,
+                              false, &sampler_view);
+      st->state.num_sampler_views[PIPE_SHADER_FRAGMENT] =
+         MAX2(st->state.num_sampler_views[PIPE_SHADER_FRAGMENT], 1);
 
       pipe_sampler_view_reference(&sampler_view, NULL);
 
@@ -206,7 +211,7 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
       image.u.buf.size = (addr.last_element - addr.first_element + 1) *
                          addr.bytes_per_pixel;
 
-      cso_set_shader_images(cso, PIPE_SHADER_FRAGMENT, 0, 1, &image);
+      pipe->set_shader_images(pipe, PIPE_SHADER_FRAGMENT, 0, 1, 0, &image);
    }
 
    /* Set up no-attachment framebuffer */
@@ -214,7 +219,7 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
    fb.width = surface->width;
    fb.height = surface->height;
    fb.samples = 1;
-   fb.layers = 1;
+   fb.layers = addr.depth;
    cso_set_framebuffer(cso, &fb);
 
    /* Any blend state would do. Set this just to prevent drivers having
@@ -235,7 +240,7 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
 
    /* Set up the fragment shader */
    {
-      void *fs = st_pbo_get_download_fs(st, view_target, src_format, dst_format);
+      void *fs = st_pbo_get_download_fs(st, view_target, src_format, dst_format, addr.depth != 1);
       if (!fs)
          goto fail;
 
@@ -248,8 +253,17 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
    pipe->memory_barrier(pipe, PIPE_BARRIER_ALL);
 
 fail:
-   cso_restore_state(cso);
-   cso_restore_constant_buffer_slot0(cso, PIPE_SHADER_FRAGMENT);
+   /* Unbind all because st/mesa won't do it if the current shader doesn't
+    * use them.
+    */
+   cso_restore_state(cso, CSO_UNBIND_FS_SAMPLERVIEWS | CSO_UNBIND_FS_IMAGE0);
+   st->state.num_sampler_views[PIPE_SHADER_FRAGMENT] = 0;
+
+   st->ctx->Array.NewVertexElements = true;
+   st->ctx->NewDriverState |= ST_NEW_FS_CONSTANTS |
+                              ST_NEW_FS_IMAGES |
+                              ST_NEW_FS_SAMPLER_VIEWS |
+                              ST_NEW_VERTEX_ARRAYS;
 
    return success;
 }
@@ -258,21 +272,20 @@ fail:
  * Create a staging texture and blit the requested region to it.
  */
 static struct pipe_resource *
-blit_to_staging(struct st_context *st, struct st_renderbuffer *strb,
+blit_to_staging(struct st_context *st, struct gl_renderbuffer *rb,
                    bool invert_y,
                    GLint x, GLint y, GLsizei width, GLsizei height,
                    GLenum format,
                    enum pipe_format src_format, enum pipe_format dst_format)
 {
-   struct pipe_context *pipe = st->pipe;
-   struct pipe_screen *screen = pipe->screen;
+   struct pipe_screen *screen = st->screen;
    struct pipe_resource dst_templ;
    struct pipe_resource *dst;
    struct pipe_blit_info blit;
 
    /* We are creating a texture of the size of the region being read back.
     * Need to check for NPOT texture support. */
-   if (!screen->get_param(screen, PIPE_CAP_NPOT_TEXTURES) &&
+   if (!screen->caps.npot_textures &&
        (!util_is_power_of_two_or_zero(width) ||
         !util_is_power_of_two_or_zero(height)))
       return NULL;
@@ -296,8 +309,8 @@ blit_to_staging(struct st_context *st, struct st_renderbuffer *strb,
       return NULL;
 
    memset(&blit, 0, sizeof(blit));
-   blit.src.resource = strb->texture;
-   blit.src.level = strb->surface->u.tex.level;
+   blit.src.resource = rb->texture;
+   blit.src.level = rb->surface->u.tex.level;
    blit.src.format = src_format;
    blit.dst.resource = dst;
    blit.dst.level = 0;
@@ -306,17 +319,17 @@ blit_to_staging(struct st_context *st, struct st_renderbuffer *strb,
    blit.dst.box.x = 0;
    blit.src.box.y = y;
    blit.dst.box.y = 0;
-   blit.src.box.z = strb->surface->u.tex.first_layer;
+   blit.src.box.z = rb->surface->u.tex.first_layer;
    blit.dst.box.z = 0;
    blit.src.box.width = blit.dst.box.width = width;
    blit.src.box.height = blit.dst.box.height = height;
    blit.src.box.depth = blit.dst.box.depth = 1;
-   blit.mask = st_get_blit_mask(strb->Base._BaseFormat, format);
+   blit.mask = st_get_blit_mask(rb->_BaseFormat, format);
    blit.filter = PIPE_TEX_FILTER_NEAREST;
-   blit.scissor_enable = FALSE;
+   blit.scissor_enable = false;
 
    if (invert_y) {
-      blit.src.box.y = strb->Base.Height - blit.src.box.y;
+      blit.src.box.y = rb->Height - blit.src.box.y;
       blit.src.box.height = -blit.src.box.height;
    }
 
@@ -327,13 +340,13 @@ blit_to_staging(struct st_context *st, struct st_renderbuffer *strb,
 }
 
 static struct pipe_resource *
-try_cached_readpixels(struct st_context *st, struct st_renderbuffer *strb,
+try_cached_readpixels(struct st_context *st, struct gl_renderbuffer *rb,
                       bool invert_y,
                       GLsizei width, GLsizei height,
                       GLenum format,
                       enum pipe_format src_format, enum pipe_format dst_format)
 {
-   struct pipe_resource *src = strb->texture;
+   struct pipe_resource *src = rb->texture;
    struct pipe_resource *dst = NULL;
 
    if (ST_DEBUG & DEBUG_NOREADPIXCACHE)
@@ -342,37 +355,37 @@ try_cached_readpixels(struct st_context *st, struct st_renderbuffer *strb,
    /* Reset cache after invalidation or switch of parameters. */
    if (st->readpix_cache.src != src ||
        st->readpix_cache.dst_format != dst_format ||
-       st->readpix_cache.level != strb->surface->u.tex.level ||
-       st->readpix_cache.layer != strb->surface->u.tex.first_layer) {
+       st->readpix_cache.level != rb->surface->u.tex.level ||
+       st->readpix_cache.layer != rb->surface->u.tex.first_layer) {
       pipe_resource_reference(&st->readpix_cache.src, src);
       pipe_resource_reference(&st->readpix_cache.cache, NULL);
       st->readpix_cache.dst_format = dst_format;
-      st->readpix_cache.level = strb->surface->u.tex.level;
-      st->readpix_cache.layer = strb->surface->u.tex.first_layer;
+      st->readpix_cache.level = rb->surface->u.tex.level;
+      st->readpix_cache.layer = rb->surface->u.tex.first_layer;
       st->readpix_cache.hits = 0;
    }
 
    /* Decide whether to trigger the cache. */
    if (!st->readpix_cache.cache) {
-      if (!strb->use_readpix_cache && !ALWAYS_READPIXELS_CACHE) {
+      if (!rb->use_readpix_cache && !ALWAYS_READPIXELS_CACHE) {
          /* Heuristic: If previous successive calls read at least a fraction
           * of the surface _and_ we read again, trigger the cache.
           */
-         unsigned threshold = MAX2(1, strb->Base.Width * strb->Base.Height / 8);
+         unsigned threshold = MAX2(1, rb->Width * rb->Height / 8);
 
          if (st->readpix_cache.hits < threshold) {
             st->readpix_cache.hits += width * height;
             return NULL;
          }
 
-         strb->use_readpix_cache = true;
+         rb->use_readpix_cache = true;
       }
 
       /* Fill the cache */
-      st->readpix_cache.cache = blit_to_staging(st, strb, invert_y,
+      st->readpix_cache.cache = blit_to_staging(st, rb, invert_y,
                                                 0, 0,
-                                                strb->Base.Width,
-                                                strb->Base.Height, format,
+                                                rb->Width,
+                                                rb->Height, format,
                                                 src_format, dst_format);
    }
 
@@ -394,7 +407,7 @@ try_cached_readpixels(struct st_context *st, struct st_renderbuffer *strb,
  *       texture layouts during texture uploads/downloads, so the blit
  *       we do here should be free in such cases.
  */
-static void
+void
 st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
               GLsizei width, GLsizei height,
               GLenum format, GLenum type,
@@ -404,28 +417,33 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
    struct st_context *st = st_context(ctx);
    struct gl_renderbuffer *rb =
          _mesa_get_read_renderbuffer_for_format(ctx, format);
-   struct st_renderbuffer *strb = st_renderbuffer(rb);
    struct pipe_context *pipe = st->pipe;
-   struct pipe_screen *screen = pipe->screen;
+   struct pipe_screen *screen = st->screen;
    struct pipe_resource *src;
    struct pipe_resource *dst = NULL;
    enum pipe_format dst_format, src_format;
    unsigned bind;
    struct pipe_transfer *tex_xfer;
-   ubyte *map = NULL;
+   uint8_t *map = NULL;
    int dst_x, dst_y;
+
+   if (rb == NULL)
+      return;
 
    /* Validate state (to be sure we have up-to-date framebuffer surfaces)
     * and flush the bitmap cache prior to reading. */
-   st_validate_state(st, ST_PIPELINE_UPDATE_FRAMEBUFFER);
+   st_validate_state(st, ST_PIPELINE_UPDATE_FB_STATE_MASK);
    st_flush_bitmap_cache(st);
+
+   if (rb->TexImage && st->force_compute_based_texture_transfer)
+      goto fallback;
 
    if (!st->prefer_blit_based_texture_transfer) {
       goto fallback;
    }
 
    /* This must be done after state validation. */
-   src = strb->texture;
+   src = rb->texture;
 
    /* XXX Fallback for depth-stencil formats due to an incomplete
     * stencil blit implementation in some drivers. */
@@ -446,7 +464,7 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
 
    /* Convert the source format to what is expected by ReadPixels
     * and see if it's supported. */
-   src_format = util_format_linear(src->format);
+   src_format = util_format_linear(rb->Format);
    src_format = util_format_luminance_to_red(src_format);
    src_format = util_format_intensity_to_red(src_format);
 
@@ -471,10 +489,10 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
    }
 
    if (st->pbo.download_enabled && pack->BufferObj) {
-      if (try_pbo_readpixels(st, strb,
-                             st_fb_orientation(ctx->ReadBuffer) == Y_0_TOP,
+      if (try_pbo_readpixels(st, rb,
+                             _mesa_fb_orientation(ctx->ReadBuffer) == Y_0_TOP,
                              x, y, width, height,
-                             src_format, dst_format,
+                             format, src_format, dst_format,
                              pack, pixels))
          return;
    }
@@ -486,8 +504,8 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
    /* Cache a staging texture for back-to-back ReadPixels, to avoid CPU-GPU
     * synchronization overhead.
     */
-   dst = try_cached_readpixels(st, strb,
-                               st_fb_orientation(ctx->ReadBuffer) == Y_0_TOP,
+   dst = try_cached_readpixels(st, rb,
+                               _mesa_fb_orientation(ctx->ReadBuffer) == Y_0_TOP,
                                width, height, format, src_format, dst_format);
    if (dst) {
       dst_x = x;
@@ -501,8 +519,8 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
          goto fallback;
       }
 
-      dst = blit_to_staging(st, strb,
-                            st_fb_orientation(ctx->ReadBuffer) == Y_0_TOP,
+      dst = blit_to_staging(st, rb,
+                            _mesa_fb_orientation(ctx->ReadBuffer) == Y_0_TOP,
                             x, y, width, height, format,
                             src_format, dst_format);
       if (!dst)
@@ -515,7 +533,7 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
    /* map resources */
    pixels = _mesa_map_pbo_dest(ctx, pack, pixels);
 
-   map = pipe_transfer_map_3d(pipe, dst, 0, PIPE_TRANSFER_READ,
+   map = pipe_texture_map_3d(pipe, dst, 0, PIPE_MAP_READ,
                               dst_x, dst_y, 0, width, height, 1, &tex_xfer);
    if (!map) {
       _mesa_unmap_pbo_dest(ctx, pack);
@@ -544,16 +562,15 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
       }
    }
 
-   pipe_transfer_unmap(pipe, tex_xfer);
+   pipe_texture_unmap(pipe, tex_xfer);
    _mesa_unmap_pbo_dest(ctx, pack);
    pipe_resource_reference(&dst, NULL);
    return;
 
 fallback:
+   if (rb->TexImage && (st->allow_compute_based_texture_transfer || st->force_compute_based_texture_transfer)) {
+      if (st_GetTexSubImage_shader(ctx, x, y, 0, width, height, 1, format, type, pixels, rb->TexImage))
+         return;
+   }
    _mesa_readpixels(ctx, x, y, width, height, format, type, pack, pixels);
-}
-
-void st_init_readpixels_functions(struct dd_function_table *functions)
-{
-   functions->ReadPixels = st_ReadPixels;
 }

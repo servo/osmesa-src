@@ -1,22 +1,5 @@
 # Copyright © 2017 Dylan Baker
-
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# SPDX-License-Identifier: MIT
 
 files_libgallium = files(
   'cso_cache/cso_cache.c',
@@ -34,6 +17,11 @@ files_libgallium = files(
   'draw/draw_gs.c',
   'draw/draw_gs.h',
   'draw/draw_gs_tmp.h',
+  'draw/draw_mesh.c',
+  'draw/draw_mesh.h',
+  'draw/draw_mesh_prim.c',
+  'draw/draw_mesh_prim.h',
+  'draw/draw_mesh_prim_tmp.h',
   'draw/draw_pipe_aaline.c',
   'draw/draw_pipe_aapoint.c',
   'draw/draw_pipe.c',
@@ -60,9 +48,9 @@ files_libgallium = files(
   'draw/draw_pt_decompose.h',
   'draw/draw_pt_emit.c',
   'draw/draw_pt_fetch.c',
-  'draw/draw_pt_fetch_emit.c',
   'draw/draw_pt_fetch_shade_emit.c',
   'draw/draw_pt_fetch_shade_pipeline.c',
+  'draw/draw_pt_mesh_pipeline.c',
   'draw/draw_pt.h',
   'draw/draw_pt_post_vs.c',
   'draw/draw_pt_so_emit.c',
@@ -76,6 +64,7 @@ files_libgallium = files(
   'draw/draw_vbuf.h',
   'draw/draw_vertex.c',
   'draw/draw_vertex.h',
+  'draw/draw_vertex_header.h',
   'draw/draw_vs.c',
   'draw/draw_vs_exec.c',
   'draw/draw_vs.h',
@@ -89,14 +78,6 @@ files_libgallium = files(
   'driver_noop/noop_pipe.c',
   'driver_noop/noop_public.h',
   'driver_noop/noop_state.c',
-  'driver_rbug/rbug_context.c',
-  'driver_rbug/rbug_context.h',
-  'driver_rbug/rbug_core.c',
-  'driver_rbug/rbug_objects.c',
-  'driver_rbug/rbug_objects.h',
-  'driver_rbug/rbug_public.h',
-  'driver_rbug/rbug_screen.c',
-  'driver_rbug/rbug_screen.h',
   'driver_trace/tr_context.c',
   'driver_trace/tr_context.h',
   'driver_trace/tr_dump.c',
@@ -109,6 +90,8 @@ files_libgallium = files(
   'driver_trace/tr_screen.h',
   'driver_trace/tr_texture.c',
   'driver_trace/tr_texture.h',
+  'driver_trace/tr_video.c',
+  'driver_trace/tr_video.h',
   'hud/font.c',
   'hud/font.h',
   'hud/hud_context.c',
@@ -125,10 +108,6 @@ files_libgallium = files(
   'indices/u_indices_priv.h',
   'indices/u_primconvert.c',
   'indices/u_primconvert.h',
-  'os/os_mman.h',
-  'os/os_process.c',
-  'os/os_process.h',
-  'os/os_thread.h',
   'pipebuffer/pb_buffer_fenced.c',
   'pipebuffer/pb_buffer_fenced.h',
   'pipebuffer/pb_buffer.h',
@@ -157,22 +136,6 @@ files_libgallium = files(
   'postprocess/pp_private.h',
   'postprocess/pp_program.c',
   'postprocess/pp_run.c',
-  'rbug/rbug_connection.c',
-  'rbug/rbug_connection.h',
-  'rbug/rbug_context.c',
-  'rbug/rbug_context.h',
-  'rbug/rbug_core.c',
-  'rbug/rbug_core.h',
-  'rbug/rbug_demarshal.c',
-  'rbug/rbug.h',
-  'rbug/rbug_internal.h',
-  'rbug/rbug_proto.h',
-  'rbug/rbug_shader.c',
-  'rbug/rbug_shader.h',
-  'rbug/rbug_texture.c',
-  'rbug/rbug_texture.h',
-  'rtasm/rtasm_cpu.c',
-  'rtasm/rtasm_cpu.h',
   'rtasm/rtasm_execmem.c',
   'rtasm/rtasm_execmem.h',
   'rtasm/rtasm_x86sse.c',
@@ -186,8 +149,6 @@ files_libgallium = files(
   'tgsi/tgsi_dynamic_indexing.c',
   'tgsi/tgsi_exec.c',
   'tgsi/tgsi_exec.h',
-  'tgsi/tgsi_emulate.c',
-  'tgsi/tgsi_emulate.h',
   'tgsi/tgsi_from_mesa.c',
   'tgsi/tgsi_from_mesa.h',
   'tgsi/tgsi_info.c',
@@ -225,22 +186,17 @@ files_libgallium = files(
   'translate/translate_cache.h',
   'translate/translate_generic.c',
   'translate/translate_sse.c',
-  'util/dbghelp.h',
   'util/u_async_debug.h',
   'util/u_async_debug.c',
   'util/u_bitcast.h',
   'util/u_bitmask.c',
   'util/u_bitmask.h',
   'util/u_blend.h',
-  'util/u_blit.c',
-  'util/u_blit.h',
   'util/u_blitter.c',
   'util/u_blitter.h',
-  'util/u_box.h',
   'util/u_cache.c',
   'util/u_cache.h',
-  'util/u_compute.c',
-  'util/u_compute.h',
+  'util/u_debug_cb.h',
   'util/u_debug_describe.c',
   'util/u_debug_describe.h',
   'util/u_debug_flush.c',
@@ -249,45 +205,31 @@ files_libgallium = files(
   'util/u_debug_image.h',
   'util/u_debug_refcnt.c',
   'util/u_debug_refcnt.h',
-  'util/u_dirty_flags.h',
-  'util/u_dirty_surfaces.h',
-  'util/u_dl.c',
-  'util/u_dl.h',
   'util/u_draw.c',
   'util/u_draw.h',
   'util/u_draw_quad.c',
   'util/u_draw_quad.h',
+  'util/u_driconf.c',
+  'util/u_driconf.h',
   'util/u_dual_blend.h',
   'util/u_dump_defines.c',
   'util/u_dump.h',
   'util/u_dump_state.c',
-  'util/u_fifo.h',
   'util/u_framebuffer.c',
   'util/u_framebuffer.h',
   'util/u_gen_mipmap.c',
   'util/u_gen_mipmap.h',
-  'util/u_half.h',
   'util/u_handle_table.c',
   'util/u_handle_table.h',
-  'util/u_hash_table.c',
-  'util/u_hash_table.h',
   'util/u_helpers.c',
   'util/u_helpers.h',
-  'util/u_idalloc.c',
-  'util/u_idalloc.h',
   'util/u_index_modify.c',
   'util/u_index_modify.h',
   'util/u_inlines.h',
-  'util/u_linear.c',
-  'util/u_linear.h',
   'util/u_live_shader_cache.c',
   'util/u_live_shader_cache.h',
   'util/u_log.c',
   'util/u_log.h',
-  'util/u_network.c',
-  'util/u_network.h',
-  'util/u_pack_color.h',
-  'util/u_pointer.h',
   'util/u_prim.h',
   'util/u_prim.c',
   'util/u_prim_restart.c',
@@ -299,6 +241,8 @@ files_libgallium = files(
   'util/u_rect.h',
   'util/u_resource.c',
   'util/u_resource.h',
+  'util/u_sample_positions.c',
+  'util/u_sample_positions.h',
   'util/u_sampler.c',
   'util/u_sampler.h',
   'util/u_screen.c',
@@ -326,14 +270,20 @@ files_libgallium = files(
   'util/u_threaded_context.c',
   'util/u_threaded_context.h',
   'util/u_threaded_context_calls.h',
+  'util/u_trace_gallium.c',
+  'util/u_trace_gallium.h',
   'util/u_upload_mgr.c',
   'util/u_upload_mgr.h',
   'util/u_vbuf.c',
   'util/u_vbuf.h',
+  'util/u_vertex_state_cache.c',
+  'util/u_vertex_state_cache.h',
   'util/u_video.h',
   'util/u_viewport.h',
   'nir/tgsi_to_nir.c',
   'nir/tgsi_to_nir.h',
+  'nir/nir_to_tgsi.c',
+  'nir/nir_to_tgsi.h',
   'nir/nir_draw_helpers.c',
   'nir/nir_draw_helpers.h',
 )
@@ -345,7 +295,7 @@ if dep_libdrm.found()
   )
 endif
 
-if with_llvm
+if draw_with_llvm
   files_libgallium += files(
     'gallivm/lp_bld_arit.c',
     'gallivm/lp_bld_arit.h',
@@ -377,12 +327,15 @@ if with_llvm
     'gallivm/lp_bld_gather.c',
     'gallivm/lp_bld_gather.h',
     'gallivm/lp_bld.h',
-    'gallivm/lp_bld_init.c',
+    'gallivm/lp_bld_init_common.c',
     'gallivm/lp_bld_init.h',
     'gallivm/lp_bld_intr.c',
     'gallivm/lp_bld_intr.h',
     'gallivm/lp_bld_ir_common.c',
     'gallivm/lp_bld_ir_common.h',
+    'gallivm/lp_bld_jit_sample.c',
+    'gallivm/lp_bld_jit_types.h',
+    'gallivm/lp_bld_jit_types.c',
     'gallivm/lp_bld_limits.h',
     'gallivm/lp_bld_logic.c',
     'gallivm/lp_bld_logic.h',
@@ -390,9 +343,12 @@ if with_llvm
     'gallivm/lp_bld_misc.h',
     'gallivm/lp_bld_nir.h',
     'gallivm/lp_bld_nir.c',
+    'gallivm/lp_bld_nir_aos.c',
     'gallivm/lp_bld_nir_soa.c',
     'gallivm/lp_bld_pack.c',
     'gallivm/lp_bld_pack.h',
+    'gallivm/lp_bld_passmgr.h',
+    'gallivm/lp_bld_passmgr.c',
     'gallivm/lp_bld_printf.c',
     'gallivm/lp_bld_printf.h',
     'gallivm/lp_bld_quad.c',
@@ -408,7 +364,6 @@ if with_llvm
     'gallivm/lp_bld_swizzle.h',
     'gallivm/lp_bld_tgsi_action.c',
     'gallivm/lp_bld_tgsi_action.h',
-    'gallivm/lp_bld_tgsi_aos.c',
     'gallivm/lp_bld_tgsi.c',
     'gallivm/lp_bld_tgsi.h',
     'gallivm/lp_bld_tgsi_info.c',
@@ -417,7 +372,6 @@ if with_llvm
     'gallivm/lp_bld_type.h',
     'draw/draw_llvm.c',
     'draw/draw_llvm.h',
-    'draw/draw_llvm_sample.c',
     'draw/draw_pt_fetch_shade_pipeline_llvm.c',
     'draw/draw_vs_llvm.c',
     'tessellator/tessellator.cpp',
@@ -427,11 +381,18 @@ if with_llvm
     'nir/nir_to_tgsi_info.c',
     'nir/nir_to_tgsi_info.h',
   )
+  if llvm_with_orcjit
+    files_libgallium += files('gallivm/lp_bld_init_orc.cpp',)
+  else
+    files_libgallium += files('gallivm/lp_bld_init.c',)
+  endif
 endif
 
 files_libgalliumvl = files(
   'vl/vl_bicubic_filter.c',
   'vl/vl_bicubic_filter.h',
+  'vl/vl_codec.c',
+  'vl/vl_codec.h',
   'vl/vl_compositor.c',
   'vl/vl_compositor.h',
   'vl/vl_compositor_gfx.c',
@@ -445,6 +406,8 @@ files_libgalliumvl = files(
   'vl/vl_defines.h',
   'vl/vl_deint_filter.c',
   'vl/vl_deint_filter.h',
+  'vl/vl_deint_filter_cs.c',
+  'vl/vl_deint_filter_cs.h',
   'vl/vl_idct.c',
   'vl/vl_idct.h',
   'vl/vl_matrix_filter.c',
@@ -457,24 +420,26 @@ files_libgalliumvl = files(
   'vl/vl_mpeg12_bitstream.h',
   'vl/vl_mpeg12_decoder.c',
   'vl/vl_mpeg12_decoder.h',
-  'vl/vl_rbsp.h',
   'vl/vl_types.h',
   'vl/vl_vertex_buffers.c',
   'vl/vl_vertex_buffers.h',
   'vl/vl_video_buffer.c',
   'vl/vl_video_buffer.h',
-  'vl/vl_vlc.h',
   'vl/vl_zscan.c',
   'vl/vl_zscan.h',
   'vl/vl_probs_table.h',
 )
 
 vlwinsys_deps = []
-files_libgalliumvlwinsys = files('vl/vl_winsys.h',
-                                 'vl/vl_winsys_drm.c')
-if with_dri2 and with_platform_x11
+files_libgalliumvlwinsys = files('vl/vl_winsys.h')
+if host_machine.system() == 'windows'
+  files_libgalliumvlwinsys += files('vl/vl_winsys_win32.c')
+else
+  files_libgalliumvlwinsys += files('vl/vl_winsys_drm.c')
+endif
+if with_platform_x11
   files_libgalliumvlwinsys += files('vl/vl_winsys_dri.c')
-  if with_dri3
+  if with_dri_platform == 'drm'
     vlwinsys_deps += [
       dep_xcb_sync, dep_xcb_present, dep_xshmfence, dep_xcb_xfixes,
       dep_xcb_dri3,
@@ -482,46 +447,108 @@ if with_dri2 and with_platform_x11
     files_libgalliumvlwinsys += files('vl/vl_winsys_dri3.c')
   endif
 endif
+if with_gallium_zink
+  files_libgalliumvlwinsys += files('vl/vl_winsys_kopper.c')
+endif
+
+if with_glx == 'xlib'
+  files_libgalliumvlwinsys += files('vl/vl_winsys_xlib_swrast.c')
+elif with_gallium_drisw_kms
+  files_libgalliumvlwinsys += files('vl/vl_winsys_dri_vgem.c')
+endif
+
+prog_enums2names = files('driver_trace/enums2names.py')
+files_libgallium += custom_target(
+  'tr_util.[ch]',
+  input: ['../include/pipe/p_defines.h', '../include/pipe/p_video_enums.h', '../../util/blend.h'],
+  output: ['tr_util.c', 'tr_util.h'],
+  command: [prog_python, prog_enums2names, '@INPUT@', '-C', '@OUTPUT0@', '-H', '@OUTPUT1@', '-I', 'tr_util.h'],
+  depend_files: prog_enums2names,
+)
+
+files_libgallium += custom_target(
+  'u_tracepoints.c',
+  input: 'util/u_tracepoints.py',
+  output: 'u_tracepoints.c',
+  command: [
+    prog_python, '@INPUT@',
+    '-p', join_paths(dir_source_root, 'src/util/perf/'),
+    '-C', '@OUTPUT@',
+  ],
+  depend_files: u_trace_py,
+)
+
+files_u_tracepoints = custom_target(
+  'u_tracepoints.h',
+  input: 'util/u_tracepoints.py',
+  output: 'u_tracepoints.h',
+  command: [
+    prog_python, '@INPUT@',
+    '-p', join_paths(dir_source_root, 'src/util/perf/'),
+    '-H', '@OUTPUT@',
+  ],
+  depend_files: u_trace_py,
+)
+
+files_libgallium += files_u_tracepoints
+
+idep_u_tracepoints = declare_dependency(
+  sources: files_u_tracepoints,
+)
 
 u_indices_gen_c = custom_target(
   'u_indices_gen.c',
   input : 'indices/u_indices_gen.py',
   output : 'u_indices_gen.c',
-  command : [prog_python, '@INPUT@'],
-  capture : true,
+  command : [prog_python, '@INPUT@', '@OUTPUT@'],
 )
 
 u_unfilled_gen_c = custom_target(
   'u_unfilled_gen.c',
   input : 'indices/u_unfilled_gen.py',
   output : 'u_unfilled_gen.c',
-  command : [prog_python, '@INPUT@'],
-  capture : true,
+  command : [prog_python, '@INPUT@', '@OUTPUT@'],
 )
 
+libgallium_extra_c_args = []
 libgallium = static_library(
   'gallium',
   [files_libgallium, u_indices_gen_c, u_unfilled_gen_c],
   include_directories : [
     inc_loader, inc_gallium, inc_src, inc_include, include_directories('util')
   ],
-  c_args : [c_msvc_compat_args],
+  c_args : [c_msvc_compat_args, libgallium_extra_c_args],
   cpp_args : [cpp_msvc_compat_args],
   gnu_symbol_visibility : 'hidden',
   dependencies : [
-    dep_libdrm, dep_llvm, dep_dl, dep_m, dep_thread, dep_lmsensors,
+    dep_libdrm, dep_llvm, dep_dl, dep_m, dep_thread, dep_lmsensors, dep_ws2_32,
     idep_nir, idep_nir_headers, idep_mesautil,
   ],
   build_by_default : false
 )
 
-libgalliumvl_stub = static_library(
+if with_tests
+  test('gallium-aux',
+    executable(
+      'gallium-aux',
+      'util/u_surface_test.cpp',
+      include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
+      link_with: libgallium,
+      dependencies : [idep_gtest, idep_mesautil],
+    ),
+    suite: 'gallium',
+    protocol : 'gtest',
+  )
+endif
+
+_libgalliumvl_stub = static_library(
   'galliumvl_stub',
   'vl/vl_stubs.c',
   c_args : [c_msvc_compat_args],
   cpp_args : [cpp_msvc_compat_args],
   gnu_symbol_visibility : 'hidden',
   include_directories: [inc_gallium, inc_include, inc_src],
+  dependencies : idep_mesautil,
   build_by_default : false,
 )
 
@@ -532,14 +559,24 @@ libgalliumvl = static_library(
   cpp_args : [cpp_msvc_compat_args],
   gnu_symbol_visibility : 'hidden',
   include_directories : [inc_gallium, inc_include, inc_src],
+  dependencies : [idep_nir, idep_mesautil],
   build_by_default : false,
 )
+
+# some drivers export their screen creation function globally, so all frontends have to contain the
+# full libgalliumvl. So we'll handle this here globally for everybody.
+if (with_gallium_va or with_gallium_vdpau or with_dri or with_gallium_radeonsi)
+  libgalliumvl_stub = libgalliumvl
+else
+  libgalliumvl_stub = _libgalliumvl_stub
+endif
 
 # XXX: The dependencies here may be off...
 libgalliumvlwinsys = static_library(
   'galliumvlwinsys',
   files_libgalliumvlwinsys,
-  include_directories : [inc_gallium, inc_include, inc_loader, inc_src],
-  dependencies : [dep_libdrm, vlwinsys_deps],
+  include_directories : [inc_gallium, inc_include, inc_loader, inc_src, include_directories('../drivers/zink')],
+  dependencies : [dep_libdrm, vlwinsys_deps, idep_mesautil],
+  link_with : [libloader_x11],
   build_by_default : false,
 )

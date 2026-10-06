@@ -31,6 +31,13 @@
  * Author: Vivek Sarkar,  Mauricio J. Serrano,  Barbara B. Simons
  */
 
+static int cmp_float(const void *a, const void *b)
+{
+   const float *fa = (const float *) a;
+   const float *fb = (const float *) b;
+   return (*fa > *fb) - (*fa < *fb);
+}
+
 static void schedule_calc_sched_info(gpir_node *node)
 {
    int n = 0;
@@ -47,7 +54,9 @@ static void schedule_calc_sched_info(gpir_node *node)
       if (node->rsched.est < est)
          node->rsched.est = est;
 
-      float reg_weight = 1.0f - 1.0f / list_length(&pred->succ_list);
+      unsigned len = list_length(&pred->succ_list);
+      assert(len > 0);
+      float reg_weight = 1.0f - 1.0f / len;
       if (extra_reg > reg_weight)
          extra_reg = reg_weight;
 
@@ -68,15 +77,7 @@ static void schedule_calc_sched_info(gpir_node *node)
    }
 
    /* sort */
-   for (i = 0; i < n - 1; i++) {
-      for (int j = 0; j < n - i - 1; j++) {
-         if (reg[j] > reg[j + 1]) {
-            float tmp = reg[j + 1];
-            reg[j + 1] = reg[j];
-            reg[j] = tmp;
-         }
-      }
-   }
+   qsort(reg, n, sizeof(reg[0]), cmp_float);
 
    for (i = 0; i < n; i++) {
       float pressure = reg[i] + n - (i + 1);

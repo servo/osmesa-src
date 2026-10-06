@@ -24,6 +24,7 @@
  */
 
 #include "util/format/u_format.h"
+#include "util/u_draw.h"
 #include "util/u_inlines.h"
 #include "util/u_prim.h"
 #include "translate/translate.h"
@@ -33,6 +34,7 @@
 #include "nv30/nv30-40_3d.xml.h"
 #include "nv30/nv30_context.h"
 #include "nv30/nv30_format.h"
+#include "nv30/nv30_winsys.h"
 
 static void
 nv30_emit_vtxattr(struct nv30_context *nv30, struct pipe_vertex_buffer *vb,
@@ -83,9 +85,9 @@ nv30_vbuf_range(struct nv30_context *nv30, int vbi,
                 uint32_t *base, uint32_t *size)
 {
    assert(nv30->vbo_max_index != ~0);
-   *base = nv30->vbo_min_index * nv30->vtxbuf[vbi].stride;
+   *base = nv30->vbo_min_index * nv30->vertex->strides[vbi];
    *size = (nv30->vbo_max_index -
-            nv30->vbo_min_index + 1) * nv30->vtxbuf[vbi].stride;
+            nv30->vbo_min_index + 1) * nv30->vertex->strides[vbi];
 }
 
 static void
@@ -100,7 +102,7 @@ nv30_prevalidate_vbufs(struct nv30_context *nv30)
 
    for (i = 0; i < nv30->num_vtxbufs; i++) {
       vb = &nv30->vtxbuf[i];
-      if (!vb->stride || !vb->buffer.resource) /* NOTE: user_buffer not implemented */
+      if (!nv30->vertex->strides[i] || !vb->buffer.resource) /* NOTE: user_buffer not implemented */
          continue;
       buf = nv04_resource(vb->buffer.resource);
 
@@ -112,7 +114,7 @@ nv30_prevalidate_vbufs(struct nv30_context *nv30)
          } else {
             if (buf->status & NOUVEAU_BUFFER_STATUS_USER_MEMORY) {
                nv30->vbo_user |= 1 << i;
-               assert(vb->stride > vb->buffer_offset);
+               assert(nv30->vertex->strides[i] > vb->buffer_offset);
                nv30_vbuf_range(nv30, i, &base, &size);
                nouveau_user_buffer_upload(&nv30->base, buf, base, size);
             } else {
@@ -141,7 +143,7 @@ nv30_update_user_vbufs(struct nv30_context *nv30)
       if (!(nv30->vbo_user & (1 << b)))
          continue;
 
-      if (!vb->stride) {
+      if (!nv30->vertex->strides[i]) {
          nv30_emit_vtxattr(nv30, vb, ve, i);
          continue;
       }
@@ -214,8 +216,8 @@ nv30_vbo_validate(struct nv30_context *nv30)
       ve = &vertex->pipe[i];
       vb = &nv30->vtxbuf[ve->vertex_buffer_index];
 
-      if (likely(vb->stride) || nv30->vbo_fifo)
-         PUSH_DATA (push, (vb->stride << 8) | vertex->element[i].state);
+      if (likely(vertex->strides[ve->vertex_buffer_index]) || nv30->vbo_fifo)
+         PUSH_DATA (push, (vertex->strides[ve->vertex_buffer_index] << 8) | vertex->element[i].state);
       else
          PUSH_DATA (push, NV30_3D_VTXFMT_TYPE_V32_FLOAT);
    }
@@ -235,7 +237,7 @@ nv30_vbo_validate(struct nv30_context *nv30)
 
       res = nv04_resource(vb->buffer.resource);
 
-      if (nv30->vbo_fifo || unlikely(vb->stride == 0)) {
+      if (nv30->vbo_fifo || unlikely(ve->src_stride == 0)) {
          if (!nv30->vbo_fifo)
             nv30_emit_vtxattr(nv30, vb, ve, i);
          continue;
@@ -260,7 +262,7 @@ nv30_vertex_state_create(struct pipe_context *pipe, unsigned num_elements,
     struct translate_key transkey;
     unsigned i;
 
-    so = MALLOC(sizeof(*so) + sizeof(*so->element) * num_elements);
+    so = CALLOC(1, sizeof(*so) + sizeof(*so->element) * num_elements);
     if (!so)
         return NULL;
     memcpy(so->pipe, elements, sizeof(*elements) * num_elements);
@@ -304,6 +306,7 @@ nv30_vertex_state_create(struct pipe_context *pipe, unsigned num_elements,
             transkey.element[j].output_offset = transkey.output_stride;
             transkey.output_stride += (util_format_get_stride(fmt, 1) + 3) & ~3;
         }
+        so->strides[vbi] = ve->src_stride;
     }
 
     so->translate = translate_create(&transkey);
@@ -513,7 +516,7 @@ nv30_draw_elements(struct nv30_context *nv30, bool shorten,
       if (!info->has_user_indices)
          data = nouveau_resource_map_offset(&nv30->base,
                                             nv04_resource(info->index.resource),
-                                            start * index_size, NOUVEAU_BO_RD);
+                                            0, NOUVEAU_BO_RD);
       else
          data = info->index.user;
       if (!data)
@@ -544,14 +547,26 @@ nv30_draw_elements(struct nv30_context *nv30, bool shorten,
 }
 
 static void
-nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
+nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+              unsigned drawid_offset,
+              const struct pipe_draw_indirect_info *indirect,
+              const struct pipe_draw_start_count_bias *draws,
+              unsigned num_draws)
 {
+   if (num_draws > 1) {
+      util_draw_multi(pipe, info, drawid_offset, indirect, draws, num_draws);
+      return;
+   }
+
+   if (!indirect && (!draws[0].count || !info->instance_count))
+      return;
+
    struct nv30_context *nv30 = nv30_context(pipe);
    struct nouveau_pushbuf *push = nv30->base.pushbuf;
    int i;
 
    if (!info->primitive_restart &&
-       !u_trim_pipe_prim(info->mode, (unsigned*)&info->count))
+       !u_trim_pipe_prim(info->mode, (unsigned*)&draws[0].count))
       return;
 
    /* For picking only a few vertices from a large user buffer, push is better,
@@ -559,25 +574,30 @@ nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
     */
    nv30->vbo_push_hint = /* the 64 is heuristic */
       !(info->index_size &&
-        ((info->max_index - info->min_index + 64) < info->count));
+        info->index_bounds_valid &&
+        ((info->max_index - info->min_index + 64) < draws[0].count));
 
-   nv30->vbo_min_index = info->min_index;
-   nv30->vbo_max_index = info->max_index;
+   if (info->index_bounds_valid) {
+      nv30->vbo_min_index = info->min_index;
+      nv30->vbo_max_index = info->max_index;
+   } else {
+      nv30->vbo_min_index = 0;
+      nv30->vbo_max_index = ~0;
+   }
 
    if (nv30->vbo_push_hint != !!nv30->vbo_fifo)
       nv30->dirty |= NV30_NEW_ARRAYS;
 
-   push->user_priv = &nv30->bufctx;
    if (nv30->vbo_user && !(nv30->dirty & (NV30_NEW_VERTEX | NV30_NEW_ARRAYS)))
       nv30_update_user_vbufs(nv30);
 
    nv30_state_validate(nv30, ~0, true);
    if (nv30->draw_flags) {
-      nv30_render_vbo(pipe, info);
+      nv30_render_vbo(pipe, info, drawid_offset, &draws[0]);
       return;
    } else
    if (nv30->vbo_fifo) {
-      nv30_push_vbo(nv30, info);
+      nv30_push_vbo(nv30, info, &draws[0]);
       return;
    }
 
@@ -600,10 +620,10 @@ nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
 
    if (!info->index_size) {
       nv30_draw_arrays(nv30,
-                       info->mode, info->start, info->count,
+                       info->mode, draws[0].start, draws[0].count,
                        info->instance_count);
    } else {
-      bool shorten = info->max_index <= 65535;
+      bool shorten = info->index_bounds_valid && info->max_index <= 65535;
 
       if (info->primitive_restart != nv30->state.prim_restart) {
          if (info->primitive_restart) {
@@ -628,8 +648,8 @@ nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
       }
 
       nv30_draw_elements(nv30, shorten, info,
-                         info->mode, info->start, info->count,
-                         info->instance_count, info->index_bias, info->index_size);
+                         info->mode, draws[0].start, draws[0].count,
+                         info->instance_count, draws[0].index_bias, info->index_size);
    }
 
    nv30_state_release(nv30);

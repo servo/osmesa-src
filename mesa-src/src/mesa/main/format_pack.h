@@ -27,78 +27,58 @@
 #define FORMAT_PACK_H
 
 
+#include "util/format/u_format.h"
 #include "formats.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/** Pack a uint8_t rgba[4] color to dest address */
-typedef void (*mesa_pack_ubyte_rgba_func)(const uint8_t src[4], void *dst);
-
-/** Pack a float rgba[4] color to dest address */
-typedef void (*mesa_pack_float_rgba_func)(const float src[4], void *dst);
-
-/** Pack a float Z value to dest address */
-typedef void (*mesa_pack_float_z_func)(const float *src, void *dst);
-
-/** Pack a uint32_t Z value to dest address */
-typedef void (*mesa_pack_uint_z_func)(const uint32_t *src, void *dst);
-
-/** Pack a uint8_t stencil value to dest address */
-typedef void (*mesa_pack_ubyte_stencil_func)(const uint8_t *src, void *dst);
-
-
-
-
-extern mesa_pack_ubyte_rgba_func
-_mesa_get_pack_ubyte_rgba_function(mesa_format format);
-
-
-extern mesa_pack_float_rgba_func
-_mesa_get_pack_float_rgba_function(mesa_format format);
-
-
-extern mesa_pack_float_z_func
-_mesa_get_pack_float_z_func(mesa_format format);
-
-
-extern mesa_pack_uint_z_func
-_mesa_get_pack_uint_z_func(mesa_format format);
-
-
-extern mesa_pack_ubyte_stencil_func
-_mesa_get_pack_ubyte_stencil_func(mesa_format format);
-
-
-extern void
+static inline void
 _mesa_pack_float_rgba_row(mesa_format format, uint32_t n,
-                          const float src[][4], void *dst);
+                          const float src[][4], void *dst)
+{
+   util_format_pack_rgba(format, dst, src, n);
+}
 
-extern void
+static inline void
 _mesa_pack_ubyte_rgba_row(mesa_format format, uint32_t n,
-                          const uint8_t src[][4], void *dst);
+                          const uint8_t *src, void *dst)
+{
+   const struct util_format_pack_description *pack = util_format_pack_description(format);
+   pack->pack_rgba_8unorm((uint8_t *)dst, 0, src, 0, n, 1);
+}
 
-extern void
+static inline void
 _mesa_pack_uint_rgba_row(mesa_format format, uint32_t n,
-                         const uint32_t src[][4], void *dst);
+                         const uint32_t src[][4], void *dst)
+{
+   util_format_pack_rgba(format, dst, src, n);
+}
 
-extern void
-_mesa_pack_ubyte_rgba_rect(mesa_format format, uint32_t width, uint32_t height,
-                           const uint8_t *src, int32_t srcRowStride,
-                           void *dst, int32_t dstRowStride);
-
-extern void
+static inline void
 _mesa_pack_float_z_row(mesa_format format, uint32_t n,
-                       const float *src, void *dst);
+                       const float *src, void *dst)
+{
+   util_format_pack_z_float(format, dst, src, n);
+}
 
-extern void
+static inline void
 _mesa_pack_uint_z_row(mesa_format format, uint32_t n,
-                      const uint32_t *src, void *dst);
+                      const uint32_t *src, void *dst)
+{
+   util_format_pack_z_32unorm(format, dst, src, n);
+}
 
-extern void
+static inline void
 _mesa_pack_ubyte_stencil_row(mesa_format format, uint32_t n,
-                             const uint8_t *src, void *dst);
+                             const uint8_t *src, void *dst)
+{
+   util_format_pack_s_8uint(format, dst, src, n);
+}
 
-extern void
-_mesa_pack_uint_24_8_depth_stencil_row(mesa_format format, uint32_t n,
-                                       const uint32_t *src, void *dst);
+#ifdef __cplusplus
+}
+#endif
 
 #endif

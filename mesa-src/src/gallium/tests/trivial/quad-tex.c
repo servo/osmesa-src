@@ -47,6 +47,7 @@
 /* constant state object helper */
 #include "cso_cache/cso_context.h"
 
+#include "util/macros.h"
 /* u_sampler_view_default_template */
 #include "util/u_sampler.h"
 /* debug_dump_surface_bmp */
@@ -89,14 +90,14 @@ struct program
 static void init_prog(struct program *p)
 {
 	struct pipe_surface surf_tmpl;
-	int ret;
+	ASSERTED int ret;
 
 	/* find a hardware device */
-	ret = pipe_loader_probe(&p->dev, 1);
+	ret = pipe_loader_probe(&p->dev, 1, false);
 	assert(ret);
 
 	/* init a pipe screen */
-	p->screen = pipe_loader_create_screen(p->dev);
+	p->screen = pipe_loader_create_screen(p->dev, false);
 	assert(p->screen);
 
 	/* create the pipe driver context and cso context */
@@ -176,12 +177,12 @@ static void init_prog(struct program *p)
 		box.height = 2;
 		box.depth = 1;
 
-		ptr = p->pipe->transfer_map(p->pipe, p->tex, 0, PIPE_TRANSFER_WRITE, &box, &t);
+		ptr = p->pipe->texture_map(p->pipe, p->tex, 0, PIPE_MAP_WRITE, &box, &t);
 		ptr[0] = 0xffff0000;
 		ptr[1] = 0xff0000ff;
 		ptr[2] = 0xff00ff00;
 		ptr[3] = 0xffffff00;
-		p->pipe->transfer_unmap(p->pipe, t);
+		p->pipe->texture_unmap(p->pipe, t);
 
 		u_sampler_view_default_template(&v_tmplt, p->tex, p->tex->format);
 
@@ -211,7 +212,6 @@ static void init_prog(struct program *p)
 	p->sampler.min_mip_filter = PIPE_TEX_MIPFILTER_NONE;
 	p->sampler.min_img_filter = PIPE_TEX_MIPFILTER_LINEAR;
 	p->sampler.mag_img_filter = PIPE_TEX_MIPFILTER_LINEAR;
-	p->sampler.normalized_coords = 1;
 
 	surf_tmpl.format = PIPE_FORMAT_B8G8R8A8_UNORM; /* All drivers support this */
 	surf_tmpl.u.tex.level = 0;
@@ -249,6 +249,11 @@ static void init_prog(struct program *p)
 		p->viewport.translate[0] = half_width + x;
 		p->viewport.translate[1] = (half_height + y) * scale + bias;
 		p->viewport.translate[2] = half_depth + z;
+
+		p->viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+		p->viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+		p->viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+		p->viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 	}
 
 	/* vertex elements state */
@@ -259,23 +264,24 @@ static void init_prog(struct program *p)
 	p->velem.velems[0].instance_divisor = 0;
 	p->velem.velems[0].vertex_buffer_index = 0;
 	p->velem.velems[0].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+   p->velem.velems[0].src_stride = 2 * 4 * sizeof(float);
 
 	p->velem.velems[1].src_offset = 1 * 4 * sizeof(float); /* offset 16, second element */
 	p->velem.velems[1].instance_divisor = 0;
 	p->velem.velems[1].vertex_buffer_index = 0;
 	p->velem.velems[1].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+   p->velem.velems[1].src_stride = 2 * 4 * sizeof(float);
 
 	/* vertex shader */
 	{
 		const enum tgsi_semantic semantic_names[] =
                    { TGSI_SEMANTIC_POSITION, TGSI_SEMANTIC_GENERIC };
 		const uint semantic_indexes[] = { 0, 0 };
-		p->vs = util_make_vertex_passthrough_shader(p->pipe, 2, semantic_names, semantic_indexes, FALSE);
+		p->vs = util_make_vertex_passthrough_shader(p->pipe, 2, semantic_names, semantic_indexes, false);
 	}
 
 	/* fragment shader */
 	p->fs = util_make_fragment_tex_shader(p->pipe, TGSI_TEXTURE_2D,
-	                                      TGSI_INTERPOLATE_LINEAR,
 	                                      TGSI_RETURN_TYPE_FLOAT,
 	                                      TGSI_RETURN_TYPE_FLOAT, false,
                                               false);
@@ -321,7 +327,7 @@ static void draw(struct program *p)
 	cso_set_samplers(p->cso, PIPE_SHADER_FRAGMENT, 1, samplers);
 
 	/* texture sampler view */
-	cso_set_sampler_views(p->cso, PIPE_SHADER_FRAGMENT, 1, &p->view);
+	p->pipe->set_sampler_views(p->pipe, PIPE_SHADER_FRAGMENT, 0, 1, 0, false, &p->view);
 
 	/* shaders */
 	cso_set_fragment_shader_handle(p->cso, p->fs);
@@ -331,8 +337,8 @@ static void draw(struct program *p)
 	cso_set_vertex_elements(p->cso, &p->velem);
 
 	util_draw_vertex_buffer(p->pipe, p->cso,
-	                        p->vbuf, 0, 0,
-	                        PIPE_PRIM_QUADS,
+	                        p->vbuf, 0, false,
+	                        MESA_PRIM_QUADS,
 	                        4,  /* verts */
 	                        2); /* attribs/vert */
 

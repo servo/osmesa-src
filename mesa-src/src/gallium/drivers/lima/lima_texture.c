@@ -23,6 +23,7 @@
  *
  */
 
+#include "util/compiler.h"
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
 #include "util/u_math.h"
@@ -70,39 +71,41 @@ lima_texture_desc_set_va(lima_tex_desc *desc,
 void
 lima_texture_desc_set_res(struct lima_context *ctx, lima_tex_desc *desc,
                           struct pipe_resource *prsc,
-                          unsigned first_level, unsigned last_level)
+                          unsigned first_level, unsigned last_level,
+                          unsigned first_layer, unsigned mrt_idx)
 {
-   unsigned width, height, layout, i;
+   unsigned width, height, depth, layout, i;
    struct lima_resource *lima_res = lima_resource(prsc);
 
    width = prsc->width0;
    height = prsc->height0;
+   depth = prsc->depth0;
    if (first_level != 0) {
       width = u_minify(width, first_level);
       height = u_minify(height, first_level);
+      depth = u_minify(depth, first_level);
    }
 
    desc->format = lima_format_get_texel(prsc->format);
    desc->swap_r_b = lima_format_get_texel_swap_rb(prsc->format);
    desc->width  = width;
    desc->height = height;
-   desc->unknown_3_1 = 1;
+   desc->depth = depth;
 
    if (lima_res->tiled)
       layout = 3;
    else {
-      /* for padded linear texture */
-      if (lima_res->levels[first_level].width != width) {
-         desc->stride = lima_res->levels[first_level].stride;
-         desc->has_stride = 1;
-      }
+      desc->stride = lima_res->levels[first_level].stride;
+      desc->has_stride = 1;
       layout = 0;
    }
 
    uint32_t base_va = lima_res->bo->va;
 
    /* attach first level */
-   uint32_t first_va = base_va + lima_res->levels[first_level].offset;
+   uint32_t first_va = base_va + lima_res->levels[first_level].offset +
+                       first_layer * lima_res->levels[first_level].layer_stride +
+                       mrt_idx * lima_res->mrt_pitch;
    desc->va_s.va_0 = first_va >> 6;
    desc->va_s.layout = layout;
 
@@ -112,6 +115,37 @@ lima_texture_desc_set_res(struct lima_context *ctx, lima_tex_desc *desc,
    for (i = 1; i <= (last_level - first_level); i++) {
       uint32_t address = base_va + lima_res->levels[first_level + i].offset;
       lima_texture_desc_set_va(desc, i, address);
+   }
+}
+
+static unsigned
+pipe_wrap_to_lima(unsigned pipe_wrap, bool using_nearest)
+{
+   switch (pipe_wrap) {
+   case PIPE_TEX_WRAP_REPEAT:
+      return LIMA_TEX_WRAP_REPEAT;
+   case PIPE_TEX_WRAP_CLAMP_TO_EDGE:
+      return LIMA_TEX_WRAP_CLAMP_TO_EDGE;
+   case PIPE_TEX_WRAP_CLAMP:
+      if (using_nearest)
+         return LIMA_TEX_WRAP_CLAMP_TO_EDGE;
+      else
+         return LIMA_TEX_WRAP_CLAMP;
+   case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
+      return LIMA_TEX_WRAP_CLAMP_TO_BORDER;
+   case PIPE_TEX_WRAP_MIRROR_REPEAT:
+      return LIMA_TEX_WRAP_MIRROR_REPEAT;
+   case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_EDGE:
+      return LIMA_TEX_WRAP_MIRROR_CLAMP_TO_EDGE;
+   case PIPE_TEX_WRAP_MIRROR_CLAMP:
+      if (using_nearest)
+         return LIMA_TEX_WRAP_MIRROR_CLAMP_TO_EDGE;
+      else
+         return LIMA_TEX_WRAP_MIRROR_CLAMP;
+   case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_BORDER:
+      return LIMA_TEX_WRAP_MIRROR_CLAMP_TO_BORDER;
+   default:
+      return LIMA_TEX_WRAP_REPEAT;
    }
 }
 
@@ -125,27 +159,38 @@ lima_update_tex_desc(struct lima_context *ctx, struct lima_sampler_state *sample
    lima_tex_desc *desc = pdesc;
    unsigned first_level;
    unsigned last_level;
+   unsigned first_layer;
    float max_lod;
 
    memset(desc, 0, desc_size);
 
+   if (!texture)
+      return;
+
    switch (texture->base.target) {
+   case PIPE_TEXTURE_1D:
+      desc->sampler_dim = LIMA_SAMPLER_DIM_1D;
+      break;
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_RECT:
-      desc->texture_type = LIMA_TEXTURE_TYPE_2D;
+      desc->sampler_dim = LIMA_SAMPLER_DIM_2D;
       break;
    case PIPE_TEXTURE_CUBE:
-      desc->texture_type = LIMA_TEXTURE_TYPE_CUBE;
+      desc->cube_map = 1;
+      FALLTHROUGH;
+   case PIPE_TEXTURE_3D:
+      desc->sampler_dim = LIMA_SAMPLER_DIM_3D;
       break;
    default:
       break;
    }
 
-   if (!sampler->base.normalized_coords)
+   if (sampler->base.unnormalized_coords)
       desc->unnorm_coords = 1;
 
    first_level = texture->base.u.tex.first_level;
    last_level = texture->base.u.tex.last_level;
+   first_layer = texture->base.u.tex.first_layer;
    if (last_level - first_level >= LIMA_MAX_MIP_LEVELS)
       last_level = first_level + LIMA_MAX_MIP_LEVELS - 1;
 
@@ -191,39 +236,19 @@ lima_update_tex_desc(struct lima_context *ctx, struct lima_sampler_state *sample
       break;
    }
 
-   /* Only clamp, clamp to edge, repeat and mirror repeat are supported */
-   switch (sampler->base.wrap_s) {
-   case PIPE_TEX_WRAP_CLAMP:
-      desc->wrap_s_clamp = 1;
-      break;
-   case PIPE_TEX_WRAP_CLAMP_TO_EDGE:
-   case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
-      desc->wrap_s_clamp_to_edge = 1;
-      break;
-   case PIPE_TEX_WRAP_MIRROR_REPEAT:
-      desc->wrap_s_mirror_repeat = 1;
-      break;
-   case PIPE_TEX_WRAP_REPEAT:
-   default:
-      break;
-   }
+   /* Panfrost mentions that GL_CLAMP is broken for NEAREST filter on Midgard,
+    * looks like it also broken on Utgard, since it fails in piglit
+    */
+   bool using_nearest = sampler->base.min_img_filter == PIPE_TEX_FILTER_NEAREST;
 
-   /* Only clamp, clamp to edge, repeat and mirror repeat are supported */
-   switch (sampler->base.wrap_t) {
-   case PIPE_TEX_WRAP_CLAMP:
-      desc->wrap_t_clamp = 1;
-      break;
-   case PIPE_TEX_WRAP_CLAMP_TO_EDGE:
-   case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
-      desc->wrap_t_clamp_to_edge = 1;
-      break;
-   case PIPE_TEX_WRAP_MIRROR_REPEAT:
-      desc->wrap_t_mirror_repeat = 1;
-      break;
-   case PIPE_TEX_WRAP_REPEAT:
-   default:
-      break;
-   }
+   desc->wrap_s = pipe_wrap_to_lima(sampler->base.wrap_s, using_nearest);
+   desc->wrap_t = pipe_wrap_to_lima(sampler->base.wrap_t, using_nearest);
+   desc->wrap_r = pipe_wrap_to_lima(sampler->base.wrap_r, using_nearest);
+
+   desc->border_red = float_to_ushort(sampler->base.border_color.f[0]);
+   desc->border_green = float_to_ushort(sampler->base.border_color.f[1]);
+   desc->border_blue = float_to_ushort(sampler->base.border_color.f[2]);
+   desc->border_alpha = float_to_ushort(sampler->base.border_color.f[3]);
 
    if (desc->min_img_filter_nearest && desc->mag_img_filter_nearest &&
        desc->min_mipfilter_2 == 0 &&
@@ -233,7 +258,7 @@ lima_update_tex_desc(struct lima_context *ctx, struct lima_sampler_state *sample
    desc->lod_bias += lod_bias_delta;
 
    lima_texture_desc_set_res(ctx, desc, texture->base.texture,
-                             first_level, last_level);
+                             first_level, last_level, first_layer, 0);
 }
 
 static unsigned
@@ -241,6 +266,10 @@ lima_calc_tex_desc_size(struct lima_sampler_view *texture)
 {
    unsigned size = offsetof(lima_tex_desc, va);
    unsigned va_bit_size;
+
+   if (!texture)
+      return lima_min_tex_desc_size;
+
    unsigned first_level = texture->base.u.tex.first_level;
    unsigned last_level = texture->base.u.tex.last_level;
 
@@ -269,6 +298,8 @@ lima_update_textures(struct lima_context *ctx)
    /* we always need to add texture bo to job */
    for (int i = 0; i < lima_tex->num_samplers; i++) {
       struct lima_sampler_view *texture = lima_sampler_view(lima_tex->textures[i]);
+      if (!texture)
+         continue;
       struct lima_resource *rsc = lima_resource(texture->base.texture);
       lima_flush_previous_job_writing_resource(ctx, texture->base.texture);
       lima_job_add_bo(job, LIMA_PIPE_PP, rsc->bo, LIMA_SUBMIT_BO_READ);

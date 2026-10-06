@@ -20,8 +20,6 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-from __future__ import print_function
-
 import getopt
 import gl_XML
 import license
@@ -54,7 +52,7 @@ class PrintCode(gl_XML.gl_print_base):
         print(footer)
 
     def printBody(self, api):
-        print('#include "GL/gl.h"')
+        print('#include "util/glheader.h"')
         print('')
         print('enum marshal_dispatch_cmd_id')
         print('{')
@@ -63,19 +61,26 @@ class PrintCode(gl_XML.gl_print_base):
             if flavor in ('skip', 'sync'):
                 continue
             print('   DISPATCH_CMD_{0},'.format(func.name))
+            if func.packed_fixed_params:
+                print('   DISPATCH_CMD_{0}_packed,'.format(func.name))
         print('   NUM_DISPATCH_CMD,')
         print('};')
         print('')
 
         for func in api.functionIterateAll():
+            func.print_struct(is_header=True)
+
             flavor = func.marshal_flavor()
+
             if flavor in ('custom', 'async'):
-                print('struct marshal_cmd_{0};'.format(func.name))
-                print(('void _mesa_unmarshal_{0}(struct gl_context *ctx, '
-                       'const struct marshal_cmd_{0} *cmd);').format(func.name))
-                print('void GLAPIENTRY _mesa_marshal_{0}({1});'.format(func.name, func.get_parameter_string()))
-            elif flavor == 'sync':
+                func.print_unmarshal_prototype(suffix=';')
+                if func.packed_fixed_params:
+                    func.print_unmarshal_prototype(suffix=';', is_packed=True)
+
+            if flavor in ('custom', 'async', 'sync') and not func.marshal_is_static():
                 print('{0} GLAPIENTRY _mesa_marshal_{1}({2});'.format(func.return_type, func.name, func.get_parameter_string()))
+                if func.marshal_no_error:
+                    print('{0} GLAPIENTRY _mesa_marshal_{1}_no_error({2});'.format(func.return_type, func.name, func.get_parameter_string()))
 
 
 def show_usage():
@@ -84,18 +89,14 @@ def show_usage():
 
 
 if __name__ == '__main__':
-    file_name = 'gl_API.xml'
-
     try:
-        (args, trail) = getopt.getopt(sys.argv[1:], 'm:f:')
+        file_name = sys.argv[1]
+        pointer_size = int(sys.argv[2])
     except Exception:
         show_usage()
 
-    for (arg,val) in args:
-        if arg == '-f':
-            file_name = val
-
     printer = PrintCode()
 
-    api = gl_XML.parse_GL_API(file_name, marshal_XML.marshal_item_factory())
+    assert pointer_size != 0
+    api = gl_XML.parse_GL_API(file_name, marshal_XML.marshal_item_factory(), pointer_size)
     printer.Print(api)

@@ -25,7 +25,7 @@
  *
  **************************************************************************/
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
 
@@ -34,10 +34,13 @@
 #include "util/u_memory.h"
 
 #include <GL/gl.h>
+#include "stw_gdishim.h"
 #include "gldrv.h"
 #include "stw_device.h"
+#include "stw_framebuffer.h"
 #include "stw_pixelformat.h"
 #include "stw_tls.h"
+#include "stw_winsys.h"
 
 
 struct stw_pf_color_info
@@ -73,18 +76,18 @@ struct stw_pf_depth_info
 static const struct stw_pf_color_info
 stw_pf_color[] = {
    /* no-alpha */
-   { PIPE_FORMAT_B8G8R8X8_UNORM,    { 8,  8,  8,  0}, {16,  8,  0,  0} },
-   { PIPE_FORMAT_X8R8G8B8_UNORM,    { 8,  8,  8,  0}, { 8, 16, 24,  0} },
+   { PIPE_FORMAT_B8G8R8X8_UNORM,     { 8,  8,  8,  0}, {16,  8,  0,  0} },
+   { PIPE_FORMAT_X8R8G8B8_UNORM,     { 8,  8,  8,  0}, { 8, 16, 24,  0} },
    /* alpha */
-   { PIPE_FORMAT_B8G8R8A8_UNORM,    { 8,  8,  8,  8}, {16,  8,  0, 24} },
-   { PIPE_FORMAT_A8R8G8B8_UNORM,    { 8,  8,  8,  8}, { 8, 16, 24,  0} },
+   { PIPE_FORMAT_B8G8R8A8_UNORM,     { 8,  8,  8,  8}, {16,  8,  0, 24} },
+   { PIPE_FORMAT_A8R8G8B8_UNORM,     { 8,  8,  8,  8}, { 8, 16, 24,  0} },
    /* shallow bit depths */
-   { PIPE_FORMAT_B5G6R5_UNORM,      { 5,  6,  5,  0}, {11,  5,  0,  0} },
-#if 0
-   { PIPE_FORMAT_R10G10B10A2_UNORM, {10, 10, 10,  2}, { 0, 10, 20, 30} },
-#endif
-   { PIPE_FORMAT_B5G5R5A1_UNORM,    { 5,  5,  5,  1}, {10,  5,  0, 15} },
-   { PIPE_FORMAT_B4G4R4A4_UNORM,    { 4,  4,  4,  4}, {16,  4,  0, 12} }
+   { PIPE_FORMAT_B5G6R5_UNORM,       { 5,  6,  5,  0}, {11,  5,  0,  0} },
+   { PIPE_FORMAT_B5G5R5A1_UNORM,     { 5,  5,  5,  1}, {10,  5,  0, 15} },
+   { PIPE_FORMAT_B4G4R4A4_UNORM,     { 4,  4,  4,  4}, {16,  4,  0, 12} },
+   /* HDR bit depths */
+   { PIPE_FORMAT_R16G16B16A16_FLOAT, {16, 16, 16, 16}, { 0, 16, 32, 48 }},
+   { PIPE_FORMAT_R10G10B10A2_UNORM,  {10, 10, 10,  2}, { 0, 10, 20, 30} },
 };
 
 static const struct stw_pf_color_info
@@ -104,11 +107,12 @@ stw_pf_depth_stencil[] = {
    { PIPE_FORMAT_S8_UINT_Z24_UNORM, {24, 8} }
 };
 
-
-static const boolean
-stw_pf_doublebuffer[] = {
-   FALSE,
-   TRUE,
+static const stw_pfd_flag
+stw_pf_flag[] = {
+   0,
+   stw_pfd_double_buffer,
+   stw_pfd_gdi_support,
+   stw_pfd_double_buffer | stw_pfd_gdi_support,
 };
 
 
@@ -123,18 +127,15 @@ stw_pf_multisample[] = {
 
 static void
 stw_pixelformat_add(struct stw_device *stw_dev,
-                    boolean extended,
+                    bool extended,
                     const struct stw_pf_color_info *color,
                     const struct stw_pf_depth_info *depth,
                     unsigned accum,
-                    boolean doublebuffer,
+                    bool doublebuffer,
+                    bool gdi,
                     unsigned samples)
 {
    struct stw_pixelformat_info *pfi;
-
-   assert(stw_dev->pixelformat_extended_count < STW_MAX_PIXELFORMATS);
-   if (stw_dev->pixelformat_extended_count >= STW_MAX_PIXELFORMATS)
-      return;
 
    assert(util_format_get_component_bits(color->format, UTIL_FORMAT_COLORSPACE_RGB, 0) == color->bits.red);
    assert(util_format_get_component_bits(color->format, UTIL_FORMAT_COLORSPACE_RGB, 1) == color->bits.green);
@@ -143,10 +144,13 @@ stw_pixelformat_add(struct stw_device *stw_dev,
    assert(util_format_get_component_bits(depth->format, UTIL_FORMAT_COLORSPACE_ZS, 0) == depth->bits.depth);
    assert(util_format_get_component_bits(depth->format, UTIL_FORMAT_COLORSPACE_ZS, 1) == depth->bits.stencil);
 
-   pfi = &stw_dev->pixelformats[stw_dev->pixelformat_extended_count];
+   pfi = util_dynarray_grow(&stw_dev->pixelformats,
+                            struct stw_pixelformat_info,
+                            1);
 
    memset(pfi, 0, sizeof *pfi);
 
+   pfi->iPixelFormat = util_dynarray_num_elements(&stw_dev->pixelformats, struct stw_pixelformat_info);
    pfi->pfd.nSize = sizeof pfi->pfd;
    pfi->pfd.nVersion = 1;
 
@@ -162,6 +166,9 @@ stw_pixelformat_add(struct stw_device *stw_dev,
 
    if (doublebuffer)
       pfi->pfd.dwFlags |= PFD_DOUBLEBUFFER | PFD_SWAP_EXCHANGE;
+
+   if (gdi)
+      pfi->pfd.dwFlags |= PFD_SUPPORT_GDI;
 
    pfi->pfd.iPixelType = PFD_TYPE_RGBA;
 
@@ -191,7 +198,8 @@ stw_pixelformat_add(struct stw_device *stw_dev,
 
    /*
     * since gallium frontend can allocate depth/stencil/accum buffers, we provide
-    * only color buffers here
+    * only color buffers here in the non-zink case, however in the zink case
+    * kopper requires that we allocate depth/stencil through the winsys
     */
    pfi->stvis.buffer_mask = ST_ATTACHMENT_FRONT_LEFT_MASK;
    if (doublebuffer)
@@ -200,23 +208,27 @@ stw_pixelformat_add(struct stw_device *stw_dev,
    pfi->stvis.color_format = color->format;
    pfi->stvis.depth_stencil_format = depth->format;
 
+#ifdef GALLIUM_ZINK
+   if (stw_dev->zink && (depth->bits.depth > 0 || depth->bits.stencil > 0))
+      pfi->stvis.buffer_mask |= ST_ATTACHMENT_DEPTH_STENCIL_MASK;
+#endif
+
    pfi->stvis.accum_format = (accum) ?
       PIPE_FORMAT_R16G16B16A16_SNORM : PIPE_FORMAT_NONE;
 
    pfi->stvis.samples = samples;
-   pfi->stvis.render_buffer = ST_ATTACHMENT_INVALID;
 
    /* WGL_ARB_render_texture */
    if (color->bits.alpha)
-      pfi->bindToTextureRGBA = TRUE;
+      pfi->bindToTextureRGBA = true;
 
-   pfi->bindToTextureRGB = TRUE;
-
-   ++stw_dev->pixelformat_extended_count;
+   pfi->bindToTextureRGB = true;
 
    if (!extended) {
       ++stw_dev->pixelformat_count;
-      assert(stw_dev->pixelformat_count == stw_dev->pixelformat_extended_count);
+      assert(stw_dev->pixelformat_count ==
+             util_dynarray_num_elements(&stw_dev->pixelformats,
+                                        struct stw_pixelformat_info));
    }
 }
 
@@ -226,10 +238,10 @@ stw_pixelformat_add(struct stw_device *stw_dev,
  */
 static unsigned
 add_color_format_variants(const struct stw_pf_color_info *color_formats,
-                          unsigned num_color_formats, boolean extended)
+                          unsigned num_color_formats, bool extended)
 {
    struct pipe_screen *screen = stw_dev->screen;
-   unsigned cfmt, ms, db, ds, acc;
+   unsigned cfmt, ms, ds, acc, f;
    unsigned bind_flags = PIPE_BIND_RENDER_TARGET;
    unsigned num_added = 0;
    int force_samples = 0;
@@ -238,7 +250,17 @@ add_color_format_variants(const struct stw_pf_color_info *color_formats,
     * to force all pixel formats to have a particular number of samples.
     */
    {
-      const char *samples= getenv("SVGA_FORCE_MSAA");
+      const char *samples = getenv("WGL_FORCE_MSAA");
+      if (!samples) {
+         static bool warned = false;
+         samples = getenv("SVGA_FORCE_MSAA");
+         if (samples && !warned) {
+            fprintf(stderr, "*** SVGA_FORCE_MSAA is deprecated; "
+                    "use WGL_FORCE_MSAA instead ***\n");
+            warned = true;
+         }
+      }
+
       if (samples)
          force_samples = atoi(samples);
    }
@@ -260,23 +282,23 @@ add_color_format_variants(const struct stw_pf_color_info *color_formats,
             continue;
          }
 
-         for (db = 0; db < ARRAY_SIZE(stw_pf_doublebuffer); db++) {
-            unsigned doublebuffer = stw_pf_doublebuffer[db];
+         for (ds = 0; ds < ARRAY_SIZE(stw_pf_depth_stencil); ds++) {
+            const struct stw_pf_depth_info *depth = &stw_pf_depth_stencil[ds];
 
-            for (ds = 0; ds < ARRAY_SIZE(stw_pf_depth_stencil); ds++) {
-               const struct stw_pf_depth_info *depth = &stw_pf_depth_stencil[ds];
+            if (!screen->is_format_supported(screen, depth->format,
+                                             PIPE_TEXTURE_2D, samples,
+                                             samples,
+                                             PIPE_BIND_DEPTH_STENCIL)) {
+               continue;
+            }
 
-               if (!screen->is_format_supported(screen, depth->format,
-                                                PIPE_TEXTURE_2D, samples,
-                                                samples,
-                                                PIPE_BIND_DEPTH_STENCIL)) {
-                  continue;
-               }
-
+            for (f = 0; f < ARRAY_SIZE(stw_pf_flag); f++) {
+               stw_pfd_flag flag = stw_pf_flag[f];
                for (acc = 0; acc < 2; acc++) {
                   stw_pixelformat_add(stw_dev, extended, &color_formats[cfmt],
-                                      depth,
-                                      acc * 16, doublebuffer, samples);
+                                       depth, acc * 16,
+                                       (flag & stw_pfd_double_buffer) != 0,
+                                       (flag & stw_pfd_gdi_support) != 0, samples);
                   num_added++;
                }
             }
@@ -294,26 +316,28 @@ stw_pixelformat_init(void)
    unsigned num_formats;
 
    assert(!stw_dev->pixelformat_count);
-   assert(!stw_dev->pixelformat_extended_count);
+
+   util_dynarray_init(&stw_dev->pixelformats, NULL);
 
    /* normal, displayable formats */
    num_formats = add_color_format_variants(stw_pf_color,
-                                           ARRAY_SIZE(stw_pf_color), FALSE);
+                                           ARRAY_SIZE(stw_pf_color), false);
    assert(num_formats > 0);
 
    /* extended, pbuffer-only formats */
    add_color_format_variants(stw_pf_color_extended,
-                             ARRAY_SIZE(stw_pf_color_extended), TRUE);
+                             ARRAY_SIZE(stw_pf_color_extended), true);
 
-   assert(stw_dev->pixelformat_count <= stw_dev->pixelformat_extended_count);
-   assert(stw_dev->pixelformat_extended_count <= STW_MAX_PIXELFORMATS);
+   assert(stw_dev->pixelformat_count <=
+          util_dynarray_num_elements(&stw_dev->pixelformats,
+                                     struct stw_pixelformat_info));
 }
 
 
 uint
-stw_pixelformat_get_count(void)
+stw_pixelformat_get_count(HDC hdc)
 {
-   if (!stw_init_screen())
+   if (!stw_init_screen(hdc))
       return 0;
 
    return stw_dev->pixelformat_count;
@@ -321,12 +345,13 @@ stw_pixelformat_get_count(void)
 
 
 uint
-stw_pixelformat_get_extended_count(void)
+stw_pixelformat_get_extended_count(HDC hdc)
 {
-   if (!stw_init_screen())
+   if (!stw_init_screen(hdc))
       return 0;
 
-   return stw_dev->pixelformat_extended_count;
+   return util_dynarray_num_elements(&stw_dev->pixelformats,
+                                     struct stw_pixelformat_info);
 }
 
 
@@ -340,11 +365,60 @@ stw_pixelformat_get_info(int iPixelFormat)
    }
 
    index = iPixelFormat - 1;
-   if (index >= stw_dev->pixelformat_extended_count) {
+   if (index >= util_dynarray_num_elements(&stw_dev->pixelformats,
+                                           struct stw_pixelformat_info)) {
       return NULL;
    }
 
-   return &stw_dev->pixelformats[index];
+   return util_dynarray_element(&stw_dev->pixelformats,
+                                struct stw_pixelformat_info,
+                                index);
+}
+
+/**
+ * Return the stw pixel format that most closely matches the pixel format
+ * on HDC.
+ * Used to get a pixel format when SetPixelFormat() hasn't been called before.
+ */
+int
+stw_pixelformat_guess(HDC hdc)
+{
+   int iPixelFormat = GetPixelFormat(hdc);
+   PIXELFORMATDESCRIPTOR pfd;
+
+   if (!iPixelFormat)
+      return 0;
+   if (!DescribePixelFormat(hdc, iPixelFormat, sizeof(pfd), &pfd))
+      return 0;
+   return stw_pixelformat_choose(hdc, &pfd);
+}
+
+const struct stw_pixelformat_info *
+stw_pixelformat_get_info_from_hdc(HDC hdc)
+{
+   /*
+    * GDI only knows about displayable pixel formats, so determine the pixel
+    * format from the framebuffer.
+    *
+    * This also allows to use a OpenGL DLL / ICD without installing.
+    */
+   struct stw_framebuffer *fb;
+   fb = stw_framebuffer_from_hdc(hdc);
+   if (fb) {
+      const struct stw_pixelformat_info *pfi = fb->pfi;
+      stw_framebuffer_unlock(fb);
+      return pfi;
+   }
+
+   /* Applications should call SetPixelFormat before creating a context,
+    * but not all do, and the opengl32 runtime seems to use a default
+    * pixel format in some cases, so use that.
+    */
+   int iPixelFormat = stw_pixelformat_guess(hdc);
+   if (!iPixelFormat)
+      return 0;
+   
+   return stw_pixelformat_get_info( iPixelFormat );
 }
 
 
@@ -355,12 +429,10 @@ DrvDescribePixelFormat(HDC hdc, INT iPixelFormat, ULONG cjpfd,
    uint count;
    const struct stw_pixelformat_info *pfi;
 
-   (void) hdc;
-
    if (!stw_dev)
       return 0;
 
-   count = stw_pixelformat_get_count();
+   count = stw_pixelformat_get_count(hdc);
 
    if (ppfd == NULL)
       return count;
@@ -384,7 +456,7 @@ DrvDescribeLayerPlane(HDC hdc, INT iPixelFormat, INT iLayerPlane,
                       UINT nBytes, LPLAYERPLANEDESCRIPTOR plpd)
 {
    assert(0);
-   return FALSE;
+   return false;
 }
 
 
@@ -410,7 +482,7 @@ BOOL APIENTRY
 DrvRealizeLayerPalette(HDC hdc, INT iLayerPlane, BOOL bRealize)
 {
    assert(0);
-   return FALSE;
+   return false;
 }
 
 
@@ -425,9 +497,7 @@ stw_pixelformat_choose(HDC hdc, CONST PIXELFORMATDESCRIPTOR *ppfd)
    uint bestindex;
    uint bestdelta;
 
-   (void) hdc;
-
-   count = stw_pixelformat_get_extended_count();
+   count = stw_pixelformat_get_extended_count(hdc);
    bestindex = 0;
    bestdelta = ~0U;
 
@@ -446,7 +516,6 @@ stw_pixelformat_choose(HDC hdc, CONST PIXELFORMATDESCRIPTOR *ppfd)
       * - Giving no more bits than requested is given lowest priority.
       */
 
-      /* FIXME: Take in account individual channel bits */
       if (ppfd->cColorBits && !pfi->pfd.cColorBits)
          delta += 10000;
       else if (ppfd->cColorBits > pfi->pfd.cColorBits)
@@ -473,6 +542,27 @@ stw_pixelformat_choose(HDC hdc, CONST PIXELFORMATDESCRIPTOR *ppfd)
       else if (ppfd->cAlphaBits > pfi->pfd.cAlphaBits)
          delta += 100;
       else if (ppfd->cAlphaBits < pfi->pfd.cAlphaBits)
+         delta++;
+
+      if (ppfd->cRedBits && !pfi->pfd.cRedBits)
+         delta += 10000;
+      else if (ppfd->cRedBits > pfi->pfd.cRedBits)
+         delta += 100;
+      else if (ppfd->cRedBits < pfi->pfd.cRedBits)
+         delta++;
+
+      if (ppfd->cGreenBits && !pfi->pfd.cGreenBits)
+         delta += 10000;
+      else if (ppfd->cGreenBits > pfi->pfd.cGreenBits)
+         delta += 100;
+      else if (ppfd->cGreenBits < pfi->pfd.cGreenBits)
+         delta++;
+
+      if (ppfd->cBlueBits && !pfi->pfd.cBlueBits)
+         delta += 10000;
+      else if (ppfd->cBlueBits > pfi->pfd.cBlueBits)
+         delta += 100;
+      else if (ppfd->cBlueBits < pfi->pfd.cBlueBits)
          delta++;
 
       if (delta < bestdelta) {

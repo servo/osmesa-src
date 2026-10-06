@@ -38,7 +38,7 @@ clCreateKernel(cl_program d_prog, const char *name, cl_int *r_errcode) try {
    ret_error(r_errcode, CL_SUCCESS);
    return new kernel(prog, name, range(sym.args));
 
-} catch (std::out_of_range &e) {
+} catch (std::out_of_range &) {
    ret_error(r_errcode, CL_INVALID_KERNEL_NAME);
    return NULL;
 
@@ -57,7 +57,7 @@ clCreateKernelsInProgram(cl_program d_prog, cl_uint count,
       throw error(CL_INVALID_VALUE);
 
    if (rd_kerns)
-      copy(map([&](const module::symbol &sym) {
+      copy(map([&](const binary::symbol &sym) {
                return desc(new kernel(prog,
                                       std::string(sym.name.begin(),
                                                   sym.name.end()),
@@ -100,7 +100,7 @@ clSetKernelArg(cl_kernel d_kern, cl_uint idx, size_t size,
    obj(d_kern).args().at(idx).set(size, value);
    return CL_SUCCESS;
 
-} catch (std::out_of_range &e) {
+} catch (std::out_of_range &) {
    return CL_INVALID_ARG_INDEX;
 
 } catch (error &e) {
@@ -132,6 +132,10 @@ clGetKernelInfo(cl_kernel d_kern, cl_kernel_info param,
 
    case CL_KERNEL_PROGRAM:
       buf.as_scalar<cl_program>() = desc(kern.program());
+      break;
+
+   case CL_KERNEL_ATTRIBUTES:
+      buf.as_string() = find(name_equals(kern.name()), kern.program().symbols()).attributes;
       break;
 
    default:
@@ -185,16 +189,53 @@ clGetKernelWorkGroupInfo(cl_kernel d_kern, cl_device_id d_dev,
 } catch (error &e) {
    return e.get();
 
-} catch (std::out_of_range &e) {
+} catch (std::out_of_range &) {
    return CL_INVALID_DEVICE;
 }
 
 CLOVER_API cl_int
 clGetKernelArgInfo(cl_kernel d_kern,
                    cl_uint idx, cl_kernel_arg_info param,
-                   size_t size, void *r_buf, size_t *r_size) {
-   CLOVER_NOT_SUPPORTED_UNTIL("1.2");
-   return CL_KERNEL_ARG_INFO_NOT_AVAILABLE;
+                   size_t size, void *r_buf, size_t *r_size) try {
+   property_buffer buf { r_buf, size, r_size };
+
+   auto info = obj(d_kern).args_infos().at(idx);
+
+   if (info.arg_name.empty())
+      return CL_KERNEL_ARG_INFO_NOT_AVAILABLE;
+
+   switch (param) {
+   case CL_KERNEL_ARG_ADDRESS_QUALIFIER:
+      buf.as_scalar<cl_kernel_arg_address_qualifier>() = info.address_qualifier;
+      break;
+
+   case CL_KERNEL_ARG_ACCESS_QUALIFIER:
+      buf.as_scalar<cl_kernel_arg_access_qualifier>() = info.access_qualifier;
+      break;
+
+   case CL_KERNEL_ARG_TYPE_NAME:
+      buf.as_string() = info.type_name;
+      break;
+
+   case CL_KERNEL_ARG_TYPE_QUALIFIER:
+      buf.as_scalar<cl_kernel_arg_type_qualifier>() = info.type_qualifier;
+      break;
+
+   case CL_KERNEL_ARG_NAME:
+      buf.as_string() = info.arg_name;
+      break;
+
+   default:
+      throw error(CL_INVALID_VALUE);
+   }
+
+   return CL_SUCCESS;
+
+} catch (std::out_of_range &) {
+   return CL_INVALID_ARG_INDEX;
+
+} catch (error &e) {
+   return e.get();
 }
 
 namespace {
@@ -216,9 +257,9 @@ namespace {
          throw error(CL_INVALID_KERNEL_ARGS);
 
       // If the command queue's device is not associated to the program, we get
-      // a module, with no sections, which will also fail the following test.
-      auto &m = kern.program().build(q.device()).binary;
-      if (!any_of(type_equals(module::section::text_executable), m.secs))
+      // a binary, with no sections, which will also fail the following test.
+      auto &b = kern.program().build(q.device()).bin;
+      if (!any_of(type_equals(binary::section::text_executable), b.secs))
          throw error(CL_INVALID_PROGRAM_EXECUTABLE);
    }
 
@@ -229,9 +270,6 @@ namespace {
 
       if (dims < 1 || dims > q.device().max_block_size().size())
          throw error(CL_INVALID_WORK_DIMENSION);
-
-      if (!d_grid_size || any_of(is_zero(), grid_size))
-         throw error(CL_INVALID_GLOBAL_WORK_SIZE);
 
       return grid_size;
    }
@@ -326,7 +364,8 @@ clEnqueueTask(cl_command_queue d_q, cl_kernel d_kern,
 }
 
 CLOVER_API cl_int
-clEnqueueNativeKernel(cl_command_queue d_q, void (*func)(void *),
+clEnqueueNativeKernel(cl_command_queue d_q,
+                      void (CL_CALLBACK * func)(void *),
                       void *args, size_t args_size,
                       cl_uint num_mems, const cl_mem *d_mems,
                       const void **mem_handles, cl_uint num_deps,
@@ -338,10 +377,12 @@ CLOVER_API cl_int
 clSetKernelArgSVMPointer(cl_kernel d_kern,
                          cl_uint arg_index,
                          const void *arg_value) try {
+  if (!any_of(std::mem_fn(&device::svm_support), obj(d_kern).program().devices()))
+      return CL_INVALID_OPERATION;
    obj(d_kern).args().at(arg_index).set_svm(arg_value);
    return CL_SUCCESS;
 
-} catch (std::out_of_range &e) {
+} catch (std::out_of_range &) {
    return CL_INVALID_ARG_INDEX;
 
 } catch (error &e) {
@@ -353,7 +394,12 @@ clSetKernelExecInfo(cl_kernel d_kern,
                     cl_kernel_exec_info param_name,
                     size_t param_value_size,
                     const void *param_value) try {
+
+   if (!any_of(std::mem_fn(&device::svm_support), obj(d_kern).program().devices()))
+      return CL_INVALID_OPERATION;
+
    auto &kern = obj(d_kern);
+
    const bool has_system_svm = all_of(std::mem_fn(&device::has_system_svm),
                                       kern.program().context().devices());
 

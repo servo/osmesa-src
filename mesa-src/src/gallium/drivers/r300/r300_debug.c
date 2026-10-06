@@ -1,24 +1,7 @@
 /*
  * Copyright 2009 Nicolai Haehnle <nhaehnle@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "r300_context.h"
 
@@ -26,11 +9,10 @@
 
 #include <stdio.h>
 
-static const struct debug_named_value debug_options[] = {
+static const struct debug_named_value r300_debug_options[] = {
     { "info", DBG_INFO, "Print hardware info (printed by default on debug builds"},
     { "fp", DBG_FP, "Log fragment program compilation" },
     { "vp", DBG_VP, "Log vertex program compilation" },
-    { "pstat", DBG_P_STAT, "Log vertex/fragment program stats" },
     { "draw", DBG_DRAW, "Log draw calls" },
     { "swtcl", DBG_SWTCL, "Log SWTCL-specific info" },
     { "rsblock", DBG_RS_BLOCK, "Log rasterizer registers" },
@@ -51,6 +33,9 @@ static const struct debug_named_value debug_options[] = {
     { "nozmask", DBG_NO_ZMASK, "Disable zbuffer compression" },
     { "nohiz", DBG_NO_HIZ, "Disable hierarchical zbuffer" },
     { "nocmask", DBG_NO_CMASK, "Disable AA compression and fast AA clear" },
+    { "notcl", DBG_NO_TCL, "Disable hardware accelerated Transform/Clip/Lighting" },
+    { "ieeemath", DBG_IEEEMATH, "Force IEEE versions of VS math opcodes where applicable and also IEEE handling of multiply by zero (R5xx only)" },
+    { "ffmath", DBG_FFMATH, "Force FF versions of VS math opcodes where applicable and 0*anything=0 rules in FS" },
 
     /* must be last */
     DEBUG_NAMED_VALUE_END
@@ -58,7 +43,7 @@ static const struct debug_named_value debug_options[] = {
 
 void r300_init_debug(struct r300_screen * screen)
 {
-    screen->debug = debug_get_flags_option("RADEON_DEBUG", debug_options, 0);
+    screen->debug = debug_get_flags_option("RADEON_DEBUG", r300_debug_options, 0);
 }
 
 void r500_dump_rs_block(struct r300_rs_block *rs)

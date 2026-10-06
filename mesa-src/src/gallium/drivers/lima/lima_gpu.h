@@ -73,9 +73,9 @@ struct lima_pp_wb_reg {
    uint32_t downsample_factor;
    uint32_t pixel_layout;
    uint32_t pitch;
+   uint32_t flags;
    uint32_t mrt_bits;
    uint32_t mrt_pitch;
-   uint32_t zero;
    uint32_t unused0;
    uint32_t unused1;
    uint32_t unused2;
@@ -120,11 +120,15 @@ struct lima_render_state {
       plbu_cmd[i++] = v2; \
    } while (0)
 
+#define PLBU_BLOCK_W_MASK 0xff
+#define PLBU_BLOCK_H_MASK 0xff
+
 #define PLBU_CMD_BLOCK_STEP(shift_min, shift_h, shift_w) \
    PLBU_CMD(((shift_min) << 28) | ((shift_h) << 16) | (shift_w), 0x1000010C)
 #define PLBU_CMD_TILED_DIMENSIONS(tiled_w, tiled_h) \
    PLBU_CMD((((tiled_w) - 1) << 24) | (((tiled_h) - 1) << 8), 0x10000109)
-#define PLBU_CMD_BLOCK_STRIDE(block_w) PLBU_CMD((block_w) & 0xff, 0x30000000)
+#define PLBU_CMD_BLOCK_STRIDE(block_w) \
+   PLBU_CMD((block_w) & PLBU_BLOCK_W_MASK, 0x30000000)
 #define PLBU_CMD_ARRAY_ADDRESS(gp_stream, block_num) \
    PLBU_CMD(gp_stream, 0x28000000 | ((block_num) - 1) | 1)
 #define PLBU_CMD_VIEWPORT_LEFT(v) PLBU_CMD(v, 0x10000107)

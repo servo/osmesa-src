@@ -7,23 +7,22 @@
 
 #define FUNC_ENTER                                                \
    /* declare more local vars */                                  \
-   const unsigned prim = input_prims->prim;                       \
+   const enum mesa_prim prim = input_prims->prim;            \
    const unsigned prim_flags = input_prims->flags;                \
-   const boolean quads_flatshade_last = FALSE;                    \
-   const boolean last_vertex_last = !asmblr->draw->rasterizer->flatshade_first;  \
+   const bool last_vertex_last = !asmblr->draw->rasterizer->flatshade_first;  \
    switch (prim) {                                                  \
-   case PIPE_PRIM_QUADS:                                            \
-   case PIPE_PRIM_QUAD_STRIP:                                       \
-   case PIPE_PRIM_POLYGON:                                          \
-      debug_assert(!"unexpected primitive type in prim assembler"); \
+   case MESA_PRIM_POLYGON:                                          \
+      assert(!"unexpected primitive type in prim assembler"); \
       return;                                                       \
    default:                                                         \
       break;                                                        \
    }
 
 
+#define PASS_QUADS
 #define POINT(i0)                             prim_point(asmblr, i0)
 #define LINE(flags, i0, i1)                   prim_line(asmblr, i0, i1)
 #define TRIANGLE(flags, i0, i1, i2)           prim_tri(asmblr, i0, i1, i2)
+#define QUAD(flags, i0, i1, i2, i3)           prim_quad(asmblr, i0, i1, i2, i3)
 
 #include "draw_decompose_tmp.h"

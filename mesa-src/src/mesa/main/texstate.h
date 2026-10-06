@@ -86,33 +86,15 @@ extern void
 _mesa_print_texunit_state( struct gl_context *ctx, GLuint unit );
 
 
-
-/**
- * \name Called from API
- */
-/*@{*/
-
-extern void GLAPIENTRY
-_mesa_ActiveTexture_no_error( GLenum target );
-
-extern void GLAPIENTRY
-_mesa_ActiveTexture( GLenum target );
-
-extern void GLAPIENTRY
-_mesa_ClientActiveTexture( GLenum target );
-
-/*@}*/
-
-
 /**
  * \name Initialization, state maintenance
  */
 /*@{*/
 
-extern void
+extern GLbitfield
 _mesa_update_texture_matrices(struct gl_context *ctx);
 
-extern void
+extern GLbitfield
 _mesa_update_texture_state(struct gl_context *ctx);
 
 extern GLboolean

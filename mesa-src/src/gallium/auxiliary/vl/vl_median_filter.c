@@ -165,7 +165,8 @@ generate_offsets(enum vl_median_filter_shape shape, unsigned size,
 {
    unsigned i = 0;
    int half_size;
-   struct vertex2f v;
+   int x;
+   int y;
 
    assert(offsets && num_offsets);
 
@@ -199,41 +200,62 @@ generate_offsets(enum vl_median_filter_shape shape, unsigned size,
 
    switch(shape) {
    case VL_MEDIAN_FILTER_BOX:
-      for (v.x = -half_size; v.x <= half_size; ++v.x)
-         for (v.y = -half_size; v.y <= half_size; ++v.y)
-            (*offsets)[i++] = v;
+      for (x = -half_size; x <= half_size; ++x)
+         for (y = -half_size; y <= half_size; ++y) {
+            (*offsets)[i].x = x;
+            (*offsets)[i].y = y;
+             i++;
+         }
       break;
 
    case VL_MEDIAN_FILTER_CROSS:
-      v.y = 0.0f;
-      for (v.x = -half_size; v.x <= half_size; ++v.x)
-         (*offsets)[i++] = v;
+      y = 0;
+      for (x = -half_size; x <= half_size; ++x) {
+          (*offsets)[i].x = x;
+          (*offsets)[i].y = y;
+           i++;
+      }
 
-      v.x = 0.0f;
-      for (v.y = -half_size; v.y <= half_size; ++v.y)
-         if (v.y != 0.0f)
-            (*offsets)[i++] = v;
+      x = 0;
+      for (y = -half_size; y <= half_size; ++y)
+         if (y != 0) {
+             (*offsets)[i].x = x;
+             (*offsets)[i].y = y;
+              i++;
+         }
       break;
 
    case VL_MEDIAN_FILTER_X:
-      for (v.x = v.y = -half_size; v.x <= half_size; ++v.x, ++v.y)
-         (*offsets)[i++] = v;
+       for (x = y = -half_size; x <= half_size; ++x, ++y) {
+           (*offsets)[i].x = x;
+           (*offsets)[i].y = y;
+            i++;
+       }
 
-      for (v.x = -half_size, v.y = half_size; v.x <= half_size; ++v.x, --v.y)
-         if (v.y != 0.0f)
-            (*offsets)[i++] = v;
+      for (x = -half_size, y = half_size; x <= half_size; ++x, --y)
+          if (y != 0) {
+              (*offsets)[i].x = x;
+              (*offsets)[i].y = y;
+               i++;
+          }
       break;
 
    case VL_MEDIAN_FILTER_HORIZONTAL:
-      v.y = 0.0f;
-      for (v.x = -half_size; v.x <= half_size; ++v.x)
-         (*offsets)[i++] = v;
+      y = 0;
+      for (x = -half_size; x <= half_size; ++x) {
+          (*offsets)[i].x = x;
+          (*offsets)[i].y = y;
+           i++;
+      }
       break;
 
    case VL_MEDIAN_FILTER_VERTICAL:
-      v.x = 0.0f;
-      for (v.y = -half_size; v.y <= half_size; ++v.y)
-         (*offsets)[i++] = v;
+      x = 0;
+      for (y = -half_size; y <= half_size; ++y) {
+          (*offsets)[i].x = x;
+          (*offsets)[i].y = y;
+           i++;
+      }
       break;
    }
 
@@ -291,7 +313,6 @@ vl_median_filter_init(struct vl_median_filter *filter, struct pipe_context *pipe
    sampler.mag_img_filter = PIPE_TEX_FILTER_NEAREST;
    sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
    sampler.compare_func = PIPE_FUNC_ALWAYS;
-   sampler.normalized_coords = 1;
    filter->sampler = pipe->create_sampler_state(pipe, &sampler);
    if (!filter->sampler)
       goto error_sampler;
@@ -305,6 +326,7 @@ vl_median_filter_init(struct vl_median_filter *filter, struct pipe_context *pipe
    ve.instance_divisor = 0;
    ve.vertex_buffer_index = 0;
    ve.src_format = PIPE_FORMAT_R32G32_FLOAT;
+   ve.src_stride = sizeof(struct vertex2f);
    filter->ves = pipe->create_vertex_elements_state(pipe, 1, &ve);
    if (!filter->ves)
       goto error_ves;
@@ -383,6 +405,10 @@ vl_median_filter_render(struct vl_median_filter *filter,
    viewport.scale[0] = dst->width;
    viewport.scale[1] = dst->height;
    viewport.scale[2] = 1;
+   viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+   viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+   viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+   viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
    memset(&fb_state, 0, sizeof(fb_state));
    fb_state.width = dst->width;
@@ -395,13 +421,13 @@ vl_median_filter_render(struct vl_median_filter *filter,
    filter->pipe->bind_sampler_states(filter->pipe, PIPE_SHADER_FRAGMENT,
                                      0, 1, &filter->sampler);
    filter->pipe->set_sampler_views(filter->pipe, PIPE_SHADER_FRAGMENT,
-                                   0, 1, &src);
+                                   0, 1, 0, false, &src);
    filter->pipe->bind_vs_state(filter->pipe, filter->vs);
    filter->pipe->bind_fs_state(filter->pipe, filter->fs);
    filter->pipe->set_framebuffer_state(filter->pipe, &fb_state);
    filter->pipe->set_viewport_states(filter->pipe, 0, 1, &viewport);
-   filter->pipe->set_vertex_buffers(filter->pipe, 0, 1, &filter->quad);
    filter->pipe->bind_vertex_elements_state(filter->pipe, filter->ves);
+   util_set_vertex_buffers(filter->pipe, 1, false, &filter->quad);
 
-   util_draw_arrays(filter->pipe, PIPE_PRIM_QUADS, 0, 4);
+   util_draw_arrays(filter->pipe, MESA_PRIM_QUADS, 0, 4);
 }

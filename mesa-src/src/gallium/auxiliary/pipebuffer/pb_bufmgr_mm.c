@@ -35,7 +35,7 @@
 
 #include "pipe/p_defines.h"
 #include "util/u_debug.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "util/u_memory.h"
 #include "util/list.h"
 #include "util/u_mm.h"
@@ -92,12 +92,12 @@ mm_buffer(struct pb_buffer *buf)
 
 
 static void
-mm_buffer_destroy(struct pb_buffer *buf)
+mm_buffer_destroy(void *winsys, struct pb_buffer *buf)
 {
    struct mm_buffer *mm_buf = mm_buffer(buf);
    struct mm_pb_manager *mm = mm_buf->mgr;
    
-   assert(!pipe_is_referenced(&mm_buf->base.reference));
+   assert(!pipe_is_referenced(&mm_buf->base.base.reference));
    
    mtx_lock(&mm->mutex);
    u_mmFreeMem(mm_buf->block);
@@ -180,8 +180,8 @@ mm_bufmgr_create_buffer(struct pb_manager *mgr,
    struct mm_buffer *mm_buf;
 
    /* We don't handle alignments larger then the one initially setup */
-   assert(pb_check_alignment(desc->alignment, (pb_size)1 << mm->align2));
-   if(!pb_check_alignment(desc->alignment, (pb_size)1 << mm->align2))
+   assert(pb_check_alignment(desc->alignment, 1u << mm->align2));
+   if(!pb_check_alignment(desc->alignment, 1u << mm->align2))
       return NULL;
    
    mtx_lock(&mm->mutex);
@@ -192,10 +192,10 @@ mm_bufmgr_create_buffer(struct pb_manager *mgr,
       return NULL;
    }
 
-   pipe_reference_init(&mm_buf->base.reference, 1);
-   mm_buf->base.alignment = desc->alignment;
-   mm_buf->base.usage = desc->usage;
-   mm_buf->base.size = size;
+   pipe_reference_init(&mm_buf->base.base.reference, 1);
+   mm_buf->base.base.alignment_log2 = util_logbase2(desc->alignment);
+   mm_buf->base.base.usage = desc->usage;
+   mm_buf->base.base.size = size;
    
    mm_buf->base.vtbl = &mm_buffer_vtbl;
    

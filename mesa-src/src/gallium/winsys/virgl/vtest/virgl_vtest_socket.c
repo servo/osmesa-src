@@ -28,8 +28,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#include <os/os_process.h>
 #include <util/format/u_format.h>
+#include <util/u_process.h>
+
+#define VIRGL_RENDERER_UNSTABLE_APIS
 
 #include "virgl_vtest_winsys.h"
 #include "virgl_vtest_public.h"
@@ -119,11 +121,12 @@ static int virgl_vtest_send_init(struct virgl_vtest_winsys *vws)
 {
    uint32_t buf[VTEST_HDR_SIZE];
    const char *nstr = "virtest";
-   char cmdline[64];
-   int ret;
+   char cmdline[64] = { 0 };
+   const char *proc_name = util_get_process_name();
 
-   ret = os_get_process_name(cmdline, 63);
-   if (ret == FALSE)
+   if (proc_name)
+      strncpy(cmdline, proc_name, 63);
+   else
       strcpy(cmdline, nstr);
 #if defined(HAVE_PROGRAM_INVOCATION_NAME)
    if (!strcmp(cmdline, "shader_runner")) {
@@ -142,13 +145,13 @@ static int virgl_vtest_send_init(struct virgl_vtest_winsys *vws)
    return 0;
 }
 
-static int virgl_vtest_negotiate_version(struct virgl_vtest_winsys *vws)
+static int virgl_vtest_negotiate_version(struct virgl_vtest_winsys *vws, int version)
 {
    uint32_t vtest_hdr[VTEST_HDR_SIZE];
    uint32_t version_buf[VCMD_PROTOCOL_VERSION_SIZE];
    uint32_t busy_wait_buf[VCMD_BUSY_WAIT_SIZE];
    uint32_t busy_wait_result[1];
-   int ret;
+   ASSERTED int ret;
 
    vtest_hdr[VTEST_CMD_LEN] = VCMD_PING_PROTOCOL_VERSION_SIZE;
    vtest_hdr[VTEST_CMD_ID] = VCMD_PING_PROTOCOL_VERSION;
@@ -173,7 +176,7 @@ static int virgl_vtest_negotiate_version(struct virgl_vtest_winsys *vws)
 
      vtest_hdr[VTEST_CMD_LEN] = VCMD_PROTOCOL_VERSION_SIZE;
      vtest_hdr[VTEST_CMD_ID] = VCMD_PROTOCOL_VERSION;
-     version_buf[VCMD_PROTOCOL_VERSION_VERSION] = VTEST_PROTOCOL_VERSION;
+     version_buf[VCMD_PROTOCOL_VERSION_VERSION] = version;
      virgl_block_write(vws->sock_fd, &vtest_hdr, sizeof(vtest_hdr));
      virgl_block_write(vws->sock_fd, &version_buf, sizeof(version_buf));
 
@@ -197,6 +200,7 @@ int virgl_vtest_connect(struct virgl_vtest_winsys *vws)
 {
    struct sockaddr_un un;
    int sock, ret;
+   const char* socket_name = os_get_option("VTEST_SOCKET_NAME");
 
    sock = socket(PF_UNIX, SOCK_STREAM, 0);
    if (sock < 0)
@@ -204,7 +208,8 @@ int virgl_vtest_connect(struct virgl_vtest_winsys *vws)
 
    memset(&un, 0, sizeof(un));
    un.sun_family = AF_UNIX;
-   snprintf(un.sun_path, sizeof(un.sun_path), "%s", VTEST_DEFAULT_SOCKET_NAME);
+   snprintf(un.sun_path, sizeof(un.sun_path), "%s", socket_name ?
+      socket_name : VTEST_DEFAULT_SOCKET_NAME);
 
    do {
       ret = 0;
@@ -215,7 +220,7 @@ int virgl_vtest_connect(struct virgl_vtest_winsys *vws)
 
    vws->sock_fd = sock;
    virgl_vtest_send_init(vws);
-   vws->protocol_version = virgl_vtest_negotiate_version(vws);
+   vws->protocol_version = virgl_vtest_negotiate_version(vws, VTEST_PROTOCOL_VERSION);
 
    /* Version 1 is deprecated. */
    if (vws->protocol_version == 1)
@@ -253,8 +258,13 @@ int virgl_vtest_send_get_caps(struct virgl_vtest_winsys *vws,
 
        ret = virgl_block_read(vws->sock_fd, &caps->caps, resp_size);
 
-       if (dummy_size)
-	   ret = virgl_block_read(vws->sock_fd, &dummy, dummy_size);
+       while (dummy_size) {
+           ret = virgl_block_read(vws->sock_fd, &dummy,
+                    dummy_size < sizeof(dummy) ? dummy_size : sizeof(dummy));
+           if (ret <= 0)
+               break;
+           dummy_size -= ret;
+       }
 
        /* now read back the pointless caps v1 we requested */
        ret = virgl_block_read(vws->sock_fd, resp_buf, sizeof(resp_buf));
@@ -263,6 +273,14 @@ int virgl_vtest_send_get_caps(struct virgl_vtest_winsys *vws,
        ret = virgl_block_read(vws->sock_fd, &dummy, sizeof(struct virgl_caps_v1));
    } else
        ret = virgl_block_read(vws->sock_fd, &caps->caps, sizeof(struct virgl_caps_v1));
+
+   // Old virglrenderer versions can't handle the re-use of host-generated
+   // resource IDs that are used with protocol version 3, so re-negotiate the
+   // protocol version limiting to <= 2
+   if (vws->protocol_version > 2 &&
+       caps->caps.v2.host_feature_check_version < 23) {
+      vws->protocol_version = virgl_vtest_negotiate_version(vws, 2);
+   }
 
    return 0;
 }
@@ -286,7 +304,7 @@ static int virgl_vtest_send_resource_create2(struct virgl_vtest_winsys *vws,
    vtest_hdr[VTEST_CMD_LEN] = VCMD_RES_CREATE2_SIZE;
    vtest_hdr[VTEST_CMD_ID] = VCMD_RESOURCE_CREATE2;
 
-   res_create_buf[VCMD_RES_CREATE2_RES_HANDLE] = handle;
+   res_create_buf[VCMD_RES_CREATE2_RES_HANDLE] = vws->protocol_version < 3 ? handle : 0;
    res_create_buf[VCMD_RES_CREATE2_TARGET] = target;
    res_create_buf[VCMD_RES_CREATE2_FORMAT] = format;
    res_create_buf[VCMD_RES_CREATE2_BIND] = bind;
@@ -301,9 +319,16 @@ static int virgl_vtest_send_resource_create2(struct virgl_vtest_winsys *vws,
    virgl_block_write(vws->sock_fd, &vtest_hdr, sizeof(vtest_hdr));
    virgl_block_write(vws->sock_fd, &res_create_buf, sizeof(res_create_buf));
 
+   if (vws->protocol_version >= 3) {
+      virgl_block_read(vws->sock_fd, vtest_hdr, sizeof(vtest_hdr));
+      assert(vtest_hdr[VTEST_CMD_LEN] == 1);
+      assert(vtest_hdr[VTEST_CMD_ID] == VCMD_RESOURCE_CREATE2);
+      virgl_block_read(vws->sock_fd, &handle, sizeof(handle));
+   }
+
    /* Multi-sampled textures have no backing store attached. */
    if (size == 0)
-      return 0;
+      return handle;
 
    *out_fd = virgl_vtest_receive_fd(vws->sock_fd);
    if (*out_fd < 0) {
@@ -311,7 +336,7 @@ static int virgl_vtest_send_resource_create2(struct virgl_vtest_winsys *vws,
       return -1;
    }
 
-   return 0;
+   return handle;
 }
 
 int virgl_vtest_send_resource_create(struct virgl_vtest_winsys *vws,
@@ -353,19 +378,18 @@ int virgl_vtest_send_resource_create(struct virgl_vtest_winsys *vws,
    virgl_block_write(vws->sock_fd, &vtest_hdr, sizeof(vtest_hdr));
    virgl_block_write(vws->sock_fd, &res_create_buf, sizeof(res_create_buf));
 
-   return 0;
+   return handle;
 }
 
 int virgl_vtest_submit_cmd(struct virgl_vtest_winsys *vws,
-                           struct virgl_vtest_cmd_buf *cbuf)
+                           uint32_t *buf, uint32_t buf_len)
 {
    uint32_t vtest_hdr[VTEST_HDR_SIZE];
-
-   vtest_hdr[VTEST_CMD_LEN] = cbuf->base.cdw;
+   vtest_hdr[VTEST_CMD_LEN] = buf_len;
    vtest_hdr[VTEST_CMD_ID] = VCMD_SUBMIT_CMD;
 
    virgl_block_write(vws->sock_fd, &vtest_hdr, sizeof(vtest_hdr));
-   virgl_block_write(vws->sock_fd, cbuf->buf, cbuf->base.cdw * 4);
+   virgl_block_write(vws->sock_fd, buf, 4 * buf_len);
    return 0;
 }
 
@@ -521,7 +545,7 @@ int virgl_vtest_busy_wait(struct virgl_vtest_winsys *vws, int handle,
    uint32_t vtest_hdr[VTEST_HDR_SIZE];
    uint32_t cmd[VCMD_BUSY_WAIT_SIZE];
    uint32_t result[1];
-   int ret;
+   ASSERTED int ret;
    vtest_hdr[VTEST_CMD_LEN] = VCMD_BUSY_WAIT_SIZE;
    vtest_hdr[VTEST_CMD_ID] = VCMD_RESOURCE_BUSY_WAIT;
    cmd[VCMD_BUSY_WAIT_HANDLE] = handle;
@@ -536,3 +560,38 @@ int virgl_vtest_busy_wait(struct virgl_vtest_winsys *vws, int handle,
    assert(ret);
    return result[0];
 }
+
+int
+virgl_vtest_send_create_blob(struct virgl_vtest_winsys *vws,
+                                 uint32_t size, uint32_t blob_id,
+                                 int *out_fd)
+{
+   uint32_t vtest_hdr[VTEST_HDR_SIZE];
+   vtest_hdr[VTEST_CMD_LEN] = VCMD_RES_CREATE_BLOB_SIZE;
+   vtest_hdr[VTEST_CMD_ID] = VCMD_RESOURCE_CREATE_BLOB;
+
+   uint32_t vcmd_res_create_blob[VCMD_RES_CREATE_BLOB_SIZE];
+
+   vcmd_res_create_blob[VCMD_RES_CREATE_BLOB_TYPE] = VCMD_BLOB_TYPE_HOST3D;
+   vcmd_res_create_blob[VCMD_RES_CREATE_BLOB_FLAGS] = VCMD_BLOB_FLAG_MAPPABLE;
+   vcmd_res_create_blob[VCMD_RES_CREATE_BLOB_SIZE_LO] = (uint32_t)size;
+   vcmd_res_create_blob[VCMD_RES_CREATE_BLOB_SIZE_HI] = 0;
+   vcmd_res_create_blob[VCMD_RES_CREATE_BLOB_ID_LO] = (uint32_t)blob_id;
+   vcmd_res_create_blob[VCMD_RES_CREATE_BLOB_ID_HI] = 0;
+
+   virgl_block_write(vws->sock_fd, vtest_hdr, sizeof(vtest_hdr));
+   virgl_block_write(vws->sock_fd, vcmd_res_create_blob, sizeof(vcmd_res_create_blob));
+
+   vtest_hdr[0] = 0;
+   virgl_block_read(vws->sock_fd, vtest_hdr, sizeof(vtest_hdr));
+   assert(vtest_hdr[VTEST_CMD_LEN] == 1);
+   assert(vtest_hdr[VTEST_CMD_ID] == VCMD_RESOURCE_CREATE_BLOB);
+
+   uint32_t res_id;
+   virgl_block_read(vws->sock_fd, &res_id, sizeof(res_id));
+
+   *out_fd = virgl_vtest_receive_fd(vws->sock_fd);
+
+   return res_id;
+}
+

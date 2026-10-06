@@ -36,13 +36,13 @@
 #define U_DEBUG_DUMP_H_
 
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_state.h"
 
 #include <stdio.h>
 
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 extern "C" {
 #endif
 
@@ -55,40 +55,40 @@ extern "C" {
  */
 
 const char *
-util_str_blend_factor(unsigned value, boolean shortened);
+util_str_blend_factor(unsigned value, bool shortened);
 
 const char *
-util_str_blend_func(unsigned value, boolean shortened);
+util_str_blend_func(unsigned value, bool shortened);
 
 const char *
-util_str_logicop(unsigned value, boolean shortened);
+util_str_logicop(unsigned value, bool shortened);
 
 const char *
-util_str_func(unsigned value, boolean shortened);
+util_str_func(unsigned value, bool shortened);
 
 const char *
-util_str_stencil_op(unsigned value, boolean shortened);
+util_str_stencil_op(unsigned value, bool shortened);
 
 const char *
-util_str_tex_target(unsigned value, boolean shortened);
+util_str_tex_target(unsigned value, bool shortened);
 
 const char *
-util_str_tex_wrap(unsigned value, boolean shortened);
+util_str_tex_wrap(unsigned value, bool shortened);
 
 const char *
-util_str_tex_mipfilter(unsigned value, boolean shortened);
+util_str_tex_mipfilter(unsigned value, bool shortened);
 
 const char *
-util_str_tex_filter(unsigned value, boolean shortened);
+util_str_tex_filter(unsigned value, bool shortened);
 
 const char *
-util_str_query_type(unsigned value, boolean shortened);
+util_str_query_type(unsigned value, bool shortened);
 
 const char *
-util_str_query_value_type(unsigned value, boolean shortened);
+util_str_query_value_type(unsigned value, bool shortened);
 
 const char *
-util_str_prim_mode(unsigned value, boolean shortened);
+util_str_prim_mode(unsigned value, bool shortened);
 
 void
 util_dump_ns(FILE *f, uint64_t time);
@@ -101,6 +101,9 @@ util_dump_query_type(FILE *stream, unsigned value);
 
 void
 util_dump_query_value_type(FILE *stream, unsigned value);
+
+void
+util_dump_query_flags(FILE *stream, unsigned value);
 
 void
 util_dump_transfer_usage(FILE *stream, unsigned value);
@@ -131,6 +134,10 @@ util_dump_scissor_state(FILE *stream,
 void
 util_dump_clip_state(FILE *stream,
                      const struct pipe_clip_state *state);
+
+void
+util_dump_stream_output_info(FILE *stream,
+                             const struct pipe_stream_output_info *state);
 
 void
 util_dump_shader_state(FILE *stream,
@@ -201,6 +208,13 @@ void
 util_dump_draw_info(FILE *stream, const struct pipe_draw_info *state);
 
 void
+util_dump_draw_start_count_bias(FILE *stream, const struct pipe_draw_start_count_bias *state);
+
+void
+util_dump_draw_indirect_info(FILE *stream,
+                             const struct pipe_draw_indirect_info *indirect);
+
+void
 util_dump_grid_info(FILE *stream, const struct pipe_grid_info *state);
 
 void
@@ -212,7 +226,7 @@ util_dump_blit_info(FILE *stream, const struct pipe_blit_info *info);
 /* FIXME: Move the other debug_dump_xxx functions out of u_debug.h into here. */
 
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 }
 #endif
 

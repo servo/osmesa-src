@@ -36,9 +36,9 @@
  * @author Jose Fonseca <jfonseca@vmware.com>
  */
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "util/u_debug.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "pipe/p_defines.h"
 #include "util/u_memory.h"
 #include "util/list.h"
@@ -187,7 +187,7 @@ pb_slab_range_manager(struct pb_manager *mgr)
  * it on the slab FREE list.
  */
 static void
-pb_slab_buffer_destroy(struct pb_buffer *_buf)
+pb_slab_buffer_destroy(void *winsys, struct pb_buffer *_buf)
 {
    struct pb_slab_buffer *buf = pb_slab_buffer(_buf);
    struct pb_slab *slab = buf->slab;
@@ -196,7 +196,7 @@ pb_slab_buffer_destroy(struct pb_buffer *_buf)
 
    mtx_lock(&mgr->mutex);
    
-   assert(!pipe_is_referenced(&buf->base.reference));
+   assert(!pipe_is_referenced(&buf->base.base.reference));
    
    buf->mapCount = 0;
 
@@ -321,7 +321,7 @@ pb_slab_create(struct pb_slab_manager *mgr)
       goto out_err1;
    }
 
-   numBuffers = slab->bo->size / mgr->bufSize;
+   numBuffers = slab->bo->base.size / mgr->bufSize;
 
    slab->buffers = CALLOC(numBuffers, sizeof(*slab->buffers));
    if (!slab->buffers) {
@@ -337,10 +337,10 @@ pb_slab_create(struct pb_slab_manager *mgr)
 
    buf = slab->buffers;
    for (i=0; i < numBuffers; ++i) {
-      pipe_reference_init(&buf->base.reference, 0);
-      buf->base.size = mgr->bufSize;
-      buf->base.alignment = 0;
-      buf->base.usage = 0;
+      pipe_reference_init(&buf->base.base.reference, 0);
+      buf->base.base.size = mgr->bufSize;
+      buf->base.base.alignment_log2 = 0;
+      buf->base.base.usage = 0;
       buf->base.vtbl = &pb_slab_buffer_vtbl;
       buf->slab = slab;
       buf->start = i* mgr->bufSize;
@@ -403,7 +403,7 @@ pb_slab_manager_create_buffer(struct pb_manager *_mgr,
    
    /* Allocate the buffer from a partial (or just created) slab */
    list = mgr->slabs.next;
-   slab = LIST_ENTRY(struct pb_slab, list, head);
+   slab = list_entry(list, struct pb_slab, head);
    
    /* If totally full remove from the partial slab list */
    if (--slab->numFree == 0)
@@ -413,11 +413,11 @@ pb_slab_manager_create_buffer(struct pb_manager *_mgr,
    list_delinit(list);
 
    mtx_unlock(&mgr->mutex);
-   buf = LIST_ENTRY(struct pb_slab_buffer, list, head);
+   buf = list_entry(list, struct pb_slab_buffer, head);
    
-   pipe_reference_init(&buf->base.reference, 1);
-   buf->base.alignment = desc->alignment;
-   buf->base.usage = desc->usage;
+   pipe_reference_init(&buf->base.base.reference, 1);
+   buf->base.base.alignment_log2 = util_logbase2(desc->alignment);
+   buf->base.base.usage = desc->usage;
    
    return &buf->base;
 }
@@ -440,6 +440,7 @@ pb_slab_manager_destroy(struct pb_manager *_mgr)
    struct pb_slab_manager *mgr = pb_slab_manager(_mgr);
 
    /* TODO: cleanup all allocated buffers */
+   mtx_destroy(&mgr->mutex);
    FREE(mgr);
 }
 

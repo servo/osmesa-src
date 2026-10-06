@@ -1,25 +1,7 @@
 /*
  * Copyright 2010 Jerome Glisse <glisse@freedesktop.org>
  * Copyright 2014 Marek Olšák <marek.olsak@amd.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "r600_query.h"
@@ -410,7 +392,7 @@ static bool r600_query_sw_get_result(struct r600_common_context *rctx,
 		struct pipe_context *ctx = rquery->b.flushed ? NULL : &rctx->b;
 
 		result->b = screen->fence_finish(screen, ctx, query->fence,
-						 wait ? PIPE_TIMEOUT_INFINITE : 0);
+						 wait ? OS_TIMEOUT_INFINITE : 0);
 		return result->b;
 	}
 
@@ -427,10 +409,10 @@ static bool r600_query_sw_get_result(struct r600_common_context *rctx,
 		result->u32 = 0;
 		return true;
 	case R600_QUERY_GPIN_NUM_SIMD:
-		result->u32 = rctx->screen->info.num_good_compute_units;
+		result->u32 = rctx->screen->info.num_cu;
 		return true;
 	case R600_QUERY_GPIN_NUM_RB:
-		result->u32 = rctx->screen->info.num_render_backends;
+		result->u32 = rctx->screen->info.max_render_backends;
 		return true;
 	case R600_QUERY_GPIN_NUM_SPI:
 		result->u32 = 1; /* all supported chips have one SPI per SE */
@@ -526,9 +508,9 @@ static bool r600_query_hw_prepare_buffer(struct r600_common_screen *rscreen,
 					 struct r600_resource *buffer)
 {
 	/* Callers ensure that the buffer is currently unused by the GPU. */
-	uint32_t *results = rscreen->ws->buffer_map(buffer->buf, NULL,
-						   PIPE_TRANSFER_WRITE |
-						   PIPE_TRANSFER_UNSYNCHRONIZED);
+	uint32_t *results = rscreen->ws->buffer_map(rscreen->ws, buffer->buf, NULL,
+						   PIPE_MAP_WRITE |
+						   PIPE_MAP_UNSYNCHRONIZED);
 	if (!results)
 		return false;
 
@@ -537,7 +519,7 @@ static bool r600_query_hw_prepare_buffer(struct r600_common_screen *rscreen,
 	if (query->b.type == PIPE_QUERY_OCCLUSION_COUNTER ||
 	    query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE ||
 	    query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE) {
-		unsigned max_rbs = rscreen->info.num_render_backends;
+		unsigned max_rbs = rscreen->info.max_render_backends;
 		unsigned enabled_rb_mask = rscreen->info.enabled_rb_mask;
 		unsigned num_results;
 		unsigned i, j;
@@ -560,7 +542,7 @@ static bool r600_query_hw_prepare_buffer(struct r600_common_screen *rscreen,
 
 static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
                                               struct r600_query *rquery,
-                                              bool wait,
+                                              enum pipe_query_flags flags,
                                               enum pipe_query_value_type result_type,
                                               int index,
                                               struct pipe_resource *resource,
@@ -622,7 +604,7 @@ static struct pipe_query *r600_query_hw_create(struct r600_common_screen *rscree
 	case PIPE_QUERY_OCCLUSION_COUNTER:
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
   	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
-		query->result_size = 16 * rscreen->info.num_render_backends;
+		query->result_size = 16 * rscreen->info.max_render_backends;
 		query->result_size += 16; /* for the fence + alignment */
 		query->num_cs_dw_begin = 6;
 		query->num_cs_dw_end = 6 + r600_gfx_write_fence_dwords(rscreen);
@@ -655,7 +637,7 @@ static struct pipe_query *r600_query_hw_create(struct r600_common_screen *rscree
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		/* 11 values on EG, 8 on R600. */
-		query->result_size = (rscreen->chip_class >= EVERGREEN ? 11 : 8) * 16;
+		query->result_size = (rscreen->gfx_level >= EVERGREEN ? 11 : 8) * 16;
 		query->result_size += 8; /* for the fence + alignment */
 		query->num_cs_dw_begin = 6;
 		query->num_cs_dw_end = 6 + r600_gfx_write_fence_dwords(rscreen);
@@ -728,7 +710,7 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 					struct r600_resource *buffer,
 					uint64_t va)
 {
-	struct radeon_cmdbuf *cs = ctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &ctx->gfx.cs;
 
 	switch (query->b.type) {
 	case PIPE_QUERY_OCCLUSION_COUNTER:
@@ -766,7 +748,7 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 	default:
 		assert(0);
 	}
-	r600_emit_reloc(ctx, &ctx->gfx, query->buffer.buf, RADEON_USAGE_WRITE,
+	r600_emit_reloc(ctx, &ctx->gfx, query->buffer.buf, RADEON_USAGE_WRITE |
 			RADEON_PRIO_QUERY);
 }
 
@@ -808,7 +790,7 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 				       struct r600_resource *buffer,
 				       uint64_t va)
 {
-	struct radeon_cmdbuf *cs = ctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &ctx->gfx.cs;
 	uint64_t fence_va = 0;
 
 	switch (query->b.type) {
@@ -821,7 +803,7 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 		radeon_emit(cs, va);
 		radeon_emit(cs, va >> 32);
 
-		fence_va = va + ctx->screen->info.num_render_backends * 16 - 8;
+		fence_va = va + ctx->screen->info.max_render_backends * 16 - 8;
 		break;
 	case PIPE_QUERY_PRIMITIVES_EMITTED:
 	case PIPE_QUERY_PRIMITIVES_GENERATED:
@@ -837,7 +819,7 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
 		va += 8;
-		/* fall through */
+		FALLTHROUGH;
 	case PIPE_QUERY_TIMESTAMP:
 		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
 					 0, EOP_DATA_SEL_TIMESTAMP, NULL, va,
@@ -859,7 +841,7 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 	default:
 		assert(0);
 	}
-	r600_emit_reloc(ctx, &ctx->gfx, query->buffer.buf, RADEON_USAGE_WRITE,
+	r600_emit_reloc(ctx, &ctx->gfx, query->buffer.buf, RADEON_USAGE_WRITE |
 			RADEON_PRIO_QUERY);
 
 	if (fence_va)
@@ -900,12 +882,12 @@ static void emit_set_predicate(struct r600_common_context *ctx,
 			       struct r600_resource *buf, uint64_t va,
 			       uint32_t op)
 {
-	struct radeon_cmdbuf *cs = ctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &ctx->gfx.cs;
 
 	radeon_emit(cs, PKT3(PKT3_SET_PREDICATION, 1, 0));
 	radeon_emit(cs, va);
 	radeon_emit(cs, op | ((va >> 32) & 0xFF));
-	r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_READ,
+	r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_READ |
 			RADEON_PRIO_QUERY);
 }
 
@@ -1021,7 +1003,7 @@ void r600_query_hw_reset_buffers(struct r600_common_context *rctx,
 
 	/* Obtain a new buffer if the current one can't be mapped without a stall. */
 	if (r600_rings_is_buffer_referenced(rctx, query->buffer.buf->buf, RADEON_USAGE_READWRITE) ||
-	    !rctx->ws->buffer_wait(query->buffer.buf->buf, 0, RADEON_USAGE_READWRITE)) {
+	    !rctx->ws->buffer_wait(rctx->ws, query->buffer.buf->buf, 0, RADEON_USAGE_READWRITE)) {
 		r600_resource_reference(&query->buffer.buf, NULL);
 		query->buffer.buf = r600_new_query_buffer(rctx->screen, query);
 	} else {
@@ -1082,7 +1064,7 @@ static void r600_get_hw_query_params(struct r600_common_context *rctx,
 				     struct r600_query_hw *rquery, int index,
 				     struct r600_hw_query_params *params)
 {
-	unsigned max_rbs = rctx->screen->info.num_render_backends;
+	unsigned max_rbs = rctx->screen->info.max_render_backends;
 
 	params->pair_stride = 0;
 	params->pair_count = 1;
@@ -1125,12 +1107,12 @@ static void r600_get_hw_query_params(struct r600_common_context *rctx,
 	case PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE:
 		params->pair_count = R600_MAX_STREAMS;
 		params->pair_stride = 32;
-		/* fallthrough */
+		FALLTHROUGH;
 	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
 		params->start_offset = 0;
 		params->end_offset = 16;
 
-		/* We can re-use the high dword of the last 64-bit value as a
+		/* We can reuse the high dword of the last 64-bit value as a
 		 * fence: it is initialized as 0, and the high bit is set by
 		 * the write of the streamout stats event.
 		 */
@@ -1173,7 +1155,7 @@ static void r600_query_hw_add_result(struct r600_common_screen *rscreen,
 				     void *buffer,
 				     union pipe_query_result *result)
 {
-	unsigned max_rbs = rscreen->info.num_render_backends;
+	unsigned max_rbs = rscreen->info.max_render_backends;
 
 	switch (query->b.type) {
 	case PIPE_QUERY_OCCLUSION_COUNTER: {
@@ -1232,7 +1214,7 @@ static void r600_query_hw_add_result(struct r600_common_screen *rscreen,
 		}
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
-		if (rscreen->chip_class >= EVERGREEN) {
+		if (rscreen->gfx_level >= EVERGREEN) {
 			result->pipeline_statistics.ps_invocations +=
 				r600_query_read_result(buffer, 0, 22, false);
 			result->pipeline_statistics.c_primitives +=
@@ -1307,7 +1289,7 @@ static bool r600_get_query_result(struct pipe_context *ctx,
 
 static void r600_get_query_result_resource(struct pipe_context *ctx,
                                            struct pipe_query *query,
-                                           bool wait,
+                                           enum pipe_query_flags flags,
                                            enum pipe_query_value_type result_type,
                                            int index,
                                            struct pipe_resource *resource,
@@ -1316,7 +1298,7 @@ static void r600_get_query_result_resource(struct pipe_context *ctx,
 	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
 	struct r600_query *rquery = (struct r600_query *)query;
 
-	rquery->ops->get_result_resource(rctx, rquery, wait, result_type, index,
+	rquery->ops->get_result_resource(rctx, rquery, flags, result_type, index,
 	                                 resource, offset);
 }
 
@@ -1337,13 +1319,13 @@ bool r600_query_hw_get_result(struct r600_common_context *rctx,
 	query->ops->clear_result(query, result);
 
 	for (qbuf = &query->buffer; qbuf; qbuf = qbuf->previous) {
-		unsigned usage = PIPE_TRANSFER_READ |
-				 (wait ? 0 : PIPE_TRANSFER_DONTBLOCK);
+		unsigned usage = PIPE_MAP_READ |
+				 (wait ? 0 : PIPE_MAP_DONTBLOCK);
 		unsigned results_base = 0;
 		void *map;
 
 		if (rquery->b.flushed)
-			map = rctx->ws->buffer_map(qbuf->buf->buf, NULL, usage);
+			map = rctx->ws->buffer_map(rctx->ws, qbuf->buf->buf, NULL, usage);
 		else
 			map = r600_buffer_map_sync_with_rings(rctx, qbuf->buf, usage);
 
@@ -1591,10 +1573,7 @@ static void r600_restore_qbo_state(struct r600_common_context *rctx,
 				   struct r600_qbo_state *st)
 {
 	rctx->b.bind_compute_state(&rctx->b, st->saved_compute);
-
-	rctx->b.set_constant_buffer(&rctx->b, PIPE_SHADER_COMPUTE, 0, &st->saved_const0);
-	pipe_resource_reference(&st->saved_const0.buffer, NULL);
-
+	rctx->b.set_constant_buffer(&rctx->b, PIPE_SHADER_COMPUTE, 0, true, &st->saved_const0);
 	rctx->b.set_shader_buffers(&rctx->b, PIPE_SHADER_COMPUTE, 0, 3, st->saved_ssbo, ~0);
 	for (unsigned i = 0; i < 3; ++i)
 		pipe_resource_reference(&st->saved_ssbo[i].buffer, NULL);
@@ -1602,7 +1581,7 @@ static void r600_restore_qbo_state(struct r600_common_context *rctx,
 
 static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
                                               struct r600_query *rquery,
-                                              bool wait,
+                                              enum pipe_query_flags flags,
                                               enum pipe_query_value_type result_type,
                                               int index,
                                               struct pipe_resource *resource,
@@ -1637,7 +1616,7 @@ static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
 	}
 
 	if (query->buffer.previous) {
-		u_suballocator_alloc(rctx->allocator_zeroed_memory, 16, 256,
+		u_suballocator_alloc(&rctx->allocator_zeroed_memory, 16, 256,
 				     &tmp_buffer_offset, &tmp_buffer);
 		if (!tmp_buffer)
 			return;
@@ -1727,11 +1706,11 @@ static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
 		} else
 			consts.buffer_offset = 0;
 
-		rctx->b.set_constant_buffer(&rctx->b, PIPE_SHADER_COMPUTE, 0, &constant_buffer);
+		rctx->b.set_constant_buffer(&rctx->b, PIPE_SHADER_COMPUTE, 0, false, &constant_buffer);
 
 		rctx->b.set_shader_buffers(&rctx->b, PIPE_SHADER_COMPUTE, 0, 3, ssbo, ~0);
 
-		if (wait && qbuf == &query->buffer) {
+		if ((flags & PIPE_QUERY_WAIT) && qbuf == &query->buffer) {
 			uint64_t va;
 
 			/* Wait for result availability. Wait only for readiness
@@ -1834,7 +1813,7 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 {
 	struct r600_common_context *ctx =
 		(struct r600_common_context*)rscreen->aux_context;
-	struct radeon_cmdbuf *cs = ctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &ctx->gfx.cs;
 	struct r600_resource *buffer;
 	uint32_t *results;
 	unsigned i, mask = 0;
@@ -1848,11 +1827,11 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 		 * written to. By increasing this number we'll write the
 		 * status bit for these as per the normal disabled rb logic.
 		 */
-		ctx->screen->info.num_render_backends = 8;
+		ctx->screen->info.max_render_backends = 8;
 	}
-	max_rbs = ctx->screen->info.num_render_backends;
+	max_rbs = ctx->screen->info.max_render_backends;
 
-	assert(rscreen->chip_class <= CAYMAN);
+	assert(rscreen->gfx_level <= CAYMAN);
 
 	/*
 	 * if backend_map query is supported by the kernel.
@@ -1862,12 +1841,12 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 	 * (Albeit some chips with just one active rb can have a valid 0 map.)
 	 */ 
 	if (rscreen->info.r600_gb_backend_map_valid &&
-	    (ctx->chip_class < EVERGREEN || rscreen->info.r600_gb_backend_map != 0)) {
+	    (ctx->gfx_level < EVERGREEN || rscreen->info.r600_gb_backend_map != 0)) {
 		unsigned num_tile_pipes = rscreen->info.num_tile_pipes;
 		unsigned backend_map = rscreen->info.r600_gb_backend_map;
 		unsigned item_width, item_mask;
 
-		if (ctx->chip_class >= EVERGREEN) {
+		if (ctx->gfx_level >= EVERGREEN) {
 			item_width = 4;
 			item_mask = 0x7;
 		} else {
@@ -1896,7 +1875,7 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 		return;
 
 	/* initialize buffer with zeroes */
-	results = r600_buffer_map_sync_with_rings(ctx, buffer, PIPE_TRANSFER_WRITE);
+	results = r600_buffer_map_sync_with_rings(ctx, buffer, PIPE_MAP_WRITE);
 	if (results) {
 		memset(results, 0, max_rbs * 4 * 4);
 
@@ -1907,10 +1886,10 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 		radeon_emit(cs, buffer->gpu_address >> 32);
 
 		r600_emit_reloc(ctx, &ctx->gfx, buffer,
-                                RADEON_USAGE_WRITE, RADEON_PRIO_QUERY);
+                                RADEON_USAGE_WRITE | RADEON_PRIO_QUERY);
 
 		/* analyze results */
-		results = r600_buffer_map_sync_with_rings(ctx, buffer, PIPE_TRANSFER_READ);
+		results = r600_buffer_map_sync_with_rings(ctx, buffer, PIPE_MAP_READ);
 		if (results) {
 			for(i = 0; i < max_rbs; i++) {
 				/* at least highest bit will be set if backend is used */
@@ -2032,10 +2011,7 @@ static const struct pipe_driver_query_info r600_driver_query_list[] = {
 
 static unsigned r600_get_num_queries(struct r600_common_screen *rscreen)
 {
-	if (rscreen->info.drm_minor >= 42)
-		return ARRAY_SIZE(r600_driver_query_list);
-	else
-		return ARRAY_SIZE(r600_driver_query_list) - 25;
+	return ARRAY_SIZE(r600_driver_query_list);
 }
 
 static int r600_get_driver_query_info(struct pipe_screen *screen,
@@ -2061,18 +2037,18 @@ static int r600_get_driver_query_info(struct pipe_screen *screen,
 	case R600_QUERY_REQUESTED_VRAM:
 	case R600_QUERY_VRAM_USAGE:
 	case R600_QUERY_MAPPED_VRAM:
-		info->max_value.u64 = rscreen->info.vram_size;
+		info->max_value.u64 = (uint64_t)rscreen->info.vram_size_kb * 1024;
 		break;
 	case R600_QUERY_REQUESTED_GTT:
 	case R600_QUERY_GTT_USAGE:
 	case R600_QUERY_MAPPED_GTT:
-		info->max_value.u64 = rscreen->info.gart_size;
+		info->max_value.u64 = (uint64_t)rscreen->info.gart_size_kb * 1024;
 		break;
 	case R600_QUERY_GPU_TEMPERATURE:
 		info->max_value.u64 = 125;
 		break;
 	case R600_QUERY_VRAM_VIS_USAGE:
-		info->max_value.u64 = rscreen->info.vram_vis_size;
+		info->max_value.u64 = (uint64_t)rscreen->info.vram_vis_size_kb * 1024;
 		break;
 	}
 
@@ -2123,7 +2099,7 @@ void r600_query_init(struct r600_common_context *rctx)
 	rctx->b.get_query_result_resource = r600_get_query_result_resource;
 	rctx->render_cond_atom.emit = r600_emit_query_predication;
 
-	if (((struct r600_common_screen*)rctx->b.screen)->info.num_render_backends > 0)
+	if (((struct r600_common_screen*)rctx->b.screen)->info.max_render_backends > 0)
 	    rctx->b.render_condition = r600_render_condition;
 
 	list_inithead(&rctx->active_queries);

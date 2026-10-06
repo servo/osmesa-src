@@ -27,7 +27,7 @@
 #ifndef U_DEBUG_REFCNT_H_
 #define U_DEBUG_REFCNT_H_
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 #include "pipe/p_state.h"
 
 #ifdef __cplusplus
@@ -36,7 +36,7 @@ extern "C" {
 
 typedef void (*debug_reference_descriptor)(char*, const struct pipe_reference*);
 
-#if defined(DEBUG)
+#if MESA_DEBUG
 
 extern int debug_refcnt_state;
 

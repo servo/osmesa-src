@@ -23,12 +23,12 @@
  */
 
 #include "util/u_blitter.h"
+#include "util/u_draw.h"
 #include "util/u_prim.h"
 #include "util/format/u_format.h"
 #include "util/u_pack_color.h"
 #include "util/u_split_draw.h"
 #include "util/u_upload_mgr.h"
-#include "indices/u_primconvert.h"
 
 #include "vc4_context.h"
 #include "vc4_resource.h"
@@ -132,6 +132,7 @@ vc4_predraw_check_textures(struct pipe_context *pctx,
 static void
 vc4_emit_gl_shader_state(struct vc4_context *vc4,
                          const struct pipe_draw_info *info,
+                         const struct pipe_draw_start_count_bias *draws,
                          uint32_t extra_index_bias)
 {
         struct vc4_job *job = vc4->job;
@@ -157,7 +158,7 @@ vc4_emit_gl_shader_state(struct vc4_context *vc4,
 
                 /* VC4_DIRTY_PRIM_MODE | VC4_DIRTY_RASTERIZER */
                 rec.point_size_included_in_shaded_vertex_data =
-                         (info->mode == PIPE_PRIM_POINTS &&
+                         (info->mode == MESA_PRIM_POINTS &&
                           vc4->rasterizer->base.point_size_per_vertex);
 
                 /* VC4_DIRTY_COMPILED_FS */
@@ -182,6 +183,7 @@ vc4_emit_gl_shader_state(struct vc4_context *vc4,
         };
 
         uint32_t max_index = 0xffff;
+        unsigned index_bias = info->index_size ? draws->index_bias : 0;
         for (int i = 0; i < vtx->num_elements; i++) {
                 struct pipe_vertex_element *elem = &vtx->pipe[i];
                 struct pipe_vertex_buffer *vb =
@@ -190,7 +192,7 @@ vc4_emit_gl_shader_state(struct vc4_context *vc4,
                 /* not vc4->dirty tracked: vc4->last_index_bias */
                 uint32_t offset = (vb->buffer_offset +
                                    elem->src_offset +
-                                   vb->stride * (info->index_bias +
+                                   elem->src_stride * (index_bias +
                                                  extra_index_bias));
                 uint32_t vb_size = rsc->bo->size - offset;
                 uint32_t elem_size =
@@ -199,16 +201,16 @@ vc4_emit_gl_shader_state(struct vc4_context *vc4,
                 cl_emit(&job->shader_rec, ATTRIBUTE_RECORD, attr) {
                         attr.address = cl_address(rsc->bo, offset);
                         attr.number_of_bytes_minus_1 = elem_size - 1;
-                        attr.stride = vb->stride;
+                        attr.stride = elem->src_stride;
                         attr.coordinate_shader_vpm_offset =
                                 vc4->prog.cs->vattr_offsets[i];
                         attr.vertex_shader_vpm_offset =
                                 vc4->prog.vs->vattr_offsets[i];
                 }
 
-                if (vb->stride > 0) {
+                if (elem->src_stride > 0) {
                         max_index = MIN2(max_index,
-                                         (vb_size - elem_size) / vb->stride);
+                                         (vb_size - elem_size) / elem->src_stride);
                 }
         }
 
@@ -247,7 +249,7 @@ vc4_emit_gl_shader_state(struct vc4_context *vc4,
                            &vc4->constbuf[PIPE_SHADER_VERTEX],
                            &vc4->verttex);
 
-        vc4->last_index_bias = info->index_bias + extra_index_bias;
+        vc4->last_index_bias = index_bias + extra_index_bias;
         vc4->max_index = max_index;
         job->shader_rec_count++;
 }
@@ -285,38 +287,58 @@ vc4_hw_2116_workaround(struct pipe_context *pctx, int vert_count)
         }
 }
 
-static void
-vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
+/* A HW bug fails to draw 2-vert line loops.  Just draw it as two GL_LINES. */
+static bool
+vc4_draw_workaround_line_loop_2(struct pipe_context *pctx, const struct pipe_draw_info *info,
+             unsigned drawid_offset,
+             const struct pipe_draw_indirect_info *indirect,
+             const struct pipe_draw_start_count_bias *draw)
 {
-        struct vc4_context *vc4 = vc4_context(pctx);
-        struct pipe_draw_info local_info;
+        if (draw->count != 2 || info->mode != MESA_PRIM_LINE_LOOP)
+                return false;
 
-	if (!info->count_from_stream_output && !info->indirect &&
+        struct pipe_draw_info local_info = *info;
+        local_info.mode = MESA_PRIM_LINES;
+
+        /* Draw twice.  The vertex order will be wrong on the second prim, but
+         * that's probably not worth rewriting an index buffer over.
+         */
+        for (int i = 0; i < 2; i++)
+                pctx->draw_vbo(pctx, &local_info, drawid_offset, indirect, draw, 1);
+
+        return true;
+}
+
+static void
+vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
+             unsigned drawid_offset,
+             const struct pipe_draw_indirect_info *indirect,
+             const struct pipe_draw_start_count_bias *draws,
+             unsigned num_draws)
+{
+        if (num_draws > 1) {
+                util_draw_multi(pctx, info, drawid_offset, indirect, draws, num_draws);
+                return;
+        }
+
+        if (!indirect && (!draws[0].count || !info->instance_count))
+           return;
+
+        struct vc4_context *vc4 = vc4_context(pctx);
+
+	if (!indirect &&
 	    !info->primitive_restart &&
-	    !u_trim_pipe_prim(info->mode, (unsigned*)&info->count))
+	    !u_trim_pipe_prim(info->mode, (unsigned*)&draws[0].count))
 		return;
 
-        if (info->mode >= PIPE_PRIM_QUADS) {
-                if (info->mode == PIPE_PRIM_QUADS &&
-                    info->count == 4 &&
-                    !vc4->rasterizer->base.flatshade) {
-                        local_info = *info;
-                        local_info.mode = PIPE_PRIM_TRIANGLE_FAN;
-                        info = &local_info;
-                } else {
-                        util_primconvert_save_rasterizer_state(vc4->primconvert, &vc4->rasterizer->base);
-                        util_primconvert_draw_vbo(vc4->primconvert, info);
-                        perf_debug("Fallback conversion for %d %s vertices\n",
-                                   info->count, u_prim_name(info->mode));
-                        return;
-                }
-        }
+        if (vc4_draw_workaround_line_loop_2(pctx, info, drawid_offset, indirect, draws))
+                return;
 
         /* Before setting up the draw, do any fixup blits necessary. */
         vc4_predraw_check_textures(pctx, &vc4->verttex);
         vc4_predraw_check_textures(pctx, &vc4->fragtex);
 
-        vc4_hw_2116_workaround(pctx, info->count);
+        vc4_hw_2116_workaround(pctx, draws[0].count);
 
         struct vc4_job *job = vc4_get_job_for_fbo(vc4);
 
@@ -328,7 +350,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 job = vc4_get_job_for_fbo(vc4);
         }
 
-        vc4_get_draw_cl_space(job, info->count);
+        vc4_get_draw_cl_space(job, draws[0].count);
 
         if (vc4->prim_mode != info->mode) {
                 vc4->prim_mode = info->mode;
@@ -345,6 +367,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
         bool needs_drawarrays_shader_state = false;
 
+        unsigned index_bias = info->index_size ? draws->index_bias : 0;
         if ((vc4->dirty & (VC4_DIRTY_VTXBUF |
                            VC4_DIRTY_VTXSTATE |
                            VC4_DIRTY_PRIM_MODE |
@@ -355,9 +378,9 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                            vc4->prog.cs->uniform_dirty_bits |
                            vc4->prog.vs->uniform_dirty_bits |
                            vc4->prog.fs->uniform_dirty_bits)) ||
-            vc4->last_index_bias != info->index_bias) {
+            vc4->last_index_bias != index_bias) {
                 if (info->index_size)
-                        vc4_emit_gl_shader_state(vc4, info, 0);
+                        vc4_emit_gl_shader_state(vc4, info, draws, 0);
                 else
                         needs_drawarrays_shader_state = true;
         }
@@ -369,19 +392,20 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
          */
         if (info->index_size) {
                 uint32_t index_size = info->index_size;
-                uint32_t offset = info->start * index_size;
+                uint32_t offset = draws[0].start * index_size;
                 struct pipe_resource *prsc;
                 if (info->index_size == 4) {
                         prsc = vc4_get_shadow_index_buffer(pctx, info,
                                                            offset,
-                                                           info->count, &offset);
+                                                           draws[0].count, &offset);
                         index_size = 2;
                 } else {
                         if (info->has_user_indices) {
+                                unsigned start_offset = draws[0].start * info->index_size;
                                 prsc = NULL;
-                                u_upload_data(vc4->uploader, 0,
-                                              info->count * index_size, 4,
-                                              info->index.user,
+                                u_upload_data(vc4->uploader, start_offset,
+                                              draws[0].count * index_size, 4,
+                                              (char*)info->index.user + start_offset,
                                               &offset, &prsc);
                         } else {
                                 prsc = info->index.resource;
@@ -415,7 +439,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                       (index_size == 2 ?
                        VC4_INDEX_BUFFER_U16:
                        VC4_INDEX_BUFFER_U8));
-                cl_u32(&bcl, info->count);
+                cl_u32(&bcl, draws[0].count);
                 cl_u32(&bcl, offset);
                 cl_u32(&bcl, vc4->max_index);
 
@@ -425,8 +449,8 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 if (info->index_size == 4 || info->has_user_indices)
                         pipe_resource_reference(&prsc, NULL);
         } else {
-                uint32_t count = info->count;
-                uint32_t start = info->start;
+                uint32_t count = draws[0].count;
+                uint32_t start = draws[0].start;
                 uint32_t extra_index_bias = 0;
                 static const uint32_t max_verts = 65535;
 
@@ -452,7 +476,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                         uint32_t step;
 
                         if (needs_drawarrays_shader_state) {
-                                vc4_emit_gl_shader_state(vc4, info,
+                                vc4_emit_gl_shader_state(vc4, info, draws,
                                                          extra_index_bias);
                         }
 
@@ -481,7 +505,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 struct vc4_resource *rsc =
                         vc4_resource(vc4->framebuffer.zsbuf->texture);
 
-                if (vc4->zsa->base.depth.enabled) {
+                if (vc4->zsa->base.depth_enabled) {
                         job->resolve |= PIPE_CLEAR_DEPTH;
                         rsc->initialized_buffers = PIPE_CLEAR_DEPTH;
                 }
@@ -501,7 +525,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
         if (job->bo_space > 128 * 1024 * 1024)
                 vc4_flush(pctx);
 
-        if (vc4_debug & VC4_DEBUG_ALWAYS_FLUSH)
+        if (VC4_DBG(ALWAYS_FLUSH))
                 vc4_flush(pctx);
 }
 
@@ -622,7 +646,10 @@ vc4_clear_render_target(struct pipe_context *pctx, struct pipe_surface *ps,
                         unsigned x, unsigned y, unsigned w, unsigned h,
 			bool render_condition_enabled)
 {
-        fprintf(stderr, "unimpl: clear RT\n");
+        struct vc4_context *vc4 = vc4_context(pctx);
+
+        vc4_blitter_save(vc4);
+        util_blitter_clear_render_target(vc4->blitter, ps, color, x, y, w, h);
 }
 
 static void
@@ -631,7 +658,11 @@ vc4_clear_depth_stencil(struct pipe_context *pctx, struct pipe_surface *ps,
                         unsigned x, unsigned y, unsigned w, unsigned h,
 			bool render_condition_enabled)
 {
-        fprintf(stderr, "unimpl: clear DS\n");
+        struct vc4_context *vc4 = vc4_context(pctx);
+
+        vc4_blitter_save(vc4);
+        util_blitter_clear_depth_stencil(vc4->blitter, ps, buffers, depth,
+                                         stencil, x, y, w, h);
 }
 
 void

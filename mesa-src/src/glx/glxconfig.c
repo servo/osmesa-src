@@ -145,10 +145,10 @@ glx_config_get(struct glx_config * mode, int attribute, int *value_return)
       *value_return = mode->fbconfigID;
       return 0;
    case GLX_MAX_PBUFFER_WIDTH:
-      *value_return = mode->maxPbufferWidth;
+      *value_return = 4096; /* _EGL_MAX_PBUFFER_WIDTH */
       return 0;
    case GLX_MAX_PBUFFER_HEIGHT:
-      *value_return = mode->maxPbufferHeight;
+      *value_return = 4096; /* _EGL_MAX_PBUFFER_HEIGHT */
       return 0;
    case GLX_MAX_PBUFFER_PIXELS:
       *value_return = mode->maxPbufferPixels;
@@ -159,9 +159,6 @@ glx_config_get(struct glx_config * mode, int attribute, int *value_return)
       return 0;
    case GLX_OPTIMAL_PBUFFER_HEIGHT_SGIX:
       *value_return = mode->optimalPbufferHeight;
-      return 0;
-   case GLX_SWAP_METHOD_OML:
-      *value_return = mode->swapMethod;
       return 0;
 #endif
    case GLX_SAMPLE_BUFFERS_SGIS:
@@ -186,9 +183,11 @@ glx_config_get(struct glx_config * mode, int attribute, int *value_return)
    case GLX_Y_INVERTED_EXT:
       *value_return = mode->yInverted;
       return 0;
-
    case GLX_FRAMEBUFFER_SRGB_CAPABLE_EXT:
       *value_return = mode->sRGBCapable;
+      return 0;
+   case GLX_FLOAT_COMPONENTS_NV:
+      *value_return = mode->floatComponentsNV;
       return 0;
 
       /* Applications are NOT allowed to query GLX_VISUAL_SELECT_GROUP_SGIX.
@@ -213,7 +212,7 @@ glx_config_get(struct glx_config * mode, int attribute, int *value_return)
  * 
  * \param count         Number of structures to allocate.
  * \returns A pointer to the first element in a linked list of \c count
- *          stuctures on success, or \c NULL on failure.
+ *          structures on success, or \c NULL on failure.
  */
 _X_HIDDEN struct glx_config *
 glx_config_create_list(unsigned count)
@@ -227,9 +226,9 @@ glx_config_create_list(unsigned count)
    for (i = 0; i < count; i++) {
       *next = calloc(1, size);
       if (*next == NULL) {
-	 glx_config_destroy_list(base);
-	 base = NULL;
-	 break;
+    glx_config_destroy_list(base);
+    base = NULL;
+    break;
       }
 
       (*next)->visualID = GLX_DONT_CARE;
@@ -243,13 +242,12 @@ glx_config_create_list(unsigned count)
       (*next)->transparentIndex = GLX_DONT_CARE;
       (*next)->xRenderable = GLX_DONT_CARE;
       (*next)->fbconfigID = GLX_DONT_CARE;
-      (*next)->swapMethod = GLX_SWAP_UNDEFINED_OML;
       (*next)->bindToTextureRgb = GLX_DONT_CARE;
       (*next)->bindToTextureRgba = GLX_DONT_CARE;
       (*next)->bindToMipmapTexture = GLX_DONT_CARE;
       (*next)->bindToTextureTargets = GLX_DONT_CARE;
       (*next)->yInverted = GLX_DONT_CARE;
-      (*next)->sRGBCapable = GLX_DONT_CARE;
+      (*next)->sRGBCapable = GL_FALSE;
 
       next = &((*next)->next);
    }
@@ -285,7 +283,7 @@ glx_config_find_visual(struct glx_config *configs, int vid)
 
    for (c = configs; c != NULL; c = c->next)
       if (c->visualID == vid)
-	 return c;
+    return c;
 
    return NULL;
 }
@@ -297,7 +295,7 @@ glx_config_find_fbconfig(struct glx_config *configs, int fbid)
 
    for (c = configs; c != NULL; c = c->next)
       if (c->fbconfigID == fbid)
-	 return c;
+    return c;
 
    return NULL;
 }

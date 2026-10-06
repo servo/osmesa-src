@@ -35,6 +35,16 @@ struct virgl_host_query_state {
    uint64_t result;
 };
 
+struct virgl_memory_info
+{
+   uint32_t total_device_memory; /**< size of device memory, e.g. VRAM */
+   uint32_t avail_device_memory; /**< free device memory at the moment */
+   uint32_t total_staging_memory; /**< size of staging memory, e.g. GART */
+   uint32_t avail_staging_memory; /**< free staging memory at the moment */
+   uint32_t device_memory_evicted; /**< size of memory evicted (monotonic counter) */
+   uint32_t nr_device_memory_evictions; /**< # of evictions (monotonic counter) */
+};
+
 enum virgl_object_type {
    VIRGL_OBJECT_NULL,
    VIRGL_OBJECT_BLEND,
@@ -47,6 +57,7 @@ enum virgl_object_type {
    VIRGL_OBJECT_SURFACE,
    VIRGL_OBJECT_QUERY,
    VIRGL_OBJECT_STREAMOUT_TARGET,
+   VIRGL_OBJECT_MSAA_SURFACE,
    VIRGL_MAX_OBJECTS,
 };
 
@@ -102,7 +113,34 @@ enum virgl_context_cmd {
    VIRGL_CCMD_SET_TWEAKS,
    VIRGL_CCMD_CLEAR_TEXTURE,
    VIRGL_CCMD_PIPE_RESOURCE_CREATE,
+   VIRGL_CCMD_PIPE_RESOURCE_SET_TYPE,
+   VIRGL_CCMD_GET_MEMORY_INFO,
+   VIRGL_CCMD_EMIT_STRING_MARKER,
+   VIRGL_CCMD_LINK_SHADER,
+
+   /* video codec */
+   VIRGL_CCMD_CREATE_VIDEO_CODEC,
+   VIRGL_CCMD_DESTROY_VIDEO_CODEC,
+   VIRGL_CCMD_CREATE_VIDEO_BUFFER,
+   VIRGL_CCMD_DESTROY_VIDEO_BUFFER,
+   VIRGL_CCMD_BEGIN_FRAME,
+   VIRGL_CCMD_DECODE_MACROBLOCK,
+   VIRGL_CCMD_DECODE_BITSTREAM,
+   VIRGL_CCMD_ENCODE_BITSTREAM,
+   VIRGL_CCMD_END_FRAME,
+
+   VIRGL_CCMD_CLEAR_SURFACE,
+
    VIRGL_MAX_COMMANDS
+};
+
+enum virgl_shader_stage {
+   VIRGL_SHADER_VERTEX,
+   VIRGL_SHADER_FRAGMENT,
+   VIRGL_SHADER_GEOMETRY,
+   VIRGL_SHADER_TESS_CTRL,
+   VIRGL_SHADER_TESS_EVAL,
+   VIRGL_SHADER_COMPUTE,
 };
 
 /*
@@ -202,7 +240,7 @@ enum virgl_context_cmd {
 #define VIRGL_OBJ_RS_S0_LINE_LAST_PIXEL(x) (((x) & 0x1) << 28)
 #define VIRGL_OBJ_RS_S0_HALF_PIXEL_CENTER(x) (((x) & 0x1) << 29)
 #define VIRGL_OBJ_RS_S0_BOTTOM_EDGE_RULE(x) (((x) & 0x1) << 30)
-#define VIRGL_OBJ_RS_S0_FORCE_PERSAMPLE_INTERP(x) (((x) & 0x1) << 31)
+#define VIRGL_OBJ_RS_S0_FORCE_PERSAMPLE_INTERP(x) (((x) & 0x1u) << 31)
 
 #define VIRGL_OBJ_RS_POINT_SIZE 3
 #define VIRGL_OBJ_RS_SPRITE_COORD_ENABLE 4
@@ -332,6 +370,10 @@ enum virgl_context_cmd {
 #define VIRGL_OBJ_SURFACE_TEXTURE_LEVEL 4
 #define VIRGL_OBJ_SURFACE_TEXTURE_LAYERS 5
 
+/* create surface with implicit MSAA support (for EXT_multisample_render_to_texture) */
+#define VIRGL_OBJ_MSAA_SURFACE_SIZE (VIRGL_OBJ_SURFACE_SIZE + 1)
+#define VIRGL_OBJ_SURFACE_SAMPLE_COUNT 6
+
 /* create streamout target */
 #define VIRGL_OBJ_STREAMOUT_SIZE 4
 #define VIRGL_OBJ_STREAMOUT_HANDLE 1
@@ -346,12 +388,13 @@ enum virgl_context_cmd {
 #define VIRGL_OBJ_SAMPLE_STATE_S0_WRAP_S(x) (((x) & 0x7) << 0)
 #define VIRGL_OBJ_SAMPLE_STATE_S0_WRAP_T(x) (((x) & 0x7) << 3)
 #define VIRGL_OBJ_SAMPLE_STATE_S0_WRAP_R(x) (((x) & 0x7) << 6)
-#define VIRGL_OBJ_SAMPLE_STATE_S0_MIN_IMG_FILTER(x) (((x) & 0x3) << 9)
+#define VIRGL_OBJ_SAMPLE_STATE_S0_MIN_IMG_FILTER(x) (((x) & 0x1) << 9) /* Used to be 2 bits wide */
 #define VIRGL_OBJ_SAMPLE_STATE_S0_MIN_MIP_FILTER(x) (((x) & 0x3) << 11)
-#define VIRGL_OBJ_SAMPLE_STATE_S0_MAG_IMG_FILTER(x) (((x) & 0x3) << 13)
+#define VIRGL_OBJ_SAMPLE_STATE_S0_MAG_IMG_FILTER(x) (((x) & 0x1) << 13) /* Used to be 2 bits wide */
 #define VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_MODE(x) (((x) & 0x1) << 15)
 #define VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_FUNC(x) (((x) & 0x7) << 16)
 #define VIRGL_OBJ_SAMPLE_STATE_S0_SEAMLESS_CUBE_MAP(x) (((x) & 0x1) << 19)
+#define VIRGL_OBJ_SAMPLE_STATE_S0_MAX_ANISOTROPY(x) (((x & 0x1f)) << 20) /* Used to be 6 bits wide */
 
 #define VIRGL_OBJ_SAMPLER_STATE_LOD_BIAS 3
 #define VIRGL_OBJ_SAMPLER_STATE_MIN_LOD 4
@@ -588,12 +631,16 @@ enum virgl_context_cmd {
 #define VIRGL_TRANSFER3D_DATA_OFFSET 12
 #define VIRGL_TRANSFER3D_DIRECTION 13
 
-/* Copy transfer */
+/* Copy transfer to host and from host*/
 #define VIRGL_COPY_TRANSFER3D_SIZE 14
 /* The first 11 dwords are the same as VIRGL_RESOURCE_IW_*  */
 #define VIRGL_COPY_TRANSFER3D_SRC_RES_HANDLE 12
 #define VIRGL_COPY_TRANSFER3D_SRC_RES_OFFSET 13
-#define VIRGL_COPY_TRANSFER3D_SYNCHRONIZED 14
+#define VIRGL_COPY_TRANSFER3D_FLAGS 14
+#define VIRGL_COPY_TRANSFER3D_FLAGS_SYNCHRONIZED (1 << 0)
+/* 1 << 1 means transfer from host.
+   0 << 1 means transfer to host.*/
+#define VIRGL_COPY_TRANSFER3D_FLAGS_READ_FROM_HOST (1 << 1)
 
 /* set tweak flags */
 #define VIRGL_SET_TWEAKS_SIZE 2
@@ -635,5 +682,102 @@ enum vrend_tweak_type {
 #define VIRGL_PIPE_RES_CREATE_NR_SAMPLES 9
 #define VIRGL_PIPE_RES_CREATE_FLAGS 10
 #define VIRGL_PIPE_RES_CREATE_BLOB_ID 11
+
+/* VIRGL_CCMD_PIPE_RESOURCE_SET_TYPE */
+#define VIRGL_PIPE_RES_SET_TYPE_SIZE(nplanes) (8 + (nplanes) * 2)
+#define VIRGL_PIPE_RES_SET_TYPE_RES_HANDLE 1
+#define VIRGL_PIPE_RES_SET_TYPE_FORMAT 2
+#define VIRGL_PIPE_RES_SET_TYPE_BIND 3
+#define VIRGL_PIPE_RES_SET_TYPE_WIDTH 4
+#define VIRGL_PIPE_RES_SET_TYPE_HEIGHT 5
+#define VIRGL_PIPE_RES_SET_TYPE_USAGE 6
+#define VIRGL_PIPE_RES_SET_TYPE_MODIFIER_LO 7
+#define VIRGL_PIPE_RES_SET_TYPE_MODIFIER_HI 8
+#define VIRGL_PIPE_RES_SET_TYPE_PLANE_STRIDE(plane) (9 + (plane) * 2)
+#define VIRGL_PIPE_RES_SET_TYPE_PLANE_OFFSET(plane) (10 + (plane) * 2)
+
+/* send string marker */
+#define VIRGL_SEND_STRING_MARKER_MIN_SIZE 2
+#define VIRGL_SEND_STRING_MARKER_STRING_SIZE 1
+#define VIRGL_SEND_STRING_MARKER_OFFSET 2
+
+/* link shader program */
+#define VIRGL_LINK_SHADER_SIZE 6
+#define VIRGL_LINK_SHADER_VERTEX_HANDLE 1
+#define VIRGL_LINK_SHADER_FRAGMENT_HANDLE 2
+#define VIRGL_LINK_SHADER_GEOMETRY_HANDLE 3
+#define VIRGL_LINK_SHADER_TESS_CTRL_HANDLE 4
+#define VIRGL_LINK_SHADER_TESS_EVAL_HANDLE 5
+#define VIRGL_LINK_SHADER_COMPUTE_HANDLE 6
+
+/* VIRGL_CCMD_CREATE_VIDEO_CODEC */
+#define VIRGL_CREATE_VIDEO_CODEC_MIN_SIZE   7
+#define VIRGL_CREATE_VIDEO_CODEC_HANDLE     1
+#define VIRGL_CREATE_VIDEO_CODEC_PROFILE    2
+#define VIRGL_CREATE_VIDEO_CODEC_ENTRYPOINT 3
+#define VIRGL_CREATE_VIDEO_CODEC_CHROMA_FMT 4
+#define VIRGL_CREATE_VIDEO_CODEC_LEVEL      5
+#define VIRGL_CREATE_VIDEO_CODEC_WIDTH      6
+#define VIRGL_CREATE_VIDEO_CODEC_HEIGHT     7
+#define VIRGL_CREATE_VIDEO_CODEC_MAX_REF    8
+
+/* VIRGL_CCMD_DESTROY_VIDEO_CODEC */
+#define VIRGL_DESTROY_VIDEO_CODEC_MIN_SIZE  1
+#define VIRGL_DESTROY_VIDEO_CODEC_HANDLE    1
+
+/* VIRGL_CCMD_CREATE_VIDEO_BUFFER */
+#define VIRGL_CREATE_VIDEO_BUFFER_MIN_SIZE  5
+#define VIRGL_CREATE_VIDEO_BUFFER_HANDLE    1
+#define VIRGL_CREATE_VIDEO_BUFFER_FORMAT    2
+#define VIRGL_CREATE_VIDEO_BUFFER_WIDTH     3
+#define VIRGL_CREATE_VIDEO_BUFFER_HEIGHT    4
+#define VIRGL_CREATE_VIDEO_BUFFER_RES_BASE  5
+
+/* VIRGL_CCMD_DESTROY_VIDEO_BUFFER */
+#define VIRGL_DESTROY_VIDEO_BUFFER_MIN_SIZE 1
+#define VIRGL_DESTROY_VIDEO_BUFFER_HANDLE   1
+
+/* VIRGL_CCMD_BEGIN_FRAME */
+#define VIRGL_BEGIN_FRAME_MIN_SIZE          2
+#define VIRGL_BEGIN_FRAME_CDC_HANDLE        1
+#define VIRGL_BEGIN_FRAME_TGT_HANDLE        2
+
+/* VIRGL_CCMD_DECODE_MACROBLOCK */
+
+/* VIRGL_CCMD_DECODE_BITSTREAM */
+#define VIRGL_DECODE_BS_MIN_SIZE            5
+#define VIRGL_DECODE_BS_CDC_HANDLE          1
+#define VIRGL_DECODE_BS_TGT_HANDLE          2
+#define VIRGL_DECODE_BS_DSC_HANDLE          3
+#define VIRGL_DECODE_BS_BUF_HANDLE          4
+#define VIRGL_DECODE_BS_BUF_SIZE            5
+
+/* VIRGL_CCMD_ENCODE_BITSTREAM */
+#define VIRGL_ENCODE_BS_MIN_SIZE            5
+#define VIRGL_ENCODE_BS_CDC_HANDLE          1
+#define VIRGL_ENCODE_BS_SRC_HANDLE          2
+#define VIRGL_ENCODE_BS_DEST_HANDLE         3
+#define VIRGL_ENCODE_BS_DESC_HANDLE         4
+#define VIRGL_ENCODE_BS_FEED_HANDLE         5
+
+/* VIRGL_CCMD_END_FRAME */
+#define VIRGL_END_FRAME_MIN_SIZE            2
+#define VIRGL_END_FRAME_CDC_HANDLE          1
+#define VIRGL_END_FRAME_TGT_HANDLE          2
+
+/* VIRGL_CCMD_CLEAR_SURFACE */
+#define VIRGL_CLEAR_SURFACE_SIZE                   10
+#define VIRGL_CLEAR_SURFACE_S0                     1
+#define VIRGL_CLEAR_SURFACE_S0_RENDER_CONDITION(x) (((x)&0x1) << 0)
+#define VIRGL_CLEAR_SURFACE_S0_BUFFERS(x)          (((x)&0x7) << 1)
+#define VIRGL_CLEAR_SURFACE_HANDLE                 2
+#define VIRGL_CLEAR_SURFACE_COLOR_0                3 /* color is 4 * u32/f32/i32 or (depth/f64+stencil/u32) */
+#define VIRGL_CLEAR_SURFACE_COLOR_1                4
+#define VIRGL_CLEAR_SURFACE_COLOR_2                5
+#define VIRGL_CLEAR_SURFACE_COLOR_3                6
+#define VIRGL_CLEAR_SURFACE_DST_X                  7
+#define VIRGL_CLEAR_SURFACE_DST_Y                  8
+#define VIRGL_CLEAR_SURFACE_WIDTH                  9
+#define VIRGL_CLEAR_SURFACE_HEIGHT                 10
 
 #endif

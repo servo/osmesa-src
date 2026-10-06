@@ -35,9 +35,10 @@
 #include "main/uniforms.h"
 #include "compiler/glsl/glsl_symbol_table.h"
 #include "compiler/glsl/ir.h"
-#include "compiler/glsl/program.h"
+#include "compiler/glsl/linker_util.h"
 #include "compiler/glsl/string_to_uint_map.h"
-#include "util/mesa-sha1.h"
+#include "c99_alloca.h"
+#include "api_exec_decl.h"
 
 static GLint
 program_resource_location(struct gl_program_resource *res,
@@ -60,6 +61,44 @@ DECL_RESOURCE_FUNC(ATC, gl_active_atomic_buffer);
 DECL_RESOURCE_FUNC(XFV, gl_transform_feedback_varying_info);
 DECL_RESOURCE_FUNC(XFB, gl_transform_feedback_buffer);
 DECL_RESOURCE_FUNC(SUB, gl_subroutine_function);
+
+static GLenum
+mediump_to_highp_type(struct gl_shader_program *shProg, GLenum type)
+{
+   if (!shProg->IsES)
+      return type;
+
+   switch (type) {
+   case GL_FLOAT16_NV:
+      return GL_FLOAT;
+   case GL_FLOAT16_VEC2_NV:
+      return GL_FLOAT_VEC2;
+   case GL_FLOAT16_VEC3_NV:
+      return GL_FLOAT_VEC3;
+   case GL_FLOAT16_VEC4_NV:
+      return GL_FLOAT_VEC4;
+   case GL_FLOAT16_MAT2_AMD:
+      return GL_FLOAT_MAT2;
+   case GL_FLOAT16_MAT3_AMD:
+      return GL_FLOAT_MAT3;
+   case GL_FLOAT16_MAT4_AMD:
+      return GL_FLOAT_MAT4;
+   case GL_FLOAT16_MAT2x3_AMD:
+      return GL_FLOAT_MAT2x3;
+   case GL_FLOAT16_MAT2x4_AMD:
+      return GL_FLOAT_MAT2x4;
+   case GL_FLOAT16_MAT3x2_AMD:
+      return GL_FLOAT_MAT3x2;
+   case GL_FLOAT16_MAT3x4_AMD:
+      return GL_FLOAT_MAT3x4;
+   case GL_FLOAT16_MAT4x2_AMD:
+      return GL_FLOAT_MAT4x2;
+   case GL_FLOAT16_MAT4x3_AMD:
+      return GL_FLOAT_MAT4x3;
+   default:
+      return type;
+   }
+}
 
 static void
 bind_attrib_location(struct gl_context *ctx,
@@ -160,17 +199,17 @@ _mesa_GetActiveAttrib(GLuint program, GLuint desired_index,
 
    const gl_shader_variable *const var = RESOURCE_VAR(res);
 
-   const char *var_name = var->name;
+   const char *var_name = var->name.string;
 
    _mesa_copy_string(name, maxLength, length, var_name);
 
    if (size)
       _mesa_program_resource_prop(shProg, res, desired_index, GL_ARRAY_SIZE,
-                                  size, "glGetActiveAttrib");
+                                  size, false, "glGetActiveAttrib");
 
    if (type)
       _mesa_program_resource_prop(shProg, res, desired_index, GL_TYPE,
-                                  (GLint *) type, "glGetActiveAttrib");
+                                  (GLint *) type, false, "glGetActiveAttrib");
 }
 
 GLint GLAPIENTRY
@@ -251,8 +290,7 @@ _mesa_longest_attribute_name_length(struct gl_shader_program *shProg)
           *    returned.  If no active attributes exist, zero is returned. If
           *    no name reflection information is available, one is returned."
           */
-         const size_t length = RESOURCE_VAR(res)->name != NULL ?
-            strlen(RESOURCE_VAR(res)->name) : 0;
+         const size_t length = RESOURCE_VAR(res)->name.length;
 
          if (length >= longest)
             longest = length + 1;
@@ -374,12 +412,6 @@ _mesa_GetFragDataIndex(GLuint program, const GLchar *name)
    if (!name)
       return -1;
 
-   if (strncmp(name, "gl_", 3) == 0) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glGetFragDataIndex(illegal name)");
-      return -1;
-   }
-
    /* Not having a fragment shader is not an error.
     */
    if (shProg->_LinkedShaders[MESA_SHADER_FRAGMENT] == NULL)
@@ -409,12 +441,6 @@ _mesa_GetFragDataLocation(GLuint program, const GLchar *name)
    if (!name)
       return -1;
 
-   if (strncmp(name, "gl_", 3) == 0) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glGetFragDataLocation(illegal name)");
-      return -1;
-   }
-
    /* Not having a fragment shader is not an error.
     */
    if (shProg->_LinkedShaders[MESA_SHADER_FRAGMENT] == NULL)
@@ -437,35 +463,113 @@ _mesa_program_resource_name(struct gl_program_resource *res)
    switch (res->Type) {
    case GL_UNIFORM_BLOCK:
    case GL_SHADER_STORAGE_BLOCK:
-      return RESOURCE_UBO(res)->Name;
+      return RESOURCE_UBO(res)->name.string;
    case GL_TRANSFORM_FEEDBACK_VARYING:
-      return RESOURCE_XFV(res)->Name;
+      return RESOURCE_XFV(res)->name.string;
    case GL_PROGRAM_INPUT:
    case GL_PROGRAM_OUTPUT:
-      return RESOURCE_VAR(res)->name;
+      return RESOURCE_VAR(res)->name.string;
    case GL_UNIFORM:
    case GL_BUFFER_VARIABLE:
-      return RESOURCE_UNI(res)->name;
+      return RESOURCE_UNI(res)->name.string;
    case GL_VERTEX_SUBROUTINE_UNIFORM:
    case GL_GEOMETRY_SUBROUTINE_UNIFORM:
    case GL_FRAGMENT_SUBROUTINE_UNIFORM:
    case GL_COMPUTE_SUBROUTINE_UNIFORM:
    case GL_TESS_CONTROL_SUBROUTINE_UNIFORM:
    case GL_TESS_EVALUATION_SUBROUTINE_UNIFORM:
-      return RESOURCE_UNI(res)->name + MESA_SUBROUTINE_PREFIX_LEN;
+      return RESOURCE_UNI(res)->name.string + MESA_SUBROUTINE_PREFIX_LEN;
    case GL_VERTEX_SUBROUTINE:
    case GL_GEOMETRY_SUBROUTINE:
    case GL_FRAGMENT_SUBROUTINE:
    case GL_COMPUTE_SUBROUTINE:
    case GL_TESS_CONTROL_SUBROUTINE:
    case GL_TESS_EVALUATION_SUBROUTINE:
-      return RESOURCE_SUB(res)->name;
+      return RESOURCE_SUB(res)->name.string;
    default:
       break;
    }
    return NULL;
 }
 
+int
+_mesa_program_resource_name_length(struct gl_program_resource *res)
+{
+   switch (res->Type) {
+   case GL_UNIFORM_BLOCK:
+   case GL_SHADER_STORAGE_BLOCK:
+      return RESOURCE_UBO(res)->name.length;
+   case GL_TRANSFORM_FEEDBACK_VARYING:
+      return RESOURCE_XFV(res)->name.length;
+   case GL_PROGRAM_INPUT:
+   case GL_PROGRAM_OUTPUT:
+      return RESOURCE_VAR(res)->name.length;
+   case GL_UNIFORM:
+   case GL_BUFFER_VARIABLE:
+      return RESOURCE_UNI(res)->name.length;
+   case GL_VERTEX_SUBROUTINE_UNIFORM:
+   case GL_GEOMETRY_SUBROUTINE_UNIFORM:
+   case GL_FRAGMENT_SUBROUTINE_UNIFORM:
+   case GL_COMPUTE_SUBROUTINE_UNIFORM:
+   case GL_TESS_CONTROL_SUBROUTINE_UNIFORM:
+   case GL_TESS_EVALUATION_SUBROUTINE_UNIFORM:
+      return RESOURCE_UNI(res)->name.length - MESA_SUBROUTINE_PREFIX_LEN;
+   case GL_VERTEX_SUBROUTINE:
+   case GL_GEOMETRY_SUBROUTINE:
+   case GL_FRAGMENT_SUBROUTINE:
+   case GL_COMPUTE_SUBROUTINE:
+   case GL_TESS_CONTROL_SUBROUTINE:
+   case GL_TESS_EVALUATION_SUBROUTINE:
+      return RESOURCE_SUB(res)->name.length;
+   default:
+      break;
+   }
+   return 0;
+}
+
+bool
+_mesa_program_get_resource_name(struct gl_program_resource *res,
+                                struct gl_resource_name *out)
+{
+   switch (res->Type) {
+   case GL_UNIFORM_BLOCK:
+   case GL_SHADER_STORAGE_BLOCK:
+      *out = RESOURCE_UBO(res)->name;
+      return out->string != NULL;
+   case GL_TRANSFORM_FEEDBACK_VARYING:
+      *out = RESOURCE_XFV(res)->name;
+      return out->string != NULL;
+   case GL_PROGRAM_INPUT:
+   case GL_PROGRAM_OUTPUT:
+      *out = RESOURCE_VAR(res)->name;
+      return out->string != NULL;
+   case GL_UNIFORM:
+   case GL_BUFFER_VARIABLE:
+      *out = RESOURCE_UNI(res)->name;
+      return out->string != NULL;
+   case GL_VERTEX_SUBROUTINE_UNIFORM:
+   case GL_GEOMETRY_SUBROUTINE_UNIFORM:
+   case GL_FRAGMENT_SUBROUTINE_UNIFORM:
+   case GL_COMPUTE_SUBROUTINE_UNIFORM:
+   case GL_TESS_CONTROL_SUBROUTINE_UNIFORM:
+   case GL_TESS_EVALUATION_SUBROUTINE_UNIFORM:
+      *out = RESOURCE_UNI(res)->name;
+      out->string += MESA_SUBROUTINE_PREFIX_LEN;
+      out->length -= MESA_SUBROUTINE_PREFIX_LEN;
+      assert(out->string); /* always non-NULL */
+      return true;
+   case GL_VERTEX_SUBROUTINE:
+   case GL_GEOMETRY_SUBROUTINE:
+   case GL_FRAGMENT_SUBROUTINE:
+   case GL_COMPUTE_SUBROUTINE:
+   case GL_TESS_CONTROL_SUBROUTINE:
+   case GL_TESS_EVALUATION_SUBROUTINE:
+      *out = RESOURCE_SUB(res)->name;
+      return out->string != NULL;
+   default:
+      return false;
+   }
+}
 
 unsigned
 _mesa_program_resource_array_size(struct gl_program_resource *res)
@@ -512,12 +616,12 @@ _mesa_program_resource_array_size(struct gl_program_resource *res)
  * Checks if array subscript is valid and if so sets array_index.
  */
 static bool
-valid_array_index(const GLchar *name, unsigned *array_index)
+valid_array_index(const GLchar *name, int len, unsigned *array_index)
 {
    long idx = 0;
    const GLchar *out_base_name_end;
 
-   idx = parse_program_resource_name(name, &out_base_name_end);
+   idx = link_util_parse_program_resource_name(name, len, &out_base_name_end);
    if (idx < 0)
       return false;
 
@@ -527,49 +631,42 @@ valid_array_index(const GLchar *name, unsigned *array_index)
    return true;
 }
 
-static uint32_t
-compute_resource_key(GLenum programInterface, const char *name)
-{
-   struct mesa_sha1 ctx;
-   unsigned char sha1[20];
-
-   _mesa_sha1_init(&ctx);
-   _mesa_sha1_update(&ctx, &programInterface, sizeof(programInterface));
-   _mesa_sha1_update(&ctx, name, strlen(name));
-   _mesa_sha1_final(&ctx, sha1);
-
-   return _mesa_hash_data(sha1, sizeof(sha1));
-}
-
 static struct gl_program_resource *
 search_resource_hash(struct gl_shader_program *shProg,
-                     GLenum programInterface, const char *name,
+                     GLenum programInterface, const char *name, int len,
                      unsigned *array_index)
 {
+   unsigned type = GET_PROGRAM_RESOURCE_TYPE_FROM_GLENUM(programInterface);
+   assert(type < ARRAY_SIZE(shProg->data->ProgramResourceHash));
+
+   if (!shProg->data->ProgramResourceHash[type])
+      return NULL;
+
    const char *base_name_end;
-   long index = parse_program_resource_name(name, &base_name_end);
+   long index = link_util_parse_program_resource_name(name, len, &base_name_end);
    char *name_copy;
 
    /* If dealing with array, we need to get the basename. */
    if (index >= 0) {
-      name_copy = (char *) malloc(base_name_end - name + 1);
+      name_copy = (char *) alloca(base_name_end - name + 1);
       memcpy(name_copy, name, base_name_end - name);
       name_copy[base_name_end - name] = '\0';
+      len = base_name_end - name;
    } else {
       name_copy = (char*) name;
    }
 
-   uint32_t key = compute_resource_key(programInterface, name_copy);
-   struct gl_program_resource *res = (struct gl_program_resource *)
-      _mesa_hash_table_u64_search(shProg->data->ProgramResourceHash, key);
+   uint32_t hash = _mesa_hash_string_with_length(name_copy, len);
+   struct hash_entry *entry =
+      _mesa_hash_table_search_pre_hashed(shProg->data->ProgramResourceHash[type],
+                                         hash, name_copy);
+   if (!entry)
+      return NULL;
 
-   if (name_copy != name)
-      free(name_copy);
-
-   if (res && array_index)
+   if (array_index)
       *array_index = index >= 0 ? index : 0;
 
-   return res;
+   return (struct gl_program_resource *)entry->data;
 }
 
 /* Find a program resource with specific name in given interface.
@@ -579,14 +676,14 @@ _mesa_program_resource_find_name(struct gl_shader_program *shProg,
                                  GLenum programInterface, const char *name,
                                  unsigned *array_index)
 {
-   struct gl_program_resource *res = NULL;
-
    if (name == NULL)
       return NULL;
 
+   int len = strlen(name);
+
    /* If we have a name, try the ProgramResourceHash first. */
-   if (shProg->data->ProgramResourceHash)
-      res = search_resource_hash(shProg, programInterface, name, array_index);
+   struct gl_program_resource *res =
+      search_resource_hash(shProg, programInterface, name, len, array_index);
 
    if (res)
       return res;
@@ -596,18 +693,14 @@ _mesa_program_resource_find_name(struct gl_shader_program *shProg,
       if (res->Type != programInterface)
          continue;
 
-      /* Resource basename. */
-      const char *rname = _mesa_program_resource_name(res);
+      struct gl_resource_name rname;
 
       /* Since ARB_gl_spirv lack of name reflections is a possibility */
-      if (rname == NULL)
+      if (!_mesa_program_get_resource_name(res, &rname))
          continue;
 
-      unsigned baselen = strlen(rname);
-      unsigned baselen_without_array_index = baselen;
-      const char *rname_last_square_bracket = strrchr(rname, '[');
       bool found = false;
-      bool rname_has_array_index_zero = false;
+
       /* From ARB_program_interface_query spec:
        *
        * "uint GetProgramResourceIndex(uint program, enum programInterface,
@@ -633,17 +726,15 @@ _mesa_program_resource_find_name(struct gl_shader_program *shProg,
        * array's index is zero and the resulting string length is the same
        * than the provided name's length.
        */
-      if (rname_last_square_bracket) {
-         baselen_without_array_index -= strlen(rname_last_square_bracket);
-         rname_has_array_index_zero =
-            (strcmp(rname_last_square_bracket, "[0]") == 0) &&
-            (baselen_without_array_index == strlen(name));
-      }
+      int length_without_array_index =
+         rname.last_square_bracket >= 0 ? rname.last_square_bracket : rname.length;
+      bool rname_has_array_index_zero = rname.suffix_is_zero_square_bracketed &&
+                                        rname.last_square_bracket == len;
 
-      if (strncmp(rname, name, baselen) == 0)
+      if (len >= rname.length && strncmp(rname.string, name, rname.length) == 0)
          found = true;
       else if (rname_has_array_index_zero &&
-               strncmp(rname, name, baselen_without_array_index) == 0)
+               strncmp(rname.string, name, length_without_array_index) == 0)
          found = true;
 
       if (found) {
@@ -652,9 +743,9 @@ _mesa_program_resource_find_name(struct gl_shader_program *shProg,
          case GL_SHADER_STORAGE_BLOCK:
             /* Basename match, check if array or struct. */
             if (rname_has_array_index_zero ||
-                name[baselen] == '\0' ||
-                name[baselen] == '[' ||
-                name[baselen] == '.') {
+                name[rname.length] == '\0' ||
+                name[rname.length] == '[' ||
+                name[rname.length] == '.') {
                return res;
             }
             break;
@@ -673,16 +764,16 @@ _mesa_program_resource_find_name(struct gl_shader_program *shProg,
          case GL_COMPUTE_SUBROUTINE:
          case GL_TESS_CONTROL_SUBROUTINE:
          case GL_TESS_EVALUATION_SUBROUTINE:
-            if (name[baselen] == '.') {
+            if (name[rname.length] == '.') {
                return res;
             }
-            /* fall-through */
+            FALLTHROUGH;
          case GL_PROGRAM_INPUT:
          case GL_PROGRAM_OUTPUT:
-            if (name[baselen] == '\0') {
+            if (name[rname.length] == '\0') {
                return res;
-            } else if (name[baselen] == '[' &&
-                valid_array_index(name, array_index)) {
+            } else if (name[rname.length] == '[' &&
+                valid_array_index(name, len, array_index)) {
                return res;
             }
             break;
@@ -945,17 +1036,16 @@ add_index_to_name(struct gl_program_resource *res)
  * base name + 3 for '[0]' if resource is an array.
  */
 extern unsigned
-_mesa_program_resource_name_len(struct gl_program_resource *res)
+_mesa_program_resource_name_length_array(struct gl_program_resource *res)
 {
-   const char* name = _mesa_program_resource_name(res);
+   int length = _mesa_program_resource_name_length(res);
 
    /* For shaders constructed from SPIR-V binaries, variables may not
     * have names associated with them.
     */
-   if (!name)
+   if (!length)
       return 0;
 
-   unsigned length = strlen(name);
    if (_mesa_program_resource_array_size(res) && add_index_to_name(res))
       length += 3;
    return length;
@@ -967,7 +1057,8 @@ bool
 _mesa_get_program_resource_name(struct gl_shader_program *shProg,
                                 GLenum programInterface, GLuint index,
                                 GLsizei bufSize, GLsizei *length,
-                                GLchar *name, const char *caller)
+                                GLchar *name, bool glthread,
+                                const char *caller)
 {
    GET_CURRENT_CONTEXT(ctx);
 
@@ -980,12 +1071,14 @@ _mesa_get_program_resource_name(struct gl_shader_program *shProg,
    * <programInterface>.
    */
    if (!res) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "%s(index %u)", caller, index);
+      _mesa_error_glthread_safe(ctx, GL_INVALID_VALUE, glthread,
+                                "%s(index %u)", caller, index);
       return false;
    }
 
    if (bufSize < 0) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "%s(bufSize %d)", caller, bufSize);
+      _mesa_error_glthread_safe(ctx, GL_INVALID_VALUE, glthread,
+                                "%s(bufSize %d)", caller, bufSize);
       return false;
    }
 
@@ -1031,7 +1124,7 @@ program_resource_location(struct gl_program_resource *res, unsigned array_index)
          return -1;
       }
       return var->location +
-	     (array_index * var->type->without_array()->matrix_columns);
+	     (array_index * glsl_without_array(var->type)->matrix_columns);
    }
    case GL_PROGRAM_OUTPUT:
       if (RESOURCE_VAR(res)->location == -1)
@@ -1053,7 +1146,7 @@ program_resource_location(struct gl_program_resource *res, unsigned array_index)
       *     "A valid name cannot be a structure, an array of structures, or any
       *     portion of a single vector or a matrix."
       */
-      if (RESOURCE_UNI(res)->type->without_array()->is_struct())
+      if (glsl_type_is_struct(glsl_without_array(RESOURCE_UNI(res)->type)))
          return -1;
 
       /* From the GL_ARB_uniform_buffer_object spec:
@@ -1067,7 +1160,7 @@ program_resource_location(struct gl_program_resource *res, unsigned array_index)
           RESOURCE_UNI(res)->atomic_buffer_index != -1)
          return -1;
 
-      /* fallthrough */
+      FALLTHROUGH;
    case GL_VERTEX_SUBROUTINE_UNIFORM:
    case GL_GEOMETRY_SUBROUTINE_UNIFORM:
    case GL_FRAGMENT_SUBROUTINE_UNIFORM:
@@ -1188,7 +1281,7 @@ is_resource_referenced(struct gl_shader_program *shProg,
 static unsigned
 get_buffer_property(struct gl_shader_program *shProg,
                     struct gl_program_resource *res, const GLenum prop,
-                    GLint *val, const char *caller)
+                    GLint *val, bool glthread, const char *caller)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (res->Type != GL_UNIFORM_BLOCK &&
@@ -1335,9 +1428,10 @@ get_buffer_property(struct gl_shader_program *shProg,
    assert(!"support for property type not implemented");
 
 invalid_operation:
-   _mesa_error(ctx, GL_INVALID_OPERATION, "%s(%s prop %s)", caller,
-               _mesa_enum_to_string(res->Type),
-               _mesa_enum_to_string(prop));
+   _mesa_error_glthread_safe(ctx, GL_INVALID_OPERATION, glthread,
+                             "%s(%s prop %s)", caller,
+                             _mesa_enum_to_string(res->Type),
+                             _mesa_enum_to_string(prop));
 
    return 0;
 }
@@ -1345,7 +1439,8 @@ invalid_operation:
 unsigned
 _mesa_program_resource_prop(struct gl_shader_program *shProg,
                             struct gl_program_resource *res, GLuint index,
-                            const GLenum prop, GLint *val, const char *caller)
+                            const GLenum prop, GLint *val, bool glthread,
+                            const char *caller)
 {
    GET_CURRENT_CONTEXT(ctx);
 
@@ -1365,7 +1460,7 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
          goto invalid_operation;
       default:
          /* Resource name length + terminator. */
-         *val = _mesa_program_resource_name_len(res) + 1;
+         *val = _mesa_program_resource_name_length_array(res) + 1;
       }
       return 1;
    case GL_TYPE:
@@ -1373,13 +1468,16 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
       case GL_UNIFORM:
       case GL_BUFFER_VARIABLE:
          *val = RESOURCE_UNI(res)->type->gl_type;
+         *val = mediump_to_highp_type(shProg, *val);
          return 1;
       case GL_PROGRAM_INPUT:
       case GL_PROGRAM_OUTPUT:
          *val = RESOURCE_VAR(res)->type->gl_type;
+         *val = mediump_to_highp_type(shProg, *val);
          return 1;
       case GL_TRANSFORM_FEEDBACK_VARYING:
          *val = RESOURCE_XFV(res)->Type;
+         *val = mediump_to_highp_type(shProg, *val);
          return 1;
       default:
          goto invalid_operation;
@@ -1450,11 +1548,11 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
    case GL_BUFFER_DATA_SIZE:
    case GL_NUM_ACTIVE_VARIABLES:
    case GL_ACTIVE_VARIABLES:
-      return get_buffer_property(shProg, res, prop, val, caller);
+      return get_buffer_property(shProg, res, prop, val, glthread, caller);
    case GL_REFERENCED_BY_COMPUTE_SHADER:
       if (!_mesa_has_compute_shaders(ctx))
          goto invalid_enum;
-      /* fallthrough */
+      FALLTHROUGH;
    case GL_REFERENCED_BY_VERTEX_SHADER:
    case GL_REFERENCED_BY_TESS_CONTROL_SHADER:
    case GL_REFERENCED_BY_TESS_EVALUATION_SHADER:
@@ -1587,15 +1685,17 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
 #undef VALIDATE_TYPE_2
 
 invalid_enum:
-   _mesa_error(ctx, GL_INVALID_ENUM, "%s(%s prop %s)", caller,
-               _mesa_enum_to_string(res->Type),
-               _mesa_enum_to_string(prop));
+   _mesa_error_glthread_safe(ctx, GL_INVALID_ENUM, glthread,
+                             "%s(%s prop %s)", caller,
+                             _mesa_enum_to_string(res->Type),
+                             _mesa_enum_to_string(prop));
    return 0;
 
 invalid_operation:
-   _mesa_error(ctx, GL_INVALID_OPERATION, "%s(%s prop %s)", caller,
-               _mesa_enum_to_string(res->Type),
-               _mesa_enum_to_string(prop));
+   _mesa_error_glthread_safe(ctx, GL_INVALID_OPERATION, glthread,
+                             "%s(%s prop %s)", caller,
+                             _mesa_enum_to_string(res->Type),
+                             _mesa_enum_to_string(prop));
    return 0;
 }
 
@@ -1625,7 +1725,7 @@ _mesa_get_program_resourceiv(struct gl_shader_program *shProg,
    for (int i = 0; i < propCount && i < bufSize; i++, val++, prop++) {
       int props_written =
          _mesa_program_resource_prop(shProg, res, index, *prop, val,
-                                     "glGetProgramResourceiv");
+                                     false, "glGetProgramResourceiv");
 
       /* Error happened. */
       if (props_written == 0)
@@ -1639,6 +1739,135 @@ _mesa_get_program_resourceiv(struct gl_shader_program *shProg,
     */
    if (length)
       *length = amount;
+}
+
+extern void
+_mesa_get_program_interfaceiv(struct gl_shader_program *shProg,
+                              GLenum programInterface, GLenum pname,
+                              GLint *params)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   unsigned i;
+
+   /* Validate pname against interface. */
+   switch(pname) {
+   case GL_ACTIVE_RESOURCES:
+      for (i = 0, *params = 0; i < shProg->data->NumProgramResourceList; i++)
+         if (shProg->data->ProgramResourceList[i].Type == programInterface)
+            (*params)++;
+      break;
+   case GL_MAX_NAME_LENGTH:
+      if (programInterface == GL_ATOMIC_COUNTER_BUFFER ||
+          programInterface == GL_TRANSFORM_FEEDBACK_BUFFER) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glGetProgramInterfaceiv(%s pname %s)",
+                     _mesa_enum_to_string(programInterface),
+                     _mesa_enum_to_string(pname));
+         return;
+      }
+      /* Name length consists of base name, 3 additional chars '[0]' if
+       * resource is an array and finally 1 char for string terminator.
+       */
+      for (i = 0, *params = 0; i < shProg->data->NumProgramResourceList; i++) {
+         if (shProg->data->ProgramResourceList[i].Type != programInterface)
+            continue;
+         unsigned len =
+            _mesa_program_resource_name_length_array(&shProg->data->ProgramResourceList[i]);
+         *params = MAX2((unsigned)*params, len + 1);
+      }
+      break;
+   case GL_MAX_NUM_ACTIVE_VARIABLES:
+      switch (programInterface) {
+      case GL_UNIFORM_BLOCK:
+         for (i = 0, *params = 0; i < shProg->data->NumProgramResourceList; i++) {
+            if (shProg->data->ProgramResourceList[i].Type == programInterface) {
+               struct gl_uniform_block *block =
+                  (struct gl_uniform_block *)
+                  shProg->data->ProgramResourceList[i].Data;
+               *params = MAX2((unsigned)*params, block->NumUniforms);
+            }
+         }
+         break;
+      case GL_SHADER_STORAGE_BLOCK:
+         for (i = 0, *params = 0; i < shProg->data->NumProgramResourceList; i++) {
+            if (shProg->data->ProgramResourceList[i].Type == programInterface) {
+               struct gl_uniform_block *block =
+                  (struct gl_uniform_block *)
+                  shProg->data->ProgramResourceList[i].Data;
+               GLint block_params = 0;
+               for (unsigned j = 0; j < block->NumUniforms; j++) {
+                  struct gl_program_resource *uni =
+                     _mesa_program_resource_find_active_variable(
+                        shProg,
+                        GL_BUFFER_VARIABLE,
+                        block,
+                        j);
+                  if (!uni)
+                     continue;
+                  block_params++;
+               }
+               *params = MAX2(*params, block_params);
+            }
+         }
+         break;
+      case GL_ATOMIC_COUNTER_BUFFER:
+         for (i = 0, *params = 0; i < shProg->data->NumProgramResourceList; i++) {
+            if (shProg->data->ProgramResourceList[i].Type == programInterface) {
+               struct gl_active_atomic_buffer *buffer =
+                  (struct gl_active_atomic_buffer *)
+                  shProg->data->ProgramResourceList[i].Data;
+               *params = MAX2((unsigned)*params, buffer->NumUniforms);
+            }
+         }
+         break;
+      case GL_TRANSFORM_FEEDBACK_BUFFER:
+         for (i = 0, *params = 0; i < shProg->data->NumProgramResourceList; i++) {
+            if (shProg->data->ProgramResourceList[i].Type == programInterface) {
+               struct gl_transform_feedback_buffer *buffer =
+                  (struct gl_transform_feedback_buffer *)
+                  shProg->data->ProgramResourceList[i].Data;
+               *params = MAX2((unsigned)*params, buffer->NumVaryings);
+            }
+         }
+         break;
+      default:
+        _mesa_error(ctx, GL_INVALID_OPERATION,
+                    "glGetProgramInterfaceiv(%s pname %s)",
+                    _mesa_enum_to_string(programInterface),
+                    _mesa_enum_to_string(pname));
+      }
+      break;
+   case GL_MAX_NUM_COMPATIBLE_SUBROUTINES:
+      switch (programInterface) {
+      case GL_VERTEX_SUBROUTINE_UNIFORM:
+      case GL_FRAGMENT_SUBROUTINE_UNIFORM:
+      case GL_GEOMETRY_SUBROUTINE_UNIFORM:
+      case GL_COMPUTE_SUBROUTINE_UNIFORM:
+      case GL_TESS_CONTROL_SUBROUTINE_UNIFORM:
+      case GL_TESS_EVALUATION_SUBROUTINE_UNIFORM: {
+         for (i = 0, *params = 0; i < shProg->data->NumProgramResourceList; i++) {
+            if (shProg->data->ProgramResourceList[i].Type == programInterface) {
+               struct gl_uniform_storage *uni =
+                  (struct gl_uniform_storage *)
+                  shProg->data->ProgramResourceList[i].Data;
+               *params = MAX2((unsigned)*params, uni->num_compatible_subroutines);
+            }
+         }
+         break;
+      }
+
+      default:
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glGetProgramInterfaceiv(%s pname %s)",
+                     _mesa_enum_to_string(programInterface),
+                     _mesa_enum_to_string(pname));
+      }
+      break;
+   default:
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "glGetProgramInterfaceiv(pname %s)",
+                  _mesa_enum_to_string(pname));
+   }
 }
 
 static bool
@@ -1694,7 +1923,7 @@ validate_io(struct gl_program *producer, struct gl_program *consumer)
        *
        *    Built-in inputs or outputs do not affect interface matching.
        */
-      if (is_gl_identifier(var->name))
+      if (is_gl_identifier(var->name.string))
          continue;
 
       outputs[num_outputs++] = var;
@@ -1711,7 +1940,7 @@ validate_io(struct gl_program *producer, struct gl_program *consumer)
       gl_shader_variable const *const consumer_var = RESOURCE_VAR(res);
       gl_shader_variable const *producer_var = NULL;
 
-      if (is_gl_identifier(consumer_var->name))
+      if (is_gl_identifier(consumer_var->name.string))
          continue;
 
       /* Inputs with explicit locations match other outputs with explicit
@@ -1733,7 +1962,7 @@ validate_io(struct gl_program *producer, struct gl_program *consumer)
             const gl_shader_variable *const var = outputs[j];
 
             if (!var->explicit_location &&
-                strcmp(consumer_var->name, var->name) == 0) {
+                strcmp(consumer_var->name.string, var->name.string) == 0) {
                producer_var = var;
                match_index = j;
                break;
@@ -1786,10 +2015,10 @@ validate_io(struct gl_program *producer, struct gl_program *consumer)
       if (consumer_is_array_stage) {
          if (consumer_interface_type) {
             /* the interface is the array; the underlying types should match */
-            if (consumer_interface_type->is_array() && !consumer_var->patch)
+            if (glsl_type_is_array(consumer_interface_type) && !consumer_var->patch)
                consumer_interface_type = consumer_interface_type->fields.array;
          } else {
-            if (consumer_type->is_array() && !consumer_var->patch)
+            if (glsl_type_is_array(consumer_type) && !consumer_var->patch)
                consumer_type = consumer_type->fields.array;
          }
       }
@@ -1797,10 +2026,10 @@ validate_io(struct gl_program *producer, struct gl_program *consumer)
       if (producer_is_array_stage) {
          if (producer_interface_type) {
             /* the interface is the array; the underlying types should match */
-            if (producer_interface_type->is_array() && !producer_var->patch)
+            if (glsl_type_is_array(producer_interface_type) && !producer_var->patch)
                producer_interface_type = producer_interface_type->fields.array;
          } else {
-            if (producer_type->is_array() && !producer_var->patch)
+            if (glsl_type_is_array(producer_type) && !producer_var->patch)
                producer_type = producer_type->fields.array;
          }
       }
@@ -1908,21 +2137,37 @@ _mesa_validate_pipeline_io(struct gl_pipeline_object *pipeline)
 }
 
 extern "C" void
+_mesa_program_resource_hash_destroy(struct gl_shader_program *shProg)
+{
+   for (unsigned i = 0; i < ARRAY_SIZE(shProg->data->ProgramResourceHash); i++) {
+      if (shProg->data->ProgramResourceHash[i]) {
+         _mesa_hash_table_destroy(shProg->data->ProgramResourceHash[i], NULL);
+         shProg->data->ProgramResourceHash[i] = NULL;
+      }
+   }
+}
+
+extern "C" void
 _mesa_create_program_resource_hash(struct gl_shader_program *shProg)
 {
    /* Rebuild resource hash. */
-   if (shProg->data->ProgramResourceHash)
-      _mesa_hash_table_u64_destroy(shProg->data->ProgramResourceHash, NULL);
-
-   shProg->data->ProgramResourceHash = _mesa_hash_table_u64_create(shProg);
+   _mesa_program_resource_hash_destroy(shProg);
 
    struct gl_program_resource *res = shProg->data->ProgramResourceList;
    for (unsigned i = 0; i < shProg->data->NumProgramResourceList; i++, res++) {
-      const char *name = _mesa_program_resource_name(res);
-      if (name) {
-         uint32_t key = compute_resource_key(res->Type, name);
-         _mesa_hash_table_u64_insert(shProg->data->ProgramResourceHash, key,
-                                     res);
+      struct gl_resource_name name;
+      if (_mesa_program_get_resource_name(res, &name)) {
+         unsigned type = GET_PROGRAM_RESOURCE_TYPE_FROM_GLENUM(res->Type);
+         assert(type < ARRAY_SIZE(shProg->data->ProgramResourceHash));
+
+         if (!shProg->data->ProgramResourceHash[type]) {
+            shProg->data->ProgramResourceHash[type] =
+               _mesa_hash_table_create(shProg, _mesa_hash_string,
+                                       _mesa_key_string_equal);
+         }
+
+         _mesa_hash_table_insert(shProg->data->ProgramResourceHash[type],
+                                 name.string, res);
       }
    }
 }

@@ -1,35 +1,18 @@
 /*
  * Copyright 2008 Corbin Simpson <MostAwesomeDude@gmail.com>
  * Copyright 2010 Marek Olšák <maraeo@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef R300_SCREEN_H
 #define R300_SCREEN_H
 
 #include "r300_chipset.h"
-#include "radeon/radeon_winsys.h"
+#include "winsys/radeon_winsys.h"
 #include "pipe/p_screen.h"
 #include "util/disk_cache.h"
 #include "util/slab.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include <stdio.h>
 
 struct r300_screen {
@@ -52,6 +35,11 @@ struct r300_screen {
     /* The MSAA texture with CMASK access; */
     struct pipe_resource *cmask_resource;
     mtx_t cmask_mutex;
+
+    struct {
+#define OPT_BOOL(name, dflt, description) bool name : 1;
+#include "r300_debug_options.h"
+    } options;
 };
 
 
@@ -103,13 +91,13 @@ radeon_winsys(struct pipe_screen *screen) {
 #define DBG_NO_ZMASK    (1 << 21)
 #define DBG_NO_HIZ      (1 << 22)
 #define DBG_NO_CMASK    (1 << 23)
-/* Statistics. */
-#define DBG_P_STAT      (1 << 25)
+#define DBG_NO_TCL      (1 << 25)
+#define DBG_IEEEMATH    (1 << 26)
+#define DBG_FFMATH      (1 << 27)
 /*@}*/
-
-static inline boolean SCREEN_DBG_ON(struct r300_screen * screen, unsigned flags)
+static inline bool SCREEN_DBG_ON(struct r300_screen * screen, unsigned flags)
 {
-    return (screen->debug & flags) ? TRUE : FALSE;
+    return (screen->debug & flags) ? true : false;
 }
 
 static inline void SCREEN_DBG(struct r300_screen * screen, unsigned flags,

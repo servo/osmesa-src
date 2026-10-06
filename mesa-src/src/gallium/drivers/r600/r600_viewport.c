@@ -1,24 +1,6 @@
 /*
  * Copyright 2012 Advanced Micro Devices, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "r600_cs.h"
@@ -48,7 +30,7 @@
 #define R_0282D0_PA_SC_VPORT_ZMIN_0                                     0x0282D0
 #define R_0282D4_PA_SC_VPORT_ZMAX_0                                     0x0282D4
 
-#define GET_MAX_SCISSOR(rctx) (rctx->chip_class >= EVERGREEN ? 16384 : 8192)
+#define GET_MAX_SCISSOR(rctx) (rctx->gfx_level >= EVERGREEN ? 16384 : 8192)
 
 static void r600_set_scissor_states(struct pipe_context *ctx,
 				    unsigned start_slot,
@@ -141,13 +123,13 @@ static void r600_scissor_make_union(struct r600_signed_scissor *out,
 void evergreen_apply_scissor_bug_workaround(struct r600_common_context *rctx,
 					    struct pipe_scissor_state *scissor)
 {
-	if (rctx->chip_class == EVERGREEN || rctx->chip_class == CAYMAN) {
+	if (rctx->gfx_level == EVERGREEN || rctx->gfx_level == CAYMAN) {
 		if (scissor->maxx == 0)
 			scissor->minx = 1;
 		if (scissor->maxy == 0)
 			scissor->miny = 1;
 
-		if (rctx->chip_class == CAYMAN &&
+		if (rctx->gfx_level == CAYMAN &&
 		    scissor->maxx == 1 && scissor->maxy == 1)
 			scissor->maxx = 2;
 	}
@@ -180,12 +162,12 @@ static void r600_emit_one_scissor(struct r600_common_context *rctx,
 }
 
 /* the range is [-MAX, MAX] */
-#define GET_MAX_VIEWPORT_RANGE(rctx) (rctx->chip_class >= EVERGREEN ? 32768 : 16384)
+#define GET_MAX_VIEWPORT_RANGE(rctx) (rctx->gfx_level >= EVERGREEN ? 32768 : 16384)
 
 static void r600_emit_guardband(struct r600_common_context *rctx,
 				struct r600_signed_scissor *vp_as_scissor)
 {
-	struct radeon_cmdbuf *cs = rctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &rctx->gfx.cs;
 	struct pipe_viewport_state vp;
 	float left, top, right, bottom, max_range, guardband_x, guardband_y;
 
@@ -221,21 +203,33 @@ static void r600_emit_guardband(struct r600_common_context *rctx,
 	guardband_x = MIN2(-left, right);
 	guardband_y = MIN2(-top, bottom);
 
+	float discard_x = 1.0;
+	float discard_y = 1.0;
+	float distance = rctx->current_clip_discard_distance;
+
+	/* Add half the point size / line width */
+	discard_x += distance / (2.0 * vp.scale[0]);
+	discard_y += distance / (2.0 * vp.scale[1]);
+
+	/* Discard primitives that would lie entirely outside the viewport area. */
+	discard_x = MIN2(discard_x, guardband_x);
+	discard_y = MIN2(discard_y, guardband_y);
+
 	/* If any of the GB registers is updated, all of them must be updated. */
-	if (rctx->chip_class >= CAYMAN)
+	if (rctx->gfx_level >= CAYMAN)
 		radeon_set_context_reg_seq(cs, CM_R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, 4);
 	else
 		radeon_set_context_reg_seq(cs, R600_R_028C0C_PA_CL_GB_VERT_CLIP_ADJ, 4);
 
 	radeon_emit(cs, fui(guardband_y)); /* R_028BE8_PA_CL_GB_VERT_CLIP_ADJ */
-	radeon_emit(cs, fui(1.0));         /* R_028BEC_PA_CL_GB_VERT_DISC_ADJ */
+	radeon_emit(cs, fui(discard_y)); /* R_028BEC_PA_CL_GB_VERT_DISC_ADJ */
 	radeon_emit(cs, fui(guardband_x)); /* R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ */
-	radeon_emit(cs, fui(1.0));         /* R_028BF4_PA_CL_GB_HORZ_DISC_ADJ */
+	radeon_emit(cs, fui(discard_x)); /* R_028BF4_PA_CL_GB_HORZ_DISC_ADJ */
 }
 
 static void r600_emit_scissors(struct r600_common_context *rctx, struct r600_atom *atom)
 {
-	struct radeon_cmdbuf *cs = rctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &rctx->gfx.cs;
 	struct pipe_scissor_state *states = rctx->scissors.states;
 	unsigned mask = rctx->scissors.dirty_mask;
 	bool scissor_enabled = rctx->scissor_enabled;
@@ -306,7 +300,7 @@ static void r600_set_viewport_states(struct pipe_context *ctx,
 static void r600_emit_one_viewport(struct r600_common_context *rctx,
 				   struct pipe_viewport_state *state)
 {
-	struct radeon_cmdbuf *cs = rctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &rctx->gfx.cs;
 
 	radeon_emit(cs, fui(state->scale[0]));
 	radeon_emit(cs, fui(state->translate[0]));
@@ -318,7 +312,7 @@ static void r600_emit_one_viewport(struct r600_common_context *rctx,
 
 static void r600_emit_viewports(struct r600_common_context *rctx)
 {
-	struct radeon_cmdbuf *cs = rctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &rctx->gfx.cs;
 	struct pipe_viewport_state *states = rctx->viewports.states;
 	unsigned mask = rctx->viewports.dirty_mask;
 
@@ -348,7 +342,7 @@ static void r600_emit_viewports(struct r600_common_context *rctx)
 
 static void r600_emit_depth_ranges(struct r600_common_context *rctx)
 {
-	struct radeon_cmdbuf *cs = rctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &rctx->gfx.cs;
 	struct pipe_viewport_state *states = rctx->viewports.states;
 	unsigned mask = rctx->viewports.depth_range_dirty_mask;
 	float zmin, zmax;
@@ -388,22 +382,6 @@ static void r600_emit_viewport_states(struct r600_common_context *rctx,
 {
 	r600_emit_viewports(rctx);
 	r600_emit_depth_ranges(rctx);
-}
-
-/* Set viewport dependencies on pipe_rasterizer_state. */
-void r600_viewport_set_rast_deps(struct r600_common_context *rctx,
-				 bool scissor_enable, bool clip_halfz)
-{
-	if (rctx->scissor_enabled != scissor_enable) {
-		rctx->scissor_enabled = scissor_enable;
-		rctx->scissors.dirty_mask = (1 << R600_MAX_VIEWPORTS) - 1;
-		rctx->set_atom_dirty(rctx, &rctx->scissors.atom, true);
-	}
-	if (rctx->clip_halfz != clip_halfz) {
-		rctx->clip_halfz = clip_halfz;
-		rctx->viewports.depth_range_dirty_mask = (1 << R600_MAX_VIEWPORTS) - 1;
-		rctx->set_atom_dirty(rctx, &rctx->viewports.atom, true);
-	}
 }
 
 /**

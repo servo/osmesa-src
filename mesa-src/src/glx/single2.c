@@ -2,30 +2,7 @@
  * SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008)
  * Copyright (C) 1991-2000 Silicon Graphics, Inc. All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice including the dates of first publication and
- * either this permission notice or a reference to
- * http://oss.sgi.com/projects/FreeB/
- * shall be included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
- * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
- * SILICON GRAPHICS, INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- * Except as contained in this notice, the name of Silicon Graphics, Inc.
- * shall not be used in advertising or otherwise to promote the sale, use or
- * other dealings in this Software without prior written authorization from
- * Silicon Graphics, Inc.
+ * SPDX-License-Identifier: SGI-B-2.0
  */
 
 #include <stdio.h>
@@ -647,7 +624,7 @@ __indirect_glGetString(GLenum name)
    GLubyte *s = NULL;
 
    if (!dpy)
-      return 0;
+      return NULL;
 
    /*
     ** Return the cached copy if the string has already been fetched
@@ -671,7 +648,7 @@ __indirect_glGetString(GLenum name)
       break;
    default:
       __glXSetError(gc, GL_INVALID_ENUM);
-      return 0;
+      return NULL;
    }
 
    /*
@@ -679,8 +656,7 @@ __indirect_glGetString(GLenum name)
     */
 
    (void) __glXFlushRenderBuffer(gc, gc->pc);
-   s = (GLubyte *) __glXGetString(dpy, gc->majorOpcode, gc->currentContextTag,
-                                  name);
+   s = (GLubyte *) __glXGetString(dpy, gc->currentContextTag, name);
    if (!s) {
       /* Throw data on the floor */
       __glXSetError(gc, GL_OUT_OF_MEMORY);
@@ -699,12 +675,11 @@ __indirect_glGetString(GLenum name)
          break;
 
       case GL_VERSION:{
-            int client_major;
-            int client_minor;
+            const int client_major = 1;
+            const int client_minor = 4;
 
             version_from_string((char *) s,
                                 &gc->server_major, &gc->server_minor);
-            __glXGetGLVersion(&client_major, &client_minor);
 
             if ((gc->server_major < client_major)
                 || ((gc->server_major == client_major)
@@ -743,43 +718,7 @@ __indirect_glGetString(GLenum name)
          }
 
       case GL_EXTENSIONS:{
-            int major = 1;
-            int minor = 0;
-
-            /* This code is currently disabled.  I was reminded that some
-             * vendors intentionally exclude some extensions from their
-             * extension string that are part of the core version they
-             * advertise.  In particular, on Nvidia drivers this means that
-             * the functionality is supported by the driver, but is not
-             * hardware accelerated.  For example, a TNT will show core
-             * version 1.5, but most of the post-1.2 functionality is a
-             * software fallback.
-             *
-             * I don't want to break applications that rely on this odd
-             * behavior.  At the same time, the code is written and tested,
-             * so I didn't want to throw it away.  Therefore, the code is here
-             * but disabled.  In the future, we may wish to and an environment
-             * variable to enable it.
-             */
-
-#if 0
-            /* Call glGetString just to make sure that gc->server_major and
-             * gc->server_minor are set.  This version may be higher than we
-             * can completely support, but it may imply support for some
-             * extensions that we can support.
-             *
-             * For example, at the time of this writing, the client-side
-             * library only supports upto core GL version 1.2.  However, cubic
-             * textures, multitexture, multisampling, and some other 1.3
-             * features are supported.  If the server reports back version
-             * 1.3, but does not report all of those extensions, we will
-             * enable them.
-             */
-            (void *) glGetString(GL_VERSION);
-            major = gc->server_major, minor = gc->server_minor;
-#endif
-
-            __glXCalculateUsableGLExtensions(gc, (char *) s, major, minor);
+            __glXCalculateUsableGLExtensions(gc, (char *) s);
             free(s);
             s = gc->extensions;
             break;

@@ -1,27 +1,8 @@
 /*
  * Copyright 2015 Advanced Micro Devices, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
  * Authors:
  *      Marek Olšák <maraeo@gmail.com>
+ * SPDX-License-Identifier: MIT
  */
 #include "r600_pipe.h"
 #include "evergreend.h"
@@ -141,7 +122,7 @@ static void ac_parse_set_reg_packet(FILE *f, uint32_t *ib, unsigned count,
 }
 
 static uint32_t *ac_parse_packet3(FILE *f, uint32_t *ib, int *num_dw,
-				  int trace_id, enum chip_class chip_class,
+				  int trace_id, enum amd_gfx_level gfx_level,
 				  ac_debug_addr_callback addr_callback,
 				  void *addr_callback_data)
 {
@@ -256,7 +237,7 @@ static uint32_t *ac_parse_packet3(FILE *f, uint32_t *ib, int *num_dw,
 					COLOR_RESET "\n");
 			break;
 		}
-		/* fallthrough *//* print all dwords */
+		FALLTHROUGH; /* print all dwords */
 	default:
 		for (i = 0; i < count+1; i++) {
 			print_spaces(f, INDENT_PKT);
@@ -275,7 +256,7 @@ static uint32_t *ac_parse_packet3(FILE *f, uint32_t *ib, int *num_dw,
  * \param f		file
  * \param ib		IB
  * \param num_dw	size of the IB
- * \param chip_class	chip class
+ * \param gfx_level	gfx level
  * \param trace_id	the last trace ID that is known to have been reached
  *			and executed by the CP, typically read from a buffer
  * \param addr_callback Get a mapped pointer of the IB at a given address. Can
@@ -283,7 +264,7 @@ static uint32_t *ac_parse_packet3(FILE *f, uint32_t *ib, int *num_dw,
  * \param addr_callback_data user data for addr_callback
  */
 static void eg_parse_ib(FILE *f, uint32_t *ib, int num_dw, int trace_id,
-			const char *name, enum chip_class chip_class,
+			const char *name, enum amd_gfx_level gfx_level,
 			ac_debug_addr_callback addr_callback, void *addr_callback_data)
 {
 	fprintf(f, "------------------ %s begin ------------------\n", name);
@@ -294,7 +275,7 @@ static void eg_parse_ib(FILE *f, uint32_t *ib, int num_dw, int trace_id,
 		switch (type) {
 		case 3:
 			ib = ac_parse_packet3(f, ib, &num_dw, trace_id,
-					      chip_class, addr_callback,
+					      gfx_level, addr_callback,
 					      addr_callback_data);
 			break;
 		case 2:
@@ -305,7 +286,7 @@ static void eg_parse_ib(FILE *f, uint32_t *ib, int num_dw, int trace_id,
 				num_dw--;
 				break;
 			}
-			/* fall through */
+			FALLTHROUGH;
 		default:
 			fprintf(f, "Unknown packet type %i\n", type);
 			return;
@@ -332,16 +313,16 @@ static void eg_dump_last_ib(struct r600_context *rctx, FILE *f)
 		 * waited for the context, so this buffer should be idle.
 		 * If the GPU is hung, there is no point in waiting for it.
 		 */
-		uint32_t *map = rctx->b.ws->buffer_map(rctx->last_trace_buf->buf,
+		uint32_t *map = rctx->b.ws->buffer_map(rctx->b.ws, rctx->last_trace_buf->buf,
 						       NULL,
-						       PIPE_TRANSFER_UNSYNCHRONIZED |
-						       PIPE_TRANSFER_READ);
+						       PIPE_MAP_UNSYNCHRONIZED |
+						       PIPE_MAP_READ);
 		if (map)
 			last_trace_id = *map;
 	}
 
 	eg_parse_ib(f, rctx->last_gfx.ib, rctx->last_gfx.num_dw,
-		    last_trace_id, "IB", rctx->b.chip_class,
+		    last_trace_id, "IB", rctx->b.gfx_level,
 		     NULL, NULL);
 }
 

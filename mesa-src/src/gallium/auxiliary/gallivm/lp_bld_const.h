@@ -37,7 +37,7 @@
 #define LP_BLD_CONST_H
 
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "gallivm/lp_bld.h"
 #include "gallivm/lp_bld_init.h"
 
@@ -98,6 +98,8 @@ LLVMValueRef
 lp_build_const_int_vec(struct gallivm_state *gallivm,
                        struct lp_type type, long long val);
 
+LLVMValueRef
+lp_build_const_channel_vec(struct gallivm_state *gallivm, struct lp_type type);
 
 LLVMValueRef
 lp_build_const_aos(struct gallivm_state *gallivm, struct lp_type type, 
@@ -138,6 +140,12 @@ lp_build_const_float(struct gallivm_state *gallivm, float x)
    return LLVMConstReal(LLVMFloatTypeInContext(gallivm->context), x);
 }
 
+static inline LLVMValueRef
+lp_build_const_double(struct gallivm_state *gallivm, float x)
+{
+   return LLVMConstReal(LLVMDoubleTypeInContext(gallivm->context), x);
+}
+
 
 /** Return constant-valued pointer to int */
 static inline LLVMValueRef
@@ -169,5 +177,11 @@ lp_build_const_func_pointer(struct gallivm_state *gallivm,
                             unsigned num_args,
                             const char *name);
 
+
+LLVMValueRef
+lp_build_const_func_pointer_from_type(struct gallivm_state *gallivm,
+                            const void *ptr,
+                            LLVMTypeRef function_type,
+                            const char *name);
 
 #endif /* !LP_BLD_CONST_H */

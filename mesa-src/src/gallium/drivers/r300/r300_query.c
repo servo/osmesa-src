@@ -1,27 +1,9 @@
 /*
  * Copyright 2009 Corbin Simpson <MostAwesomeDude@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "util/u_memory.h"
-#include "util/simple_list.h"
 
 #include "r300_context.h"
 #include "r300_screen.h"
@@ -74,9 +56,10 @@ static struct pipe_query *r300_create_query(struct pipe_context *pipe,
 static void r300_destroy_query(struct pipe_context* pipe,
                                struct pipe_query* query)
 {
+    struct r300_context *r300 = r300_context(pipe);
     struct r300_query* q = r300_query(query);
 
-    pb_reference(&q->buf, NULL);
+    radeon_bo_reference(r300->rws, &q->buf, NULL);
     FREE(query);
 }
 
@@ -121,7 +104,7 @@ static bool r300_end_query(struct pipe_context* pipe,
     struct r300_query *q = r300_query(query);
 
     if (q->type == PIPE_QUERY_GPU_FINISHED) {
-        pb_reference(&q->buf, NULL);
+        radeon_bo_reference(r300->rws, &q->buf, NULL);
         r300_flush(pipe, PIPE_FLUSH_ASYNC,
                    (struct pipe_fence_handle**)&q->buf);
         return true;
@@ -150,20 +133,20 @@ static bool r300_get_query_result(struct pipe_context* pipe,
 
     if (q->type == PIPE_QUERY_GPU_FINISHED) {
         if (wait) {
-            r300->rws->buffer_wait(q->buf, PIPE_TIMEOUT_INFINITE,
+            r300->rws->buffer_wait(r300->rws, q->buf, OS_TIMEOUT_INFINITE,
                                    RADEON_USAGE_READWRITE);
-            vresult->b = TRUE;
+            vresult->b = true;
         } else {
-            vresult->b = r300->rws->buffer_wait(q->buf, 0, RADEON_USAGE_READWRITE);
+            vresult->b = r300->rws->buffer_wait(r300->rws, q->buf, 0, RADEON_USAGE_READWRITE);
         }
         return vresult->b;
     }
 
-    map = r300->rws->buffer_map(q->buf, r300->cs,
-                                PIPE_TRANSFER_READ |
-                                (!wait ? PIPE_TRANSFER_DONTBLOCK : 0));
+    map = r300->rws->buffer_map(r300->rws, q->buf, &r300->cs,
+                                PIPE_MAP_READ |
+                                (!wait ? PIPE_MAP_DONTBLOCK : 0));
     if (!map)
-        return FALSE;
+        return false;
 
     /* Sum up the results. */
     temp = 0;
@@ -179,7 +162,7 @@ static bool r300_get_query_result(struct pipe_context* pipe,
     } else {
         vresult->u64 = temp;
     }
-    return TRUE;
+    return true;
 }
 
 static void r300_render_condition(struct pipe_context *pipe,
@@ -191,7 +174,7 @@ static void r300_render_condition(struct pipe_context *pipe,
     union pipe_query_result result;
     bool wait;
 
-    r300->skip_rendering = FALSE;
+    r300->skip_rendering = false;
 
     if (query) {
         wait = mode == PIPE_RENDER_COND_WAIT ||

@@ -46,13 +46,13 @@ struct dump_ctx
 {
    struct tgsi_iterate_context iter;
 
-   boolean dump_float_as_hex;
+   bool dump_float_as_hex;
 
-   uint instno;
-   uint immno;
+   unsigned instno;
+   unsigned immno;
    int indent;
    
-   uint indentation;
+   unsigned indentation;
    FILE *file;
 
    void (*dump_printf)(struct dump_ctx *ctx, const char *format, ...);
@@ -74,9 +74,9 @@ dump_ctx_printf(struct dump_ctx *ctx, const char *format, ...)
 static void
 dump_enum(
    struct dump_ctx *ctx,
-   uint e,
+   unsigned e,
    const char **enums,
-   uint enum_count )
+   unsigned enum_count )
 {
    if (e >= enum_count)
       ctx->dump_printf( ctx, "%u", e );
@@ -222,7 +222,7 @@ _dump_register_dst(
 static void
 _dump_writemask(
    struct dump_ctx *ctx,
-   uint writemask )
+   unsigned writemask )
 {
    if (writemask != TGSI_WRITEMASK_XYZW) {
       CHR( '.' );
@@ -294,13 +294,13 @@ dump_imm_data(struct tgsi_iterate_context *iter,
    TXT( "}" );
 }
 
-static boolean
+static bool
 iter_declaration(
    struct tgsi_iterate_context *iter,
    struct tgsi_full_declaration *decl )
 {
    struct dump_ctx *ctx = (struct dump_ctx *)iter;
-   boolean patch = decl->Semantic.Name == TGSI_SEMANTIC_PATCH ||
+   bool patch = decl->Semantic.Name == TGSI_SEMANTIC_PATCH ||
       decl->Semantic.Name == TGSI_SEMANTIC_TESSINNER ||
       decl->Semantic.Name == TGSI_SEMANTIC_TESSOUTER ||
       decl->Semantic.Name == TGSI_SEMANTIC_PRIMID;
@@ -436,22 +436,6 @@ iter_declaration(
          TXT( ", " );
          ENM( decl->Interp.Location, tgsi_interpolate_locations );
       }
-
-      if (decl->Interp.CylindricalWrap) {
-         TXT(", CYLWRAP_");
-         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_X) {
-            CHR('X');
-         }
-         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_Y) {
-            CHR('Y');
-         }
-         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_Z) {
-            CHR('Z');
-         }
-         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_W) {
-            CHR('W');
-         }
-      }
    }
 
    if (decl->Declaration.Invariant) {
@@ -460,22 +444,10 @@ iter_declaration(
 
    EOL();
 
-   return TRUE;
+   return true;
 }
 
-void
-tgsi_dump_declaration(
-   const struct tgsi_full_declaration *decl )
-{
-   struct dump_ctx ctx;
-   memset(&ctx, 0, sizeof(ctx));
-
-   ctx.dump_printf = dump_ctx_printf;
-
-   iter_declaration( &ctx.iter, (struct tgsi_full_declaration *)decl );
-}
-
-static boolean
+static bool
 iter_property(
    struct tgsi_iterate_context *iter,
    struct tgsi_full_property *prop )
@@ -513,21 +485,10 @@ iter_property(
    }
    EOL();
 
-   return TRUE;
+   return true;
 }
 
-void tgsi_dump_property(
-   const struct tgsi_full_property *prop )
-{
-   struct dump_ctx ctx;
-   memset(&ctx, 0, sizeof(ctx));
-
-   ctx.dump_printf = dump_ctx_printf;
-
-   iter_property( &ctx.iter, (struct tgsi_full_property *)prop );
-}
-
-static boolean
+static bool
 iter_immediate(
    struct tgsi_iterate_context *iter,
    struct tgsi_full_immediate *imm )
@@ -544,31 +505,19 @@ iter_immediate(
 
    EOL();
 
-   return TRUE;
+   return true;
 }
 
-void
-tgsi_dump_immediate(
-   const struct tgsi_full_immediate *imm )
-{
-   struct dump_ctx ctx;
-   memset(&ctx, 0, sizeof(ctx));
-
-   ctx.dump_printf = dump_ctx_printf;
-
-   iter_immediate( &ctx.iter, (struct tgsi_full_immediate *)imm );
-}
-
-static boolean
+static bool
 iter_instruction(
    struct tgsi_iterate_context *iter,
    struct tgsi_full_instruction *inst )
 {
    struct dump_ctx *ctx = (struct dump_ctx *) iter;
-   uint instno = ctx->instno++;
+   unsigned instno = ctx->instno++;
    const struct tgsi_opcode_info *info = tgsi_get_opcode_info( inst->Instruction.Opcode );
-   uint i;
-   boolean first_reg = TRUE;
+   unsigned i;
+   bool first_reg = true;
 
    INSTID( instno );
    TXT( ": " );
@@ -598,7 +547,7 @@ iter_instruction(
       _dump_register_dst( ctx, dst );
       _dump_writemask( ctx, dst->Register.WriteMask );
 
-      first_reg = FALSE;
+      first_reg = false;
    }
 
    for (i = 0; i < inst->Instruction.NumSrcRegs; i++) {
@@ -629,7 +578,7 @@ iter_instruction(
       if (src->Register.Absolute)
          CHR( '|' );
 
-      first_reg = FALSE;
+      first_reg = false;
    }
 
    if (inst->Instruction.Texture) {
@@ -694,13 +643,13 @@ iter_instruction(
 
    EOL();
 
-   return TRUE;
+   return true;
 }
 
 void
 tgsi_dump_instruction(
    const struct tgsi_full_instruction *inst,
-   uint instno )
+   unsigned instno )
 {
    struct dump_ctx ctx;
    memset(&ctx, 0, sizeof(ctx));
@@ -715,18 +664,18 @@ tgsi_dump_instruction(
    iter_instruction( &ctx.iter, (struct tgsi_full_instruction *)inst );
 }
 
-static boolean
+static bool
 prolog(
    struct tgsi_iterate_context *iter )
 {
    struct dump_ctx *ctx = (struct dump_ctx *) iter;
    ENM( iter->processor.Processor, tgsi_processor_type_names );
    EOL();
-   return TRUE;
+   return true;
 }
 
 static void
-init_dump_ctx(struct dump_ctx *ctx, uint flags)
+init_dump_ctx(struct dump_ctx *ctx, unsigned flags)
 {
    memset(ctx, 0, sizeof(*ctx));
 
@@ -737,11 +686,11 @@ init_dump_ctx(struct dump_ctx *ctx, uint flags)
    ctx->iter.iterate_property = iter_property;
 
    if (flags & TGSI_DUMP_FLOAT_AS_HEX)
-      ctx->dump_float_as_hex = TRUE;
+      ctx->dump_float_as_hex = true;
 }
 
 void
-tgsi_dump_to_file(const struct tgsi_token *tokens, uint flags, FILE *file)
+tgsi_dump_to_file(const struct tgsi_token *tokens, unsigned flags, FILE *file)
 {
    struct dump_ctx ctx;
    memset(&ctx, 0, sizeof(ctx));
@@ -755,7 +704,7 @@ tgsi_dump_to_file(const struct tgsi_token *tokens, uint flags, FILE *file)
 }
 
 void
-tgsi_dump(const struct tgsi_token *tokens, uint flags)
+tgsi_dump(const struct tgsi_token *tokens, unsigned flags)
 {
    tgsi_dump_to_file(tokens, flags, NULL);
 }
@@ -798,7 +747,7 @@ str_dump_ctx_printf(struct dump_ctx *ctx, const char *format, ...)
 bool
 tgsi_dump_str(
    const struct tgsi_token *tokens,
-   uint flags,
+   unsigned flags,
    char *str,
    size_t size)
 {
@@ -823,7 +772,7 @@ tgsi_dump_str(
 void
 tgsi_dump_instruction_str(
    const struct tgsi_full_instruction *inst,
-   uint instno,
+   unsigned instno,
    char *str,
    size_t size)
 {

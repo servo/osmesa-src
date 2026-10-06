@@ -24,61 +24,92 @@
 #ifndef ZINK_COMPILER_H
 #define ZINK_COMPILER_H
 
-#include "pipe/p_defines.h"
-#include "pipe/p_state.h"
+#include "zink_types.h"
 
-#include "compiler/nir/nir.h"
-#include "compiler/shader_info.h"
+#define ZINK_WORKGROUP_SIZE_X 1
+#define ZINK_WORKGROUP_SIZE_Y 2
+#define ZINK_WORKGROUP_SIZE_Z 3
+#define ZINK_VARIABLE_SHARED_MEM 4
+#define ZINK_INLINE_VAL_FLAT_MASK 0
+#define ZINK_INLINE_VAL_PV_LAST_VERT 2
 
-#include <vulkan/vulkan.h>
+/* stop inlining shaders if they have >limit ssa vals after inlining:
+ * recompile time isn't worth the inline
+ */
+#define ZINK_ALWAYS_INLINE_LIMIT 1500
 
-struct pipe_screen;
-struct zink_context;
-struct zink_screen;
-struct zink_gfx_program;
-
-struct nir_shader_compiler_options;
-struct nir_shader;
-
-struct set;
+struct zink_shader_key;
+struct spirv_shader;
 
 struct tgsi_token;
-struct zink_so_info {
-   struct pipe_stream_output_info so_info;
-   unsigned *so_info_slots;
-};
 
+static inline gl_shader_stage
+clamp_stage(const shader_info *info)
+{
+   return info->stage == MESA_SHADER_KERNEL ? MESA_SHADER_COMPUTE : info->stage;
+}
 
 const void *
 zink_get_compiler_options(struct pipe_screen *screen,
                           enum pipe_shader_ir ir,
-                          enum pipe_shader_type shader);
+                          gl_shader_stage shader);
 
 struct nir_shader *
 zink_tgsi_to_nir(struct pipe_screen *screen, const struct tgsi_token *tokens);
 
-struct zink_shader {
-   struct nir_shader *nir;
+nir_shader*
+zink_create_quads_emulation_gs(const nir_shader_compiler_options *options,
+                               const nir_shader *prev_stage);
 
-   struct zink_so_info streamout;
-
-   struct {
-      int index;
-      int binding;
-      VkDescriptorType type;
-   } bindings[PIPE_MAX_CONSTANT_BUFFERS + PIPE_MAX_SHADER_SAMPLER_VIEWS];
-   size_t num_bindings;
-   struct set *programs;
-};
-
-VkShaderModule
-zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs);
-
-struct zink_shader *
-zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
-                 const struct pipe_stream_output_info *so_info);
+bool
+zink_lower_system_values_to_inlined_uniforms(nir_shader *nir);
 
 void
-zink_shader_free(struct zink_context *ctx, struct zink_shader *shader);
+zink_screen_init_compiler(struct zink_screen *screen);
+void
+zink_compiler_assign_io(struct zink_screen *screen, nir_shader *producer, nir_shader *consumer);
+/* pass very large shader key data with extra_data */
+struct zink_shader_object
+zink_shader_compile(struct zink_screen *screen, bool can_shobj, struct zink_shader *zs, nir_shader *nir, const struct zink_shader_key *key, const void *extra_data, struct zink_program *pg);
+struct zink_shader_object
+zink_shader_compile_separate(struct zink_screen *screen, struct zink_shader *zs);
+struct zink_shader *
+zink_shader_create(struct zink_screen *screen, struct nir_shader *nir);
+void
+zink_shader_init(struct zink_screen *screen, struct zink_shader *zs);
 
+char *
+zink_shader_finalize(struct pipe_screen *pscreen, struct nir_shader *nir);
+
+void
+zink_shader_free(struct zink_screen *screen, struct zink_shader *shader);
+void
+zink_gfx_shader_free(struct zink_screen *screen, struct zink_shader *shader);
+
+struct zink_shader_object
+zink_shader_spirv_compile(struct zink_screen *screen, struct zink_shader *zs, struct spirv_shader *spirv, bool can_shobj, struct zink_program *pg);
+struct zink_shader_object
+zink_shader_tcs_compile(struct zink_screen *screen, struct zink_shader *zs, unsigned patch_vertices, bool can_shobj, struct zink_program *pg);
+struct zink_shader *
+zink_shader_tcs_create(struct zink_screen *screen, unsigned vertices_per_patch);
+void
+zink_shader_tcs_init(struct zink_screen *screen, struct zink_shader *zs, nir_shader *tes, nir_shader **nir_ret);
+
+static inline bool
+zink_shader_descriptor_is_buffer(struct zink_shader *zs, enum zink_descriptor_type type, unsigned i)
+{
+   return zs->bindings[type][i].type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER ||
+          zs->bindings[type][i].type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+}
+
+bool
+zink_shader_has_cubes(nir_shader *nir);
+nir_shader *
+zink_shader_blob_deserialize(struct zink_screen *screen, struct blob *blob);
+nir_shader *
+zink_shader_deserialize(struct zink_screen *screen, struct zink_shader *zs);
+void
+zink_shader_serialize_blob(nir_shader *nir, struct blob *blob);
+void
+zink_print_shader(struct zink_screen *screen, struct zink_shader *zs, FILE *fp);
 #endif

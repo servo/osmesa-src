@@ -52,7 +52,7 @@
 
 #include "hud/font.h"
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_screen.h"
 #include "pipe/p_state.h"
 #include "pipe/p_context.h"
@@ -372,7 +372,7 @@ util_font_draw_character(void *dst_mem, unsigned dst_stride, unsigned character)
    }
 }
 
-static boolean
+static bool
 util_font_create_fixed_8x13(struct pipe_context *pipe,
                             struct util_font *out_font)
 {
@@ -390,7 +390,7 @@ util_font_create_fixed_8x13(struct pipe_context *pipe,
 
    for (i = 0; i < ARRAY_SIZE(formats); i++) {
       if (screen->is_format_supported(screen, formats[i],
-                                   PIPE_TEXTURE_RECT, 0, 0,
+                                   PIPE_TEXTURE_2D, 0, 0,
                                    PIPE_BIND_SAMPLER_VIEW)) {
          tex_format = formats[i];
          break;
@@ -399,11 +399,11 @@ util_font_create_fixed_8x13(struct pipe_context *pipe,
 
    if (tex_format == PIPE_FORMAT_NONE) {
       debug_printf("Unable to find texture format for font.\n");
-      return FALSE;
+      return false;
    }
 
    memset(&tex_templ, 0, sizeof(tex_templ));
-   tex_templ.target = PIPE_TEXTURE_RECT;
+   tex_templ.target = PIPE_TEXTURE_2D;
    tex_templ.format = tex_format;
    tex_templ.width0 = 128;
    tex_templ.height0 = 256;
@@ -414,14 +414,14 @@ util_font_create_fixed_8x13(struct pipe_context *pipe,
 
    tex = screen->resource_create(screen, &tex_templ);
    if (!tex) {
-      return FALSE;
+      return false;
    }
 
-   map = pipe_transfer_map(pipe, tex, 0, 0, PIPE_TRANSFER_WRITE, 0, 0,
-                           tex->width0, tex->height0, &transfer);
+   map = pipe_texture_map(pipe, tex, 0, 0, PIPE_MAP_WRITE, 0, 0,
+                          tex->width0, tex->height0, &transfer);
    if (!map) {
       pipe_resource_reference(&tex, NULL);
-      return FALSE;
+      return false;
    }
 
    for (i = 0; i < 256; i++) {
@@ -432,17 +432,17 @@ util_font_create_fixed_8x13(struct pipe_context *pipe,
                                transfer->stride, i);
    }
 
-   pipe_transfer_unmap(pipe, transfer);
+   pipe_texture_unmap(pipe, transfer);
 
    pipe_resource_reference(&out_font->texture, NULL);
    out_font->texture = tex;
    out_font->glyph_width = 8;
    out_font->glyph_height = 14;
-   return TRUE;
+   return true;
 }
 
 
-boolean
+bool
 util_font_create(struct pipe_context *pipe, enum util_font_name name,
                  struct util_font *out_font)
 {
@@ -450,5 +450,5 @@ util_font_create(struct pipe_context *pipe, enum util_font_name name,
    case UTIL_FONT_FIXED_8X13:
       return util_font_create_fixed_8x13(pipe, out_font);
    }
-   return FALSE;
+   return false;
 }

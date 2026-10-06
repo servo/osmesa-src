@@ -33,7 +33,10 @@
 
 #include "util/u_math.h"
 #include "util/u_memory.h"
+#include "util/ralloc.h"
 #include "pipe/p_shader_tokens.h"
+#include "pipe/p_context.h"
+#include "nir/nir_to_tgsi.h"
 
 #include "draw_private.h"
 #include "draw_context.h"
@@ -65,7 +68,7 @@ vs_exec_prepare(struct draw_vertex_shader *shader,
 {
    struct exec_vertex_shader *evs = exec_vertex_shader(shader);
 
-   debug_assert(!draw->llvm);
+   assert(!draw->llvm);
    /* Specify the vertex program to interpret/execute.
     * Avoid rebinding when possible.
     */
@@ -89,8 +92,7 @@ static void
 vs_exec_run_linear(struct draw_vertex_shader *shader,
                    const float (*input)[4],
                    float (*output)[4],
-                   const void *constants[PIPE_MAX_CONSTANT_BUFFERS],
-                    const unsigned const_size[PIPE_MAX_CONSTANT_BUFFERS],
+                   const struct draw_buffer_info *constants,
                    unsigned count,
                    unsigned input_stride,
                    unsigned output_stride,
@@ -100,11 +102,11 @@ vs_exec_run_linear(struct draw_vertex_shader *shader,
    struct tgsi_exec_machine *machine = evs->machine;
    unsigned int i, j;
    unsigned slot;
-   boolean clamp_vertex_color = shader->draw->rasterizer->clamp_vertex_color;
+   bool clamp_vertex_color = shader->draw->rasterizer->clamp_vertex_color;
 
-   debug_assert(!shader->draw->llvm);
+   assert(!shader->draw->llvm);
    tgsi_exec_set_constant_buffers(machine, PIPE_MAX_CONSTANT_BUFFERS,
-                                  constants, const_size);
+                                  (const struct tgsi_exec_consts_info *)constants);
 
    if (shader->info.uses_instanceid) {
       unsigned i = machine->SysSemanticToIndex[TGSI_SEMANTIC_INSTANCEID];
@@ -221,16 +223,23 @@ draw_create_vs_exec(struct draw_context *draw,
    if (!vs)
       return NULL;
 
-   /* we make a private copy of the tokens */
-   vs->base.state.tokens = tgsi_dup_tokens(state->tokens);
-   if (!vs->base.state.tokens) {
-      FREE(vs);
-      return NULL;
+   if (state->type == PIPE_SHADER_IR_NIR) {
+      vs->base.state.type = PIPE_SHADER_IR_TGSI;
+      vs->base.state.tokens = nir_to_tgsi(state->ir.nir, draw->pipe->screen);
+   } else {
+      assert(state->type == PIPE_SHADER_IR_TGSI);
+      vs->base.state.type = state->type;
+
+      /* we need to keep a local copy of the tokens */
+      vs->base.state.tokens = tgsi_dup_tokens(state->tokens);
+      if (!vs->base.state.tokens) {
+         FREE(vs);
+         return NULL;
+      }
    }
 
-   tgsi_scan_shader(state->tokens, &vs->base.info);
+   tgsi_scan_shader(vs->base.state.tokens, &vs->base.info);
 
-   vs->base.state.type = state->type;
    vs->base.state.stream_output = state->stream_output;
    vs->base.draw = draw;
    vs->base.prepare = vs_exec_prepare;

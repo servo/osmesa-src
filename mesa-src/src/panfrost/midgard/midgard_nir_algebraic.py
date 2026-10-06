@@ -1,5 +1,6 @@
 #
 # Copyright (C) 2018 Alyssa Rosenzweig
+# Copyright (C) 2019-2020 Collabora, Ltd.
 #
 # Copyright (C) 2016 Intel Corporation
 #
@@ -31,19 +32,15 @@ b = 'b'
 c = 'c'
 
 algebraic = [
-   (('pack_unorm_4x8', a), ('pack_32_4x8', ('f2u8', ('fround_even', ('fmul', ('fsat', a), 255.0))))),
-
    # Allows us to schedule as a multiply by 2
    (('~fadd', ('fadd', a, b), a), ('fadd', ('fadd', a, a), b)),
+
+   # Midgard scales fsin/fcos arguments by pi.
+   (('fsin', a), ('fsin_mdg', ('fdiv', a, math.pi))),
+   (('fcos', a), ('fcos_mdg', ('fdiv', a, math.pi))),
 ]
 
 algebraic_late = [
-    # ineg must be lowered late, but only for integers; floats will try to
-    # have modifiers attached... hence why this has to be here rather than
-    # a more standard lower_negate approach
-
-    (('ineg', a), ('isub', 0, a)),
-
     # Likewise we want fsub lowered but not isub
     (('fsub', a, b), ('fadd', a, ('fneg', b))),
 
@@ -72,6 +69,12 @@ algebraic_late = [
     (('fmul', a, 2.0), ('fadd', a, a))
 ]
 
+# Size conversion is redundant to Midgard but needed for NIR, and writing this
+# lowering in MIR would be painful without a competent builder, so eat the
+# extra instruction
+for sz in ('8', '16', '32'):
+    converted = ('u2u32', a) if sz != '32' else a
+    algebraic_late += [(('ufind_msb', 'a@' + sz), ('isub', 31, ('uclz', converted)))]
 
 # Midgard is able to type convert down by only one "step" per instruction; if
 # NIR wants more than one step, we need to break up into multiple instructions.
@@ -127,15 +130,8 @@ constant_switch = [
 
 # ..since the above switching happens after algebraic stuff is done
 cancel_inot = [
-        (('inot', ('inot', a)), a)
-]
-
-# Midgard scales fsin/fcos arguments by pi.
-# Pass must be run only once, after the main loop
-
-scale_trig = [
-        (('fsin', a), ('fsin', ('fdiv', a, math.pi))),
-        (('fcos', a), ('fcos', ('fdiv', a, math.pi))),
+        (('inot', ('inot', a)), a),
+        (('b32csel', ('inot', a), b, c), ('b32csel', a, c, b)),
 ]
 
 def main():
@@ -156,9 +152,6 @@ def run():
 
     print(nir_algebraic.AlgebraicPass("midgard_nir_lower_algebraic_late",
                                       algebraic_late + converts + constant_switch).render())
-
-    print(nir_algebraic.AlgebraicPass("midgard_nir_scale_trig",
-                                      scale_trig).render())
 
     print(nir_algebraic.AlgebraicPass("midgard_nir_cancel_inot",
                                       cancel_inot).render())

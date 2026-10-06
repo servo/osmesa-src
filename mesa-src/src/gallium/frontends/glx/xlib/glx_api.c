@@ -40,6 +40,8 @@
 
 #include "xm_api.h"
 #include "main/errors.h"
+#include "main/config.h"
+#include "util/compiler.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 
@@ -102,21 +104,20 @@ struct __GLXcontextRec
 };
 
 
-
-static pipe_tsd ContextTSD;
+thread_local GLXContext ContextTSD;
 
 /** Set current context for calling thread */
 static void
 SetCurrentContext(GLXContext c)
 {
-   pipe_tsd_set(&ContextTSD, c);
+   ContextTSD = c;
 }
 
 /** Get current context for calling thread */
 static GLXContext
 GetCurrentContext(void)
 {
-   return pipe_tsd_get(&ContextTSD);
+   return ContextTSD;
 }
 
 
@@ -233,8 +234,6 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
    for (i=0; i<NumVisuals; i++) {
       XMesaVisual v = VisualTable[i];
       if (v->display == dpy
-          && v->mesa_visual.level == level
-          && v->mesa_visual.numAuxBuffers == numAuxBuffers
           && v->mesa_visual.samples == num_samples
           && v->ximage_flag == ximageFlag
           && v->mesa_visual.doubleBufferMode == dbFlag
@@ -272,10 +271,6 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
       /* add xmvis to the list */
       VisualTable[NumVisuals] = xmvis;
       NumVisuals++;
-      /* XXX minor hack, because XMesaCreateVisual doesn't support an
-       * aux buffers parameter.
-       */
-      xmvis->mesa_visual.numAuxBuffers = numAuxBuffers;
    }
    return xmvis;
 }
@@ -284,7 +279,7 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
 /**
  * Return the default number of bits for the Z buffer.
  * If defined, use the MESA_GLX_DEPTH_BITS env var value.
- * Otherwise, use the DEFAULT_SOFTWARE_DEPTH_BITS constant.
+ * Otherwise, use 24.
  * XXX probably do the same thing for stencil, accum, etc.
  */
 static GLint
@@ -428,7 +423,7 @@ get_visual( Display *dpy, int scr, unsigned int depth, int xclass )
          return vis;
       }
       else {
-         free((void *) vis);
+         XFree((void *) vis);
          return NULL;
       }
    }
@@ -1181,7 +1176,7 @@ glXMakeContextCurrent( Display *dpy, GLXDrawable draw,
 {
    GLXContext glxCtx = ctx;
    GLXContext current = GetCurrentContext();
-   static boolean firsttime = 1, no_rast = 0;
+   static bool firsttime = 1, no_rast = 0;
 
    if (firsttime) {
       no_rast = getenv("SP_NO_RAST") != NULL;
@@ -1397,8 +1392,14 @@ glXQueryExtension( Display *dpy, int *errorBase, int *eventBase )
 PUBLIC void
 glXDestroyContext( Display *dpy, GLXContext ctx )
 {
-   if (ctx) {
-      GLXContext glxCtx = ctx;
+   GLXContext glxCtx = ctx;
+
+   if (glxCtx == NULL || glxCtx->xid == None)
+      return;
+
+   if (ctx->currentDpy) {
+      ctx->xid = None;
+   } else {
       (void) dpy;
       XMesaDestroyContext( glxCtx->xmesaContext );
       XMesaGarbageCollect();
@@ -1419,7 +1420,7 @@ PUBLIC void
 glXSwapBuffers( Display *dpy, GLXDrawable drawable )
 {
    XMesaBuffer buffer = XMesaFindBuffer( dpy, drawable );
-   static boolean firsttime = 1, no_rast = 0;
+   static bool firsttime = 1, no_rast = 0;
 
    if (firsttime) {
       no_rast = getenv("SP_NO_RAST") != NULL;
@@ -1485,7 +1486,7 @@ get_config( XMesaVisual xmvis, int attrib, int *value, GLboolean fbconfig )
 	 *value = xmvis->visinfo->depth;
 	 return 0;
       case GLX_LEVEL:
-	 *value = xmvis->mesa_visual.level;
+	 *value = 0;
 	 return 0;
       case GLX_RGBA:
          if (fbconfig)
@@ -1499,7 +1500,7 @@ get_config( XMesaVisual xmvis, int attrib, int *value, GLboolean fbconfig )
 	 *value = (int) xmvis->mesa_visual.stereoMode;
 	 return 0;
       case GLX_AUX_BUFFERS:
-	 *value = xmvis->mesa_visual.numAuxBuffers;
+	 *value = 0;
 	 return 0;
       case GLX_RED_SIZE:
          *value = xmvis->mesa_visual.redBits;
@@ -1569,18 +1570,14 @@ get_config( XMesaVisual xmvis, int attrib, int *value, GLboolean fbconfig )
        * GLX_EXT_visual_info extension
        */
       case GLX_VISUAL_CAVEAT_EXT:
-         /* test for zero, just in case */
-         if (xmvis->mesa_visual.visualRating > 0)
-            *value = xmvis->mesa_visual.visualRating;
-         else
-            *value = GLX_NONE_EXT;
+         *value = GLX_NONE_EXT;
          return 0;
 
       /*
        * GLX_ARB_multisample
        */
       case GLX_SAMPLE_BUFFERS_ARB:
-         *value = xmvis->mesa_visual.sampleBuffers;
+         *value = xmvis->mesa_visual.samples > 0;
          return 0;
       case GLX_SAMPLES_ARB:
          *value = xmvis->mesa_visual.samples;

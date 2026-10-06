@@ -1,36 +1,15 @@
 /*
  * Copyright © 2011 Marek Olšák <maraeo@gmail.com>
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS
- * AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "radeon_drm_cs.h"
 
 #include "util/u_hash_table.h"
 #include "util/u_memory.h"
-#include "util/simple_list.h"
-#include "os/os_thread.h"
-#include "os/os_mman.h"
+#include "util/u_thread.h"
+#include "util/os_mman.h"
 #include "util/os_time.h"
 
 #include "frontend/drm_driver.h"
@@ -42,14 +21,14 @@
 #include <stdio.h>
 #include <inttypes.h>
 
-static struct pb_buffer *
+static struct pb_buffer_lean *
 radeon_winsys_bo_create(struct radeon_winsys *rws,
                         uint64_t size,
                         unsigned alignment,
                         enum radeon_bo_domain domain,
                         enum radeon_bo_flag flags);
 
-static inline struct radeon_bo *radeon_bo(struct pb_buffer *bo)
+static inline struct radeon_bo *radeon_bo(struct pb_buffer_lean *bo)
 {
    return (struct radeon_bo *)bo;
 }
@@ -69,7 +48,7 @@ static bool radeon_real_bo_is_busy(struct radeon_bo *bo)
                               &args, sizeof(args)) != 0;
 }
 
-static bool radeon_bo_is_busy(struct radeon_bo *bo)
+static bool radeon_bo_is_busy(struct radeon_winsys *rws, struct radeon_bo *bo)
 {
    unsigned num_idle;
    bool busy = false;
@@ -83,7 +62,7 @@ static bool radeon_bo_is_busy(struct radeon_bo *bo)
          busy = true;
          break;
       }
-      radeon_bo_reference(&bo->u.slab.fences[num_idle], NULL);
+      radeon_ws_bo_reference(rws, &bo->u.slab.fences[num_idle], NULL);
    }
    memmove(&bo->u.slab.fences[0], &bo->u.slab.fences[num_idle],
          (bo->u.slab.num_fences - num_idle) * sizeof(bo->u.slab.fences[0]));
@@ -102,7 +81,7 @@ static void radeon_real_bo_wait_idle(struct radeon_bo *bo)
                           &args, sizeof(args)) == -EBUSY);
 }
 
-static void radeon_bo_wait_idle(struct radeon_bo *bo)
+static void radeon_bo_wait_idle(struct radeon_winsys *rws, struct radeon_bo *bo)
 {
    if (bo->handle) {
       radeon_real_bo_wait_idle(bo);
@@ -110,7 +89,7 @@ static void radeon_bo_wait_idle(struct radeon_bo *bo)
       mtx_lock(&bo->rws->bo_fence_lock);
       while (bo->u.slab.num_fences) {
          struct radeon_bo *fence = NULL;
-         radeon_bo_reference(&fence, bo->u.slab.fences[0]);
+         radeon_ws_bo_reference(rws, &fence, bo->u.slab.fences[0]);
          mtx_unlock(&bo->rws->bo_fence_lock);
 
          /* Wait without holding the fence lock. */
@@ -118,26 +97,27 @@ static void radeon_bo_wait_idle(struct radeon_bo *bo)
 
          mtx_lock(&bo->rws->bo_fence_lock);
          if (bo->u.slab.num_fences && fence == bo->u.slab.fences[0]) {
-            radeon_bo_reference(&bo->u.slab.fences[0], NULL);
+            radeon_ws_bo_reference(rws, &bo->u.slab.fences[0], NULL);
             memmove(&bo->u.slab.fences[0], &bo->u.slab.fences[1],
                   (bo->u.slab.num_fences - 1) * sizeof(bo->u.slab.fences[0]));
             bo->u.slab.num_fences--;
          }
-         radeon_bo_reference(&fence, NULL);
+         radeon_ws_bo_reference(rws, &fence, NULL);
       }
       mtx_unlock(&bo->rws->bo_fence_lock);
    }
 }
 
-static bool radeon_bo_wait(struct pb_buffer *_buf, uint64_t timeout,
-                           enum radeon_bo_usage usage)
+static bool radeon_bo_wait(struct radeon_winsys *rws,
+                           struct pb_buffer_lean *_buf, uint64_t timeout,
+                           unsigned usage)
 {
    struct radeon_bo *bo = radeon_bo(_buf);
    int64_t abs_timeout;
 
    /* No timeout. Just query. */
    if (timeout == 0)
-      return !bo->num_active_ioctls && !radeon_bo_is_busy(bo);
+      return !bo->num_active_ioctls && !radeon_bo_is_busy(rws, bo);
 
    abs_timeout = os_time_get_absolute_timeout(timeout);
 
@@ -146,13 +126,13 @@ static bool radeon_bo_wait(struct pb_buffer *_buf, uint64_t timeout,
       return false;
 
    /* Infinite timeout. */
-   if (abs_timeout == PIPE_TIMEOUT_INFINITE) {
-      radeon_bo_wait_idle(bo);
+   if (abs_timeout == OS_TIMEOUT_INFINITE) {
+      radeon_bo_wait_idle(rws, bo);
       return true;
    }
 
    /* Other timeouts need to be emulated with a loop. */
-   while (radeon_bo_is_busy(bo)) {
+   while (radeon_bo_is_busy(rws, bo)) {
       if (os_time_get_nano() >= abs_timeout)
          return false;
       os_time_sleep(10);
@@ -174,13 +154,10 @@ static enum radeon_bo_domain get_valid_domain(enum radeon_bo_domain domain)
 }
 
 static enum radeon_bo_domain radeon_bo_get_initial_domain(
-      struct pb_buffer *buf)
+      struct pb_buffer_lean *buf)
 {
    struct radeon_bo *bo = (struct radeon_bo*)buf;
    struct drm_radeon_gem_op args;
-
-   if (bo->rws->info.drm_minor < 38)
-      return RADEON_DOMAIN_VRAM_GTT;
 
    memset(&args, 0, sizeof(args));
    args.handle = bo->handle;
@@ -296,7 +273,7 @@ static void radeon_bomgr_free_va(const struct radeon_info *info,
       heap->start = va;
       /* Delete uppermost hole if it reaches the new top */
       if (!list_is_empty(&heap->holes)) {
-         hole = container_of(heap->holes.next, hole, list);
+         hole = container_of(heap->holes.next, struct radeon_bo_va_hole, list);
          if ((hole->offset + hole->size) == va) {
             heap->start = hole->offset;
             list_del(&hole->list);
@@ -306,7 +283,7 @@ static void radeon_bomgr_free_va(const struct radeon_info *info,
    } else {
       struct radeon_bo_va_hole *next;
 
-      hole = container_of(&heap->holes, hole, list);
+      hole = container_of(&heap->holes, struct radeon_bo_va_hole, list);
       LIST_FOR_EACH_ENTRY(next, &heap->holes, list) {
          if (next->offset < va)
             break;
@@ -350,9 +327,9 @@ out:
    mtx_unlock(&heap->mutex);
 }
 
-void radeon_bo_destroy(struct pb_buffer *_buf)
+void radeon_bo_destroy(void *winsys, struct pb_buffer_lean *_buf)
 {
-   struct radeon_bo *bo = radeon_bo(_buf);
+   struct radeon_bo *bo = radeon_bo((struct pb_buffer_lean*)_buf);
    struct radeon_drm_winsys *rws = bo->rws;
    struct drm_gem_close args;
 
@@ -419,16 +396,17 @@ void radeon_bo_destroy(struct pb_buffer *_buf)
    FREE(bo);
 }
 
-static void radeon_bo_destroy_or_cache(struct pb_buffer *_buf)
+static void radeon_bo_destroy_or_cache(void *winsys, struct pb_buffer_lean *_buf)
 {
+   struct radeon_drm_winsys *rws = (struct radeon_drm_winsys *)winsys;
    struct radeon_bo *bo = radeon_bo(_buf);
 
    assert(bo->handle && "must not be called for slab entries");
 
    if (bo->u.real.use_reusable_pool)
-      pb_cache_add_buffer(&bo->u.real.cache_entry);
+      pb_cache_add_buffer(&rws->bo_cache, &bo->u.real.cache_entry);
    else
-      radeon_bo_destroy(_buf);
+      radeon_bo_destroy(NULL, _buf);
 }
 
 void *radeon_bo_do_map(struct radeon_bo *bo)
@@ -496,18 +474,19 @@ void *radeon_bo_do_map(struct radeon_bo *bo)
    return (uint8_t*)bo->u.real.ptr + offset;
 }
 
-static void *radeon_bo_map(struct pb_buffer *buf,
+static void *radeon_bo_map(struct radeon_winsys *rws,
+                           struct pb_buffer_lean *buf,
                            struct radeon_cmdbuf *rcs,
-                           enum pipe_transfer_usage usage)
+                           enum pipe_map_flags usage)
 {
    struct radeon_bo *bo = (struct radeon_bo*)buf;
-   struct radeon_drm_cs *cs = (struct radeon_drm_cs*)rcs;
+   struct radeon_drm_cs *cs = rcs ? radeon_drm_cs(rcs) : NULL;
 
    /* If it's not unsynchronized bo_map, flush CS if needed and then wait. */
-   if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
+   if (!(usage & PIPE_MAP_UNSYNCHRONIZED)) {
       /* DONTBLOCK doesn't make sense with UNSYNCHRONIZED. */
-      if (usage & PIPE_TRANSFER_DONTBLOCK) {
-         if (!(usage & PIPE_TRANSFER_WRITE)) {
+      if (usage & PIPE_MAP_DONTBLOCK) {
+         if (!(usage & PIPE_MAP_WRITE)) {
             /* Mapping for read.
              *
              * Since we are mapping for read, we don't need to wait
@@ -521,7 +500,7 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                return NULL;
             }
 
-            if (!radeon_bo_wait((struct pb_buffer*)bo, 0,
+            if (!radeon_bo_wait(rws, (struct pb_buffer_lean*)bo, 0,
                                 RADEON_USAGE_WRITE)) {
                return NULL;
             }
@@ -532,7 +511,7 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                return NULL;
             }
 
-            if (!radeon_bo_wait((struct pb_buffer*)bo, 0,
+            if (!radeon_bo_wait(rws, (struct pb_buffer_lean*)bo, 0,
                                 RADEON_USAGE_READWRITE)) {
                return NULL;
             }
@@ -540,7 +519,7 @@ static void *radeon_bo_map(struct pb_buffer *buf,
       } else {
          uint64_t time = os_time_get_nano();
 
-         if (!(usage & PIPE_TRANSFER_WRITE)) {
+         if (!(usage & PIPE_MAP_WRITE)) {
             /* Mapping for read.
              *
              * Since we are mapping for read, we don't need to wait
@@ -552,7 +531,7 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                cs->flush_cs(cs->flush_data,
                             RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
             }
-            radeon_bo_wait((struct pb_buffer*)bo, PIPE_TIMEOUT_INFINITE,
+            radeon_bo_wait(rws, (struct pb_buffer_lean*)bo, OS_TIMEOUT_INFINITE,
                            RADEON_USAGE_WRITE);
          } else {
             /* Mapping for write. */
@@ -567,7 +546,7 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                }
             }
 
-            radeon_bo_wait((struct pb_buffer*)bo, PIPE_TIMEOUT_INFINITE,
+            radeon_bo_wait(rws, (struct pb_buffer_lean*)bo, OS_TIMEOUT_INFINITE,
                            RADEON_USAGE_READWRITE);
          }
 
@@ -578,7 +557,7 @@ static void *radeon_bo_map(struct pb_buffer *buf,
    return radeon_bo_do_map(bo);
 }
 
-static void radeon_bo_unmap(struct pb_buffer *_buf)
+static void radeon_bo_unmap(struct radeon_winsys *rws, struct pb_buffer_lean *_buf)
 {
    struct radeon_bo *bo = (struct radeon_bo*)_buf;
 
@@ -611,11 +590,6 @@ static void radeon_bo_unmap(struct pb_buffer *_buf)
 
    mtx_unlock(&bo->u.real.map_mutex);
 }
-
-static const struct pb_vtbl radeon_bo_vtbl = {
-   radeon_bo_destroy_or_cache
-   /* other functions are never called */
-};
 
 static struct radeon_bo *radeon_create_bo(struct radeon_drm_winsys *rws,
                                           unsigned size, unsigned alignment,
@@ -667,10 +641,9 @@ static struct radeon_bo *radeon_create_bo(struct radeon_drm_winsys *rws,
       return NULL;
 
    pipe_reference_init(&bo->base.reference, 1);
-   bo->base.alignment = alignment;
+   bo->base.alignment_log2 = util_logbase2(alignment);
    bo->base.usage = 0;
    bo->base.size = size;
-   bo->base.vtbl = &radeon_bo_vtbl;
    bo->rws = rws;
    bo->handle = args.handle;
    bo->va = 0;
@@ -711,17 +684,17 @@ static struct radeon_bo *radeon_create_bo(struct radeon_drm_winsys *rws,
          fprintf(stderr, "radeon:    alignment : %d bytes\n", alignment);
          fprintf(stderr, "radeon:    domains   : %d\n", args.initial_domain);
          fprintf(stderr, "radeon:    va        : 0x%016llx\n", (unsigned long long)bo->va);
-         radeon_bo_destroy(&bo->base);
+         radeon_bo_destroy(NULL, &bo->base);
          return NULL;
       }
       mtx_lock(&rws->bo_handles_mutex);
       if (va.operation == RADEON_VA_RESULT_VA_EXIST) {
-         struct pb_buffer *b = &bo->base;
+         struct pb_buffer_lean *b = &bo->base;
          struct radeon_bo *old_bo =
                _mesa_hash_table_u64_search(rws->bo_vas, va.offset);
 
          mtx_unlock(&rws->bo_handles_mutex);
-         pb_reference(&b, &old_bo->base);
+         radeon_bo_reference(&rws->base, &b, &old_bo->base);
          return radeon_bo(b);
       }
 
@@ -737,25 +710,24 @@ static struct radeon_bo *radeon_create_bo(struct radeon_drm_winsys *rws,
    return bo;
 }
 
-bool radeon_bo_can_reclaim(struct pb_buffer *_buf)
+bool radeon_bo_can_reclaim(void *winsys, struct pb_buffer_lean *_buf)
 {
-   struct radeon_bo *bo = radeon_bo(_buf);
+   struct radeon_bo *bo = radeon_bo((struct pb_buffer_lean*)_buf);
 
    if (radeon_bo_is_referenced_by_any_cs(bo))
       return false;
 
-   return radeon_bo_wait(_buf, 0, RADEON_USAGE_READWRITE);
+   return radeon_bo_wait(winsys, (struct pb_buffer_lean*)_buf, 0, RADEON_USAGE_READWRITE);
 }
 
 bool radeon_bo_can_reclaim_slab(void *priv, struct pb_slab_entry *entry)
 {
-   struct radeon_bo *bo = NULL; /* fix container_of */
-   bo = container_of(entry, bo, u.slab.entry);
+   struct radeon_bo *bo = container_of(entry, struct radeon_bo, u.slab.entry);
 
-   return radeon_bo_can_reclaim(&bo->base);
+   return radeon_bo_can_reclaim(priv, &bo->base);
 }
 
-static void radeon_bo_slab_destroy(struct pb_buffer *_buf)
+static void radeon_bo_slab_destroy(void *winsys, struct pb_buffer_lean *_buf)
 {
    struct radeon_bo *bo = radeon_bo(_buf);
 
@@ -763,11 +735,6 @@ static void radeon_bo_slab_destroy(struct pb_buffer *_buf)
 
    pb_slab_free(&bo->rws->bo_slabs, &bo->u.slab.entry);
 }
-
-static const struct pb_vtbl radeon_winsys_bo_slab_vtbl = {
-   radeon_bo_slab_destroy
-   /* other functions are never called */
-};
 
 struct pb_slab *radeon_bo_slab_alloc(void *priv, unsigned heap,
                                      unsigned entry_size,
@@ -792,6 +759,8 @@ struct pb_slab *radeon_bo_slab_alloc(void *priv, unsigned heap,
 
    slab->base.num_entries = slab->buffer->base.size / entry_size;
    slab->base.num_free = slab->base.num_entries;
+   slab->base.group_index = group_index;
+   slab->base.entry_size = entry_size;
    slab->entries = CALLOC(slab->base.num_entries, sizeof(*slab->entries));
    if (!slab->entries)
       goto fail_buffer;
@@ -803,16 +772,14 @@ struct pb_slab *radeon_bo_slab_alloc(void *priv, unsigned heap,
    for (unsigned i = 0; i < slab->base.num_entries; ++i) {
       struct radeon_bo *bo = &slab->entries[i];
 
-      bo->base.alignment = entry_size;
+      bo->base.alignment_log2 = util_logbase2(entry_size);
       bo->base.usage = slab->buffer->base.usage;
       bo->base.size = entry_size;
-      bo->base.vtbl = &radeon_winsys_bo_slab_vtbl;
       bo->rws = ws;
       bo->va = slab->buffer->va + i * entry_size;
       bo->initial_domain = domains;
       bo->hash = base_hash + i;
       bo->u.slab.entry.slab = &slab->base;
-      bo->u.slab.entry.group_index = group_index;
       bo->u.slab.real = slab->buffer;
 
       list_addtail(&bo->u.slab.entry.head, &slab->base.free);
@@ -821,7 +788,7 @@ struct pb_slab *radeon_bo_slab_alloc(void *priv, unsigned heap,
    return &slab->base;
 
 fail_buffer:
-   radeon_bo_reference(&slab->buffer, NULL);
+   radeon_ws_bo_reference(&ws->base, &slab->buffer, NULL);
 fail:
    FREE(slab);
    return NULL;
@@ -829,17 +796,18 @@ fail:
 
 void radeon_bo_slab_free(void *priv, struct pb_slab *pslab)
 {
+   struct radeon_winsys *rws = (struct radeon_winsys *)priv;
    struct radeon_slab *slab = (struct radeon_slab *)pslab;
 
    for (unsigned i = 0; i < slab->base.num_entries; ++i) {
       struct radeon_bo *bo = &slab->entries[i];
       for (unsigned j = 0; j < bo->u.slab.num_fences; ++j)
-         radeon_bo_reference(&bo->u.slab.fences[j], NULL);
+         radeon_ws_bo_reference(rws, &bo->u.slab.fences[j], NULL);
       FREE(bo->u.slab.fences);
    }
 
    FREE(slab->entries);
-   radeon_bo_reference(&slab->buffer, NULL);
+   radeon_ws_bo_reference(rws, &slab->buffer, NULL);
    FREE(slab);
 }
 
@@ -872,7 +840,8 @@ static unsigned eg_tile_split_rev(unsigned eg_tile_split)
    }
 }
 
-static void radeon_bo_get_metadata(struct pb_buffer *_buf,
+static void radeon_bo_get_metadata(struct radeon_winsys *rws,
+                                   struct pb_buffer_lean *_buf,
                                    struct radeon_bo_metadata *md,
                                    struct radeon_surf *surf)
 {
@@ -929,7 +898,8 @@ static void radeon_bo_get_metadata(struct pb_buffer *_buf,
    md->u.legacy.scanout = bo->rws->gen >= DRV_SI && !(args.tiling_flags & RADEON_TILING_R600_NO_SCANOUT);
 }
 
-static void radeon_bo_set_metadata(struct pb_buffer *_buf,
+static void radeon_bo_set_metadata(struct radeon_winsys *rws,
+                                   struct pb_buffer_lean *_buf,
                                    struct radeon_bo_metadata *md,
                                    struct radeon_surf *surf)
 {
@@ -940,7 +910,7 @@ static void radeon_bo_set_metadata(struct pb_buffer *_buf,
 
    memset(&args, 0, sizeof(args));
 
-   os_wait_until_zero(&bo->num_active_ioctls, PIPE_TIMEOUT_INFINITE);
+   os_wait_until_zero(&bo->num_active_ioctls, OS_TIMEOUT_INFINITE);
 
    if (surf) {
       if (surf->u.legacy.level[0].mode >= RADEON_SURF_MODE_1D)
@@ -999,7 +969,7 @@ static void radeon_bo_set_metadata(struct pb_buffer *_buf,
                        sizeof(args));
 }
 
-static struct pb_buffer *
+static struct pb_buffer_lean *
 radeon_winsys_bo_create(struct radeon_winsys *rws,
                         uint64_t size,
                         unsigned alignment,
@@ -1008,7 +978,8 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
 {
    struct radeon_drm_winsys *ws = radeon_drm_winsys(rws);
    struct radeon_bo *bo;
-   int heap = -1;
+
+   radeon_canonicalize_bo_flags(&domain, &flags);
 
    assert(!(flags & RADEON_FLAG_SPARSE)); /* not supported */
 
@@ -1016,23 +987,14 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
    if (size > UINT_MAX)
       return NULL;
 
-   /* VRAM implies WC. This is not optional. */
-   if (domain & RADEON_DOMAIN_VRAM)
-      flags |= RADEON_FLAG_GTT_WC;
-   /* NO_CPU_ACCESS is valid with VRAM only. */
-   if (domain != RADEON_DOMAIN_VRAM)
-      flags &= ~RADEON_FLAG_NO_CPU_ACCESS;
+   int heap = radeon_get_heap_index(domain, flags);
 
    /* Sub-allocate small buffers from slabs. */
-   if (!(flags & RADEON_FLAG_NO_SUBALLOC) &&
+   if (heap >= 0 &&
        size <= (1 << RADEON_SLAB_MAX_SIZE_LOG2) &&
        ws->info.r600_has_virtual_memory &&
        alignment <= MAX2(1 << RADEON_SLAB_MIN_SIZE_LOG2, util_next_power_of_two(size))) {
       struct pb_slab_entry *entry;
-      int heap = radeon_get_heap_index(domain, flags);
-
-      if (heap < 0 || heap >= RADEON_MAX_SLAB_HEAPS)
-         goto no_slab;
 
       entry = pb_slab_alloc(&ws->bo_slabs, size, heap);
       if (!entry) {
@@ -1044,17 +1006,12 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
       if (!entry)
          return NULL;
 
-      bo = NULL;
-      bo = container_of(entry, bo, u.slab.entry);
+      bo = container_of(entry, struct radeon_bo, u.slab.entry);
 
       pipe_reference_init(&bo->base.reference, 1);
 
       return &bo->base;
    }
-no_slab:
-
-   /* This flag is irrelevant for the cache. */
-   flags &= ~RADEON_FLAG_NO_SUBALLOC;
 
    /* Align size to page size. This is the minimum alignment for normal
     * BOs. Aligning this here helps the cached bufmgr. Especially small BOs,
@@ -1063,15 +1020,17 @@ no_slab:
    size = align(size, ws->info.gart_page_size);
    alignment = align(alignment, ws->info.gart_page_size);
 
-   bool use_reusable_pool = flags & RADEON_FLAG_NO_INTERPROCESS_SHARING;
+   bool use_reusable_pool = flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
+                            !(flags & RADEON_FLAG_DISCARDABLE);
 
    /* Shared resources don't use cached heaps. */
    if (use_reusable_pool) {
-      heap = radeon_get_heap_index(domain, flags);
-      assert(heap >= 0 && heap < RADEON_MAX_CACHED_HEAPS);
+      /* RADEON_FLAG_NO_SUBALLOC is irrelevant for the cache. */
+      heap = radeon_get_heap_index(domain, flags & ~RADEON_FLAG_NO_SUBALLOC);
+      assert(heap >= 0 && heap < RADEON_NUM_HEAPS);
 
-      bo = radeon_bo(pb_cache_reclaim_buffer(&ws->bo_cache, size, alignment,
-                                             0, heap));
+      bo = radeon_bo((struct pb_buffer_lean*)pb_cache_reclaim_buffer(&ws->bo_cache, size,
+                                                                alignment, 0, heap));
       if (bo)
          return &bo->base;
    }
@@ -1096,8 +1055,19 @@ no_slab:
    return &bo->base;
 }
 
-static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
-                                                   void *pointer, uint64_t size)
+static void radeon_winsys_bo_destroy(struct radeon_winsys *ws, struct pb_buffer_lean *buf)
+{
+   struct radeon_bo *bo = radeon_bo(buf);
+
+   if (bo->handle)
+      radeon_bo_destroy_or_cache(ws, buf);
+   else
+      radeon_bo_slab_destroy(ws, buf);
+}
+
+static struct pb_buffer_lean *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
+                                                   void *pointer, uint64_t size,
+                                                   enum radeon_bo_flag flags)
 {
    struct radeon_drm_winsys *ws = radeon_drm_winsys(rws);
    struct drm_radeon_gem_userptr args;
@@ -1112,8 +1082,9 @@ static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
    args.addr = (uintptr_t)pointer;
    args.size = align(size, ws->info.gart_page_size);
    args.flags = RADEON_GEM_USERPTR_ANONONLY |
-                RADEON_GEM_USERPTR_VALIDATE |
-                RADEON_GEM_USERPTR_REGISTER;
+                RADEON_GEM_USERPTR_REGISTER |
+                RADEON_GEM_USERPTR_VALIDATE;
+
    if (drmCommandWriteRead(ws->fd, DRM_RADEON_GEM_USERPTR,
                            &args, sizeof(args))) {
       FREE(bo);
@@ -1127,9 +1098,8 @@ static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
    /* Initialize it. */
    pipe_reference_init(&bo->base.reference, 1);
    bo->handle = args.handle;
-   bo->base.alignment = 0;
+   bo->base.alignment_log2 = 0;
    bo->base.size = size;
-   bo->base.vtbl = &radeon_bo_vtbl;
    bo->rws = ws;
    bo->user_ptr = pointer;
    bo->va = 0;
@@ -1157,17 +1127,17 @@ static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
       r = drmCommandWriteRead(ws->fd, DRM_RADEON_GEM_VA, &va, sizeof(va));
       if (r && va.operation == RADEON_VA_RESULT_ERROR) {
          fprintf(stderr, "radeon: Failed to assign virtual address space\n");
-         radeon_bo_destroy(&bo->base);
+         radeon_bo_destroy(NULL, &bo->base);
          return NULL;
       }
       mtx_lock(&ws->bo_handles_mutex);
       if (va.operation == RADEON_VA_RESULT_VA_EXIST) {
-         struct pb_buffer *b = &bo->base;
+         struct pb_buffer_lean *b = &bo->base;
          struct radeon_bo *old_bo =
                _mesa_hash_table_u64_search(ws->bo_vas, va.offset);
 
          mtx_unlock(&ws->bo_handles_mutex);
-         pb_reference(&b, &old_bo->base);
+         radeon_bo_reference(rws, &b, &old_bo->base);
          return b;
       }
 
@@ -1177,12 +1147,13 @@ static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
 
    ws->allocated_gtt += align(bo->base.size, ws->info.gart_page_size);
 
-   return (struct pb_buffer*)bo;
+   return (struct pb_buffer_lean*)bo;
 }
 
-static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
+static struct pb_buffer_lean *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
                                                       struct winsys_handle *whandle,
-                                                      unsigned vm_alignment)
+                                                      unsigned vm_alignment,
+                                                      bool is_dri_prime_linear_buffer)
 {
    struct radeon_drm_winsys *ws = radeon_drm_winsys(rws);
    struct radeon_bo *bo;
@@ -1214,9 +1185,12 @@ static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
 
    if (bo) {
       /* Increase the refcount. */
-      struct pb_buffer *b = NULL;
-      pb_reference(&b, &bo->base);
-      goto done;
+      if (unlikely(p_atomic_inc_return(&bo->base.reference.count) == 1)) {
+         p_atomic_dec(&bo->base.reference.count);
+         assert(p_atomic_read(&bo->base.reference.count) == 0);
+      } else {
+         goto done;
+      }
    }
 
    /* There isn't, create a new one. */
@@ -1256,9 +1230,8 @@ static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
 
    /* Initialize it. */
    pipe_reference_init(&bo->base.reference, 1);
-   bo->base.alignment = 0;
+   bo->base.alignment_log2 = 0;
    bo->base.size = (unsigned) size;
-   bo->base.vtbl = &radeon_bo_vtbl;
    bo->rws = ws;
    bo->va = 0;
    bo->hash = __sync_fetch_and_add(&ws->next_bo_hash, 1);
@@ -1288,17 +1261,17 @@ done:
       r = drmCommandWriteRead(ws->fd, DRM_RADEON_GEM_VA, &va, sizeof(va));
       if (r && va.operation == RADEON_VA_RESULT_ERROR) {
          fprintf(stderr, "radeon: Failed to assign virtual address space\n");
-         radeon_bo_destroy(&bo->base);
+         radeon_bo_destroy(NULL, &bo->base);
          return NULL;
       }
       mtx_lock(&ws->bo_handles_mutex);
       if (va.operation == RADEON_VA_RESULT_VA_EXIST) {
-         struct pb_buffer *b = &bo->base;
+         struct pb_buffer_lean *b = &bo->base;
          struct radeon_bo *old_bo =
                _mesa_hash_table_u64_search(ws->bo_vas, va.offset);
 
          mtx_unlock(&ws->bo_handles_mutex);
-         pb_reference(&b, &old_bo->base);
+         radeon_bo_reference(rws, &b, &old_bo->base);
          return b;
       }
 
@@ -1313,7 +1286,7 @@ done:
    else if (bo->initial_domain & RADEON_DOMAIN_GTT)
       ws->allocated_gtt += align(bo->base.size, ws->info.gart_page_size);
 
-   return (struct pb_buffer*)bo;
+   return (struct pb_buffer_lean*)bo;
 
 fail:
    mtx_unlock(&ws->bo_handles_mutex);
@@ -1321,7 +1294,7 @@ fail:
 }
 
 static bool radeon_winsys_bo_get_handle(struct radeon_winsys *rws,
-                                        struct pb_buffer *buffer,
+                                        struct pb_buffer_lean *buffer,
                                         struct winsys_handle *whandle)
 {
    struct drm_gem_flink flink;
@@ -1361,22 +1334,22 @@ static bool radeon_winsys_bo_get_handle(struct radeon_winsys *rws,
    return true;
 }
 
-static bool radeon_winsys_bo_is_user_ptr(struct pb_buffer *buf)
+static bool radeon_winsys_bo_is_user_ptr(struct pb_buffer_lean *buf)
 {
    return ((struct radeon_bo*)buf)->user_ptr != NULL;
 }
 
-static bool radeon_winsys_bo_is_suballocated(struct pb_buffer *buf)
+static bool radeon_winsys_bo_is_suballocated(struct pb_buffer_lean *buf)
 {
    return !((struct radeon_bo*)buf)->handle;
 }
 
-static uint64_t radeon_winsys_bo_va(struct pb_buffer *buf)
+static uint64_t radeon_winsys_bo_va(struct pb_buffer_lean *buf)
 {
    return ((struct radeon_bo*)buf)->va;
 }
 
-static unsigned radeon_winsys_bo_get_reloc_offset(struct pb_buffer *buf)
+static unsigned radeon_winsys_bo_get_reloc_offset(struct pb_buffer_lean *buf)
 {
    struct radeon_bo *bo = radeon_bo(buf);
 
@@ -1394,6 +1367,7 @@ void radeon_drm_bo_init_functions(struct radeon_drm_winsys *ws)
    ws->base.buffer_unmap = radeon_bo_unmap;
    ws->base.buffer_wait = radeon_bo_wait;
    ws->base.buffer_create = radeon_winsys_bo_create;
+   ws->base.buffer_destroy = radeon_winsys_bo_destroy;
    ws->base.buffer_from_handle = radeon_winsys_bo_from_handle;
    ws->base.buffer_from_ptr = radeon_winsys_bo_from_ptr;
    ws->base.buffer_is_user_ptr = radeon_winsys_bo_is_user_ptr;

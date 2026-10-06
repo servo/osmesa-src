@@ -118,7 +118,10 @@ event::wait_signalled() const {
 
 void
 event::wait() const {
-   for (event &ev : deps)
+   std::vector<intrusive_ref<event>> evs;
+   std::swap(deps, evs);
+
+   for (event &ev : evs)
       ev.wait();
 
    wait_signalled();
@@ -177,7 +180,7 @@ hard_event::wait() const {
       queue()->flush();
 
    if (!_fence ||
-       !screen->fence_finish(screen, NULL, _fence, PIPE_TIMEOUT_INFINITE))
+       !screen->fence_finish(screen, NULL, _fence, OS_TIMEOUT_INFINITE))
       throw error(CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST);
 }
 
@@ -203,8 +206,10 @@ hard_event::time_end() const {
 
 void
 hard_event::fence(pipe_fence_handle *fence) {
+   assert(fence);
    pipe_screen *screen = queue()->device().pipe;
    screen->fence_reference(screen, &_fence, fence);
+   deps.clear();
 }
 
 event::action

@@ -34,32 +34,85 @@
 
 #include "common/v3d_debug.h"
 #include "util/macros.h"
-#include "util/debug.h"
+#include "util/u_debug.h"
 #include "c11/threads.h"
 
-uint32_t V3D_DEBUG = 0;
+uint32_t v3d_mesa_debug = 0;
 
-static const struct debug_control debug_control[] = {
-        { "cl",          V3D_DEBUG_CL},
-        { "clif",        V3D_DEBUG_CLIF},
-        { "qpu",         V3D_DEBUG_QPU},
-        { "vir",         V3D_DEBUG_VIR},
-        { "nir",         V3D_DEBUG_NIR},
-        { "tgsi",        V3D_DEBUG_TGSI},
-        { "shaderdb",    V3D_DEBUG_SHADERDB},
-        { "surface",     V3D_DEBUG_SURFACE},
-        { "perf",        V3D_DEBUG_PERF},
-        { "norast",      V3D_DEBUG_NORAST},
-        { "fs",          V3D_DEBUG_FS},
-        { "gs",          V3D_DEBUG_GS},
-        { "vs",          V3D_DEBUG_VS},
-        { "cs",          V3D_DEBUG_CS},
-        { "always_flush", V3D_DEBUG_ALWAYS_FLUSH},
-        { "precompile",  V3D_DEBUG_PRECOMPILE},
-        { NULL,    0 }
+static const struct debug_named_value debug_control[] = {
+        { "cl",          V3D_DEBUG_CL,
+          "Dump command list during creation" },
+        { "cl_nobin",    V3D_DEBUG_CL_NO_BIN,
+          "Dump command list during creation, excluding binary resources" },
+        { "clif",        V3D_DEBUG_CLIF,
+          "Dump command list (CLIF format) during creation", },
+        { "qpu",         V3D_DEBUG_QPU,
+          "Dump generated QPU instructions" },
+        { "vir",         V3D_DEBUG_VIR,
+          "Dump VIR during program compile" },
+        { "nir",         V3D_DEBUG_NIR,
+          "Dump NIR during program compile" },
+        { "tgsi",        V3D_DEBUG_TGSI,
+          "Dump TGSI during program compile (v3d only)" },
+        /* `shaderdb` is *not* used by shader-db, but is here so that any other
+         * game/app can dump its stats in the shader-db format, allowing them
+         * to be compared using shader-db's report.py tool.
+         */
+        { "shaderdb",    V3D_DEBUG_SHADERDB,
+          "Dump program compile information for shader-db analysis" },
+        { "surface",     V3D_DEBUG_SURFACE,
+          /* FIXME: evaluate to implement it on v3dv */
+          "Print resource layout information (v3d only)" },
+        { "perf",        V3D_DEBUG_PERF,
+          "Print performance-related events during runtime" },
+        { "norast",      V3D_DEBUG_NORAST,
+          /* FIXME: evaluate to implement on v3dv*/
+          "Skip actual hardware execution of commands (v3d only)" },
+        { "fs",          V3D_DEBUG_FS,
+          "Dump fragment shaders" },
+        { "gs",          V3D_DEBUG_GS,
+          "Dump geometry shaders" },
+        { "vs",          V3D_DEBUG_VS,
+          "Dump vertex shaders" },
+        { "cs",          V3D_DEBUG_CS,
+          "Dump computer shaders" },
+        { "always_flush", V3D_DEBUG_ALWAYS_FLUSH,
+          "Flush after each draw call" },
+        { "precompile",  V3D_DEBUG_PRECOMPILE,
+          "Precompiles shader variant at shader state creation time (v3d only)" },
+        { "ra",          V3D_DEBUG_RA,
+          "Dump register allocation failures" },
+        { "tmu32",  V3D_DEBUG_TMU_32BIT,
+          "Force 32-bit precision on all TMU operations" },
+        /* This can lead to incorrect behavior for applications that do
+         * require full 32-bit precision, but can improve performance
+         * for those that don't.
+         */
+        { "tmu16",  V3D_DEBUG_TMU_16BIT,
+          "Force 16-bit precision on all TMU operations" },
+        { "noloopunroll",  V3D_DEBUG_NO_LOOP_UNROLL,
+          "Disable loop unrolling" },
+        { "db", V3D_DEBUG_DOUBLE_BUFFER,
+          "Enable double buffer for Tile Buffer when MSAA is disabled" },
+#ifdef ENABLE_SHADER_CACHE
+        { "cache", V3D_DEBUG_CACHE,
+          "Print on-disk cache events (only with cache enabled)" },
+#endif
+        { "no_merge_jobs", V3D_DEBUG_NO_MERGE_JOBS,
+          "Don't try to merge subpasses in the same job even if they share framebuffer configuration (v3dv only)" },
+        { "opt_compile_time", V3D_DEBUG_OPT_COMPILE_TIME,
+          "Don't try to reduce shader spilling, might improve compile times with expensive shaders." },
+        /* disable_tfu is v3dv only because v3d has some uses of the TFU without alternative codepaths */
+        { "disable_tfu", V3D_DEBUG_DISABLE_TFU,
+          "Disable TFU (v3dv only)" },
+        { "sync", V3D_DEBUG_SYNC,
+          "Sync wait for each job to complete after submission." },
+        DEBUG_NAMED_VALUE_END
 };
 
-uint32_t
+DEBUG_GET_ONCE_FLAGS_OPTION(v3d_debug, "V3D_DEBUG", debug_control, 0)
+
+bool
 v3d_debug_flag_for_shader_stage(gl_shader_stage stage)
 {
         uint32_t flags[] = {
@@ -71,23 +124,11 @@ v3d_debug_flag_for_shader_stage(gl_shader_stage stage)
                 [MESA_SHADER_COMPUTE] = V3D_DEBUG_CS,
         };
         STATIC_ASSERT(MESA_SHADER_STAGES == 6);
-        return flags[stage];
-}
-
-static void
-v3d_process_debug_variable_once(void)
-{
-        V3D_DEBUG = parse_debug_string(getenv("V3D_DEBUG"), debug_control);
-
-        if (V3D_DEBUG & V3D_DEBUG_SHADERDB)
-                V3D_DEBUG |= V3D_DEBUG_NORAST;
+        return v3d_mesa_debug & flags[stage];
 }
 
 void
 v3d_process_debug_variable(void)
 {
-        static once_flag v3d_process_debug_variable_flag = ONCE_FLAG_INIT;
-
-        call_once(&v3d_process_debug_variable_flag,
-                  v3d_process_debug_variable_once);
+        v3d_mesa_debug = debug_get_option_v3d_debug();
 }

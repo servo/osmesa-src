@@ -19,10 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
- *
  */
 
 #include "nir.h"
@@ -33,8 +29,11 @@
  */
 
 struct lower_phis_to_scalar_state {
+   nir_shader *shader;
    void *mem_ctx;
-   void *dead_ctx;
+   struct exec_list dead_instrs;
+
+   bool lower_all;
 
    /* Hash table marking which phi nodes are scalarizable.  The key is
     * pointers to phi instructions and the entry is either NULL for not
@@ -50,9 +49,6 @@ static bool
 is_phi_src_scalarizable(nir_phi_src *src,
                         struct lower_phis_to_scalar_state *state)
 {
-   /* Don't know what to do with non-ssa sources */
-   if (!src->src.is_ssa)
-      return false;
 
    nir_instr *src_instr = src->src.ssa->parent_instr;
    switch (src_instr->type) {
@@ -65,7 +61,7 @@ is_phi_src_scalarizable(nir_phi_src *src,
        * are ok too.
        */
       return nir_op_infos[src_alu->op].output_size == 0 ||
-             nir_op_is_vec(src_alu->op);
+             nir_op_is_vec_or_mov(src_alu->op);
    }
 
    case nir_instr_type_phi:
@@ -76,7 +72,7 @@ is_phi_src_scalarizable(nir_phi_src *src,
       /* These are trivially scalarizable */
       return true;
 
-   case nir_instr_type_ssa_undef:
+   case nir_instr_type_undef:
       /* The caller of this function is going to OR the results and we don't
        * want undefs to count so we return false.
        */
@@ -87,12 +83,12 @@ is_phi_src_scalarizable(nir_phi_src *src,
 
       switch (src_intrin->intrinsic) {
       case nir_intrinsic_load_deref: {
+         /* Don't scalarize if we see a load of a local variable because it
+          * might turn into one of the things we can't scalarize.
+          */
          nir_deref_instr *deref = nir_src_as_deref(src_intrin->src[0]);
-         return deref->mode == nir_var_shader_in ||
-                deref->mode == nir_var_uniform ||
-                deref->mode == nir_var_mem_ubo ||
-                deref->mode == nir_var_mem_ssbo ||
-                deref->mode == nir_var_mem_global;
+         return !nir_deref_mode_may_be(deref, nir_var_function_temp |
+                                                 nir_var_shader_temp);
       }
 
       case nir_intrinsic_interp_deref_at_centroid:
@@ -103,13 +99,15 @@ is_phi_src_scalarizable(nir_phi_src *src,
       case nir_intrinsic_load_ubo:
       case nir_intrinsic_load_ssbo:
       case nir_intrinsic_load_global:
+      case nir_intrinsic_load_global_constant:
       case nir_intrinsic_load_input:
+      case nir_intrinsic_load_per_primitive_input:
          return true;
       default:
          break;
       }
    }
-   /* fallthrough */
+      FALLTHROUGH;
 
    default:
       /* We can't scalarize this type of instruction */
@@ -120,7 +118,7 @@ is_phi_src_scalarizable(nir_phi_src *src,
 /**
  * Determines if the given phi node should be lowered.  The only phi nodes
  * we will scalarize at the moment are those where all of the sources are
- * scalarizable.
+ * scalarizable, unless lower_all is set.
  *
  * The reason for this comes down to coalescing.  Since phi sources can't
  * swizzle, swizzles on phis have to be resolved by inserting a mov right
@@ -142,8 +140,11 @@ static bool
 should_lower_phi(nir_phi_instr *phi, struct lower_phis_to_scalar_state *state)
 {
    /* Already scalar */
-   if (phi->dest.ssa.num_components == 1)
+   if (phi->def.num_components == 1)
       return false;
+
+   if (state->lower_all)
+      return true;
 
    struct hash_entry *entry = _mesa_hash_table_search(state->phi_table, phi);
    if (entry)
@@ -183,56 +184,40 @@ lower_phis_to_scalar_block(nir_block *block,
                            struct lower_phis_to_scalar_state *state)
 {
    bool progress = false;
-
-   /* Find the last phi node in the block */
-   nir_phi_instr *last_phi = NULL;
-   nir_foreach_instr(instr, block) {
-      if (instr->type != nir_instr_type_phi)
-         break;
-
-      last_phi = nir_instr_as_phi(instr);
-   }
+   nir_phi_instr *last_phi = nir_block_last_phi_instr(block);
 
    /* We have to handle the phi nodes in their own pass due to the way
     * we're modifying the linked list of instructions.
     */
-   nir_foreach_instr_safe(instr, block) {
-      if (instr->type != nir_instr_type_phi)
-         break;
-
-      nir_phi_instr *phi = nir_instr_as_phi(instr);
-
+   nir_foreach_phi_safe(phi, block) {
       if (!should_lower_phi(phi, state))
          continue;
 
-      unsigned bit_size = phi->dest.ssa.bit_size;
+      unsigned bit_size = phi->def.bit_size;
 
       /* Create a vecN operation to combine the results.  Most of these
        * will be redundant, but copy propagation should clean them up for
        * us.  No need to add the complexity here.
        */
-      nir_op vec_op = nir_op_vec(phi->dest.ssa.num_components);
+      nir_op vec_op = nir_op_vec(phi->def.num_components);
 
-      nir_alu_instr *vec = nir_alu_instr_create(state->mem_ctx, vec_op);
-      nir_ssa_dest_init(&vec->instr, &vec->dest.dest,
-                        phi->dest.ssa.num_components,
-                        bit_size, NULL);
-      vec->dest.write_mask = (1 << phi->dest.ssa.num_components) - 1;
+      nir_alu_instr *vec = nir_alu_instr_create(state->shader, vec_op);
+      nir_def_init(&vec->instr, &vec->def,
+                   phi->def.num_components, bit_size);
 
-      for (unsigned i = 0; i < phi->dest.ssa.num_components; i++) {
-         nir_phi_instr *new_phi = nir_phi_instr_create(state->mem_ctx);
-         nir_ssa_dest_init(&new_phi->instr, &new_phi->dest, 1,
-                           phi->dest.ssa.bit_size, NULL);
+      for (unsigned i = 0; i < phi->def.num_components; i++) {
+         nir_phi_instr *new_phi = nir_phi_instr_create(state->shader);
+         nir_def_init(&new_phi->instr, &new_phi->def, 1,
+                      phi->def.bit_size);
 
-         vec->src[i].src = nir_src_for_ssa(&new_phi->dest.ssa);
+         vec->src[i].src = nir_src_for_ssa(&new_phi->def);
 
          nir_foreach_phi_src(src, phi) {
             /* We need to insert a mov to grab the i'th component of src */
-            nir_alu_instr *mov = nir_alu_instr_create(state->mem_ctx,
+            nir_alu_instr *mov = nir_alu_instr_create(state->shader,
                                                       nir_op_mov);
-            nir_ssa_dest_init(&mov->instr, &mov->dest.dest, 1, bit_size, NULL);
-            mov->dest.write_mask = 1;
-            nir_src_copy(&mov->src[0].src, &src->src, state->mem_ctx);
+            nir_def_init(&mov->instr, &mov->def, 1, bit_size);
+            mov->src[0].src = nir_src_for_ssa(src->src.ssa);
             mov->src[0].swizzle[0] = i;
 
             /* Insert at the end of the predecessor but before the jump */
@@ -242,11 +227,7 @@ lower_phis_to_scalar_block(nir_block *block,
             else
                nir_instr_insert_after_block(src->pred, &mov->instr);
 
-            nir_phi_src *new_src = ralloc(new_phi, nir_phi_src);
-            new_src->pred = src->pred;
-            new_src->src = nir_src_for_ssa(&mov->dest.dest.ssa);
-
-            exec_list_push_tail(&new_phi->srcs, &new_src->node);
+            nir_phi_instr_add_src(new_phi, src->pred, &mov->def);
          }
 
          nir_instr_insert_before(&phi->instr, &new_phi->instr);
@@ -254,11 +235,8 @@ lower_phis_to_scalar_block(nir_block *block,
 
       nir_instr_insert_after(&last_phi->instr, &vec->instr);
 
-      nir_ssa_def_rewrite_uses(&phi->dest.ssa,
-                               nir_src_for_ssa(&vec->dest.dest.ssa));
-
-      ralloc_steal(state->dead_ctx, phi);
-      nir_instr_remove(&phi->instr);
+      nir_def_replace(&phi->def, &vec->def);
+      exec_list_push_tail(&state->dead_instrs, &phi->instr.node);
 
       progress = true;
 
@@ -268,7 +246,7 @@ lower_phis_to_scalar_block(nir_block *block,
        * the last phi node so once we get here, we can't trust even the
        * safe iterator to stop properly.  We have to break manually.
        */
-      if (instr == &last_phi->instr)
+      if (phi == last_phi)
          break;
    }
 
@@ -276,23 +254,27 @@ lower_phis_to_scalar_block(nir_block *block,
 }
 
 static bool
-lower_phis_to_scalar_impl(nir_function_impl *impl)
+lower_phis_to_scalar_impl(nir_function_impl *impl, bool lower_all)
 {
    struct lower_phis_to_scalar_state state;
    bool progress = false;
 
+   state.shader = impl->function->shader;
    state.mem_ctx = ralloc_parent(impl);
-   state.dead_ctx = ralloc_context(NULL);
-   state.phi_table = _mesa_pointer_hash_table_create(state.dead_ctx);
+   exec_list_make_empty(&state.dead_instrs);
+   state.phi_table = _mesa_pointer_hash_table_create(NULL);
+   state.lower_all = lower_all;
 
    nir_foreach_block(block, impl) {
       progress = lower_phis_to_scalar_block(block, &state) || progress;
    }
 
-   nir_metadata_preserve(impl, nir_metadata_block_index |
-                               nir_metadata_dominance);
+   nir_metadata_preserve(impl, nir_metadata_control_flow);
 
-   ralloc_free(state.dead_ctx);
+   nir_instr_free_list(&state.dead_instrs);
+
+   ralloc_free(state.phi_table);
+
    return progress;
 }
 
@@ -304,13 +286,12 @@ lower_phis_to_scalar_impl(nir_function_impl *impl)
  * don't bother lowering because that would generate hard-to-coalesce movs.
  */
 bool
-nir_lower_phis_to_scalar(nir_shader *shader)
+nir_lower_phis_to_scalar(nir_shader *shader, bool lower_all)
 {
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress = lower_phis_to_scalar_impl(function->impl) || progress;
+   nir_foreach_function_impl(impl, shader) {
+      progress = lower_phis_to_scalar_impl(impl, lower_all) || progress;
    }
 
    return progress;

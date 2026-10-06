@@ -118,6 +118,7 @@ struct blitter_context
    bool skip_viewport_restore;
    bool is_sample_mask_saved;
    unsigned saved_sample_mask;
+   unsigned saved_min_samples;
 
    unsigned saved_num_sampler_states;
    void *saved_sampler_states[PIPE_MAX_SAMPLERS];
@@ -128,17 +129,18 @@ struct blitter_context
    unsigned cb_slot;
    struct pipe_constant_buffer saved_fs_constant_buffer;
 
-   unsigned vb_slot;
-   struct pipe_vertex_buffer saved_vertex_buffer;
+   unsigned saved_num_vb;
+   struct pipe_vertex_buffer saved_vertex_buffers[PIPE_MAX_ATTRIBS];
 
    unsigned saved_num_so_targets;
+   enum mesa_prim saved_so_output_prim;
    struct pipe_stream_output_target *saved_so_targets[PIPE_MAX_SO_BUFFERS];
 
    struct pipe_query *saved_render_cond_query;
-   uint saved_render_cond_mode;
+   enum pipe_render_cond_flag saved_render_cond_mode;
    bool saved_render_cond_cond;
 
-   boolean saved_window_rectangles_include;
+   bool saved_window_rectangles_include;
    unsigned saved_num_window_rectangles;
    struct pipe_scissor_state saved_window_rectangles[PIPE_MAX_WINDOW_RECTANGLES];
 };
@@ -169,7 +171,7 @@ struct pipe_context *util_blitter_get_pipe(struct blitter_context *blitter)
 }
 
 /**
- * Override PIPE_CAP_TEXTURE_MULTISAMPLE as reported by the driver.
+ * Override pipe_caps.texture_multisample as reported by the driver.
  */
 void util_blitter_set_texture_multisample(struct blitter_context *blitter,
                                           bool supported);
@@ -270,10 +272,13 @@ void util_blitter_blit_generic(struct blitter_context *blitter,
                                unsigned src_width0, unsigned src_height0,
                                unsigned mask, unsigned filter,
                                const struct pipe_scissor_state *scissor,
-                               bool alpha_blend);
+                               bool alpha_blend, bool sample0_only,
+                               unsigned dst_sample,
+                               void *fs_override);
 
 void util_blitter_blit(struct blitter_context *blitter,
-		       const struct pipe_blit_info *info);
+		       const struct pipe_blit_info *info,
+                       void *fs_override);
 
 void util_blitter_generate_mipmap(struct blitter_context *blitter,
                                   struct pipe_resource *tex,
@@ -298,17 +303,6 @@ void util_blitter_default_src_texture(struct blitter_context *blitter,
                                       struct pipe_sampler_view *src_templ,
                                       struct pipe_resource *src,
                                       unsigned srclevel);
-
-/**
- * Copy data from one buffer to another using the Stream Output functionality.
- * 4-byte alignment is required, otherwise software fallback is used.
- */
-void util_blitter_copy_buffer(struct blitter_context *blitter,
-                              struct pipe_resource *dst,
-                              unsigned dstx,
-                              struct pipe_resource *src,
-                              unsigned srcx,
-                              unsigned size);
 
 /**
  * Clear the contents of a buffer using the Stream Output functionality.
@@ -399,6 +393,16 @@ void util_blitter_custom_resolve_color(struct blitter_context *blitter,
 void util_blitter_custom_shader(struct blitter_context *blitter,
                                 struct pipe_surface *dstsurf,
                                 void *custom_vs, void *custom_fs);
+
+/* Used by D3D12 for non-MSAA -> MSAA stencil blits */
+void util_blitter_stencil_fallback(struct blitter_context *blitter,
+                                   struct pipe_resource *dst,
+                                   unsigned dst_level,
+                                   const struct pipe_box *dstbox,
+                                   struct pipe_resource *src,
+                                   unsigned src_level,
+                                   const struct pipe_box *srcbox,
+                                   const struct pipe_scissor_state *scissor);
 
 /* The functions below should be used to save currently bound constant state
  * objects inside a driver. The objects are automatically restored at the end
@@ -532,22 +536,29 @@ util_blitter_save_fragment_constant_buffer_slot(
 }
 
 static inline void
-util_blitter_save_vertex_buffer_slot(struct blitter_context *blitter,
-                                     struct pipe_vertex_buffer *vertex_buffers)
+util_blitter_save_vertex_buffers(struct blitter_context *blitter,
+                                 struct pipe_vertex_buffer *vertex_buffers,
+                                 unsigned count)
 {
-   pipe_vertex_buffer_reference(&blitter->saved_vertex_buffer,
-                                &vertex_buffers[blitter->vb_slot]);
+   for (unsigned i = 0; i < count; i++) {
+      pipe_vertex_buffer_reference(&blitter->saved_vertex_buffers[i],
+                                   &vertex_buffers[i]);
+   }
+   blitter->saved_num_vb = count;
 }
 
 static inline void
 util_blitter_save_so_targets(struct blitter_context *blitter,
                              unsigned num_targets,
-                             struct pipe_stream_output_target **targets)
+                             struct pipe_stream_output_target **targets,
+                             enum mesa_prim output_prim)
 {
    unsigned i;
    assert(num_targets <= ARRAY_SIZE(blitter->saved_so_targets));
 
    blitter->saved_num_so_targets = num_targets;
+   blitter->saved_so_output_prim = output_prim;
+
    for (i = 0; i < num_targets; i++)
       pipe_so_target_reference(&blitter->saved_so_targets[i],
                                targets[i]);
@@ -555,10 +566,11 @@ util_blitter_save_so_targets(struct blitter_context *blitter,
 
 static inline void
 util_blitter_save_sample_mask(struct blitter_context *blitter,
-                              unsigned sample_mask)
+                              unsigned sample_mask, unsigned min_samples)
 {
    blitter->is_sample_mask_saved = true;
    blitter->saved_sample_mask = sample_mask;
+   blitter->saved_min_samples = min_samples;
 }
 
 static inline void
@@ -574,7 +586,7 @@ util_blitter_save_render_condition(struct blitter_context *blitter,
 
 static inline void
 util_blitter_save_window_rectangles(struct blitter_context *blitter,
-                                    boolean include,
+                                    bool include,
                                     unsigned num_rectangles,
                                     const struct pipe_scissor_state *rects)
 {

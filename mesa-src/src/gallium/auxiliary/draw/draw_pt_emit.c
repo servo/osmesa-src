@@ -46,20 +46,17 @@ struct pt_emit {
    const struct vertex_info *vinfo;
 
    float zero4[4];
-
 };
 
 
 void
 draw_pt_emit_prepare(struct pt_emit *emit,
-                     unsigned prim,
+                     enum mesa_prim prim,
                      unsigned *max_vertices)
 {
    struct draw_context *draw = emit->draw;
    const struct vertex_info *vinfo;
-   unsigned dst_offset;
    struct translate_key hw_key;
-   unsigned i;
 
    /* XXX: need to flush to get prim_vbuf.c to release its allocation??
     */
@@ -71,6 +68,8 @@ draw_pt_emit_prepare(struct pt_emit *emit,
    emit->prim = prim;
 
    draw->render->set_primitive(draw->render, emit->prim);
+   if (draw->render->set_view_index)
+      draw->render->set_view_index(draw->render, draw->pt.user.viewid);
 
    /* Must do this after set_primitive() above:
     */
@@ -78,8 +77,8 @@ draw_pt_emit_prepare(struct pt_emit *emit,
 
    /* Translate from pipeline vertices to hw vertices.
     */
-   dst_offset = 0;
-   for (i = 0; i < vinfo->num_attribs; i++) {
+   unsigned dst_offset = 0;
+   for (unsigned i = 0; i < vinfo->num_attribs; i++) {
       unsigned emit_sz = 0;
       unsigned src_buffer = 0;
       unsigned output_format;
@@ -94,8 +93,7 @@ draw_pt_emit_prepare(struct pt_emit *emit,
       if (vinfo->attrib[i].emit == EMIT_1F_PSIZE) {
          src_buffer = 1;
          src_offset = 0;
-      }
-      else if (vinfo->attrib[i].src_index == DRAW_ATTR_NONEXIST) {
+      } else if (vinfo->attrib[i].src_index == DRAW_ATTR_NONEXIST) {
          /* elements which don't exist will get assigned zeros */
          src_buffer = 2;
          src_offset = 0;
@@ -139,7 +137,7 @@ draw_pt_emit(struct pt_emit *emit,
    const float (*vertex_data)[4] = (const float (*)[4])vert_info->verts->data;
    unsigned vertex_count = vert_info->count;
    unsigned stride = vert_info->stride;
-   const ushort *elts = prim_info->elts;
+   const uint16_t *elts = prim_info->elts;
    struct draw_context *draw = emit->draw;
    struct translate *translate = emit->translate;
    struct vbuf_render *render = draw->render;
@@ -157,11 +155,13 @@ draw_pt_emit(struct pt_emit *emit,
     * between vbuf.c and here...
     */
    render->set_primitive(draw->render, prim_info->prim);
+   if (draw->render->set_view_index)
+      draw->render->set_view_index(draw->render, draw->pt.user.viewid);
 
    assert(vertex_count <= 65535);
    render->allocate_vertices(render,
-                             (ushort)translate->key.output_stride,
-                             (ushort)vertex_count);
+                             (uint16_t)translate->key.output_stride,
+                             (uint16_t)vertex_count);
 
    hw_verts = render->map_vertices(render);
    if (!hw_verts) {
@@ -189,12 +189,20 @@ draw_pt_emit(struct pt_emit *emit,
                   0,
                   hw_verts);
 
+   if (0) {
+      for (unsigned i = 0; i < vertex_count; i++) {
+         debug_printf("\n\n%s vertex %d:\n", __func__, i);
+         draw_dump_emitted_vertex(emit->vinfo,
+                                  (const uint8_t *)hw_verts +
+                                  translate->key.output_stride * i);
+      }
+   }
+
    render->unmap_vertices(render, 0, vertex_count - 1);
 
    for (start = i = 0;
         i < prim_info->primitive_count;
-        start += prim_info->primitive_lengths[i], i++)
-   {
+        start += prim_info->primitive_lengths[i], i++) {
       render->draw_elements(render,
                             elts + start,
                             prim_info->primitive_lengths[i]);
@@ -229,11 +237,13 @@ draw_pt_emit_linear(struct pt_emit *emit,
     * between vbuf.c and here...
     */
    render->set_primitive(draw->render, prim_info->prim);
+   if (draw->render->set_view_index)
+      draw->render->set_view_index(draw->render, draw->pt.user.viewid);
 
    assert(count <= 65535);
    if (!render->allocate_vertices(render,
-                                  (ushort)translate->key.output_stride,
-                                  (ushort)count))
+                                  (uint16_t)translate->key.output_stride,
+                                  (uint16_t)count))
       goto fail;
 
    hw_verts = render->map_vertices(render);
@@ -255,9 +265,8 @@ draw_pt_emit_linear(struct pt_emit *emit,
                   hw_verts);
 
    if (0) {
-      unsigned i;
-      for (i = 0; i < count; i++) {
-         debug_printf("\n\n%s vertex %d:\n", __FUNCTION__, i);
+      for (unsigned i = 0; i < count; i++) {
+         debug_printf("\n\n%s vertex %d:\n", __func__, i);
          draw_dump_emitted_vertex(emit->vinfo,
                                   (const uint8_t *)hw_verts +
                                   translate->key.output_stride * i);
@@ -268,8 +277,7 @@ draw_pt_emit_linear(struct pt_emit *emit,
 
    for (start = i = 0;
         i < prim_info->primitive_count;
-        start += prim_info->primitive_lengths[i], i++)
-   {
+        start += prim_info->primitive_lengths[i], i++) {
       render->draw_arrays(render,
                           start,
                           prim_info->primitive_lengths[i]);

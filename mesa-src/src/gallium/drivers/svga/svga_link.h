@@ -1,8 +1,15 @@
+/*
+ * Copyright (c) 2014-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef SVGA_LINK_H
 #define SVGA_LINK_H
 
 #include "pipe/p_defines.h"
+#include "tgsi/tgsi_scan.h"
 
 struct svga_context;
 
@@ -11,11 +18,11 @@ struct shader_linkage
    unsigned num_inputs;     /* number of inputs in the current shader */
    unsigned position_index; /* position register index */
    unsigned input_map_max;  /* highest index of mapped inputs */
-   ubyte input_map[PIPE_MAX_SHADER_INPUTS];
+   uint8_t input_map[PIPE_MAX_SHADER_INPUTS];
 
    struct {
       unsigned num_outputs;
-      ubyte output_map[PIPE_MAX_SHADER_OUTPUTS];
+      uint8_t output_map[PIPE_MAX_SHADER_OUTPUTS];
    } prevShader;
 };
 

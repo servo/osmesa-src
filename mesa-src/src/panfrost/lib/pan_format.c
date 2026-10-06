@@ -24,387 +24,592 @@
  *   Alyssa Rosenzweig <alyssa.rosenzweig@collabora.com>
  */
 
-#include <stdio.h>
-#include "midgard_pack.h"
-#include "pan_texture.h"
+#include "pan_format.h"
+#include "genxml/gen_macros.h"
+#include "util/format/u_format.h"
 
 /* Convenience */
 
-#define _V PIPE_BIND_VERTEX_BUFFER
-#define _T PIPE_BIND_SAMPLER_VIEW
-#define _R PIPE_BIND_RENDER_TARGET
-#define _Z PIPE_BIND_DEPTH_STENCIL
-#define _VT (_V | _T)
-#define _VTR (_V | _T | _R)
-#define _TZ (_T | _Z)
+#if PAN_ARCH == 6
+#define MALI_RGBA_SWIZZLE         PAN_V6_SWIZZLE(R, G, B, A)
+#define MALI_RGB1_SWIZZLE         PAN_V6_SWIZZLE(R, G, B, A)
+#else
+#define MALI_RGBA_SWIZZLE         MALI_RGB_COMPONENT_ORDER_RGBA
+#define MALI_RGB1_SWIZZLE         MALI_RGB_COMPONENT_ORDER_RGB1
+#endif
 
-struct panfrost_format panfrost_pipe_format_table[PIPE_FORMAT_COUNT] = {
-        [PIPE_FORMAT_ETC1_RGB8] 		= { MALI_ETC2_RGB8, _T },
-        [PIPE_FORMAT_ETC2_RGB8] 		= { MALI_ETC2_RGB8, _T },
-        [PIPE_FORMAT_ETC2_SRGB8] 		= { MALI_ETC2_RGB8, _T },
-        [PIPE_FORMAT_ETC2_R11_UNORM] 		= { MALI_ETC2_R11_UNORM, _T },
-        [PIPE_FORMAT_ETC2_RGBA8] 		= { MALI_ETC2_RGBA8, _T },
-        [PIPE_FORMAT_ETC2_SRGBA8] 		= { MALI_ETC2_RGBA8, _T },
-        [PIPE_FORMAT_ETC2_RG11_UNORM] 		= { MALI_ETC2_RG11_UNORM, _T },
-        [PIPE_FORMAT_ETC2_R11_SNORM] 		= { MALI_ETC2_R11_SNORM, _T },
-        [PIPE_FORMAT_ETC2_RG11_SNORM] 		= { MALI_ETC2_RG11_SNORM, _T },
-        [PIPE_FORMAT_ETC2_RGB8A1] 		= { MALI_ETC2_RGB8A1, _T },
-        [PIPE_FORMAT_ETC2_SRGB8A1] 		= { MALI_ETC2_RGB8A1, _T },
+#define MALI_BLEND_AU_R8G8B8A8    (MALI_RGBA8_TB << 12)    | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_PU_R8G8B8A8    (MALI_RGBA8_TB << 12)    | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_AU_R10G10B10A2 (MALI_RGB10_A2_TB << 12) | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_PU_R10G10B10A2 (MALI_RGB10_A2_TB << 12) | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_AU_R8G8B8A2    (MALI_RGB8_A2_AU << 12)  | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_PU_R8G8B8A2    (MALI_RGB8_A2_PU << 12)  | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_AU_R4G4B4A4    (MALI_RGBA4_AU << 12)    | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_PU_R4G4B4A4    (MALI_RGBA4_PU << 12)    | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_AU_R5G6B5A0    (MALI_R5G6B5_AU << 12)   | MALI_RGB1_SWIZZLE
+#define MALI_BLEND_PU_R5G6B5A0    (MALI_R5G6B5_PU << 12)   | MALI_RGB1_SWIZZLE
+#define MALI_BLEND_AU_R5G5B5A1    (MALI_RGB5_A1_AU << 12)  | MALI_RGBA_SWIZZLE
+#define MALI_BLEND_PU_R5G5B5A1    (MALI_RGB5_A1_PU << 12)  | MALI_RGBA_SWIZZLE
 
-        [PIPE_FORMAT_DXT1_RGB]                  = { MALI_BC1_UNORM, _T },
-        [PIPE_FORMAT_DXT1_RGBA]                 = { MALI_BC1_UNORM, _T },
-        [PIPE_FORMAT_DXT1_SRGB]                 = { MALI_BC1_UNORM, _T },
-        [PIPE_FORMAT_DXT1_SRGBA]                = { MALI_BC1_UNORM, _T },
-        [PIPE_FORMAT_DXT3_RGBA]                 = { MALI_BC2_UNORM, _T },
-        [PIPE_FORMAT_DXT3_SRGBA]                = { MALI_BC2_UNORM, _T },
-        [PIPE_FORMAT_DXT5_RGBA]                 = { MALI_BC3_UNORM, _T },
-        [PIPE_FORMAT_DXT5_SRGBA]                = { MALI_BC3_UNORM, _T },
+#if PAN_ARCH <= 5
+#define BFMT2(pipe, internal, writeback, srgb)                                 \
+   [PIPE_FORMAT_##pipe] = {                                                    \
+      MALI_COLOR_BUFFER_INTERNAL_FORMAT_##internal,                            \
+      MALI_COLOR_FORMAT_##writeback,                                           \
+      { 0, 0 },                                                                \
+   }
+#else
+#define BFMT2(pipe, internal, writeback, srgb)                                 \
+   [PIPE_FORMAT_##pipe] = {                                                    \
+      MALI_COLOR_BUFFER_INTERNAL_FORMAT_##internal,                            \
+      MALI_COLOR_FORMAT_##writeback,                                           \
+      {                                                                        \
+         MALI_BLEND_PU_##internal | (srgb ? (1 << 20) : 0),                    \
+         MALI_BLEND_AU_##internal | (srgb ? (1 << 20) : 0),                    \
+      },                                                                       \
+   }
+#endif
 
-        [PIPE_FORMAT_RGTC1_UNORM]               = { MALI_BC4_UNORM, _T },
-        [PIPE_FORMAT_RGTC1_SNORM]               = { MALI_BC4_SNORM, _T },
-        [PIPE_FORMAT_RGTC2_UNORM]               = { MALI_BC5_UNORM, _T },
-        [PIPE_FORMAT_RGTC2_SNORM]               = { MALI_BC5_SNORM, _T },
+#define BFMT(pipe, internal_and_writeback)                                     \
+   BFMT2(pipe, internal_and_writeback, internal_and_writeback, 0)
 
-        [PIPE_FORMAT_BPTC_RGB_FLOAT]            = { MALI_BC6H_SF16, _T },
-        [PIPE_FORMAT_BPTC_RGB_UFLOAT]           = { MALI_BC6H_UF16, _T },
-        [PIPE_FORMAT_BPTC_RGBA_UNORM]           = { MALI_BC7_UNORM, _T },
-        [PIPE_FORMAT_BPTC_SRGBA]                = { MALI_BC7_UNORM, _T },
+#define BFMT_SRGB(pipe, writeback)                                             \
+   BFMT2(pipe##_UNORM, R8G8B8A8, writeback, 0),                                \
+      BFMT2(pipe##_SRGB, R8G8B8A8, writeback, 1)
 
-        [PIPE_FORMAT_ASTC_4x4]	                = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_5x4]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_5x5]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_6x5]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_6x6]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_8x5]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_8x6]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_8x8]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_10x5]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_10x6]		        = { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_10x8]	        	= { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_10x10]		= { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_12x10]		= { MALI_ASTC_2D_HDR, _T },
-        [PIPE_FORMAT_ASTC_12x12]		= { MALI_ASTC_2D_HDR, _T },
+const struct pan_blendable_format
+   GENX(panfrost_blendable_formats)[PIPE_FORMAT_COUNT] = {
+      BFMT_SRGB(L8, R8),
+      BFMT_SRGB(L8A8, R8G8),
+      BFMT_SRGB(R8, R8),
+      BFMT_SRGB(R8G8, R8G8),
+      BFMT_SRGB(R8G8B8, R8G8B8),
 
-        [PIPE_FORMAT_ASTC_4x4_SRGB]             = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_5x4_SRGB]             = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_5x5_SRGB]             = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_6x5_SRGB]             = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_6x6_SRGB]             = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_8x5_SRGB]             = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_8x6_SRGB]             = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_8x8_SRGB]             = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_10x5_SRGB]            = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_10x6_SRGB]            = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_10x8_SRGB]            = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_10x10_SRGB]           = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_12x10_SRGB]           = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_ASTC_12x12_SRGB]           = { MALI_ASTC_2D_LDR, _T },
-        [PIPE_FORMAT_B5G6R5_UNORM] 		= { MALI_RGB565, _VTR },
-        [PIPE_FORMAT_B5G5R5X1_UNORM] 		= { MALI_RGB5_X1_UNORM, _VT },
-        [PIPE_FORMAT_R5G5B5A1_UNORM] 		= { MALI_RGB5_A1_UNORM, _VTR },
+      BFMT_SRGB(B8G8R8A8, R8G8B8A8),
+      BFMT_SRGB(B8G8R8X8, R8G8B8A8),
+      BFMT_SRGB(A8R8G8B8, R8G8B8A8),
+      BFMT_SRGB(X8R8G8B8, R8G8B8A8),
+      BFMT_SRGB(A8B8G8R8, R8G8B8A8),
+      BFMT_SRGB(X8B8G8R8, R8G8B8A8),
+      BFMT_SRGB(R8G8B8X8, R8G8B8A8),
+      BFMT_SRGB(R8G8B8A8, R8G8B8A8),
 
-        [PIPE_FORMAT_R10G10B10X2_UNORM] 	= { MALI_RGB10_A2_UNORM, _VTR },
-        [PIPE_FORMAT_B10G10R10X2_UNORM] 	= { MALI_RGB10_A2_UNORM, _VTR },
-        [PIPE_FORMAT_R10G10B10A2_UNORM] 	= { MALI_RGB10_A2_UNORM, _VTR },
-        [PIPE_FORMAT_B10G10R10A2_UNORM] 	= { MALI_RGB10_A2_UNORM, _VTR },
-        [PIPE_FORMAT_R10G10B10X2_SNORM] 	= { MALI_RGB10_A2_SNORM, _VT },
-        [PIPE_FORMAT_R10G10B10A2_SNORM] 	= { MALI_RGB10_A2_SNORM, _VT },
-        [PIPE_FORMAT_B10G10R10A2_SNORM] 	= { MALI_RGB10_A2_SNORM, _VT },
-        [PIPE_FORMAT_R10G10B10A2_UINT] 		= { MALI_RGB10_A2UI, _VTR },
-        [PIPE_FORMAT_B10G10R10A2_UINT] 		= { MALI_RGB10_A2UI, _VTR },
-        [PIPE_FORMAT_R10G10B10A2_USCALED] 	= { MALI_RGB10_A2UI, _VTR },
-        [PIPE_FORMAT_B10G10R10A2_USCALED] 	= { MALI_RGB10_A2UI, _VTR },
-        [PIPE_FORMAT_R10G10B10A2_SINT] 		= { MALI_RGB10_A2I, _VTR},
-        [PIPE_FORMAT_B10G10R10A2_SINT] 		= { MALI_RGB10_A2I, _VTR },
-        [PIPE_FORMAT_R10G10B10A2_SSCALED] 	= { MALI_RGB10_A2I, _VTR },
-        [PIPE_FORMAT_B10G10R10A2_SSCALED] 	= { MALI_RGB10_A2I, _VTR },
+      BFMT2(A8_UNORM, R8G8B8A8, R8, 0),
+      BFMT2(I8_UNORM, R8G8B8A8, R8, 0),
+      BFMT2(R5G6B5_UNORM, R5G6B5A0, R5G6B5, 0),
+      BFMT2(B5G6R5_UNORM, R5G6B5A0, R5G6B5, 0),
 
-        [PIPE_FORMAT_R8_SSCALED]		= { MALI_R8I, _V },
-        [PIPE_FORMAT_R8G8_SSCALED]		= { MALI_RG8I, _V },
-        [PIPE_FORMAT_R8G8B8_SSCALED]		= { MALI_RGB8I, _V },
-        [PIPE_FORMAT_B8G8R8_SSCALED]		= { MALI_RGB8I, _V },
-        [PIPE_FORMAT_R8G8B8A8_SSCALED]		= { MALI_RGBA8I, _V },
-        [PIPE_FORMAT_B8G8R8A8_SSCALED]		= { MALI_RGBA8I, _V },
-        [PIPE_FORMAT_A8B8G8R8_SSCALED]		= { MALI_RGBA8I, _V },
+      BFMT(R4G4B4A4_UNORM, R4G4B4A4),
+      BFMT(B4G4R4A4_UNORM, R4G4B4A4),
+      BFMT(A4R4G4B4_UNORM, R4G4B4A4),
+      BFMT(A4B4G4R4_UNORM, R4G4B4A4),
 
-        [PIPE_FORMAT_R8_USCALED]		= { MALI_R8UI, _V },
-        [PIPE_FORMAT_R8G8_USCALED]		= { MALI_RG8UI, _V },
-        [PIPE_FORMAT_R8G8B8_USCALED]		= { MALI_RGB8UI, _V },
-        [PIPE_FORMAT_B8G8R8_USCALED]		= { MALI_RGB8UI, _V },
-        [PIPE_FORMAT_R8G8B8A8_USCALED]		= { MALI_RGBA8UI, _V },
-        [PIPE_FORMAT_B8G8R8A8_USCALED]		= { MALI_RGBA8UI, _V },
-        [PIPE_FORMAT_A8B8G8R8_USCALED]		= { MALI_RGBA8UI, _V },
+      BFMT(R10G10B10A2_UNORM, R10G10B10A2),
+      BFMT(B10G10R10A2_UNORM, R10G10B10A2),
+      BFMT(R10G10B10X2_UNORM, R10G10B10A2),
+      BFMT(B10G10R10X2_UNORM, R10G10B10A2),
 
-        [PIPE_FORMAT_R16_USCALED]		= { MALI_R16UI, _V },
-        [PIPE_FORMAT_R16G16_USCALED]		= { MALI_RG16UI, _V },
-        [PIPE_FORMAT_R16G16B16_USCALED]		= { MALI_RGB16UI, _V },
-        [PIPE_FORMAT_R16G16B16A16_USCALED]	= { MALI_RGBA16UI, _V },
-        [PIPE_FORMAT_R16_SSCALED]		= { MALI_R16I, _V },
-        [PIPE_FORMAT_R16G16_SSCALED]		= { MALI_RG16I, _V },
-        [PIPE_FORMAT_R16G16B16_SSCALED]		= { MALI_RGB16I, _V },
-        [PIPE_FORMAT_R16G16B16A16_SSCALED]	= { MALI_RGBA16I, _V },
-
-        [PIPE_FORMAT_R32_USCALED]		= { MALI_R32UI, _V },
-        [PIPE_FORMAT_R32G32_USCALED]		= { MALI_RG32UI, _V },
-        [PIPE_FORMAT_R32G32B32_USCALED]		= { MALI_RGB32UI, _V },
-        [PIPE_FORMAT_R32G32B32A32_USCALED]	= { MALI_RGBA32UI, _V },
-        [PIPE_FORMAT_R32_SSCALED]		= { MALI_R32I, _V },
-        [PIPE_FORMAT_R32G32_SSCALED]		= { MALI_RG32I, _V },
-        [PIPE_FORMAT_R32G32B32_SSCALED]		= { MALI_RGB32I, _V },
-        [PIPE_FORMAT_R32G32B32A32_SSCALED]	= { MALI_RGBA32I, _V },
-
-        [PIPE_FORMAT_R3G3B2_UNORM] 		= { MALI_RGB332_UNORM, _VT },
-
-        [PIPE_FORMAT_Z24_UNORM_S8_UINT]		= { MALI_Z24X8_UNORM, _TZ },
-        [PIPE_FORMAT_Z24X8_UNORM]		= { MALI_Z24X8_UNORM, _TZ },
-        [PIPE_FORMAT_Z32_FLOAT]		        = { MALI_R32F, _TZ },
-        [PIPE_FORMAT_Z32_FLOAT_S8X24_UINT]	= { MALI_R32F, _TZ },
-        [PIPE_FORMAT_X32_S8X24_UINT]	        = { MALI_R8UI, _T },
-        [PIPE_FORMAT_X24S8_UINT]		= { MALI_RGBA8UI, _TZ },
-        [PIPE_FORMAT_S8_UINT]   		= { MALI_R8UI, _T },
-
-        [PIPE_FORMAT_R32_FIXED] 		= { MALI_R32_FIXED, _V },
-        [PIPE_FORMAT_R32G32_FIXED] 		= { MALI_RG32_FIXED, _V },
-        [PIPE_FORMAT_R32G32B32_FIXED] 		= { MALI_RGB32_FIXED, _V },
-        [PIPE_FORMAT_R32G32B32A32_FIXED] 	= { MALI_RGBA32_FIXED, _V },
-
-        [PIPE_FORMAT_R11G11B10_FLOAT] 		= { MALI_R11F_G11F_B10F, _VTR},
-        [PIPE_FORMAT_R9G9B9E5_FLOAT] 		= { MALI_R9F_G9F_B9F_E5F, _VT },
-
-        [PIPE_FORMAT_R8_SNORM] 			= { MALI_R8_SNORM, _VT },
-        [PIPE_FORMAT_R16_SNORM] 		= { MALI_R16_SNORM, _VT },
-        [PIPE_FORMAT_R32_SNORM] 		= { MALI_R32_SNORM, _VT },
-        [PIPE_FORMAT_R8G8_SNORM] 		= { MALI_RG8_SNORM, _VT },
-        [PIPE_FORMAT_R16G16_SNORM] 		= { MALI_RG16_SNORM, _VT },
-        [PIPE_FORMAT_R32G32_SNORM] 		= { MALI_RG32_SNORM, _VT },
-        [PIPE_FORMAT_R8G8B8_SNORM] 		= { MALI_RGB8_SNORM, _VT },
-        [PIPE_FORMAT_R16G16B16_SNORM] 		= { MALI_RGB16_SNORM, _VT },
-        [PIPE_FORMAT_R32G32B32_SNORM] 		= { MALI_RGB32_SNORM, _VT },
-        [PIPE_FORMAT_R8G8B8A8_SNORM] 		= { MALI_RGBA8_SNORM, _VT },
-        [PIPE_FORMAT_R16G16B16A16_SNORM] 	= { MALI_RGBA16_SNORM, _VT },
-        [PIPE_FORMAT_R32G32B32A32_SNORM] 	= { MALI_RGBA32_SNORM, _VT },
-
-        [PIPE_FORMAT_A8_SINT] 			= { MALI_R8I, _VTR },
-        [PIPE_FORMAT_I8_SINT] 			= { MALI_R8I, _VTR },
-        [PIPE_FORMAT_L8_SINT] 			= { MALI_R8I, _VTR },
-        [PIPE_FORMAT_L8A8_SINT] 	        = { MALI_RG8I, _VTR },
-        [PIPE_FORMAT_A8_UINT] 			= { MALI_R8UI, _VTR },
-        [PIPE_FORMAT_I8_UINT] 			= { MALI_R8UI, _VTR },
-        [PIPE_FORMAT_L8_UINT] 			= { MALI_R8UI, _VTR },
-        [PIPE_FORMAT_L8A8_UINT] 	        = { MALI_RG8UI, _VTR },
-
-        [PIPE_FORMAT_A16_SINT] 			= { MALI_R16I, _VTR },
-        [PIPE_FORMAT_I16_SINT] 			= { MALI_R16I, _VTR },
-        [PIPE_FORMAT_L16_SINT] 			= { MALI_R16I, _VTR },
-        [PIPE_FORMAT_L16A16_SINT] 	        = { MALI_RG16I, _VTR },
-        [PIPE_FORMAT_A16_UINT] 			= { MALI_R16UI, _VTR },
-        [PIPE_FORMAT_I16_UINT] 			= { MALI_R16UI, _VTR },
-        [PIPE_FORMAT_L16_UINT] 			= { MALI_R16UI, _VTR },
-        [PIPE_FORMAT_L16A16_UINT] 	        = { MALI_RG16UI, _VTR },
-
-        [PIPE_FORMAT_A32_SINT] 			= { MALI_R32I, _VTR },
-        [PIPE_FORMAT_I32_SINT] 			= { MALI_R32I, _VTR },
-        [PIPE_FORMAT_L32_SINT] 			= { MALI_R32I, _VTR },
-        [PIPE_FORMAT_L32A32_SINT] 	        = { MALI_RG32I, _VTR },
-        [PIPE_FORMAT_A32_UINT] 			= { MALI_R32UI, _VTR },
-        [PIPE_FORMAT_I32_UINT] 			= { MALI_R32UI, _VTR },
-        [PIPE_FORMAT_L32_UINT] 			= { MALI_R32UI, _VTR },
-        [PIPE_FORMAT_L32A32_UINT] 	        = { MALI_RG32UI, _VTR },
-
-        [PIPE_FORMAT_B8G8R8_UINT] 		= { MALI_RGB8UI, _VTR },
-        [PIPE_FORMAT_B8G8R8A8_UINT] 		= { MALI_RGBA8UI, _VTR },
-        [PIPE_FORMAT_B8G8R8_SINT] 		= { MALI_RGB8I, _VTR },
-        [PIPE_FORMAT_B8G8R8A8_SINT] 		= { MALI_RGBA8I, _VTR },
-        [PIPE_FORMAT_A8R8G8B8_UINT] 		= { MALI_RGBA8UI, _VTR },
-        [PIPE_FORMAT_A8B8G8R8_UINT] 		= { MALI_RGBA8UI, _VTR },
-
-        [PIPE_FORMAT_R8_UINT] 			= { MALI_R8UI, _VTR },
-        [PIPE_FORMAT_R16_UINT] 			= { MALI_R16UI, _VTR },
-        [PIPE_FORMAT_R32_UINT] 			= { MALI_R32UI, _VTR },
-        [PIPE_FORMAT_R8G8_UINT] 		= { MALI_RG8UI, _VTR },
-        [PIPE_FORMAT_R16G16_UINT] 		= { MALI_RG16UI, _VTR },
-        [PIPE_FORMAT_R32G32_UINT] 		= { MALI_RG32UI, _VTR },
-        [PIPE_FORMAT_R8G8B8_UINT] 		= { MALI_RGB8UI, _VTR },
-        [PIPE_FORMAT_R16G16B16_UINT] 		= { MALI_RGB16UI, _VTR },
-        [PIPE_FORMAT_R32G32B32_UINT] 		= { MALI_RGB32UI, _VTR },
-        [PIPE_FORMAT_R8G8B8A8_UINT] 		= { MALI_RGBA8UI, _VTR },
-        [PIPE_FORMAT_R16G16B16A16_UINT] 	= { MALI_RGBA16UI, _VTR },
-        [PIPE_FORMAT_R32G32B32A32_UINT] 	= { MALI_RGBA32UI, _VTR },
-
-        [PIPE_FORMAT_R32_FLOAT] 		= { MALI_R32F, _VTR },
-        [PIPE_FORMAT_R32G32_FLOAT] 		= { MALI_RG32F, _VTR },
-        [PIPE_FORMAT_R32G32B32_FLOAT] 		= { MALI_RGB32F, _VTR },
-        [PIPE_FORMAT_R32G32B32A32_FLOAT] 	= { MALI_RGBA32F, _VTR },
-
-        [PIPE_FORMAT_R8_UNORM] 			= { MALI_R8_UNORM, _VTR },
-        [PIPE_FORMAT_R16_UNORM] 		= { MALI_R16_UNORM, _VTR },
-        [PIPE_FORMAT_R32_UNORM] 		= { MALI_R32_UNORM, _VTR },
-        [PIPE_FORMAT_R8G8_UNORM] 		= { MALI_RG8_UNORM, _VTR },
-        [PIPE_FORMAT_R16G16_UNORM] 		= { MALI_RG16_UNORM, _VTR },
-        [PIPE_FORMAT_R32G32_UNORM] 		= { MALI_RG32_UNORM, _VTR },
-        [PIPE_FORMAT_R8G8B8_UNORM] 		= { MALI_RGB8_UNORM, _VTR },
-        [PIPE_FORMAT_R16G16B16_UNORM] 		= { MALI_RGB16_UNORM, _VTR },
-        [PIPE_FORMAT_R32G32B32_UNORM] 		= { MALI_RGB32_UNORM, _VTR },
-        [PIPE_FORMAT_R4G4B4A4_UNORM] 		= { MALI_RGBA4_UNORM, _VTR },
-        [PIPE_FORMAT_R16G16B16A16_UNORM] 	= { MALI_RGBA16_UNORM, _VTR },
-        [PIPE_FORMAT_R32G32B32A32_UNORM] 	= { MALI_RGBA32_UNORM, _VTR },
-
-        [PIPE_FORMAT_B8G8R8A8_UNORM] 		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_B8G8R8X8_UNORM] 		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_A8R8G8B8_UNORM] 		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_X8R8G8B8_UNORM] 		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_A8B8G8R8_UNORM] 		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_X8B8G8R8_UNORM] 		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_R8G8B8X8_UNORM] 		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_R8G8B8A8_UNORM] 		= { MALI_RGBA8_UNORM, _VTR },
-
-        [PIPE_FORMAT_R8G8B8X8_SNORM] 		= { MALI_RGBA8_SNORM, _VT },
-        [PIPE_FORMAT_R8G8B8X8_SRGB] 		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_R8G8B8X8_UINT] 		= { MALI_RGBA8UI, _VTR },
-        [PIPE_FORMAT_R8G8B8X8_SINT] 		= { MALI_RGBA8I, _VTR },
-
-        [PIPE_FORMAT_L8_UNORM]		        = { MALI_R8_UNORM, _VTR },
-        [PIPE_FORMAT_A8_UNORM]		        = { MALI_R8_UNORM, _VTR },
-        [PIPE_FORMAT_I8_UNORM]		        = { MALI_R8_UNORM, _VTR },
-        [PIPE_FORMAT_L8A8_UNORM]	       	= { MALI_RG8_UNORM, _VTR },
-        [PIPE_FORMAT_L16_UNORM]		        = { MALI_R16_UNORM, _VTR },
-        [PIPE_FORMAT_A16_UNORM]		        = { MALI_R16_UNORM, _VTR },
-        [PIPE_FORMAT_I16_UNORM]		        = { MALI_R16_UNORM, _VTR },
-        [PIPE_FORMAT_L16A16_UNORM]	       	= { MALI_RG16_UNORM, _VTR },
-
-        [PIPE_FORMAT_L8_SNORM]		        = { MALI_R8_SNORM, _VT },
-        [PIPE_FORMAT_A8_SNORM]		        = { MALI_R8_SNORM, _VT },
-        [PIPE_FORMAT_I8_SNORM]		        = { MALI_R8_SNORM, _VT },
-        [PIPE_FORMAT_L8A8_SNORM]	       	= { MALI_RG8_SNORM, _VT },
-        [PIPE_FORMAT_L16_SNORM]		        = { MALI_R16_SNORM, _VT },
-        [PIPE_FORMAT_A16_SNORM]		        = { MALI_R16_SNORM, _VT },
-        [PIPE_FORMAT_I16_SNORM]		        = { MALI_R16_SNORM, _VT },
-        [PIPE_FORMAT_L16A16_SNORM]	       	= { MALI_RG16_SNORM, _VT },
-
-        [PIPE_FORMAT_L16_FLOAT]		        = { MALI_R16F, _VTR },
-        [PIPE_FORMAT_A16_FLOAT]		        = { MALI_R16F, _VTR },
-        [PIPE_FORMAT_I16_FLOAT]		        = { MALI_RG16F, _VTR },
-        [PIPE_FORMAT_L16A16_FLOAT]	       	= { MALI_RG16F, _VTR },
-
-        [PIPE_FORMAT_L8_SRGB]		        = { MALI_R8_UNORM, _VTR },
-        [PIPE_FORMAT_R8_SRGB]		        = { MALI_R8_UNORM, _VTR },
-        [PIPE_FORMAT_L8A8_SRGB]		        = { MALI_RG8_UNORM, _VTR },
-        [PIPE_FORMAT_R8G8_SRGB]		        = { MALI_RG8_UNORM, _VTR },
-        [PIPE_FORMAT_R8G8B8_SRGB]		= { MALI_RGB8_UNORM, _VTR },
-        [PIPE_FORMAT_B8G8R8_SRGB]		= { MALI_RGB8_UNORM, _VTR },
-        [PIPE_FORMAT_R8G8B8A8_SRGB]		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_A8B8G8R8_SRGB]		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_X8B8G8R8_SRGB]		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_B8G8R8A8_SRGB]		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_B8G8R8X8_SRGB]		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_A8R8G8B8_SRGB]		= { MALI_RGBA8_UNORM, _VTR },
-        [PIPE_FORMAT_X8R8G8B8_SRGB]		= { MALI_RGBA8_UNORM, _VTR },
-
-        [PIPE_FORMAT_R8_SINT] 			= { MALI_R8I, _VTR },
-        [PIPE_FORMAT_R16_SINT] 			= { MALI_R16I, _VTR },
-        [PIPE_FORMAT_R32_SINT] 			= { MALI_R32I, _VTR },
-        [PIPE_FORMAT_R16_FLOAT] 		= { MALI_R16F, _VTR },
-        [PIPE_FORMAT_R8G8_SINT] 		= { MALI_RG8I, _VTR },
-        [PIPE_FORMAT_R16G16_SINT] 		= { MALI_RG16I, _VTR },
-        [PIPE_FORMAT_R32G32_SINT] 		= { MALI_RG32I, _VTR },
-        [PIPE_FORMAT_R16G16_FLOAT] 		= { MALI_RG16F, _VTR },
-        [PIPE_FORMAT_R8G8B8_SINT] 		= { MALI_RGB8I, _VTR },
-        [PIPE_FORMAT_R16G16B16_SINT] 		= { MALI_RGB16I, _VTR },
-        [PIPE_FORMAT_R32G32B32_SINT] 		= { MALI_RGB32I, _VTR },
-        [PIPE_FORMAT_R16G16B16_FLOAT] 		= { MALI_RGB16F, _VTR },
-        [PIPE_FORMAT_R8G8B8A8_SINT] 		= { MALI_RGBA8I, _VTR },
-        [PIPE_FORMAT_R16G16B16A16_SINT] 	= { MALI_RGBA16I, _VTR },
-        [PIPE_FORMAT_R32G32B32A32_SINT] 	= { MALI_RGBA32I, _VTR },
-        [PIPE_FORMAT_R16G16B16A16_FLOAT] 	= { MALI_RGBA16F, _VTR },
-
-        [PIPE_FORMAT_R16G16B16X16_UNORM] 	= { MALI_RGBA16_UNORM, _VTR },
-        [PIPE_FORMAT_R16G16B16X16_SNORM] 	= { MALI_RGBA16_SNORM, _VT },
-        [PIPE_FORMAT_R16G16B16X16_FLOAT] 	= { MALI_RGBA16F, _VTR },
-        [PIPE_FORMAT_R16G16B16X16_UINT] 	= { MALI_RGBA16UI, _VTR },
-        [PIPE_FORMAT_R16G16B16X16_SINT] 	= { MALI_RGBA16I, _VTR },
-
-        [PIPE_FORMAT_R32G32B32X32_FLOAT] 	= { MALI_RGBA32F, _VTR },
-        [PIPE_FORMAT_R32G32B32X32_UINT] 	= { MALI_RGBA32UI, _VTR },
-        [PIPE_FORMAT_R32G32B32X32_SINT] 	= { MALI_RGBA32I, _VTR },
+      BFMT(B5G5R5A1_UNORM, R5G5B5A1),
+      BFMT(R5G5B5A1_UNORM, R5G5B5A1),
+      BFMT(B5G5R5X1_UNORM, R5G5B5A1),
 };
 
-#undef _VTR
-#undef _VT
-#undef _V
-#undef _T
-#undef _R
+/* Convenience */
 
-/* Is a format encoded like Z24S8 and therefore compatible for render? */
+#define _V PAN_BIND_VERTEX_BUFFER
+#define _T PAN_BIND_SAMPLER_VIEW
+#define _R PAN_BIND_RENDER_TARGET
+#define _Z PAN_BIND_DEPTH_STENCIL
 
-bool
-panfrost_is_z24s8_variant(enum pipe_format fmt)
+#define FLAGS_V___ (_V)
+#define FLAGS__T__ (_T)
+#define FLAGS_VTR_ (_V | _T | _R)
+#define FLAGS_VT__ (_V | _T)
+#define FLAGS__T_Z (_T | _Z)
+
+#define FMT(pipe, mali, swizzle, srgb, flags)                                  \
+   [PIPE_FORMAT_##pipe] = {                                                    \
+      .hw = MALI_PACK_FMT(mali, swizzle, srgb),                                \
+      .bind = FLAGS_##flags,                                                   \
+   }
+
+#if PAN_ARCH >= 7
+#define YUV_NO_SWAP (0)
+#define YUV_SWAP    (1)
+
+#if PAN_ARCH < 14
+#define MALI_YUV_CR_SITING_CENTER_422 (MALI_YUV_CR_SITING_CENTER_Y)
+#else
+#define MALI_YUV_CR_SITING_CENTER_422 (MALI_YUV_CR_SITING_CENTER_X)
+#endif
+
+#define FMT_YUV(pipe, mali, swizzle, swap, siting, flags)                      \
+   [PIPE_FORMAT_##pipe] = {                                                    \
+      .hw = (MALI_YUV_SWIZZLE_##swizzle) | ((YUV_##swap) << 3) |               \
+            ((MALI_YUV_CR_SITING_##siting) << 9) | ((MALI_##mali) << 12),      \
+      .bind = FLAGS_##flags,                                                   \
+   }
+#endif
+
+#if PAN_ARCH <= 7
+#define FMTC(pipe, texfeat, interchange, swizzle, srgb)                        \
+   [PIPE_FORMAT_##pipe] = {                                                    \
+      .hw = MALI_PACK_FMT(texfeat, swizzle, srgb),                             \
+      .bind = PAN_BIND_SAMPLER_VIEW,                                           \
+      .texfeat_bit = MALI_##texfeat,                                           \
+   }
+#else
+   /* Map to interchange format, as compression is specified in the plane
+    * descriptor on Valhall.
+    */
+#define FMTC(pipe, texfeat, interchange, swizzle, srgb)                        \
+   [PIPE_FORMAT_##pipe] = {                                                    \
+      .hw = MALI_PACK_FMT(interchange, swizzle, srgb),                         \
+      .bind = PAN_BIND_SAMPLER_VIEW,                                           \
+      .texfeat_bit = MALI_##texfeat,                                           \
+   }
+#endif
+
+/* clang-format off */
+const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
+   FMT(NONE,                    CONSTANT,        0000, L, VTR_),
+
+#if PAN_ARCH >= 7
+   /* Multiplane formats */
+   FMT_YUV(R8G8_R8B8_UNORM, YUYV8, UVYA, NO_SWAP, CENTER_422, _T__),
+   FMT_YUV(G8R8_B8R8_UNORM, VYUY8, UYVA, SWAP,    CENTER_422, _T__),
+   FMT_YUV(R8B8_R8G8_UNORM, YUYV8, VYUA, NO_SWAP, CENTER_422, _T__),
+   FMT_YUV(B8R8_G8R8_UNORM, VYUY8, VUYA, SWAP,    CENTER_422, _T__),
+   FMT_YUV(R8_G8B8_420_UNORM, Y8_UV8_420, YUVA, NO_SWAP, CENTER, _T__),
+   FMT_YUV(R8_B8G8_420_UNORM, Y8_UV8_420, YVUA, NO_SWAP, CENTER, _T__),
+   FMT_YUV(R8_G8_B8_420_UNORM, Y8_U8_V8_420, YUVA, NO_SWAP, CENTER, _T__),
+   FMT_YUV(R8_B8_G8_420_UNORM, Y8_U8_V8_420, YVUA, NO_SWAP, CENTER, _T__),
+
+   FMT_YUV(R8_G8B8_422_UNORM, Y8_UV8_422, YUVA, NO_SWAP, CENTER_422, _T__),
+   FMT_YUV(R8_B8G8_422_UNORM, Y8_UV8_422, YVUA, NO_SWAP, CENTER_422, _T__),
+
+   FMT_YUV(R10_G10B10_420_UNORM, Y10_UV10_420, YUVA, NO_SWAP, CENTER, _T__),
+   FMT_YUV(R10_G10B10_422_UNORM, Y10_UV10_422, YUVA, NO_SWAP, CENTER_422, _T__),
+#endif
+
+   FMTC(ETC1_RGB8,               ETC2_RGB8,       RGBA8_UNORM, RGB1, L),
+   FMTC(ETC2_RGB8,               ETC2_RGB8,       RGBA8_UNORM, RGB1, L),
+   FMTC(ETC2_SRGB8,              ETC2_RGB8,       RGBA8_UNORM, RGB1, S),
+   FMTC(ETC2_R11_UNORM,          ETC2_R11_UNORM,  R16_UNORM,   R001, L),
+   FMTC(ETC2_RGBA8,              ETC2_RGBA8,      RGBA8_UNORM, RGBA, L),
+   FMTC(ETC2_SRGBA8,             ETC2_RGBA8,      RGBA8_UNORM, RGBA, S),
+   FMTC(ETC2_RG11_UNORM,         ETC2_RG11_UNORM, RG16_UNORM,  RG01, L),
+   FMTC(ETC2_R11_SNORM,          ETC2_R11_SNORM,  R16_SNORM,   R001, L),
+   FMTC(ETC2_RG11_SNORM,         ETC2_RG11_SNORM, RG16_SNORM,  RG01, L),
+   FMTC(ETC2_RGB8A1,             ETC2_RGB8A1,     RGBA8_UNORM, RGBA, L),
+   FMTC(ETC2_SRGB8A1,            ETC2_RGB8A1,     RGBA8_UNORM, RGBA, S),
+   FMTC(DXT1_RGB,                BC1_UNORM,       RGBA8_UNORM, RGB1, L),
+   FMTC(DXT1_RGBA,               BC1_UNORM,       RGBA8_UNORM, RGBA, L),
+   FMTC(DXT1_SRGB,               BC1_UNORM,       RGBA8_UNORM, RGB1, S),
+   FMTC(DXT1_SRGBA,              BC1_UNORM,       RGBA8_UNORM, RGBA, S),
+   FMTC(DXT3_RGBA,               BC2_UNORM,       RGBA8_UNORM, RGBA, L),
+   FMTC(DXT3_SRGBA,              BC2_UNORM,       RGBA8_UNORM, RGBA, S),
+   FMTC(DXT5_RGBA,               BC3_UNORM,       RGBA8_UNORM, RGBA, L),
+   FMTC(DXT5_SRGBA,              BC3_UNORM,       RGBA8_UNORM, RGBA, S),
+   FMTC(RGTC1_UNORM,             BC4_UNORM,       R16_UNORM,   R001, L),
+   FMTC(RGTC1_SNORM,             BC4_SNORM,       R16_SNORM,   R001, L),
+   FMTC(RGTC2_UNORM,             BC5_UNORM,       RG16_UNORM,  RG01, L),
+   FMTC(RGTC2_SNORM,             BC5_SNORM,       RG16_SNORM,  RG01, L),
+   FMTC(BPTC_RGB_FLOAT,          BC6H_SF16,       RGBA16F,     RGB1, L),
+   FMTC(BPTC_RGB_UFLOAT,         BC6H_UF16,       RGBA16F,     RGB1, L),
+   FMTC(BPTC_RGBA_UNORM,         BC7_UNORM,       RGBA8_UNORM, RGBA, L),
+   FMTC(BPTC_SRGBA,              BC7_UNORM,       RGBA8_UNORM, RGBA, S),
+
+   /* If ASTC decode mode is set to RGBA8, the hardware format
+    * will be overriden to RGBA8_UNORM later on.
+    */
+   FMTC(ASTC_4x4,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x4,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x6,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x8,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x5,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x6,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x8,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x10,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x10,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x12,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_3x3x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x3x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x4x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x4x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x4x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x5x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6x6,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+
+   /* By definition, sRGB formats are narrow */
+   FMTC(ASTC_4x4_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_5x4_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_5x5_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_6x5_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_6x6_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_8x5_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_8x6_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_8x8_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_10x5_SRGB,          ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_10x6_SRGB,          ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_10x8_SRGB,          ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_10x10_SRGB,         ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_12x10_SRGB,         ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_12x12_SRGB,         ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_3x3x3_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_4x3x3_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_4x4x3_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_4x4x4_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_5x4x4_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_5x5x4_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_5x5x5_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_6x5x5_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_6x6x5_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+   FMTC(ASTC_6x6x6_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+
+   FMT(R5G6B5_UNORM,            RGB565,          RGB1, L, VTR_),
+   FMT(B5G6R5_UNORM,            RGB565,          BGR1, L, VTR_),
+   FMT(R5G5B5X1_UNORM,          RGB5_A1_UNORM,   RGB1, L, VT__),
+   FMT(B5G5R5X1_UNORM,          RGB5_A1_UNORM,   BGR1, L, VT__),
+   FMT(R5G5B5A1_UNORM,          RGB5_A1_UNORM,   RGBA, L, VTR_),
+   FMT(B5G5R5A1_UNORM,          RGB5_A1_UNORM,   BGRA, L, VTR_),
+   FMT(R10G10B10X2_UNORM,       RGB10_A2_UNORM,  RGB1, L, VTR_),
+   FMT(B10G10R10X2_UNORM,       RGB10_A2_UNORM,  BGR1, L, VTR_),
+   FMT(R10G10B10A2_UNORM,       RGB10_A2_UNORM,  RGBA, L, VTR_),
+   FMT(B10G10R10A2_UNORM,       RGB10_A2_UNORM,  BGRA, L, VTR_),
+#if PAN_ARCH <= 5
+   FMT(R10G10B10X2_SNORM,       RGB10_A2_SNORM,  RGB1, L, VT__),
+   FMT(R10G10B10A2_SNORM,       RGB10_A2_SNORM,  RGBA, L, VT__),
+   FMT(B10G10R10A2_SNORM,       RGB10_A2_SNORM,  BGRA, L, VT__),
+   FMT(R3G3B2_UNORM,            RGB332_UNORM,    RGB1, L, _T__),
+#else
+   FMT(R10G10B10X2_SNORM,       RGB10_A2_SNORM,  RGB1, L, V___),
+   FMT(R10G10B10A2_SNORM,       RGB10_A2_SNORM,  RGBA, L, V___),
+   FMT(B10G10R10A2_SNORM,       RGB10_A2_SNORM,  BGRA, L, V___),
+#endif
+   FMT(R10G10B10A2_UINT,        RGB10_A2UI,      RGBA, L, VTR_),
+   FMT(B10G10R10A2_UINT,        RGB10_A2UI,      BGRA, L, VTR_),
+   FMT(R10G10B10A2_USCALED,     RGB10_A2UI,      RGBA, L, V___),
+   FMT(B10G10R10A2_USCALED,     RGB10_A2UI,      BGRA, L, V___),
+   FMT(R10G10B10A2_SINT,        RGB10_A2I,       RGBA, L, VTR_),
+   FMT(B10G10R10A2_SINT,        RGB10_A2I,       BGRA, L, VTR_),
+   FMT(R10G10B10A2_SSCALED,     RGB10_A2I,       RGBA, L, V___),
+   FMT(B10G10R10A2_SSCALED,     RGB10_A2I,       BGRA, L, V___),
+   FMT(R8_SSCALED,              R8I,             R001, L, V___),
+   FMT(R8G8_SSCALED,            RG8I,            RG01, L, V___),
+   FMT(R8G8B8_SSCALED,          RGB8I,           RGB1, L, V___),
+   FMT(B8G8R8_SSCALED,          RGB8I,           BGR1, L, V___),
+   FMT(R8G8B8A8_SSCALED,        RGBA8I,          RGBA, L, V___),
+   FMT(B8G8R8A8_SSCALED,        RGBA8I,          BGRA, L, V___),
+   FMT(A8B8G8R8_SSCALED,        RGBA8I,          ABGR, L, V___),
+   FMT(R8_USCALED,              R8UI,            R001, L, V___),
+   FMT(R8G8_USCALED,            RG8UI,           RG01, L, V___),
+   FMT(R8G8B8_USCALED,          RGB8UI,          RGB1, L, V___),
+   FMT(B8G8R8_USCALED,          RGB8UI,          BGR1, L, V___),
+   FMT(R8G8B8A8_USCALED,        RGBA8UI,         RGBA, L, V___),
+   FMT(B8G8R8A8_USCALED,        RGBA8UI,         BGRA, L, V___),
+   FMT(A8B8G8R8_USCALED,        RGBA8UI,         ABGR, L, V___),
+   FMT(R16_USCALED,             R16UI,           R001, L, V___),
+   FMT(R16G16_USCALED,          RG16UI,          RG01, L, V___),
+   FMT(R16G16B16A16_USCALED,    RGBA16UI,        RGBA, L, V___),
+   FMT(R16_SSCALED,             R16I,            R001, L, V___),
+   FMT(R16G16_SSCALED,          RG16I,           RG01, L, V___),
+   FMT(R16G16B16A16_SSCALED,    RGBA16I,         RGBA, L, V___),
+   FMT(R32_USCALED,             R32UI,           R001, L, V___),
+   FMT(R32G32_USCALED,          RG32UI,          RG01, L, V___),
+   FMT(R32G32B32_USCALED,       RGB32UI,         RGB1, L, V___),
+   FMT(R32G32B32A32_USCALED,    RGBA32UI,        RGBA, L, V___),
+   FMT(R32_SSCALED,             R32I,            R001, L, V___),
+   FMT(R32G32_SSCALED,          RG32I,           RG01, L, V___),
+   FMT(R32G32B32_SSCALED,       RGB32I,          RGB1, L, V___),
+   FMT(R32G32B32A32_SSCALED,    RGBA32I,         RGBA, L, V___),
+   FMT(R32_FIXED,               R32_FIXED,       R001, L, V___),
+   FMT(R32G32_FIXED,            RG32_FIXED,      RG01, L, V___),
+   FMT(R32G32B32_FIXED,         RGB32_FIXED,     RGB1, L, V___),
+   FMT(R32G32B32A32_FIXED,      RGBA32_FIXED,    RGBA, L, V___),
+   FMT(R11G11B10_FLOAT,         R11F_G11F_B10F,  RGB1, L, VTR_),
+#if PAN_ARCH < 7
+   FMT(R9G9B9E5_FLOAT,          R9F_G9F_B9F_E5F, RGB1, L, _T__),
+#else
+   FMT(R9G9B9E5_FLOAT,          R9F_G9F_B9F_E5F, RGB1, L, VTR_),
+#endif
+#if PAN_ARCH >= 6
+   /* SNORM is renderable on Bifrost (with blend shaders) */
+   FMT(R8_SNORM,                R8_SNORM,        R001, L, VTR_),
+   FMT(R16_SNORM,               R16_SNORM,       R001, L, VTR_),
+   FMT(R8G8_SNORM,              RG8_SNORM,       RG01, L, VTR_),
+   FMT(R16G16_SNORM,            RG16_SNORM,      RG01, L, VTR_),
+   FMT(R8G8B8_SNORM,            RGB8_SNORM,      RGB1, L, VTR_),
+   FMT(R8G8B8A8_SNORM,          RGBA8_SNORM,     RGBA, L, VTR_),
+   FMT(B8G8R8A8_SNORM,          RGBA8_SNORM,     BGRA, L, VTR_),
+   FMT(R16G16B16A16_SNORM,      RGBA16_SNORM,    RGBA, L, VTR_),
+#else
+   /* So far we haven't needed SNORM rendering on Midgard */
+   FMT(R8_SNORM,                R8_SNORM,        R001, L, VT__),
+   FMT(R16_SNORM,               R16_SNORM,       R001, L, VT__),
+   FMT(R8G8_SNORM,              RG8_SNORM,       RG01, L, VT__),
+   FMT(R16G16_SNORM,            RG16_SNORM,      RG01, L, VT__),
+   FMT(R8G8B8_SNORM,            RGB8_SNORM,      RGB1, L, VT__),
+   FMT(R8G8B8A8_SNORM,          RGBA8_SNORM,     RGBA, L, VT__),
+   FMT(B8G8R8A8_SNORM,          RGBA8_SNORM,     BGRA, L, VT__),
+   FMT(R16G16B16A16_SNORM,      RGBA16_SNORM,    RGBA, L, VT__),
+#endif
+   FMT(I8_SINT,                 R8I,             RRRR, L, VTR_),
+   FMT(L8_SINT,                 R8I,             RRR1, L, VTR_),
+   FMT(I8_UINT,                 R8UI,            RRRR, L, VTR_),
+   FMT(L8_UINT,                 R8UI,            RRR1, L, VTR_),
+   FMT(I16_SINT,                R16I,            RRRR, L, VTR_),
+   FMT(L16_SINT,                R16I,            RRR1, L, VTR_),
+   FMT(I16_UINT,                R16UI,           RRRR, L, VTR_),
+   FMT(L16_UINT,                R16UI,           RRR1, L, VTR_),
+   FMT(I32_SINT,                R32I,            RRRR, L, VTR_),
+   FMT(L32_SINT,                R32I,            RRR1, L, VTR_),
+   FMT(I32_UINT,                R32UI,           RRRR, L, VTR_),
+   FMT(L32_UINT,                R32UI,           RRR1, L, VTR_),
+   FMT(B8G8R8_UINT,             RGB8UI,          BGR1, L, V___),
+   FMT(B8G8R8_SINT,             RGB8I,           BGR1, L, V___),
+   FMT(B8G8R8A8_UINT,           RGBA8UI,         BGRA, L, VTR_),
+   FMT(B8G8R8A8_SINT,           RGBA8I,          BGRA, L, VTR_),
+   FMT(A8R8G8B8_UINT,           RGBA8UI,         GBAR, L, VTR_),
+   FMT(A8B8G8R8_UINT,           RGBA8UI,         ABGR, L, VTR_),
+   FMT(R8_UINT,                 R8UI,            R001, L, VTR_),
+   FMT(R16_UINT,                R16UI,           R001, L, VTR_),
+   FMT(R32_UINT,                R32UI,           R001, L, VTR_),
+   FMT(R8G8_UINT,               RG8UI,           RG01, L, VTR_),
+   FMT(R16G16_UINT,             RG16UI,          RG01, L, VTR_),
+   FMT(R32G32_UINT,             RG32UI,          RG01, L, VTR_),
+   FMT(R8G8B8_UINT,             RGB8UI,          RGB1, L, V___),
+   FMT(R32G32B32_UINT,          RGB32UI,         RGB1, L, VTR_),
+   FMT(R8G8B8A8_UINT,           RGBA8UI,         RGBA, L, VTR_),
+   FMT(R16G16B16A16_UINT,       RGBA16UI,        RGBA, L, VTR_),
+   FMT(R32G32B32A32_UINT,       RGBA32UI,        RGBA, L, VTR_),
+   FMT(R32_FLOAT,               R32F,            R001, L, VTR_),
+   FMT(R32G32_FLOAT,            RG32F,           RG01, L, VTR_),
+   FMT(R32G32B32_FLOAT,         RGB32F,          RGB1, L, VTR_),
+   FMT(R32G32B32A32_FLOAT,      RGBA32F,         RGBA, L, VTR_),
+   FMT(R8_UNORM,                R8_UNORM,        R001, L, VTR_),
+   FMT(R16_UNORM,               R16_UNORM,       R001, L, VTR_),
+   FMT(R8G8_UNORM,              RG8_UNORM,       RG01, L, VTR_),
+   FMT(R16G16_UNORM,            RG16_UNORM,      RG01, L, VTR_),
+   FMT(R8G8B8_UNORM,            RGB8_UNORM,      RGB1, L, V___),
+
+   /* 32-bit NORM is not texturable in v7 onwards. It's renderable
+    * everywhere, but rendering without texturing is not useful.
+    */
+#if PAN_ARCH <= 6
+   FMT(R32_UNORM,               R32_UNORM,       R001, L, VTR_),
+   FMT(R32G32_UNORM,            RG32_UNORM,      RG01, L, VTR_),
+   FMT(R32G32B32_UNORM,         RGB32_UNORM,     RGB1, L, VT__),
+   FMT(R32G32B32A32_UNORM,      RGBA32_UNORM,    RGBA, L, VTR_),
+   FMT(R32_SNORM,               R32_SNORM,       R001, L, VT__),
+   FMT(R32G32_SNORM,            RG32_SNORM,      RG01, L, VT__),
+   FMT(R32G32B32_SNORM,         RGB32_SNORM,     RGB1, L, VT__),
+   FMT(R32G32B32A32_SNORM,      RGBA32_SNORM,    RGBA, L, VT__),
+#else
+   FMT(R32_UNORM,               R32_UNORM,       R001, L, V___),
+   FMT(R32G32_UNORM,            RG32_UNORM,      RG01, L, V___),
+   FMT(R32G32B32_UNORM,         RGB32_UNORM,     RGB1, L, V___),
+   FMT(R32G32B32A32_UNORM,      RGBA32_UNORM,    RGBA, L, V___),
+   FMT(R32_SNORM,               R32_SNORM,       R001, L, V___),
+   FMT(R32G32_SNORM,            RG32_SNORM,      RG01, L, V___),
+   FMT(R32G32B32_SNORM,         RGB32_SNORM,     RGB1, L, V___),
+   FMT(R32G32B32A32_SNORM,      RGBA32_SNORM,    RGBA, L, V___),
+#endif
+
+   /* Don't allow render/texture for 48-bit  */
+   FMT(R16G16B16_UNORM,         RGB16_UNORM,     RGB1, L, V___),
+   FMT(R16G16B16_SINT,          RGB16I,          RGB1, L, V___),
+   FMT(R16G16B16_FLOAT,         RGB16F,          RGB1, L, V___),
+   FMT(R16G16B16_USCALED,       RGB16UI,         RGB1, L, V___),
+   FMT(R16G16B16_SSCALED,       RGB16I,          RGB1, L, V___),
+   FMT(R16G16B16_SNORM,         RGB16_SNORM,     RGB1, L, V___),
+   FMT(R16G16B16_UINT,          RGB16UI,         RGB1, L, V___),
+   FMT(R4G4B4A4_UNORM,          RGBA4_UNORM,     RGBA, L, VTR_),
+   FMT(B4G4R4A4_UNORM,          RGBA4_UNORM,     BGRA, L, VTR_),
+   FMT(A4R4G4B4_UNORM,          RGBA4_UNORM,     ARGB, L, VTR_),
+   FMT(A4B4G4R4_UNORM,          RGBA4_UNORM,     ABGR, L, VTR_),
+   FMT(R16G16B16A16_UNORM,      RGBA16_UNORM,    RGBA, L, VTR_),
+   FMT(B8G8R8A8_UNORM,          RGBA8_UNORM,     BGRA, L, VTR_),
+   FMT(B8G8R8X8_UNORM,          RGBA8_UNORM,     BGR1, L, VTR_),
+   FMT(A8R8G8B8_UNORM,          RGBA8_UNORM,     GBAR, L, VTR_),
+   FMT(X8R8G8B8_UNORM,          RGBA8_UNORM,     GBA1, L, VTR_),
+   FMT(A8B8G8R8_UNORM,          RGBA8_UNORM,     ABGR, L, VTR_),
+   FMT(X8B8G8R8_UNORM,          RGBA8_UNORM,     ABG1, L, VTR_),
+   FMT(R8G8B8X8_UNORM,          RGBA8_UNORM,     RGB1, L, VTR_),
+   FMT(R8G8B8A8_UNORM,          RGBA8_UNORM,     RGBA, L, VTR_),
+   FMT(R8G8B8X8_SNORM,          RGBA8_SNORM,     RGB1, L, VT__),
+   FMT(R8G8B8X8_SRGB,           RGBA8_UNORM,     RGB1, S, VTR_),
+   FMT(R8G8B8X8_UINT,           RGBA8UI,         RGB1, L, VTR_),
+   FMT(R8G8B8X8_SINT,           RGBA8I,          RGB1, L, VTR_),
+   FMT(L8_UNORM,                R8_UNORM,        RRR1, L, VTR_),
+   FMT(I8_UNORM,                R8_UNORM,        RRRR, L, VTR_),
+   FMT(L16_UNORM,               R16_UNORM,       RRR1, L, VT__),
+   FMT(I16_UNORM,               R16_UNORM,       RRRR, L, VT__),
+   FMT(L8_SNORM,                R8_SNORM,        RRR1, L, VT__),
+   FMT(I8_SNORM,                R8_SNORM,        RRRR, L, VT__),
+   FMT(L16_SNORM,               R16_SNORM,       RRR1, L, VT__),
+   FMT(I16_SNORM,               R16_SNORM,       RRRR, L, VT__),
+   FMT(L16_FLOAT,               R16F,            RRR1, L, VTR_),
+   FMT(I16_FLOAT,               RG16F,           RRRR, L, VTR_),
+   FMT(L8_SRGB,                 R8_UNORM,        RRR1, S, VTR_),
+   FMT(R8_SRGB,                 R8_UNORM,        R001, S, VTR_),
+   FMT(R8G8_SRGB,               RG8_UNORM,       RG01, S, VTR_),
+   FMT(R8G8B8_SRGB,             RGB8_UNORM,      RGB1, S, V___),
+   FMT(B8G8R8_SRGB,             RGB8_UNORM,      BGR1, S, V___),
+   FMT(R8G8B8A8_SRGB,           RGBA8_UNORM,     RGBA, S, VTR_),
+   FMT(A8B8G8R8_SRGB,           RGBA8_UNORM,     ABGR, S, VTR_),
+   FMT(X8B8G8R8_SRGB,           RGBA8_UNORM,     ABG1, S, VTR_),
+   FMT(B8G8R8A8_SRGB,           RGBA8_UNORM,     BGRA, S, VTR_),
+   FMT(B8G8R8X8_SRGB,           RGBA8_UNORM,     BGR1, S, VTR_),
+   FMT(A8R8G8B8_SRGB,           RGBA8_UNORM,     GBAR, S, VTR_),
+   FMT(X8R8G8B8_SRGB,           RGBA8_UNORM,     GBA1, S, VTR_),
+   FMT(R8_SINT,                 R8I,             R001, L, VTR_),
+   FMT(R16_SINT,                R16I,            R001, L, VTR_),
+   FMT(R32_SINT,                R32I,            R001, L, VTR_),
+   FMT(R16_FLOAT,               R16F,            R001, L, VTR_),
+   FMT(R8G8_SINT,               RG8I,            RG01, L, VTR_),
+   FMT(R16G16_SINT,             RG16I,           RG01, L, VTR_),
+   FMT(R32G32_SINT,             RG32I,           RG01, L, VTR_),
+   FMT(R16G16_FLOAT,            RG16F,           RG01, L, VTR_),
+   FMT(R8G8B8_SINT,             RGB8I,           RGB1, L, V___),
+   FMT(R32G32B32_SINT,          RGB32I,          RGB1, L, VTR_),
+   FMT(R8G8B8A8_SINT,           RGBA8I,          RGBA, L, VTR_),
+   FMT(R16G16B16A16_SINT,       RGBA16I,         RGBA, L, VTR_),
+   FMT(R32G32B32A32_SINT,       RGBA32I,         RGBA, L, VTR_),
+   FMT(R16G16B16A16_FLOAT,      RGBA16F,         RGBA, L, VTR_),
+   FMT(R16G16B16X16_UNORM,      RGBA16_UNORM,    RGB1, L, VTR_),
+   FMT(R16G16B16X16_SNORM,      RGBA16_SNORM,    RGB1, L, VT__),
+   FMT(R16G16B16X16_FLOAT,      RGBA16F,         RGB1, L, VTR_),
+   FMT(R16G16B16X16_UINT,       RGBA16UI,        RGB1, L, VTR_),
+   FMT(R16G16B16X16_SINT,       RGBA16I,         RGB1, L, VTR_),
+   FMT(R32G32B32X32_FLOAT,      RGBA32F,         RGB1, L, VTR_),
+   FMT(R32G32B32X32_UINT,       RGBA32UI,        RGB1, L, VTR_),
+   FMT(R32G32B32X32_SINT,       RGBA32I,         RGB1, L, VTR_),
+
+#if PAN_ARCH <= 6
+   FMT(Z16_UNORM,               R16_UNORM,       RRRR, L, _T_Z),
+   FMT(Z24_UNORM_S8_UINT,       Z24X8_UNORM,     RRRR, L, _T_Z),
+   FMT(Z24X8_UNORM,             Z24X8_UNORM,     RRRR, L, _T_Z),
+   FMT(Z32_FLOAT,               R32F,            RRRR, L, _T_Z),
+   FMT(Z32_FLOAT_S8X24_UINT,    RG32F,           RRRR, L, _T_Z),
+   FMT(X32_S8X24_UINT,          X32_S8X24,       GGGG, L, _T_Z),
+   FMT(X24S8_UINT,              RGBA8UI,         AAAA, L, _T_Z),
+   FMT(S8_UINT,                 R8UI,            RRRR, L, _T_Z),
+
+   FMT(A8_UNORM,                R8_UNORM,        000R, L, VTR_),
+   FMT(L8A8_UNORM,              RG8_UNORM,       RRRG, L, VTR_),
+   FMT(L8A8_SRGB,               RG8_UNORM,       RRRG, S, VTR_),
+
+   /* These formats were removed in v7 */
+   FMT(A8_SNORM,                R8_SNORM,        000R, L, VT__),
+   FMT(A8_SINT,                 R8I,             000R, L, VTR_),
+   FMT(A8_UINT,                 R8UI,            000R, L, VTR_),
+   FMT(A16_SINT,                R16I,            000R, L, VTR_),
+   FMT(A16_UINT,                R16UI,           000R, L, VTR_),
+   FMT(A32_SINT,                R32I,            000R, L, VTR_),
+   FMT(A32_UINT,                R32UI,           000R, L, VTR_),
+   FMT(A16_UNORM,               R16_UNORM,       000R, L, VT__),
+   FMT(A16_SNORM,               R16_SNORM,       000R, L, VT__),
+   FMT(A16_FLOAT,               R16F,            000R, L, VTR_),
+
+#else
+   FMT(Z16_UNORM,               Z16_UNORM,       RGBA, L, _T_Z),
+   FMT(Z24_UNORM_S8_UINT,       Z24X8_UNORM,     RGBA, L, _T_Z),
+   FMT(Z24X8_UNORM,             Z24X8_UNORM,     RGBA, L, _T_Z),
+   FMT(Z32_FLOAT,               R32F,            RGBA, L, _T_Z),
+
+#if PAN_ARCH >= 9
+   /* Specify interchange formats, the actual format for depth/stencil is
+    * determined by the plane descriptor on Valhall.
+    *
+    * On Valhall, S8 logically acts like "X8S8", so "S8 RGBA" is logically
+    * "0s00" and "S8 GRBA" is logically "s000". For Bifrost compatibility
+    * we want stencil in the red channel, so we use the GRBA swizzles.
+    */
+   FMT(Z32_FLOAT_S8X24_UINT,    R32F,            GRBA, L, _T_Z),
+   FMT(X32_S8X24_UINT,          S8,              GRBA, L, _T_Z),
+   FMT(X24S8_UINT,              S8,              GRBA, L, _T_Z),
+   FMT(S8_UINT,                 S8,              GRBA, L, _T_Z),
+
+   /* similarly, the interchange format is RGBA8, but we only
+      actually store 1 component in memory here */
+   FMT(A8_UNORM,                RGBA8_UNORM,     000A, L, VTR_),
+#else
+   /* Specify real formats on Bifrost */
+   FMT(Z32_FLOAT_S8X24_UINT,    Z32_X32,         RGBA, L, _T_Z),
+   FMT(X32_S8X24_UINT,          X32_S8X24,       GRBA, L, _T_Z),
+   FMT(X24S8_UINT,              X24S8,           GRBA, L, _T_Z),
+   FMT(S8_UINT,                 S8,              GRBA, L, _T_Z),
+
+   /* Obsolete formats removed in Valhall */
+   FMT(A8_UNORM,                A8_UNORM,        000A, L, VTR_),
+   FMT(L8A8_UNORM,              R8A8_UNORM,      RRRA, L, VTR_),
+   FMT(L8A8_SRGB,               R8A8_UNORM,      RRRA, S, VTR_),
+#endif
+
+#endif
+};
+/* clang-format on */
+
+#if PAN_ARCH == 7 || PAN_ARCH >= 10
+/*
+ * Decompose a component ordering swizzle into a component ordering (applied
+ * first) and a swizzle (applied second). The output ordering "pre" is allowed
+ * with compression and the swizzle "post" is a bijection.
+ *
+ * These properties allow any component ordering to be used with compression, by
+ * using the output "pre" ordering, composing the API swizzle with the "post"
+ * ordering, and applying the inverse of the "post" ordering to the border
+ * colour to undo what we compose into the API swizzle.
+ *
+ * Note that "post" is a swizzle, not a component ordering, which means it is
+ * inverted from the ordering. E.g. ARGB ordering uses a GBAR (YZWX) swizzle.
+ */
+struct pan_decomposed_swizzle
+GENX(pan_decompose_swizzle)(enum mali_rgb_component_order order)
 {
-        switch (fmt) {
-                case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-                case PIPE_FORMAT_Z24X8_UNORM:
-                        return true;
-                default:
-                        return false;
-        }
+#define CASE(case_, pre_, R_, G_, B_, A_)                                      \
+   case MALI_RGB_COMPONENT_ORDER_##case_:                                      \
+      return (struct pan_decomposed_swizzle){                                  \
+         MALI_RGB_COMPONENT_ORDER_##pre_,                                      \
+         {                                                                     \
+            PIPE_SWIZZLE_##R_,                                                 \
+            PIPE_SWIZZLE_##G_,                                                 \
+            PIPE_SWIZZLE_##B_,                                                 \
+            PIPE_SWIZZLE_##A_,                                                 \
+         },                                                                    \
+      };
+
+   switch (order) {
+      CASE(RGBA, RGBA, X, Y, Z, W);
+      CASE(GRBA, RGBA, Y, X, Z, W);
+      CASE(BGRA, RGBA, Z, Y, X, W);
+      CASE(ARGB, RGBA, Y, Z, W, X);
+      CASE(AGRB, RGBA, Z, Y, W, X);
+      CASE(ABGR, RGBA, W, Z, Y, X);
+      CASE(RGB1, RGB1, X, Y, Z, W);
+      CASE(GRB1, RGB1, Y, X, Z, W);
+      CASE(BGR1, RGB1, Z, Y, X, W);
+      CASE(1RGB, RGB1, Y, Z, W, X);
+      CASE(1GRB, RGB1, Z, Y, W, X);
+      CASE(1BGR, RGB1, W, Z, Y, X);
+      CASE(RRRR, RRRR, X, Y, Z, W);
+      CASE(RRR1, RRR1, X, Y, Z, W);
+      CASE(RRRA, RRRA, X, Y, Z, W);
+      CASE(000A, 000A, X, Y, Z, W);
+      CASE(0001, 0001, X, Y, Z, W);
+      CASE(0000, 0000, X, Y, Z, W);
+   default:
+      unreachable("Invalid case for texturing");
+   }
+
+#undef CASE
 }
-
-/* Translate a PIPE swizzle quad to a 12-bit Mali swizzle code. PIPE
- * swizzles line up with Mali swizzles for the XYZW01, but PIPE swizzles have
- * an additional "NONE" field that we have to mask out to zero. Additionally,
- * PIPE swizzles are sparse but Mali swizzles are packed */
-
-unsigned
-panfrost_translate_swizzle_4(const unsigned char swizzle[4])
-{
-        unsigned out = 0;
-
-        for (unsigned i = 0; i < 4; ++i) {
-                unsigned translated = (swizzle[i] > PIPE_SWIZZLE_1) ? PIPE_SWIZZLE_0 : swizzle[i];
-                out |= (translated << (3*i));
-        }
-
-        return out;
-}
-
-void
-panfrost_invert_swizzle(const unsigned char *in, unsigned char *out)
-{
-        /* First, default to all zeroes to prevent uninitialized junk */
-
-        for (unsigned c = 0; c < 4; ++c)
-                out[c] = PIPE_SWIZZLE_0;
-
-        /* Now "do" what the swizzle says */
-
-        for (unsigned c = 0; c < 4; ++c) {
-                unsigned char i = in[c];
-
-                /* Who cares? */
-                assert(PIPE_SWIZZLE_X == 0);
-                if (i > PIPE_SWIZZLE_W)
-                        continue;
-
-                /* Invert */
-                unsigned idx = i - PIPE_SWIZZLE_X;
-                out[idx] = PIPE_SWIZZLE_X + c;
-        }
-}
-
-enum mali_format
-panfrost_format_to_bifrost_blend(const struct util_format_description *desc)
-{
-        enum mali_format format = panfrost_pipe_format_table[desc->format].hw;
-        assert(format);
-
-        switch (format) {
-        case MALI_RGBA4_UNORM:
-                return MALI_RGBA4;
-        case MALI_RGBA8_UNORM:
-        case MALI_RGB8_UNORM:
-                return MALI_RGBA8_2;
-        case MALI_RGB10_A2_UNORM:
-                return MALI_RGB10_A2_2;
-        default:
-                return format;
-        }
-}
+#endif

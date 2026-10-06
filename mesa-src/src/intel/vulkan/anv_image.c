@@ -30,19 +30,197 @@
 #include "drm-uapi/drm_fourcc.h"
 
 #include "anv_private.h"
-#include "util/debug.h"
+#include "common/intel_aux_map.h"
+#include "util/u_debug.h"
 #include "vk_util.h"
 #include "util/u_math.h"
 
-#include "vk_format_info.h"
+#include "vk_format.h"
+#include "av1_tables.h"
 
-static isl_surf_usage_flags_t
-choose_isl_surf_usage(VkImageCreateFlags vk_create_flags,
-                      VkImageUsageFlags vk_usage,
-                      isl_surf_usage_flags_t isl_extra_usage,
-                      VkImageAspectFlagBits aspect)
+#define ANV_OFFSET_IMPLICIT UINT64_MAX
+
+static const enum isl_surf_dim
+vk_to_isl_surf_dim[] = {
+   [VK_IMAGE_TYPE_1D] = ISL_SURF_DIM_1D,
+   [VK_IMAGE_TYPE_2D] = ISL_SURF_DIM_2D,
+   [VK_IMAGE_TYPE_3D] = ISL_SURF_DIM_3D,
+};
+
+static uint64_t MUST_CHECK UNUSED
+memory_range_end(struct anv_image_memory_range memory_range)
+{
+   assert(anv_is_aligned(memory_range.offset, memory_range.alignment));
+   return memory_range.offset + memory_range.size;
+}
+
+/**
+ * Get binding for VkImagePlaneMemoryRequirementsInfo,
+ * VkBindImagePlaneMemoryInfo and VkDeviceImageMemoryRequirements.
+ */
+enum anv_image_memory_binding
+anv_image_aspect_to_binding(struct anv_image *image,
+                            VkImageAspectFlags aspect)
+{
+   uint32_t plane = 0;
+
+   assert(image->disjoint);
+
+   if (image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
+      /* Spec requires special aspects for modifier images. */
+      assert(aspect == VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT ||
+             aspect == VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT ||
+             aspect == VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT ||
+             aspect == VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT);
+
+      /* We don't advertise DISJOINT for modifiers with aux, and therefore we
+       * don't handle queries of the modifier's "aux plane" here.
+       */
+      assert(!isl_drm_modifier_has_aux(image->vk.drm_format_mod));
+
+      switch(aspect) {
+         case VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT: plane = 0; break;
+         case VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT: plane = 1; break;
+         case VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT: plane = 2; break;
+         case VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT: plane = 3; break;
+      }
+   } else {
+      plane = anv_image_aspect_to_plane(image, aspect);
+   }
+
+   return ANV_IMAGE_MEMORY_BINDING_PLANE_0 + plane;
+}
+
+/**
+ * Extend the memory binding's range by appending a new memory range with `size`
+ * and `alignment` at `offset`. Return the appended range.
+ *
+ * Offset is ignored if ANV_OFFSET_IMPLICIT.
+ *
+ * The given binding must not be ANV_IMAGE_MEMORY_BINDING_MAIN. The function
+ * converts to MAIN as needed.
+ */
+static VkResult MUST_CHECK
+image_binding_grow(const struct anv_device *device,
+                   struct anv_image *image,
+                   enum anv_image_memory_binding binding,
+                   uint64_t offset,
+                   uint64_t size,
+                   uint32_t alignment,
+                   struct anv_image_memory_range *out_range)
+{
+   /* We overwrite 'offset' but need to remember if it was implicit. */
+   const bool has_implicit_offset = (offset == ANV_OFFSET_IMPLICIT);
+
+   assert(size > 0);
+   assert(util_is_power_of_two_or_zero(alignment));
+
+   switch (binding) {
+   case ANV_IMAGE_MEMORY_BINDING_MAIN:
+      /* The caller must not pre-translate BINDING_PLANE_i to BINDING_MAIN. */
+      unreachable("ANV_IMAGE_MEMORY_BINDING_MAIN");
+   case ANV_IMAGE_MEMORY_BINDING_PLANE_0:
+   case ANV_IMAGE_MEMORY_BINDING_PLANE_1:
+   case ANV_IMAGE_MEMORY_BINDING_PLANE_2:
+      if (!image->disjoint)
+         binding = ANV_IMAGE_MEMORY_BINDING_MAIN;
+      break;
+   case ANV_IMAGE_MEMORY_BINDING_PRIVATE:
+      assert(offset == ANV_OFFSET_IMPLICIT);
+      break;
+   case ANV_IMAGE_MEMORY_BINDING_END:
+      unreachable("ANV_IMAGE_MEMORY_BINDING_END");
+   }
+
+   struct anv_image_memory_range *container =
+      &image->bindings[binding].memory_range;
+
+   if (has_implicit_offset) {
+      offset = align64(container->offset + container->size, alignment);
+   } else {
+      /* Offset must be validated because it comes from
+       * VkImageDrmFormatModifierExplicitCreateInfoEXT.
+       */
+      if (unlikely(!anv_is_aligned(offset, alignment))) {
+         return vk_errorf(device,
+                          VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT,
+                          "VkImageDrmFormatModifierExplicitCreateInfoEXT::"
+                          "pPlaneLayouts[]::offset is misaligned");
+      }
+   }
+
+   /* Surfaces can be added out of memory-order. Track the end of each memory
+    * plane to update the binding size properly.
+    */
+   uint64_t memory_range_end;
+   if (__builtin_add_overflow(offset, size, &memory_range_end)) {
+      if (has_implicit_offset) {
+         assert(!"overflow");
+         return vk_errorf(device, VK_ERROR_UNKNOWN,
+                          "internal error: overflow in %s", __func__);
+      } else {
+         return vk_errorf(device,
+                          VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT,
+                          "VkImageDrmFormatModifierExplicitCreateInfoEXT::"
+                          "pPlaneLayouts[]::offset is too large");
+      }
+   }
+
+   container->size = MAX2(container->size, memory_range_end);
+   container->alignment = MAX2(container->alignment, alignment);
+
+   *out_range = (struct anv_image_memory_range) {
+      .binding = binding,
+      .alignment = alignment,
+      .size = size,
+      .offset = offset,
+   };
+
+   return VK_SUCCESS;
+}
+
+/**
+ * Adjust range 'a' to contain range 'b'.
+ *
+ * For simplicity's sake, the offset of 'a' must be 0 and remains 0.
+ * If 'a' and 'b' target different bindings, then no merge occurs.
+ */
+static void
+memory_range_merge(struct anv_image_memory_range *a,
+                   const struct anv_image_memory_range b)
+{
+   if (b.size == 0)
+      return;
+
+   if (a->binding != b.binding)
+      return;
+
+   assert(a->offset == 0);
+   assert(anv_is_aligned(a->offset, a->alignment));
+   assert(anv_is_aligned(b.offset, b.alignment));
+
+   a->alignment = MAX2(a->alignment, b.alignment);
+   a->size = MAX2(a->size, b.offset + b.size);
+}
+
+isl_surf_usage_flags_t
+anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
+                                VkImageCreateFlags vk_create_flags,
+                                VkImageUsageFlags vk_usage,
+                                isl_surf_usage_flags_t isl_extra_usage,
+                                VkImageAspectFlagBits aspect,
+                                VkImageCompressionFlagsEXT comp_flags)
 {
    isl_surf_usage_flags_t isl_usage = isl_extra_usage;
+
+   /* On platform like MTL, we choose to allocate additional CCS memory at the
+    * back of the VkDeviceMemory objects since different images can share the
+    * AUX-TT PTE because the HW doesn't care about the image format in the
+    * PTE. That means we can always ignore the AUX-TT alignment requirement
+    * from an ISL point of view.
+    */
+   if (device->alloc_aux_tt_mem)
+      isl_usage |= ISL_SURF_USAGE_NO_AUX_TT_ALIGNMENT_BIT;
 
    if (vk_usage & VK_IMAGE_USAGE_SAMPLED_BIT)
       isl_usage |= ISL_SURF_USAGE_TEXTURE_BIT;
@@ -50,11 +228,41 @@ choose_isl_surf_usage(VkImageCreateFlags vk_create_flags,
    if (vk_usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)
       isl_usage |= ISL_SURF_USAGE_TEXTURE_BIT;
 
+   if (vk_usage & VK_IMAGE_USAGE_STORAGE_BIT)
+      isl_usage |= ISL_SURF_USAGE_STORAGE_BIT;
+
    if (vk_usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
       isl_usage |= ISL_SURF_USAGE_RENDER_TARGET_BIT;
 
+   if (vk_usage & VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR)
+      isl_usage |= ISL_SURF_USAGE_CPB_BIT;
+
+   /* TODO: consider whether compression with sparse is workable. */
+   if (vk_create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
+      isl_usage |= ISL_SURF_USAGE_SPARSE_BIT |
+                   ISL_SURF_USAGE_DISABLE_AUX_BIT;
+
+   if (vk_usage & VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR ||
+       vk_usage & VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR ||
+       vk_usage & VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR ||
+       vk_usage & VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR)
+      isl_usage |= ISL_SURF_USAGE_VIDEO_DECODE_BIT;
+
+   /* We disable aux surfaces for host read/write images so that we can update
+    * the main surface without caring about the auxiliary surface.
+    */
+   if (vk_usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT)
+      isl_usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+
    if (vk_create_flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)
       isl_usage |= ISL_SURF_USAGE_CUBE_BIT;
+
+   if (vk_create_flags & (VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT |
+                          VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT))
+      isl_usage |= ISL_SURF_USAGE_2D_3D_COMPATIBLE_BIT;
+
+   if (vk_create_flags & VK_IMAGE_CREATE_PROTECTED_BIT)
+      isl_usage |= ISL_SURF_USAGE_PROTECTED_BIT;
 
    /* Even if we're only using it for transfer operations, clears to depth and
     * stencil images happen as depth and stencil so they need the right ISL
@@ -89,17 +297,23 @@ choose_isl_surf_usage(VkImageCreateFlags vk_create_flags,
       isl_usage |= ISL_SURF_USAGE_RENDER_TARGET_BIT;
    }
 
+   if (comp_flags & VK_IMAGE_COMPRESSION_DISABLED_EXT)
+      isl_usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+
    return isl_usage;
 }
 
 static isl_tiling_flags_t
-choose_isl_tiling_flags(const struct gen_device_info *devinfo,
+choose_isl_tiling_flags(const struct intel_device_info *devinfo,
+                        const struct anv_image *image,
                         const struct anv_image_create_info *anv_info,
-                        const struct isl_drm_modifier_info *isl_mod_info,
-                        bool legacy_scanout)
+                        const struct isl_drm_modifier_info *isl_mod_info)
 {
    const VkImageCreateInfo *base_info = anv_info->vk_info;
    isl_tiling_flags_t flags = 0;
+
+   assert((isl_mod_info != NULL) ==
+          (base_info->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT));
 
    switch (base_info->tiling) {
    default:
@@ -111,14 +325,15 @@ choose_isl_tiling_flags(const struct gen_device_info *devinfo,
       flags = ISL_TILING_LINEAR_BIT;
       break;
    case VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT:
-      assert(isl_mod_info);
       flags = 1 << isl_mod_info->tiling;
    }
 
-   if (anv_info->isl_tiling_flags)
+   if (anv_info->isl_tiling_flags) {
+      assert(isl_mod_info == NULL);
       flags &= anv_info->isl_tiling_flags;
+   }
 
-   if (legacy_scanout) {
+   if (image->vk.wsi_legacy_scanout) {
       isl_tiling_flags_t legacy_mask = ISL_TILING_LINEAR_BIT;
       if (devinfo->has_tiling_uapi)
          legacy_mask |= ISL_TILING_X_BIT;
@@ -130,91 +345,70 @@ choose_isl_tiling_flags(const struct gen_device_info *devinfo,
    return flags;
 }
 
-static void
-add_surface(struct anv_image *image, struct anv_surface *surf, uint32_t plane)
-{
-   assert(surf->isl.size_B > 0); /* isl surface must be initialized */
-
-   if (image->disjoint) {
-      surf->offset = align_u32(image->planes[plane].size,
-                               surf->isl.alignment_B);
-      /* Plane offset is always 0 when it's disjoint. */
-   } else {
-      surf->offset = align_u32(image->size, surf->isl.alignment_B);
-      /* Determine plane's offset only once when the first surface is added. */
-      if (image->planes[plane].size == 0)
-         image->planes[plane].offset = image->size;
-   }
-
-   image->size = surf->offset + surf->isl.size_B;
-   image->planes[plane].size = (surf->offset + surf->isl.size_B) - image->planes[plane].offset;
-
-   image->alignment = MAX2(image->alignment, surf->isl.alignment_B);
-   image->planes[plane].alignment = MAX2(image->planes[plane].alignment,
-                                         surf->isl.alignment_B);
-}
-
 /**
- * Do hardware limitations require the image plane to use a shadow surface?
+ * Add the surface to the binding at the given offset.
  *
- * If hardware limitations force us to use a shadow surface, then the same
- * limitations may also constrain the tiling of the primary surface; therefore
- * paramater @a inout_primary_tiling_flags.
- *
- * If the image plane is a separate stencil plane and if the user provided
- * VkImageStencilUsageCreateInfoEXT, then @a usage must be stencilUsage.
- *
- * @see anv_image::planes[]::shadow_surface
+ * \see image_binding_grow()
  */
-static bool
-anv_image_plane_needs_shadow_surface(const struct gen_device_info *devinfo,
-                                     struct anv_format_plane plane_format,
-                                     VkImageTiling vk_tiling,
-                                     VkImageUsageFlags vk_plane_usage,
-                                     VkImageCreateFlags vk_create_flags,
-                                     isl_tiling_flags_t *inout_primary_tiling_flags)
+static VkResult MUST_CHECK
+add_surface(struct anv_device *device,
+            struct anv_image *image,
+            struct anv_surface *surf,
+            enum anv_image_memory_binding binding,
+            uint64_t offset)
 {
-   if (devinfo->gen <= 8 &&
-       (vk_create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) &&
-       vk_tiling == VK_IMAGE_TILING_OPTIMAL) {
-      /* We must fallback to a linear surface because we may not be able to
-       * correctly handle the offsets if tiled. (On gen9,
-       * RENDER_SURFACE_STATE::X/Y Offset are sufficient). To prevent garbage
-       * performance while texturing, we maintain a tiled shadow surface.
-       */
-      assert(isl_format_is_compressed(plane_format.isl_format));
+   /* isl surface must be initialized */
+   assert(surf->isl.size_B > 0);
 
-      if (inout_primary_tiling_flags) {
-         *inout_primary_tiling_flags = ISL_TILING_LINEAR_BIT;
-      }
-
-      return true;
-   }
-
-   if (devinfo->gen <= 7 &&
-       plane_format.aspect == VK_IMAGE_ASPECT_STENCIL_BIT &&
-       (vk_plane_usage & VK_IMAGE_USAGE_SAMPLED_BIT)) {
-      /* gen7 can't sample from W-tiled surfaces. */
-      return true;
-   }
-
-   return false;
+   return image_binding_grow(device, image, binding, offset,
+                             surf->isl.size_B,
+                             surf->isl.alignment_B,
+                             &surf->memory_range);
 }
 
-bool
-anv_formats_ccs_e_compatible(const struct gen_device_info *devinfo,
-                             VkImageCreateFlags create_flags,
-                             VkFormat vk_format,
-                             VkImageTiling vk_tiling,
-                             const VkImageFormatListCreateInfoKHR *fmt_list)
+static bool
+image_may_use_r32_view(VkImageCreateFlags create_flags,
+                       VkFormat vk_format,
+                       const VkImageFormatListCreateInfo *fmt_list)
 {
-   enum isl_format format =
-      anv_get_isl_format(devinfo, vk_format,
-                         VK_IMAGE_ASPECT_COLOR_BIT, vk_tiling);
+   if (vk_format == VK_FORMAT_R32_SINT ||
+       vk_format == VK_FORMAT_R32_UINT ||
+       vk_format == VK_FORMAT_R32_SFLOAT)
+      return true;
 
-   if (!isl_format_supports_ccs_e(devinfo, format))
+   if (!(create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT))
       return false;
 
+   if (fmt_list) {
+      for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
+         if (fmt_list->pViewFormats[i] == VK_FORMAT_R32_SINT ||
+             fmt_list->pViewFormats[i] == VK_FORMAT_R32_UINT ||
+             fmt_list->pViewFormats[i] == VK_FORMAT_R32_SFLOAT)
+            return true;
+      }
+
+      return false;
+   }
+
+   return vk_format_get_blocksizebits(vk_format) == 32;
+}
+
+static bool
+formats_ccs_e_compatible(const struct anv_physical_device *physical_device,
+                         VkImageCreateFlags create_flags,
+                         VkImageAspectFlagBits aspect,
+                         enum isl_format format, VkImageTiling vk_tiling,
+                         const VkImageFormatListCreateInfo *fmt_list)
+{
+   const struct intel_device_info *devinfo = &physical_device->info;
+
+   if (!anv_format_supports_ccs_e(physical_device, format))
+      return false;
+
+   /* For images created without MUTABLE_FORMAT_BIT set, we know that they will
+    * always be used with the original format. In particular, they will always
+    * be used with a format that supports color compression.
+    */
    if (!(create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT))
       return true;
 
@@ -222,12 +416,76 @@ anv_formats_ccs_e_compatible(const struct gen_device_info *devinfo,
       return false;
 
    for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
+      if (fmt_list->pViewFormats[i] == VK_FORMAT_UNDEFINED)
+         continue;
+
       enum isl_format view_format =
-         anv_get_isl_format(devinfo, fmt_list->pViewFormats[i],
-                            VK_IMAGE_ASPECT_COLOR_BIT, vk_tiling);
+         anv_get_isl_format(physical_device, fmt_list->pViewFormats[i],
+                            aspect, vk_tiling);
 
       if (!isl_formats_are_ccs_e_compatible(devinfo, format, view_format))
          return false;
+   }
+
+   return true;
+}
+
+bool
+anv_format_supports_ccs_e(const struct anv_physical_device *physical_device,
+                          const enum isl_format format)
+{
+   /* CCS_E for YCRCB_NORMAL and YCRCB_SWAP_UV is not currently supported by
+    * ANV so leave it disabled for now.
+    */
+   if (isl_format_is_yuv(format))
+      return false;
+
+   return isl_format_supports_ccs_e(&physical_device->info, format);
+}
+
+bool
+anv_formats_ccs_e_compatible(const struct anv_physical_device *physical_device,
+                             VkImageCreateFlags create_flags,
+                             VkFormat vk_format, VkImageTiling vk_tiling,
+                             VkImageUsageFlags vk_usage,
+                             const VkImageFormatListCreateInfo *fmt_list)
+{
+   const struct intel_device_info *devinfo = &physical_device->info;
+
+   u_foreach_bit(b, vk_format_aspects(vk_format)) {
+      VkImageAspectFlagBits aspect = 1 << b;
+      enum isl_format format =
+         anv_get_isl_format(physical_device, vk_format, aspect, vk_tiling);
+
+      if (!formats_ccs_e_compatible(physical_device, create_flags, aspect,
+                                    format, vk_tiling, fmt_list))
+         return false;
+   }
+
+   if ((vk_usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
+       vk_tiling != VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
+      assert(vk_format_aspects(vk_format) == VK_IMAGE_ASPECT_COLOR_BIT);
+      if (devinfo->ver == 12) {
+         /* From the TGL Bspec 44930 (r47128):
+          *
+          *    "Memory atomic operation on compressed data is not supported
+          *     in Gen12 E2E compression. Result of such operation is
+          *     undefined.
+          *
+          *     Software should ensure at the time of the Atomic operation
+          *     the surface is resolved (uncompressed) state."
+          *
+          * On gfx12.0, compression is not supported with atomic
+          * operations. On gfx12.5, the support is there, but it's slow
+          * (see HSD 1406337848).
+          */
+         if (image_may_use_r32_view(create_flags, vk_format, fmt_list))
+            return false;
+
+      } else if (devinfo->ver <= 11) {
+         /* Storage accesses are not supported on compressed surfaces. */
+         return false;
+      }
    }
 
    return true;
@@ -250,7 +508,7 @@ anv_formats_ccs_e_compatible(const struct gen_device_info *devinfo,
  *
  *  * 1 or 4 dwords (depending on hardware generation) for the clear color
  *  * 1 dword for the anv_fast_clear_type of the clear color
- *  * On gen9+, 1 dword per level and layer of the image (3D levels count
+ *  * On gfx9+, 1 dword per level and layer of the image (3D levels count
  *    multiple layers) in level-major order for compression state.
  *
  * For the purpose of discoverability, the algorithm used to manage
@@ -278,7 +536,7 @@ anv_formats_ccs_e_compatible(const struct gen_device_info *devinfo,
  * See anv_layout_to_aux_usage and anv_layout_to_fast_clear_type functions for
  * details on exactly what is allowed in what layouts.
  *
- * On gen7-9, we do not have a concept of indirect clear colors in hardware.
+ * On gfx7-9, we do not have a concept of indirect clear colors in hardware.
  * In order to deal with this, we have to do some clear color management.
  *
  *  * For LOAD_OP_LOAD at the top of a renderpass, we have to copy the clear
@@ -287,62 +545,135 @@ anv_formats_ccs_e_compatible(const struct gen_device_info *devinfo,
  *  * For any blorp operations, we pass the address to the clear value into
  *    blorp and it knows to copy the clear color.
  */
-static void
-add_aux_state_tracking_buffer(struct anv_image *image,
-                              uint32_t plane,
-                              const struct anv_device *device)
+static VkResult MUST_CHECK
+add_aux_state_tracking_buffer(struct anv_device *device,
+                              struct anv_image *image,
+                              uint64_t state_offset,
+                              uint32_t plane)
 {
    assert(image && device);
+   /* Xe2+ platforms don't use aux tracking buffers. We shouldn't get here. */
+   assert(device->info->ver < 20);
    assert(image->planes[plane].aux_usage != ISL_AUX_USAGE_NONE &&
-          image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
+          image->vk.aspects & (VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV |
+                               VK_IMAGE_ASPECT_DEPTH_BIT));
 
-   /* Compressed images must be tiled and therefore everything should be 4K
-    * aligned.  The CCS has the same alignment requirements.  This is good
-    * because we need at least dword-alignment for MI_LOAD/STORE operations.
-    */
-   assert(image->alignment % 4 == 0);
-   assert((image->planes[plane].offset + image->planes[plane].size) % 4 == 0);
-
-   /* This buffer should be at the very end of the plane. */
-   if (image->disjoint) {
-      assert(image->planes[plane].size ==
-             (image->planes[plane].offset + image->planes[plane].size));
+   unsigned clear_color_state_size;
+   if (device->info->ver >= 11) {
+      /* When importing an image from another source with a drm modifier that
+       * supports clear color, the clear color values are in a 32-byte struct
+       * defined in drm_fourcc.h. The fast clear type and compression state
+       * are not defined in these drm_fourcc.h, so there won't be memory
+       * allocated for these extra meta data by the source.
+       *
+       * We use the last 2 dwords of the clear color struct's memory to store
+       * the fast clear type and the first compression state, so the driver
+       * doesn't assume the extra size or need another allocation later.
+       *
+       * So far, the 2 stolen dwords are either not used in the clear color
+       * struct or for features not enabled. There should be no side effect to
+       * the hardware and destinations of images exported by this driver.
+       *
+       * Images with multiple levels or layers are not supported by drm
+       * modifiers, so we don't have to apply the above approach or face a
+       * bigger shortage from multiple compression states. We just apply the
+       * approach to all cases to keep the design unified.
+       *
+       * As a result, the state starts 8 bytes lower than where it should be.
+       */
+      assert(device->isl_dev.ss.clear_color_state_size == 32);
+      clear_color_state_size = (image->num_view_formats - 1) * 64 + 32 - 8;
    } else {
-      assert(image->size ==
-             (image->planes[plane].offset + image->planes[plane].size));
+      /* When sampling or rendering with an sRGB format, HW expects the clear
+       * color to be in two different color spaces - sRGB in the former and
+       * linear in the latter. Allocate twice the space to support either
+       * access.
+       */
+      assert(device->isl_dev.ss.clear_value_size == 16);
+      clear_color_state_size = image->num_view_formats * 16 * 2;
    }
-
-   const unsigned clear_color_state_size = device->info.gen >= 10 ?
-      device->isl_dev.ss.clear_color_state_size :
-      device->isl_dev.ss.clear_value_size;
 
    /* Clear color and fast clear type */
    unsigned state_size = clear_color_state_size + 4;
 
    /* We only need to track compression on CCS_E surfaces. */
-   if (image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E) {
-      if (image->type == VK_IMAGE_TYPE_3D) {
-         for (uint32_t l = 0; l < image->levels; l++)
-            state_size += anv_minify(image->extent.depth, l) * 4;
+   if (isl_aux_usage_has_ccs_e(image->planes[plane].aux_usage)) {
+      if (image->vk.image_type == VK_IMAGE_TYPE_3D) {
+         for (uint32_t l = 0; l < image->vk.mip_levels; l++)
+            state_size += u_minify(image->vk.extent.depth, l) * 4;
       } else {
-         state_size += image->levels * image->array_size * 4;
+         state_size += image->vk.mip_levels * image->vk.array_layers * 4;
       }
    }
 
-   /* Add some padding to make sure the fast clear color state buffer starts at
-    * a 4K alignment. We believe that 256B might be enough, but due to lack of
-    * testing we will leave this as 4K for now.
+   enum anv_image_memory_binding binding =
+      ANV_IMAGE_MEMORY_BINDING_PLANE_0 + plane;
+
+   const struct isl_drm_modifier_info *mod_info =
+      isl_drm_modifier_get_info(image->vk.drm_format_mod);
+
+   /* If an auxiliary surface is used for an externally-shareable image,
+    * we have to hide this from the memory of the image since other
+    * processes with access to the memory may not be aware of it or of
+    * its current state. So put that auxiliary data into a separate
+    * buffer (ANV_IMAGE_MEMORY_BINDING_PRIVATE).
+    *
+    * But when the image is created with a drm modifier that supports
+    * clear color, it will be exported along with main surface.
     */
-   image->planes[plane].size = align_u64(image->planes[plane].size, 4096);
-   image->size = align_u64(image->size, 4096);
+   if (anv_image_is_externally_shared(image) &&
+       !mod_info->supports_clear_color)
+      binding = ANV_IMAGE_MEMORY_BINDING_PRIVATE;
 
-   assert(image->planes[plane].offset % 4096 == 0);
+   /* The indirect clear color BO requires 64B-alignment on gfx11+. If we're
+    * using a modifier with clear color, then some kernels might require a 4k
+    * alignment.
+    */
+   const uint32_t clear_color_alignment =
+      (mod_info && mod_info->supports_clear_color) ? 4096 : 64;
 
-   image->planes[plane].fast_clear_state_offset =
-      image->planes[plane].offset + image->planes[plane].size;
+   return image_binding_grow(device, image, binding,
+                             state_offset, state_size, clear_color_alignment,
+                             &image->planes[plane].fast_clear_memory_range);
+}
 
-   image->planes[plane].size += state_size;
-   image->size += state_size;
+static VkResult MUST_CHECK
+add_compression_control_buffer(struct anv_device *device,
+                               struct anv_image *image,
+                               uint32_t plane,
+                               uint32_t binding,
+                               uint64_t offset)
+{
+   assert(device->info->has_aux_map);
+
+   return image_binding_grow(device, image, binding, offset,
+                             image->planes[plane].primary_surface.isl.size_B /
+                             INTEL_AUX_MAP_MAIN_SIZE_SCALEDOWN,
+                             INTEL_AUX_MAP_META_ALIGNMENT_B,
+                             &image->planes[plane].compr_ctrl_memory_range);
+}
+
+static bool
+want_hiz_wt_for_image(const struct intel_device_info *devinfo,
+                      const struct anv_image *image)
+{
+   /* Gen12 only supports single-sampled while Gen20+ supports
+    * multi-sampled images.
+    */
+   if (devinfo->ver < 20 && image->vk.samples > 1)
+      return false;
+
+   if ((image->vk.usage & (VK_IMAGE_USAGE_SAMPLED_BIT |
+                           VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) == 0)
+      return false;
+
+   /* If this image has the maximum number of samples supported by
+    * running platform and will be used as a texture, put the HiZ surface
+    * in write-through mode so that we can sample from it.
+    *
+    * TODO: This is a heuristic trade-off; we haven't tuned it at all.
+    */
+   return true;
 }
 
 /**
@@ -351,293 +682,726 @@ add_aux_state_tracking_buffer(struct anv_image *image,
  * surface is not required (for example, by neither hardware nor DRM format
  * modifier), then this may return VK_SUCCESS when creation of the aux surface
  * fails.
+ *
+ * @param offset See add_surface()
  */
 static VkResult
 add_aux_surface_if_supported(struct anv_device *device,
                              struct anv_image *image,
                              uint32_t plane,
                              struct anv_format_plane plane_format,
-                             const VkImageFormatListCreateInfoKHR *fmt_list,
-                             isl_surf_usage_flags_t isl_extra_usage_flags)
+                             const VkImageFormatListCreateInfo *fmt_list,
+                             uint64_t offset,
+                             uint32_t stride,
+                             uint64_t aux_state_offset)
 {
    VkImageAspectFlags aspect = plane_format.aspect;
+   VkResult result;
    bool ok;
 
    /* The aux surface must not be already added. */
-   assert(image->planes[plane].aux_surface.isl.size_B == 0);
+   assert(!anv_surface_is_valid(&image->planes[plane].aux_surface));
 
-   if ((isl_extra_usage_flags & ISL_SURF_USAGE_DISABLE_AUX_BIT))
+   if (image->planes[plane].primary_surface.isl.usage &
+       ISL_SURF_USAGE_DISABLE_AUX_BIT)
       return VK_SUCCESS;
+
+   uint32_t binding;
+   if (image->vk.drm_format_mod == DRM_FORMAT_MOD_INVALID ||
+       isl_drm_modifier_has_aux(image->vk.drm_format_mod)) {
+      binding = ANV_IMAGE_MEMORY_BINDING_PLANE_0 + plane;
+   } else {
+      binding = ANV_IMAGE_MEMORY_BINDING_PRIVATE;
+   }
 
    if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
       /* We don't advertise that depth buffers could be used as storage
        * images.
        */
-       assert(!(image->usage & VK_IMAGE_USAGE_STORAGE_BIT));
-
-      /* Allow the user to control HiZ enabling. Disable by default on gen7
-       * because resolves are not currently implemented pre-BDW.
-       */
-      if (!(image->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
-         /* It will never be used as an attachment, HiZ is pointless. */
-         return VK_SUCCESS;
-      }
-
-      if (device->info.gen == 7) {
-         anv_perf_warn(device, image, "Implement gen7 HiZ");
-         return VK_SUCCESS;
-      }
-
-      if (image->levels > 1) {
-         anv_perf_warn(device, image, "Enable multi-LOD HiZ");
-         return VK_SUCCESS;
-      }
-
-      if (device->info.gen == 8 && image->samples > 1) {
-         anv_perf_warn(device, image, "Enable gen8 multisampled HiZ");
-         return VK_SUCCESS;
-      }
-
-      if (unlikely(INTEL_DEBUG & DEBUG_NO_HIZ))
-         return VK_SUCCESS;
+       assert(!(image->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT));
 
       ok = isl_surf_get_hiz_surf(&device->isl_dev,
-                                 &image->planes[plane].surface.isl,
+                                 &image->planes[plane].primary_surface.isl,
                                  &image->planes[plane].aux_surface.isl);
-      assert(ok);
-      if (!isl_surf_supports_ccs(&device->isl_dev,
-                                 &image->planes[plane].surface.isl)) {
-         image->planes[plane].aux_usage = ISL_AUX_USAGE_HIZ;
-      } else if (image->usage & (VK_IMAGE_USAGE_SAMPLED_BIT |
-                                 VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) &&
-                 image->samples == 1) {
-         /* If it's used as an input attachment or a texture and it's
-          * single-sampled (this is a requirement for HiZ+CCS write-through
-          * mode), use write-through mode so that we don't need to resolve
-          * before texturing.  This will make depth testing a bit slower but
-          * texturing faster.
-          *
-          * TODO: This is a heuristic trade-off; we haven't tuned it at all.
-          */
-         assert(device->info.gen >= 12);
-         image->planes[plane].aux_usage = ISL_AUX_USAGE_HIZ_CCS_WT;
-      } else {
-         assert(device->info.gen >= 12);
-         image->planes[plane].aux_usage = ISL_AUX_USAGE_HIZ_CCS;
-      }
-      add_surface(image, &image->planes[plane].aux_surface, plane);
-   } else if ((aspect & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) && image->samples == 1) {
-      if (image->n_planes != 1) {
-         /* Multiplanar images seem to hit a sampler bug with CCS and R16G16
-          * format. (Putting the clear state a page/4096bytes further fixes
-          * the issue).
-          */
-         return VK_SUCCESS;
-      }
-
-      if ((image->create_flags & VK_IMAGE_CREATE_ALIAS_BIT)) {
-         /* The image may alias a plane of a multiplanar image. Above we ban
-          * CCS on multiplanar images.
-          */
-         return VK_SUCCESS;
-      }
-
-      if (!isl_format_supports_rendering(&device->info,
-                                         plane_format.isl_format)) {
-         /* Disable CCS because it is not useful (we can't render to the image
-          * with CCS enabled).  While it may be technically possible to enable
-          * CCS for this case, we currently don't have things hooked up to get
-          * it working.
-          */
-         anv_perf_warn(device, image,
-                       "This image format doesn't support rendering. "
-                       "Not allocating an CCS buffer.");
-         return VK_SUCCESS;
-      }
-
-      if (unlikely(INTEL_DEBUG & DEBUG_NO_RBC))
-         return VK_SUCCESS;
-
-      ok = isl_surf_get_ccs_surf(&device->isl_dev,
-                                 &image->planes[plane].surface.isl,
-                                 &image->planes[plane].aux_surface.isl,
-                                 NULL, 0);
       if (!ok)
          return VK_SUCCESS;
 
-      /* Choose aux usage */
-      if (!(image->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
-          anv_formats_ccs_e_compatible(&device->info,
-                                       image->create_flags,
-                                       image->vk_format,
-                                       image->tiling,
-                                       fmt_list)) {
-         /* For images created without MUTABLE_FORMAT_BIT set, we know that
-          * they will always be used with the original format.  In particular,
-          * they will always be used with a format that supports color
-          * compression.  If it's never used as a storage image, then it will
-          * only be used through the sampler or the as a render target.  This
-          * means that it's safe to just leave compression on at all times for
-          * these formats.
-          */
-         image->planes[plane].aux_usage = ISL_AUX_USAGE_CCS_E;
-      } else if (device->info.gen >= 12) {
-         anv_perf_warn(device, image,
-                       "The CCS_D aux mode is not yet handled on "
-                       "Gen12+. Not allocating a CCS buffer.");
-         image->planes[plane].aux_surface.isl.size_B = 0;
+      if (!isl_surf_supports_ccs(&device->isl_dev,
+                                 &image->planes[plane].primary_surface.isl,
+                                 &image->planes[plane].aux_surface.isl)) {
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_HIZ;
+      } else if (want_hiz_wt_for_image(device->info, image)) {
+         assert(device->info->ver >= 12);
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_HIZ_CCS_WT;
+      } else {
+         assert(device->info->ver >= 12);
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_HIZ_CCS;
+      }
+
+      result = add_surface(device, image, &image->planes[plane].aux_surface,
+                           binding, ANV_OFFSET_IMPLICIT);
+      if (result != VK_SUCCESS)
+         return result;
+
+      if (anv_image_plane_uses_aux_map(device, image, plane)) {
+         result = add_compression_control_buffer(device, image, plane,
+                                                 binding,
+                                                 ANV_OFFSET_IMPLICIT);
+         if (result != VK_SUCCESS)
+            return result;
+      }
+
+      if (device->info->ver == 12 &&
+          image->planes[plane].aux_usage == ISL_AUX_USAGE_HIZ_CCS_WT) {
+         return add_aux_state_tracking_buffer(device, image, aux_state_offset,
+                                              plane);
+      }
+   } else if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT) {
+      if (!isl_surf_supports_ccs(&device->isl_dev,
+                                 &image->planes[plane].primary_surface.isl,
+                                 NULL))
          return VK_SUCCESS;
+
+      image->planes[plane].aux_usage = ISL_AUX_USAGE_STC_CCS;
+
+      if (device->info->has_aux_map) {
+         result = add_compression_control_buffer(device, image, plane,
+                                                 binding,
+                                                 ANV_OFFSET_IMPLICIT);
+         if (result != VK_SUCCESS)
+            return result;
+      }
+   } else if ((aspect & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) && image->vk.samples == 1) {
+
+      if (device->info->has_flat_ccs || device->info->has_aux_map) {
+         ok = isl_surf_supports_ccs(&device->isl_dev,
+                                    &image->planes[plane].primary_surface.isl,
+                                    NULL);
+      } else {
+         ok = isl_surf_get_ccs_surf(&device->isl_dev,
+                                    &image->planes[plane].primary_surface.isl,
+                                    &image->planes[plane].aux_surface.isl,
+                                    stride);
+      }
+      if (!ok)
+         return VK_SUCCESS;
+
+      /* Choose aux usage. */
+      if (device->info->verx10 == 125 && !device->physical->disable_fcv) {
+         /* FCV is enabled via 3DSTATE_3D_MODE. We'd expect plain CCS_E to
+          * perform better because it allows for non-zero fast clear colors,
+          * but we've run into regressions in several benchmarks (F1 22 and
+          * RDR2) when trying to enable it. When non-zero clear colors are
+          * enabled, we've observed many partial resolves. We haven't yet
+          * root-caused what layout transitions are causing these resolves,
+          * so in the meantime, we choose to reduce our clear color support.
+          * With only zero clear colors being supported, we might as well
+          * turn on FCV.
+          */
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_FCV_CCS_E;
+      } else if (intel_needs_workaround(device->info, 1607794140)) {
+         /* FCV is permanently enabled on this hardware. */
+         assert(device->info->verx10 == 120);
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_FCV_CCS_E;
+      } else if (device->info->ver >= 12) {
+         /* Support for CCS_E was already checked for in anv_image_init(). */
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_CCS_E;
+      } else if (anv_formats_ccs_e_compatible(device->physical,
+                                              image->vk.create_flags,
+                                              image->vk.format,
+                                              image->vk.tiling,
+                                              image->vk.usage, fmt_list)) {
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_CCS_E;
       } else {
          image->planes[plane].aux_usage = ISL_AUX_USAGE_CCS_D;
       }
 
-      if (!device->physical->has_implicit_ccs)
-         add_surface(image, &image->planes[plane].aux_surface, plane);
+      if (device->info->has_flat_ccs) {
+         result = VK_SUCCESS;
+      } else if (device->info->has_aux_map) {
+         result = add_compression_control_buffer(device, image, plane,
+                                                 binding, offset);
+      } else {
+         result = add_surface(device, image,
+                              &image->planes[plane].aux_surface, binding,
+                              offset);
+      }
+      if (result != VK_SUCCESS)
+         return result;
 
-      add_aux_state_tracking_buffer(image, plane, device);
-   } else if ((aspect & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) && image->samples > 1) {
-      assert(!(image->usage & VK_IMAGE_USAGE_STORAGE_BIT));
+      if (device->info->ver <= 12)
+         return add_aux_state_tracking_buffer(device, image, aux_state_offset,
+                                              plane);
+   } else if ((aspect & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) && image->vk.samples > 1) {
+      assert(!(image->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT));
       ok = isl_surf_get_mcs_surf(&device->isl_dev,
-                                 &image->planes[plane].surface.isl,
+                                 &image->planes[plane].primary_surface.isl,
                                  &image->planes[plane].aux_surface.isl);
       if (!ok)
          return VK_SUCCESS;
 
-      image->planes[plane].aux_usage = ISL_AUX_USAGE_MCS;
-      add_surface(image, &image->planes[plane].aux_surface, plane);
-      add_aux_state_tracking_buffer(image, plane, device);
+      if (isl_surf_supports_ccs(&device->isl_dev,
+                                &image->planes[plane].primary_surface.isl,
+                                &image->planes[plane].aux_surface.isl)) {
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_MCS_CCS;
+      } else {
+         image->planes[plane].aux_usage = ISL_AUX_USAGE_MCS;
+      }
+
+      result = add_surface(device, image, &image->planes[plane].aux_surface,
+                           binding, ANV_OFFSET_IMPLICIT);
+      if (result != VK_SUCCESS)
+         return result;
+
+      if (anv_image_plane_uses_aux_map(device, image, plane)) {
+         result = add_compression_control_buffer(device, image, plane,
+                                                 binding,
+                                                 ANV_OFFSET_IMPLICIT);
+         if (result != VK_SUCCESS)
+            return result;
+      }
+
+      if (device->info->ver <= 12)
+         return add_aux_state_tracking_buffer(device, image, aux_state_offset,
+                                              plane);
+   }
+
+   return VK_SUCCESS;
+}
+
+static VkResult
+add_video_buffers(struct anv_device *device,
+                  struct anv_image *image,
+                  const struct VkVideoProfileListInfoKHR *profile_list,
+                  bool independent_profile)
+{
+   ASSERTED VkResult ok;
+   unsigned size = 0;
+
+   if (independent_profile) {
+      /* Takes the worst case */
+      unsigned w_mb = DIV_ROUND_UP(image->vk.extent.width, ANV_MB_WIDTH);
+      unsigned h_mb = DIV_ROUND_UP(image->vk.extent.height, ANV_MB_HEIGHT);
+      size = w_mb * h_mb * 128;
+   } else {
+      size = anv_video_get_image_mv_size(device, image, profile_list);
+   }
+
+   if (size == 0)
+      return VK_SUCCESS;
+
+   ok = image_binding_grow(device, image, ANV_IMAGE_MEMORY_BINDING_PRIVATE,
+                           ANV_OFFSET_IMPLICIT, size, 65536, &image->vid_dmv_top_surface);
+   if (ok != VK_SUCCESS)
+      return ok;
+
+   /* Doesn't work for av1 without provided profiles */
+   if (!independent_profile) {
+      for (unsigned i = 0; i < profile_list->profileCount; i++) {
+         if (profile_list->pProfiles[i].videoCodecOperation == VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_KHR) {
+            ok = image_binding_grow(device, image, ANV_IMAGE_MEMORY_BINDING_PRIVATE,
+                                    ANV_OFFSET_IMPLICIT, av1_cdf_max_num_bytes, 4096, &image->av1_cdf_table);
+         }
+      }
+   }
+
+   return ok;
+}
+
+/**
+ * Initialize the anv_image::*_surface selected by \a aspect. Then update the
+ * image's memory requirements (that is, the image's size and alignment).
+ *
+ * @param offset See add_surface()
+ */
+static VkResult
+add_primary_surface(struct anv_device *device,
+                    struct anv_image *image,
+                    uint32_t plane,
+                    struct anv_format_plane plane_format,
+                    uint64_t offset,
+                    uint32_t stride,
+                    isl_tiling_flags_t isl_tiling_flags,
+                    isl_surf_usage_flags_t isl_usage)
+{
+   struct anv_surface *anv_surf = &image->planes[plane].primary_surface;
+   bool ok;
+
+   uint32_t width = image->vk.extent.width;
+   uint32_t height = image->vk.extent.height;
+   const struct vk_format_ycbcr_info *ycbcr_info =
+      vk_format_get_ycbcr_info(image->vk.format);
+   if (ycbcr_info) {
+      assert(plane < ycbcr_info->n_planes);
+      width /= ycbcr_info->planes[plane].denominator_scales[0];
+      height /= ycbcr_info->planes[plane].denominator_scales[1];
+   }
+
+   ok = isl_surf_init(&device->isl_dev, &anv_surf->isl,
+      .dim = vk_to_isl_surf_dim[image->vk.image_type],
+      .format = plane_format.isl_format,
+      .width = width,
+      .height = height,
+      .depth = image->vk.extent.depth,
+      .levels = image->vk.mip_levels,
+      .array_len = image->vk.array_layers,
+      .samples = image->vk.samples,
+      .min_alignment_B = 0,
+      .row_pitch_B = stride,
+      .usage = isl_usage,
+      .tiling_flags = isl_tiling_flags);
+
+   if (!ok) {
+      /* TODO: Should return
+       * VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT in come cases.
+       */
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   }
+
+   image->planes[plane].aux_usage = ISL_AUX_USAGE_NONE;
+
+   return add_surface(device, image, anv_surf,
+                      ANV_IMAGE_MEMORY_BINDING_PLANE_0 + plane, offset);
+}
+
+#ifndef NDEBUG
+static bool MUST_CHECK
+memory_range_is_aligned(struct anv_image_memory_range memory_range)
+{
+   return anv_is_aligned(memory_range.offset, memory_range.alignment);
+}
+
+static bool MUST_CHECK
+memory_ranges_equal(struct anv_image_memory_range a,
+                    struct anv_image_memory_range b)
+{
+   return a.binding == b.binding &&
+          a.alignment == b.alignment &&
+          a.size == b.size &&
+          a.offset == b.offset;
+}
+#endif
+
+struct check_memory_range_params {
+   struct anv_image_memory_range *accum_ranges;
+   const struct anv_surface *test_surface;
+   const struct anv_image_memory_range *test_range;
+   enum anv_image_memory_binding expect_binding;
+};
+
+#define check_memory_range(...) \
+   check_memory_range_s(&(struct check_memory_range_params) { __VA_ARGS__ })
+
+static void UNUSED
+check_memory_range_s(const struct check_memory_range_params *p)
+{
+   assert((p->test_surface == NULL) != (p->test_range == NULL));
+
+   const struct anv_image_memory_range *test_range =
+      p->test_range ?: &p->test_surface->memory_range;
+
+   struct anv_image_memory_range *accum_range =
+      &p->accum_ranges[p->expect_binding];
+
+   assert(test_range->binding == p->expect_binding);
+   assert(test_range->offset >= memory_range_end(*accum_range));
+   assert(memory_range_is_aligned(*test_range));
+
+   if (p->test_surface) {
+      assert(anv_surface_is_valid(p->test_surface));
+      assert(p->test_surface->memory_range.alignment ==
+             p->test_surface->isl.alignment_B);
+   }
+
+   memory_range_merge(accum_range, *test_range);
+}
+
+/**
+ * Validate the image's memory bindings *after* all its surfaces and memory
+ * ranges are final.
+ *
+ * For simplicity's sake, we do not validate free-form layout of the image's
+ * memory bindings. We validate the layout described in the comments of struct
+ * anv_image.
+ */
+static void
+check_memory_bindings(const struct anv_device *device,
+                     const struct anv_image *image)
+{
+#if MESA_DEBUG
+   /* As we inspect each part of the image, we merge the part's memory range
+    * into these accumulation ranges.
+    */
+   struct anv_image_memory_range accum_ranges[ANV_IMAGE_MEMORY_BINDING_END];
+   for (int i = 0; i < ANV_IMAGE_MEMORY_BINDING_END; ++i) {
+      accum_ranges[i] = (struct anv_image_memory_range) {
+         .binding = i,
+      };
+   }
+
+   for (uint32_t p = 0; p < image->n_planes; ++p) {
+      const struct anv_image_plane *plane = &image->planes[p];
+
+      /* The binding that must contain the plane's primary surface. */
+      const enum anv_image_memory_binding primary_binding = image->disjoint
+         ? ANV_IMAGE_MEMORY_BINDING_PLANE_0 + p
+         : ANV_IMAGE_MEMORY_BINDING_MAIN;
+
+      /* Aliasing is incompatible with the private binding because it does not
+       * live in a VkDeviceMemory.  The exception is either swapchain images or
+       * that the private binding is for a video motion vector buffer.
+       */
+      assert(!(image->vk.create_flags & VK_IMAGE_CREATE_ALIAS_BIT) ||
+             image->from_wsi ||
+             (plane->primary_surface.isl.usage & ISL_SURF_USAGE_VIDEO_DECODE_BIT) ||
+             image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE].memory_range.size == 0);
+
+      /* Check primary surface */
+      check_memory_range(accum_ranges,
+                         .test_surface = &plane->primary_surface,
+                         .expect_binding = primary_binding);
+
+      /* Check aux_surface */
+      const struct anv_image_memory_range *aux_mem_range =
+         anv_image_get_aux_memory_range(image, p);
+      if (aux_mem_range->size > 0) {
+         enum anv_image_memory_binding binding = primary_binding;
+
+         /* If an auxiliary surface is used for an externally-shareable image,
+          * we have to hide this from the memory of the image since other
+          * processes with access to the memory may not be aware of it or of
+          * its current state. So put that auxiliary data into a separate
+          * buffer (ANV_IMAGE_MEMORY_BINDING_PRIVATE).
+          */
+         if (anv_image_is_externally_shared(image) &&
+             !isl_drm_modifier_has_aux(image->vk.drm_format_mod)) {
+            binding = ANV_IMAGE_MEMORY_BINDING_PRIVATE;
+         }
+
+         /* Display hardware requires that the aux surface start at
+          * a higher address than the primary surface. The 3D hardware
+          * doesn't care, but we enforce the display requirement in case
+          * the image is sent to display.
+          */
+         check_memory_range(accum_ranges,
+                            .test_range = aux_mem_range,
+                            .expect_binding = binding);
+      }
+
+      /* Check fast clear state */
+      if (plane->fast_clear_memory_range.size > 0) {
+         enum anv_image_memory_binding binding = primary_binding;
+
+         /* If an auxiliary surface is used for an externally-shareable image,
+          * we have to hide this from the memory of the image since other
+          * processes with access to the memory may not be aware of it or of
+          * its current state. So put that auxiliary data into a separate
+          * buffer (ANV_IMAGE_MEMORY_BINDING_PRIVATE).
+          *
+          * But when the image is created with a drm modifier that supports
+          * clear color, it will be exported along with main surface.
+          */
+         if (anv_image_is_externally_shared(image)
+             && !isl_drm_modifier_get_info(image->vk.drm_format_mod)->supports_clear_color) {
+            binding = ANV_IMAGE_MEMORY_BINDING_PRIVATE;
+         }
+
+         /* The indirect clear color BO requires 64B-alignment on gfx11+. */
+         assert(plane->fast_clear_memory_range.alignment % 64 == 0);
+         check_memory_range(accum_ranges,
+                            .test_range = &plane->fast_clear_memory_range,
+                            .expect_binding = binding);
+      }
+   }
+#endif
+}
+
+/**
+ * Check that the fully-initialized anv_image is compatible with its DRM format
+ * modifier.
+ *
+ * Checking compatibility at the end of image creation is prudent, not
+ * superfluous, because usage of modifiers triggers numerous special cases
+ * throughout queries and image creation, and because
+ * vkGetPhysicalDeviceImageFormatProperties2 has difficulty detecting all
+ * incompatibilities.
+ *
+ * Return VK_ERROR_UNKNOWN if the incompatibility is difficult to detect in
+ * vkGetPhysicalDeviceImageFormatProperties2.  Otherwise, assert fail.
+ *
+ * Ideally, if vkGetPhysicalDeviceImageFormatProperties2() succeeds with a given
+ * modifier, then vkCreateImage() produces an image that is compatible with the
+ * modifier. However, it is difficult to reconcile the two functions to agree
+ * due to their complexity. For example, isl_surf_get_ccs_surf() may
+ * unexpectedly fail in vkCreateImage(), eliminating the image's aux surface
+ * even when the modifier requires one. (Maybe we should reconcile the two
+ * functions despite the difficulty).
+ */
+static VkResult MUST_CHECK
+check_drm_format_mod(const struct anv_device *device,
+                     const struct anv_image *image)
+{
+   /* Image must have a modifier if and only if it has modifier tiling. */
+   assert((image->vk.drm_format_mod != DRM_FORMAT_MOD_INVALID) ==
+          (image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT));
+
+   if (image->vk.drm_format_mod == DRM_FORMAT_MOD_INVALID)
+      return VK_SUCCESS;
+
+   const struct isl_drm_modifier_info *isl_mod_info =
+      isl_drm_modifier_get_info(image->vk.drm_format_mod);
+
+   /* Driver must support the modifier. */
+   assert(isl_drm_modifier_get_score(device->info, isl_mod_info->modifier));
+
+   /* Enforced by us, not the Vulkan spec. */
+   assert(image->vk.image_type == VK_IMAGE_TYPE_2D);
+   assert(!(image->vk.aspects & VK_IMAGE_ASPECT_DEPTH_BIT));
+   assert(!(image->vk.aspects & VK_IMAGE_ASPECT_STENCIL_BIT));
+   assert(image->vk.mip_levels == 1);
+   assert(image->vk.array_layers == 1);
+   assert(image->vk.samples == 1);
+
+   for (int i = 0; i < image->n_planes; ++i) {
+      const struct anv_image_plane *plane = &image->planes[i];
+      ASSERTED const struct isl_format_layout *isl_layout =
+         isl_format_get_layout(plane->primary_surface.isl.format);
+
+      /* Enforced by us, not the Vulkan spec. */
+      assert(isl_layout->txc == ISL_TXC_NONE);
+      assert(isl_layout->colorspace == ISL_COLORSPACE_LINEAR ||
+             isl_layout->colorspace == ISL_COLORSPACE_SRGB);
+
+      if (isl_drm_modifier_has_aux(isl_mod_info->modifier)) {
+         /* Reject DISJOINT for consistency with the GL driver. */
+         assert(!image->disjoint);
+
+         /* The modifier's required aux usage mandates the image's aux usage.
+          * The inverse, however, does not hold; if the modifier has no aux
+          * usage, then we may enable a private aux surface.
+          */
+         if ((isl_mod_info->supports_media_compression &&
+              plane->aux_usage != ISL_AUX_USAGE_MC) ||
+             (isl_mod_info->supports_render_compression &&
+              !isl_aux_usage_has_ccs_e(plane->aux_usage))) {
+            return vk_errorf(device, VK_ERROR_UNKNOWN,
+                             "image with modifier unexpectedly has wrong aux "
+                             "usage");
+         }
+      }
    }
 
    return VK_SUCCESS;
 }
 
 /**
- * Initialize the anv_image::*_surface selected by \a aspect. Then update the
- * image's memory requirements (that is, the image's size and alignment).
+ * Use when the app does not provide
+ * VkImageDrmFormatModifierExplicitCreateInfoEXT.
  */
-static VkResult
-make_surface(struct anv_device *device,
-             struct anv_image *image,
-             const VkImageFormatListCreateInfoKHR *fmt_list,
-             uint32_t stride,
-             isl_tiling_flags_t tiling_flags,
-             isl_surf_usage_flags_t isl_extra_usage_flags,
-             VkImageAspectFlagBits aspect)
+static VkResult MUST_CHECK
+add_all_surfaces_implicit_layout(
+   struct anv_device *device,
+   struct anv_image *image,
+   const VkImageFormatListCreateInfo *format_list_info,
+   uint32_t stride,
+   isl_tiling_flags_t isl_tiling_flags,
+   isl_surf_usage_flags_t isl_extra_usage_flags)
 {
    VkResult result;
-   bool ok;
 
-   static const enum isl_surf_dim vk_to_isl_surf_dim[] = {
-      [VK_IMAGE_TYPE_1D] = ISL_SURF_DIM_1D,
-      [VK_IMAGE_TYPE_2D] = ISL_SURF_DIM_2D,
-      [VK_IMAGE_TYPE_3D] = ISL_SURF_DIM_3D,
-   };
+   const struct vk_format_ycbcr_info *ycbcr_info =
+      vk_format_get_ycbcr_info(image->vk.format);
+   if (ycbcr_info)
+      assert(ycbcr_info->n_planes == image->n_planes);
 
-   image->extent = anv_sanitize_image_extent(image->type, image->extent);
+   unsigned num_aspects = 0;
+   VkImageAspectFlagBits aspects[3];
+   u_foreach_bit(b, image->vk.aspects) {
+      assert(num_aspects < 3);
+      aspects[num_aspects++] = 1 << b;
+   }
+   assert(num_aspects == image->n_planes);
 
-   const unsigned plane = anv_image_aspect_to_plane(image->aspects, aspect);
-   const  struct anv_format_plane plane_format =
-      anv_get_format_plane(&device->info, image->vk_format, aspect, image->tiling);
-   struct anv_surface *anv_surf = &image->planes[plane].surface;
-
-   const isl_surf_usage_flags_t usage =
-      choose_isl_surf_usage(image->create_flags, image->usage,
-                            isl_extra_usage_flags, aspect);
-
-   VkImageUsageFlags plane_vk_usage =
-      aspect == VK_IMAGE_ASPECT_STENCIL_BIT ?
-      image->stencil_usage : image->usage;
-
-   bool needs_shadow =
-      anv_image_plane_needs_shadow_surface(&device->info,
-                                   plane_format,
-                                   image->tiling,
-                                   plane_vk_usage,
-                                   image->create_flags,
-                                   &tiling_flags);
-
-   ok = isl_surf_init(&device->isl_dev, &anv_surf->isl,
-      .dim = vk_to_isl_surf_dim[image->type],
-      .format = plane_format.isl_format,
-      .width = image->extent.width / plane_format.denominator_scales[0],
-      .height = image->extent.height / plane_format.denominator_scales[1],
-      .depth = image->extent.depth,
-      .levels = image->levels,
-      .array_len = image->array_size,
-      .samples = image->samples,
-      .min_alignment_B = 0,
-      .row_pitch_B = stride,
-      .usage = usage,
-      .tiling_flags = tiling_flags);
-
-   if (!ok)
-      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-
-   image->planes[plane].aux_usage = ISL_AUX_USAGE_NONE;
-
-   add_surface(image, anv_surf, plane);
-
-   if (needs_shadow) {
-      ok = isl_surf_init(&device->isl_dev, &image->planes[plane].shadow_surface.isl,
-         .dim = vk_to_isl_surf_dim[image->type],
-         .format = plane_format.isl_format,
-         .width = image->extent.width,
-         .height = image->extent.height,
-         .depth = image->extent.depth,
-         .levels = image->levels,
-         .array_len = image->array_size,
-         .samples = image->samples,
-         .min_alignment_B = 0,
-         .row_pitch_B = stride,
-         .usage = ISL_SURF_USAGE_TEXTURE_BIT |
-                  (usage & ISL_SURF_USAGE_CUBE_BIT),
-         .tiling_flags = ISL_TILING_ANY_MASK);
-
-      /* isl_surf_init() will fail only if provided invalid input. Invalid input
-       * is illegal in Vulkan.
-       */
-      assert(ok);
-
-      add_surface(image, &image->planes[plane].shadow_surface, plane);
+   /* The Android hardware buffer YV12 format has the planes ordered as Y-Cr-Cb,
+    * while Vulkan expects VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM to be in Y-Cb-Cr.
+    * Adjust the order we add the ISL surfaces accordingly so the implicit
+    * offset gets calculated correctly.
+    */
+   if (image->from_ahb && image->vk.format == VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM) {
+      assert(num_aspects == 3);
+      assert(aspects[1] == VK_IMAGE_ASPECT_PLANE_1_BIT);
+      assert(aspects[2] == VK_IMAGE_ASPECT_PLANE_2_BIT);
+      aspects[1] = VK_IMAGE_ASPECT_PLANE_2_BIT;
+      aspects[2] = VK_IMAGE_ASPECT_PLANE_1_BIT;
    }
 
-   result = add_aux_surface_if_supported(device, image, plane, plane_format,
-                                         fmt_list, isl_extra_usage_flags);
-   if (result != VK_SUCCESS)
-      return result;
+   for (unsigned i = 0; i < num_aspects; i++) {
+      VkImageAspectFlagBits aspect = aspects[i];
+      const uint32_t plane = anv_image_aspect_to_plane(image, aspect);
+      const  struct anv_format_plane plane_format =
+         anv_get_format_plane(device->physical, image->vk.format,
+                              plane, image->vk.tiling);
 
-   assert((image->planes[plane].offset + image->planes[plane].size) == image->size);
+      enum isl_format isl_fmt = plane_format.isl_format;
+      assert(isl_fmt != ISL_FORMAT_UNSUPPORTED);
 
-   /* Upper bound of the last surface should be smaller than the plane's
-    * size.
-    */
-   assert((MAX2(image->planes[plane].surface.offset,
-                image->planes[plane].aux_surface.offset) +
-           (image->planes[plane].aux_surface.isl.size_B > 0 ?
-            image->planes[plane].aux_surface.isl.size_B :
-            image->planes[plane].surface.isl.size_B)) <=
-          (image->planes[plane].offset + image->planes[plane].size));
+      uint32_t plane_stride = stride * isl_format_get_layout(isl_fmt)->bpb / 8;
+      if (ycbcr_info)
+         plane_stride /= ycbcr_info->planes[plane].denominator_scales[0];
 
-   if (image->planes[plane].aux_usage != ISL_AUX_USAGE_NONE) {
-      /* assert(image->planes[plane].fast_clear_state_offset == */
-      /*        (image->planes[plane].aux_surface.offset + image->planes[plane].aux_surface.isl.size_B)); */
-      assert(image->planes[plane].fast_clear_state_offset <
-             (image->planes[plane].offset + image->planes[plane].size));
+      VkImageUsageFlags vk_usage = vk_image_usage(&image->vk, aspect);
+      isl_surf_usage_flags_t isl_usage =
+         anv_image_choose_isl_surf_usage(device->physical,
+                                         image->vk.create_flags, vk_usage,
+                                         isl_extra_usage_flags, aspect,
+                                         image->vk.compr_flags);
+
+      result = add_primary_surface(device, image, plane, plane_format,
+                                   ANV_OFFSET_IMPLICIT, plane_stride,
+                                   isl_tiling_flags, isl_usage);
+      if (result != VK_SUCCESS)
+         return result;
+
+      result = add_aux_surface_if_supported(device, image, plane, plane_format,
+                                            format_list_info,
+                                            ANV_OFFSET_IMPLICIT, plane_stride,
+                                            ANV_OFFSET_IMPLICIT);
+      if (result != VK_SUCCESS)
+         return result;
    }
 
    return VK_SUCCESS;
 }
 
-static uint32_t
-score_drm_format_mod(uint64_t modifier)
+/**
+ * Use when the app provides VkImageDrmFormatModifierExplicitCreateInfoEXT.
+ */
+static VkResult
+add_all_surfaces_explicit_layout(
+   struct anv_device *device,
+   struct anv_image *image,
+   const VkImageFormatListCreateInfo *format_list_info,
+   const VkImageDrmFormatModifierExplicitCreateInfoEXT *drm_info,
+   isl_tiling_flags_t isl_tiling_flags,
+   isl_surf_usage_flags_t isl_extra_usage_flags)
 {
-   switch (modifier) {
-   case DRM_FORMAT_MOD_LINEAR: return 1;
-   case I915_FORMAT_MOD_X_TILED: return 2;
-   case I915_FORMAT_MOD_Y_TILED: return 3;
-   case I915_FORMAT_MOD_Y_TILED_CCS: return 4;
-   default: unreachable("bad DRM format modifier");
+   const struct intel_device_info *devinfo = device->info;
+   const uint32_t mod_plane_count = drm_info->drmFormatModifierPlaneCount;
+   const bool mod_has_aux =
+      isl_drm_modifier_has_aux(drm_info->drmFormatModifier);
+   VkResult result;
+
+   /* Currently there is no way to properly map memory planes to format planes
+    * and aux planes due to the lack of defined ABI for external multi-planar
+    * images.
+    */
+   if (image->n_planes == 1)
+      assert(image->vk.aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+   else
+      assert(!(image->vk.aspects & ~VK_IMAGE_ASPECT_PLANES_BITS_ANV));
+
+   if (mod_has_aux) {
+      assert(image->n_planes == 1);
+
+      /* About valid usage in the Vulkan spec:
+       *
+       * Unlike vanilla vkCreateImage, which produces undefined behavior on user
+       * error, here the spec requires the implementation to return
+       * VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT if the app provides
+       * a bad plane layout. However, the spec does require
+       * drmFormatModifierPlaneCount to be valid.
+       *
+       * Most validation of plane layout occurs in add_surface().
+       */
+      uint32_t n_mod_planes =
+         isl_drm_modifier_get_plane_count(devinfo,
+                                          drm_info->drmFormatModifier,
+                                          image->n_planes);
+      assert(n_mod_planes == mod_plane_count);
+   } else {
+      assert(image->n_planes == mod_plane_count);
    }
+
+   /* Reject special values in the app-provided plane layouts. */
+   for (uint32_t i = 0; i < mod_plane_count; ++i) {
+      if (drm_info->pPlaneLayouts[i].rowPitch == 0) {
+         return vk_errorf(device,
+                          VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT,
+                          "VkImageDrmFormatModifierExplicitCreateInfoEXT::"
+                          "pPlaneLayouts[%u]::rowPitch is 0", i);
+      }
+
+      if (drm_info->pPlaneLayouts[i].offset == ANV_OFFSET_IMPLICIT) {
+         return vk_errorf(device,
+                          VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT,
+                          "VkImageDrmFormatModifierExplicitCreateInfoEXT::"
+                          "pPlaneLayouts[%u]::offset is %" PRIu64,
+                          i, ANV_OFFSET_IMPLICIT);
+      }
+   }
+
+   u_foreach_bit(b, image->vk.aspects) {
+      const VkImageAspectFlagBits aspect = 1 << b;
+      const uint32_t plane = anv_image_aspect_to_plane(image, aspect);
+      const struct anv_format_plane format_plane =
+         anv_get_format_plane(device->physical, image->vk.format,
+                              plane, image->vk.tiling);
+      const VkSubresourceLayout *primary_layout = &drm_info->pPlaneLayouts[plane];
+
+      result = add_primary_surface(device, image, plane,
+                                   format_plane,
+                                   primary_layout->offset,
+                                   primary_layout->rowPitch,
+                                   isl_tiling_flags,
+                                   isl_extra_usage_flags);
+      if (result != VK_SUCCESS)
+         return result;
+
+      if (mod_has_aux) {
+         const VkSubresourceLayout flat_ccs_layout = {
+            .offset = ANV_OFFSET_IMPLICIT,
+         };
+
+         const VkSubresourceLayout *aux_layout;
+
+         uint64_t aux_state_offset = ANV_OFFSET_IMPLICIT;
+
+         /* We already asserted on image->n_planes == 1 when mod_has_aux is
+          * true above, so the indexes of aux and clear color are just hard-
+          * coded without ambiguity.
+          */
+         if (devinfo->has_flat_ccs) {
+            aux_layout = &flat_ccs_layout;
+            if (isl_drm_modifier_get_info(
+                  drm_info->drmFormatModifier)->supports_clear_color) {
+               aux_state_offset = drm_info->pPlaneLayouts[1].offset;
+            }
+         } else {
+            aux_layout = &drm_info->pPlaneLayouts[1];
+            if (isl_drm_modifier_get_info(
+                  drm_info->drmFormatModifier)->supports_clear_color) {
+               aux_state_offset = drm_info->pPlaneLayouts[2].offset;
+            }
+         }
+
+         result = add_aux_surface_if_supported(device, image, plane,
+                                               format_plane,
+                                               format_list_info,
+                                               aux_layout->offset,
+                                               aux_layout->rowPitch,
+                                               aux_state_offset);
+         if (result != VK_SUCCESS)
+            return result;
+
+         assert(isl_aux_usage_has_ccs(image->planes[plane].aux_usage));
+         if (aux_state_offset != ANV_OFFSET_IMPLICIT) {
+            assert(image->planes[plane].fast_clear_memory_range.size <=
+                   device->isl_dev.ss.clear_color_state_size);
+         }
+      }
+   }
+
+   return VK_SUCCESS;
 }
 
 static const struct isl_drm_modifier_info *
@@ -648,7 +1412,7 @@ choose_drm_format_mod(const struct anv_physical_device *device,
    uint32_t best_score = 0;
 
    for (uint32_t i = 0; i < modifier_count; ++i) {
-      uint32_t score = score_drm_format_mod(modifiers[i]);
+      uint32_t score = isl_drm_modifier_get_score(&device->info, modifiers[i]);
       if (score > best_score) {
          best_mod = modifiers[i];
          best_score = score;
@@ -661,221 +1425,628 @@ choose_drm_format_mod(const struct anv_physical_device *device,
       return NULL;
 }
 
-VkResult
-anv_image_create(VkDevice _device,
-                 const struct anv_image_create_info *create_info,
-                 const VkAllocationCallbacks* alloc,
-                 VkImage *pImage)
+static VkImageUsageFlags
+anv_image_create_usage(const VkImageCreateInfo *pCreateInfo,
+                       VkImageUsageFlags usage)
 {
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   const VkImageCreateInfo *pCreateInfo = create_info->vk_info;
-   const struct isl_drm_modifier_info *isl_mod_info = NULL;
-   struct anv_image *image = NULL;
-   VkResult r;
-
-   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
-
-   const struct wsi_image_create_info *wsi_info =
-      vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
-
-   if (pCreateInfo->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
-      const VkImageDrmFormatModifierListCreateInfoEXT *mod_info =
-         vk_find_struct_const(pCreateInfo->pNext,
-                              IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT);
-      isl_mod_info = choose_drm_format_mod(device->physical,
-                                           mod_info->drmFormatModifierCount,
-                                           mod_info->pDrmFormatModifiers);
-      assert(isl_mod_info);
-   }
-
-   anv_assert(pCreateInfo->mipLevels > 0);
-   anv_assert(pCreateInfo->arrayLayers > 0);
-   anv_assert(pCreateInfo->samples > 0);
-   anv_assert(pCreateInfo->extent.width > 0);
-   anv_assert(pCreateInfo->extent.height > 0);
-   anv_assert(pCreateInfo->extent.depth > 0);
-
-   image = vk_zalloc2(&device->vk.alloc, alloc, sizeof(*image), 8,
-                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-   if (!image)
-      return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   vk_object_base_init(&device->vk, &image->base, VK_OBJECT_TYPE_IMAGE);
-   image->type = pCreateInfo->imageType;
-   image->extent = pCreateInfo->extent;
-   image->vk_format = pCreateInfo->format;
-   image->format = anv_get_format(pCreateInfo->format);
-   image->aspects = vk_format_aspects(image->vk_format);
-   image->levels = pCreateInfo->mipLevels;
-   image->array_size = pCreateInfo->arrayLayers;
-   image->samples = pCreateInfo->samples;
-   image->usage = pCreateInfo->usage;
-   image->create_flags = pCreateInfo->flags;
-   image->tiling = pCreateInfo->tiling;
-   image->disjoint = pCreateInfo->flags & VK_IMAGE_CREATE_DISJOINT_BIT;
-   image->needs_set_tiling = wsi_info && wsi_info->scanout;
-   image->drm_format_mod = isl_mod_info ? isl_mod_info->modifier :
-                                          DRM_FORMAT_MOD_INVALID;
-
-   if (image->aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
-      image->stencil_usage = pCreateInfo->usage;
-      const VkImageStencilUsageCreateInfoEXT *stencil_usage_info =
-         vk_find_struct_const(pCreateInfo->pNext,
-                              IMAGE_STENCIL_USAGE_CREATE_INFO_EXT);
-      if (stencil_usage_info)
-         image->stencil_usage = stencil_usage_info->stencilUsage;
-   }
-
-   /* In case of external format, We don't know format yet,
-    * so skip the rest for now.
+   /* Add TRANSFER_SRC usage for multisample attachment images. This is
+    * because we might internally use the TRANSFER_SRC layout on them for
+    * blorp operations associated with resolving those into other attachments
+    * at the end of a subpass.
+    *
+    * Without this additional usage, we compute an incorrect AUX state in
+    * anv_layout_to_aux_state().
     */
-   if (create_info->external_format) {
-      image->external_format = true;
-      *pImage = anv_image_to_handle(image);
+   if (pCreateInfo->samples > VK_SAMPLE_COUNT_1_BIT &&
+       (usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)))
+      usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+   return usage;
+}
+
+static VkResult MUST_CHECK
+alloc_private_binding(struct anv_device *device,
+                      struct anv_image *image,
+                      const VkImageCreateInfo *create_info)
+{
+   struct anv_image_binding *binding =
+      &image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE];
+
+   if (binding->memory_range.size == 0)
+      return VK_SUCCESS;
+
+   const VkImageSwapchainCreateInfoKHR *swapchain_info =
+      vk_find_struct_const(create_info->pNext, IMAGE_SWAPCHAIN_CREATE_INFO_KHR);
+
+   if (swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE) {
+      /* The image will be bound to swapchain memory. */
       return VK_SUCCESS;
    }
 
-   const struct anv_format *format = anv_get_format(image->vk_format);
-   assert(format != NULL);
+   VkResult result = anv_device_alloc_bo(device, "image-binding-private",
+                                         binding->memory_range.size, 0, 0,
+                                         &binding->address.bo);
+   if (result == VK_SUCCESS) {
+      pthread_mutex_lock(&device->mutex);
+      list_addtail(&image->link, &device->image_private_objects);
+      pthread_mutex_unlock(&device->mutex);
+   }
+
+   return result;
+}
+
+static void
+anv_image_finish_sparse_bindings(struct anv_image *image)
+{
+   struct anv_device *device =
+      container_of(image->vk.base.device, struct anv_device, vk);
+
+   assert(anv_image_is_sparse(image));
+
+   for (int i = 0; i < ANV_IMAGE_MEMORY_BINDING_END; i++) {
+      struct anv_image_binding *b = &image->bindings[i];
+
+      if (b->sparse_data.size != 0) {
+         assert(b->memory_range.size == b->sparse_data.size);
+         assert(b->address.offset == b->sparse_data.address);
+         anv_free_sparse_bindings(device, &b->sparse_data);
+      }
+   }
+}
+
+static VkResult MUST_CHECK
+anv_image_init_sparse_bindings(struct anv_image *image,
+                               const struct anv_image_create_info *create_info)
+{
+   struct anv_device *device =
+      container_of(image->vk.base.device, struct anv_device, vk);
+   VkResult result;
+
+   assert(anv_image_is_sparse(image));
+
+   enum anv_bo_alloc_flags alloc_flags = 0;
+   uint64_t explicit_address = 0;
+   if (image->vk.create_flags & VK_IMAGE_CREATE_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT) {
+      alloc_flags |= ANV_BO_ALLOC_FIXED_ADDRESS;
+
+      const VkOpaqueCaptureDescriptorDataCreateInfoEXT *opaque_info =
+         vk_find_struct_const(create_info->vk_info->pNext,
+                              OPAQUE_CAPTURE_DESCRIPTOR_DATA_CREATE_INFO_EXT);
+      if (opaque_info)
+         explicit_address = *((const uint64_t *)opaque_info->opaqueCaptureDescriptorData);
+   }
+
+   for (int i = 0; i < ANV_IMAGE_MEMORY_BINDING_END; i++) {
+      struct anv_image_binding *b = &image->bindings[i];
+
+      if (b->memory_range.size != 0) {
+         assert(b->sparse_data.size == 0);
+
+         /* From the spec, Custom Sparse Image Block Shapes section:
+          *   "... the size in bytes of the custom sparse image block shape
+          *    will be reported in VkMemoryRequirements::alignment."
+          *
+          * ISL should have set this for us, so just assert it here.
+          */
+         assert(b->memory_range.alignment == ANV_SPARSE_BLOCK_SIZE);
+         assert(b->memory_range.size % ANV_SPARSE_BLOCK_SIZE == 0);
+
+         result = anv_init_sparse_bindings(device,
+                                           b->memory_range.size,
+                                           &b->sparse_data,
+                                           alloc_flags,
+                                           explicit_address,
+                                           &b->address);
+         if (result != VK_SUCCESS) {
+            anv_image_finish_sparse_bindings(image);
+            return result;
+         }
+      }
+   }
+
+   return VK_SUCCESS;
+}
+
+bool
+anv_image_view_formats_incomplete(const struct anv_image *image)
+{
+   /* See mark_image_view_formats_incomplete(). */
+   return image->num_view_formats < ARRAY_SIZE(image->view_formats) &&
+          image->view_formats[image->num_view_formats] ==
+          ISL_FORMAT_UNSUPPORTED;
+}
+
+static void
+mark_image_view_formats_incomplete(struct anv_image *image)
+{
+   /* We need to reserve space to insert the token for an incomplete list. Use
+    * up all the space except for the first entry. This helps various code
+    * paths that depend on the list to have decent fall-back behavior. For
+    * examples, see add_aux_state_tracking_buffer() and
+    * set_image_clear_color().
+    */
+   assert(image->num_view_formats >= 1);
+   image->num_view_formats = 1;
+
+   /* Replace the first unused entry with the token for an incomplete list. */
+   image->view_formats[image->num_view_formats] = ISL_FORMAT_UNSUPPORTED;
+   assert(anv_image_view_formats_incomplete(image));
+}
+
+static void
+add_image_view_format(struct anv_image *image, enum isl_format view_format)
+{
+   /* If this list can't be completed, reject all formats. */
+   if (anv_image_view_formats_incomplete(image))
+      return;
+
+   /* Reject invalid formats. */
+   if (view_format == ISL_FORMAT_UNSUPPORTED)
+      return;
+
+   /* Reject duplicate formats. */
+   for (int i = 0; i < image->num_view_formats; i++)
+      if (view_format == image->view_formats[i])
+         return;
+
+   if (image->num_view_formats == ARRAY_SIZE(image->view_formats)) {
+      /* The array is full, so we can't add any more entries. */
+      mark_image_view_formats_incomplete(image);
+   } else {
+      /* Add to the end of the array. */
+      image->view_formats[image->num_view_formats++] = view_format;
+   }
+}
+
+VkResult
+anv_image_init(struct anv_device *device, struct anv_image *image,
+               const struct anv_image_create_info *create_info)
+{
+   const VkImageCreateInfo *pCreateInfo = create_info->vk_info;
+   const struct VkImageDrmFormatModifierExplicitCreateInfoEXT *mod_explicit_info = NULL;
+   const struct isl_drm_modifier_info *isl_mod_info = NULL;
+   VkResult r;
+
+   vk_image_init(&device->vk, &image->vk, pCreateInfo);
+
+   image->vk.usage = anv_image_create_usage(pCreateInfo, image->vk.usage);
+   image->vk.stencil_usage =
+      anv_image_create_usage(pCreateInfo, image->vk.stencil_usage);
+
+   isl_surf_usage_flags_t isl_extra_usage_flags =
+      create_info->isl_extra_usage_flags;
+   if (pCreateInfo->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
+      assert(!image->vk.wsi_legacy_scanout);
+      mod_explicit_info =
+         vk_find_struct_const(pCreateInfo->pNext,
+                              IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT);
+      if (mod_explicit_info) {
+         isl_mod_info = isl_drm_modifier_get_info(mod_explicit_info->drmFormatModifier);
+      } else {
+         const struct VkImageDrmFormatModifierListCreateInfoEXT *mod_list_info =
+            vk_find_struct_const(pCreateInfo->pNext,
+                                 IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT);
+         isl_mod_info = choose_drm_format_mod(device->physical,
+                                              mod_list_info->drmFormatModifierCount,
+                                              mod_list_info->pDrmFormatModifiers);
+      }
+
+      assert(isl_mod_info);
+      assert(image->vk.drm_format_mod == DRM_FORMAT_MOD_INVALID);
+      image->vk.drm_format_mod = isl_mod_info->modifier;
+
+      if (isl_drm_modifier_needs_display_layout(image->vk.drm_format_mod))
+         isl_extra_usage_flags |= ISL_SURF_USAGE_DISPLAY_BIT;
+
+      /* Disable compression on gen12+ if the selected/requested modifier
+       * doesn't support it. Prior to that we can use a private binding for
+       * the aux surface and it should be transparent to users.
+       */
+      if (device->info->ver >= 12 &&
+          !isl_drm_modifier_has_aux(image->vk.drm_format_mod)) {
+         isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+      }
+   }
+
+   for (int i = 0; i < ANV_IMAGE_MEMORY_BINDING_END; ++i) {
+      image->bindings[i] = (struct anv_image_binding) {
+         .memory_range = { .binding = i },
+      };
+   }
+
+   /* In case of AHardwareBuffer import, we don't know the layout yet */
+   if (image->vk.external_handle_types &
+       VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
+      image->from_ahb = true;
+#if DETECT_OS_ANDROID
+      image->vk.ahb_format = anv_ahb_format_for_vk_format(image->vk.format);
+#endif
+      return VK_SUCCESS;
+   }
+
+   image->n_planes = anv_get_format_planes(device->physical, image->vk.format);
+
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
+   /* In the case of gralloc-backed swap chain image, we don't know the
+    * layout yet.
+    */
+   if (vk_find_struct_const(pCreateInfo->pNext,
+                            IMAGE_SWAPCHAIN_CREATE_INFO_KHR) != NULL)
+      return VK_SUCCESS;
+#endif
+
+   const struct wsi_image_create_info *wsi_info =
+      vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
+   image->from_wsi = wsi_info != NULL;
+   image->wsi_blit_src = wsi_info && wsi_info->blit_src;
+
+   /* The Vulkan 1.2.165 glossary says:
+    *
+    *    A disjoint image consists of multiple disjoint planes, and is created
+    *    with the VK_IMAGE_CREATE_DISJOINT_BIT bit set.
+    */
+   image->disjoint = image->n_planes > 1 &&
+                     (pCreateInfo->flags & VK_IMAGE_CREATE_DISJOINT_BIT);
+
+   if (anv_is_format_emulated(device->physical, pCreateInfo->format)) {
+      assert(image->n_planes == 1 &&
+             vk_format_is_compressed(image->vk.format));
+      assert(!(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT));
+
+      image->emu_plane_format =
+         anv_get_emulation_format(device->physical, image->vk.format);
+
+      /* for fetching the raw copmressed data and storing the decompressed
+       * data
+       */
+      image->vk.create_flags |=
+         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT |
+         VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT;
+      if (image->vk.image_type == VK_IMAGE_TYPE_3D)
+         image->vk.create_flags |= VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT;
+      image->vk.usage |=
+         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+
+      /* TODO: enable compression on emulation plane */
+      isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+   }
+
+   /* Disable aux if image supports export without modifiers. */
+   if (image->vk.external_handle_types != 0 &&
+       image->vk.tiling != VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+      isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+
+   if (device->queue_count > 1) {
+      /* Notify ISL that the app may access this image from different engines.
+       * Note that parallel access to the surface will occur regardless of the
+       * sharing mode.
+       */
+      isl_extra_usage_flags |= ISL_SURF_USAGE_MULTI_ENGINE_PAR_BIT;
+
+      /* If the resource is created with the CONCURRENT sharing mode, we can't
+       * support compression because we aren't allowed barriers in order to
+       * construct the main surface data with FULL_RESOLVE/PARTIAL_RESOLVE.
+       */
+      if (image->vk.sharing_mode == VK_SHARING_MODE_CONCURRENT)
+         isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+   }
+
+   /* Aux is pointless if it will never be used as an attachment. */
+   if (vk_format_is_depth_or_stencil(image->vk.format) &&
+       !(image->vk.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
+      isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+
+   /* TODO: Adjust blorp for multi-LOD HiZ surface on Gen9. */
+   if (vk_format_has_depth(image->vk.format) &&
+       image->vk.mip_levels > 1 && device->info->ver == 9) {
+      anv_perf_warn(VK_LOG_OBJS(&image->vk.base), "Enable multi-LOD HiZ");
+      isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+   }
+
+   /* Mark WSI images with the right surf usage. */
+   if (image->from_wsi)
+      isl_extra_usage_flags |= ISL_SURF_USAGE_DISPLAY_BIT;
 
    const isl_tiling_flags_t isl_tiling_flags =
-      choose_isl_tiling_flags(&device->info, create_info, isl_mod_info,
-                              image->needs_set_tiling);
+      choose_isl_tiling_flags(device->info, image, create_info, isl_mod_info);
 
-   image->n_planes = format->n_planes;
-
-   const VkImageFormatListCreateInfoKHR *fmt_list =
+   const VkImageFormatListCreateInfo *fmt_list =
       vk_find_struct_const(pCreateInfo->pNext,
-                           IMAGE_FORMAT_LIST_CREATE_INFO_KHR);
+                           IMAGE_FORMAT_LIST_CREATE_INFO);
 
-   uint32_t b;
-   for_each_bit(b, image->aspects) {
-      r = make_surface(device, image, fmt_list, create_info->stride,
-                       isl_tiling_flags, create_info->isl_extra_usage_flags,
-                       (1 << b));
+   if ((image->vk.aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) &&
+       image->vk.samples == 1) {
+      if (image->n_planes != 1) {
+         /* Multiplanar images seem to hit a sampler bug with CCS and R16G16
+          * format. (Putting the clear state a page/4096bytes further fixes
+          * the issue).
+          */
+         isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+      }
+
+      if ((image->vk.create_flags & VK_IMAGE_CREATE_ALIAS_BIT) &&
+          !image->from_wsi) {
+         /* The image may alias a plane of a multiplanar image. Above we ban
+          * CCS on multiplanar images.
+          *
+          * We must also reject aliasing of any image that uses
+          * ANV_IMAGE_MEMORY_BINDING_PRIVATE. Since we're already rejecting
+          * all aliasing here, there's no need to further analyze if the image
+          * needs a private binding.
+          */
+         isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+      }
+
+      if (device->info->ver >= 12 &&
+          !anv_formats_ccs_e_compatible(device->physical,
+                                        image->vk.create_flags,
+                                        image->vk.format, image->vk.tiling,
+                                        image->vk.usage, fmt_list)) {
+         /* CCS_E is the only aux-mode supported for single sampled color
+          * surfaces on gfx12+. If we can't support it, we should configure
+          * the main surface without aux support.
+          */
+         isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+      }
+   }
+
+   /* Fill out the list of view formats. */
+   const enum isl_format image_format =
+      anv_get_format_plane(device->physical, image->vk.format, 0,
+                           image->vk.tiling).isl_format;
+   add_image_view_format(image, image_format);
+
+   if (image->vk.usage & (VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+      if (vk_format_is_color(image->vk.format)) {
+         const enum isl_format blorp_copy_format =
+            blorp_copy_get_color_format(&device->isl_dev, image_format);
+         add_image_view_format(image, blorp_copy_format);
+      } else {
+         /* We don't have a helper for depth-stencil formats. */
+         mark_image_view_formats_incomplete(image);
+      }
+   }
+
+   if (image->vk.create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) {
+      if (!fmt_list || fmt_list->viewFormatCount == 0) {
+         /* Without a format list provided, we must assume all compatible
+          * formats. Instead of adding them all, mark our list as incomplete.
+          */
+         mark_image_view_formats_incomplete(image);
+      } else {
+         for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
+            const enum isl_format fmt_list_format =
+               anv_get_format_plane(device->physical,
+                                    fmt_list->pViewFormats[i], 0,
+                                    image->vk.tiling).isl_format;
+            add_image_view_format(image, fmt_list_format);
+         }
+      }
+   }
+
+   if (isl_mod_info && isl_mod_info->supports_clear_color) {
+      if (image->num_view_formats > 1) {
+         /* We use the number of view formats to determine the number of
+          * CLEAR_COLOR structures to append to the image. For an imported
+          * dmabuf supporting clear colors, we're limited to a single such
+          * struct. So, mark the view format list as incomplete because doing
+          * so shrinks the list size to one.
+          */
+         mark_image_view_formats_incomplete(image);
+      }
+      assert(image->num_view_formats == 1);
+   }
+
+   if (mod_explicit_info) {
+      r = add_all_surfaces_explicit_layout(device, image, fmt_list,
+                                           mod_explicit_info, isl_tiling_flags,
+                                           isl_extra_usage_flags);
+   } else {
+      r = add_all_surfaces_implicit_layout(device, image, fmt_list, create_info->stride,
+                                           isl_tiling_flags,
+                                           isl_extra_usage_flags);
+   }
+
+   if (r != VK_SUCCESS)
+      goto fail;
+
+   if (image->emu_plane_format != VK_FORMAT_UNDEFINED) {
+      const uint32_t plane = image->n_planes;
+      const struct anv_format_plane plane_format = anv_get_format_plane(
+            device->physical, image->emu_plane_format, 0, image->vk.tiling);
+
+      isl_surf_usage_flags_t isl_usage = anv_image_choose_isl_surf_usage(
+         device->physical, image->vk.create_flags, image->vk.usage,
+         isl_extra_usage_flags, VK_IMAGE_ASPECT_COLOR_BIT,
+         image->vk.compr_flags);
+
+      r = add_primary_surface(device, image, plane, plane_format,
+                              ANV_OFFSET_IMPLICIT, 0,
+                              isl_tiling_flags, isl_usage);
       if (r != VK_SUCCESS)
          goto fail;
    }
 
-   *pImage = anv_image_to_handle(image);
+   const VkVideoProfileListInfoKHR *video_profile =
+      vk_find_struct_const(pCreateInfo->pNext,
+                           VIDEO_PROFILE_LIST_INFO_KHR);
+
+   bool independent_video_profile =
+      pCreateInfo->flags & VK_IMAGE_CREATE_VIDEO_PROFILE_INDEPENDENT_BIT_KHR;
+
+   if (video_profile || independent_video_profile) {
+      r = add_video_buffers(device, image, video_profile, independent_video_profile);
+      if (r != VK_SUCCESS)
+         goto fail;
+   }
+
+   if (!create_info->no_private_binding_alloc) {
+      r = alloc_private_binding(device, image, pCreateInfo);
+      if (r != VK_SUCCESS)
+         goto fail;
+   }
+
+   check_memory_bindings(device, image);
+
+   r = check_drm_format_mod(device, image);
+   if (r != VK_SUCCESS)
+      goto fail;
+
+   if (anv_image_is_sparse(image)) {
+      r = anv_image_init_sparse_bindings(image, create_info);
+      if (r != VK_SUCCESS)
+         goto fail;
+   }
 
    return VK_SUCCESS;
 
 fail:
-   if (image)
-      vk_free2(&device->vk.alloc, alloc, image);
-
+   vk_image_finish(&image->vk);
    return r;
+}
+
+void
+anv_image_finish(struct anv_image *image)
+{
+   struct anv_device *device =
+      container_of(image->vk.base.device, struct anv_device, vk);
+
+   if (anv_image_is_sparse(image))
+      anv_image_finish_sparse_bindings(image);
+
+   /* Unmap a CCS so that if the bound region of the image is rebound to
+    * another image, the AUX tables will be cleared to allow for a new
+    * mapping.
+    */
+   for (int p = 0; p < image->n_planes; ++p) {
+      if (image->planes[p].aux_tt.mapped) {
+         intel_aux_map_del_mapping(device->aux_map_ctx,
+                                   image->planes[p].aux_tt.addr,
+                                   image->planes[p].aux_tt.size);
+      }
+   }
+
+   if (image->from_gralloc) {
+      assert(!image->disjoint);
+      assert(image->n_planes == 1);
+      assert(image->planes[0].primary_surface.memory_range.binding ==
+             ANV_IMAGE_MEMORY_BINDING_MAIN);
+      assert(image->bindings[ANV_IMAGE_MEMORY_BINDING_MAIN].address.bo != NULL);
+      anv_device_release_bo(device, image->bindings[ANV_IMAGE_MEMORY_BINDING_MAIN].address.bo);
+   }
+
+   for (uint32_t b = 0; b < ARRAY_SIZE(image->bindings); b++) {
+      if (image->bindings[b].host_map != NULL) {
+         anv_device_unmap_bo(device,
+                             image->bindings[b].address.bo,
+                             image->bindings[b].host_map,
+                             image->bindings[b].map_size,
+                             false /* replace */);
+      }
+   }
+
+   struct anv_bo *private_bo = image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE].address.bo;
+   if (private_bo) {
+      pthread_mutex_lock(&device->mutex);
+      list_del(&image->link);
+      pthread_mutex_unlock(&device->mutex);
+      anv_device_release_bo(device, private_bo);
+   }
+
+   vk_image_finish(&image->vk);
 }
 
 static struct anv_image *
 anv_swapchain_get_image(VkSwapchainKHR swapchain,
                         uint32_t index)
 {
-   uint32_t n_images = index + 1;
-   VkImage *images = malloc(sizeof(*images) * n_images);
-   VkResult result = wsi_common_get_images(swapchain, &n_images, images);
-
-   if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
-      free(images);
-      return NULL;
-   }
-
-   ANV_FROM_HANDLE(anv_image, image, images[index]);
-   free(images);
-
-   return image;
+   VkImage image = wsi_common_get_image(swapchain, index);
+   return anv_image_from_handle(image);
 }
 
 static VkResult
-anv_image_from_swapchain(VkDevice device,
-                         const VkImageCreateInfo *pCreateInfo,
-                         const VkImageSwapchainCreateInfoKHR *swapchain_info,
-                         const VkAllocationCallbacks *pAllocator,
-                         VkImage *pImage)
+anv_image_init_from_create_info(struct anv_device *device,
+                                struct anv_image *image,
+                                const VkImageCreateInfo *pCreateInfo,
+                                bool no_private_binding_alloc)
 {
-   struct anv_image *swapchain_image = anv_swapchain_get_image(swapchain_info->swapchain, 0);
-   assert(swapchain_image);
-
-   assert(swapchain_image->type == pCreateInfo->imageType);
-   assert(swapchain_image->vk_format == pCreateInfo->format);
-   assert(swapchain_image->extent.width == pCreateInfo->extent.width);
-   assert(swapchain_image->extent.height == pCreateInfo->extent.height);
-   assert(swapchain_image->extent.depth == pCreateInfo->extent.depth);
-   assert(swapchain_image->array_size == pCreateInfo->arrayLayers);
-   /* Color attachment is added by the wsi code. */
-   assert(swapchain_image->usage == (pCreateInfo->usage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT));
-
-   VkImageCreateInfo local_create_info;
-   local_create_info = *pCreateInfo;
-   local_create_info.pNext = NULL;
-   /* The following parameters are implictly selected by the wsi code. */
-   local_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-   local_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
-   local_create_info.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-   /* If the image has a particular modifier, specify that modifier. */
-   VkImageDrmFormatModifierListCreateInfoEXT local_modifier_info = {
-      .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
-      .drmFormatModifierCount = 1,
-      .pDrmFormatModifiers = &swapchain_image->drm_format_mod,
-   };
-   if (swapchain_image->drm_format_mod != DRM_FORMAT_MOD_INVALID)
-      __vk_append_struct(&local_create_info, &local_modifier_info);
-
-   return anv_image_create(device,
-      &(struct anv_image_create_info) {
-         .vk_info = &local_create_info,
-         .external_format = swapchain_image->external_format,
-      },
-      pAllocator,
-      pImage);
-}
-
-VkResult
-anv_CreateImage(VkDevice device,
-                const VkImageCreateInfo *pCreateInfo,
-                const VkAllocationCallbacks *pAllocator,
-                VkImage *pImage)
-{
-   const VkExternalMemoryImageCreateInfo *create_info =
-      vk_find_struct_const(pCreateInfo->pNext, EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
-
-   if (create_info && (create_info->handleTypes &
-       VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID))
-      return anv_image_from_external(device, pCreateInfo, create_info,
-                                     pAllocator, pImage);
-
-   bool use_external_format = false;
-   const VkExternalFormatANDROID *ext_format =
-      vk_find_struct_const(pCreateInfo->pNext, EXTERNAL_FORMAT_ANDROID);
-
-   /* "If externalFormat is zero, the effect is as if the
-    * VkExternalFormatANDROID structure was not present. Otherwise, the image
-    * will have the specified external format."
-    */
-   if (ext_format && ext_format->externalFormat != 0)
-      use_external_format = true;
+   if (pCreateInfo->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) {
+      VkResult result =
+         anv_sparse_image_check_support(device->physical,
+                                        pCreateInfo->flags,
+                                        pCreateInfo->tiling,
+                                        pCreateInfo->samples,
+                                        pCreateInfo->imageType,
+                                        pCreateInfo->format);
+      if (result != VK_SUCCESS)
+         return result;
+   }
 
    const VkNativeBufferANDROID *gralloc_info =
       vk_find_struct_const(pCreateInfo->pNext, NATIVE_BUFFER_ANDROID);
    if (gralloc_info)
-      return anv_image_from_gralloc(device, pCreateInfo, gralloc_info,
-                                    pAllocator, pImage);
+      return anv_image_init_from_gralloc(device, image, pCreateInfo,
+                                         gralloc_info);
 
+   struct anv_image_create_info create_info = {
+      .vk_info = pCreateInfo,
+      .no_private_binding_alloc = no_private_binding_alloc,
+   };
+
+   return anv_image_init(device, image, &create_info);
+}
+
+VkResult anv_CreateImage(
+    VkDevice                                    _device,
+    const VkImageCreateInfo*                    pCreateInfo,
+    const VkAllocationCallbacks*                pAllocator,
+    VkImage*                                    pImage)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+
+   if ((device->physical->sparse_type == ANV_SPARSE_TYPE_NOT_SUPPORTED) &&
+       INTEL_DEBUG(DEBUG_SPARSE) &&
+       pCreateInfo->flags & (VK_IMAGE_CREATE_SPARSE_BINDING_BIT |
+                             VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
+                             VK_IMAGE_CREATE_SPARSE_ALIASED_BIT))
+      fprintf(stderr, "=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
+              __LINE__, pCreateInfo->flags);
+
+#ifndef VK_USE_PLATFORM_ANDROID_KHR
+   /* Skip the WSI common swapchain creation here on Android. Similar to ahw,
+    * this case is handled by a partial image init and then resolved when the
+    * image is bound and gralloc info is passed.
+    */
    const VkImageSwapchainCreateInfoKHR *swapchain_info =
       vk_find_struct_const(pCreateInfo->pNext, IMAGE_SWAPCHAIN_CREATE_INFO_KHR);
-   if (swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE)
-      return anv_image_from_swapchain(device, pCreateInfo, swapchain_info,
-                                      pAllocator, pImage);
+   if (swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE) {
+      return wsi_common_create_swapchain_image(&device->physical->wsi_device,
+                                               pCreateInfo,
+                                               swapchain_info->swapchain,
+                                               pImage);
+   }
+#endif
 
-   return anv_image_create(device,
-      &(struct anv_image_create_info) {
-         .vk_info = pCreateInfo,
-         .external_format = use_external_format,
-      },
-      pAllocator,
-      pImage);
+   struct anv_image *image =
+      vk_object_zalloc(&device->vk, pAllocator, sizeof(*image),
+                       VK_OBJECT_TYPE_IMAGE);
+   if (!image)
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   VkResult result = anv_image_init_from_create_info(device, image,
+                                                     pCreateInfo,
+                                                     false);
+   if (result != VK_SUCCESS) {
+      vk_object_free(&device->vk, pAllocator, image);
+      return result;
+   }
+
+   ANV_RMV(image_create, device, false, image);
+
+   *pImage = anv_image_to_handle(image);
+
+   return result;
 }
 
 void
@@ -888,40 +2059,12 @@ anv_DestroyImage(VkDevice _device, VkImage _image,
    if (!image)
       return;
 
-   for (uint32_t p = 0; p < image->n_planes; ++p) {
-      if (image->planes[p].bo_is_owned) {
-         assert(image->planes[p].address.bo != NULL);
-         anv_device_release_bo(device, image->planes[p].address.bo);
-      }
-   }
+   ANV_RMV(image_destroy, device, image);
 
-   vk_object_base_finish(&image->base);
+   assert(&device->vk == image->vk.base.device);
+   anv_image_finish(image);
+
    vk_free2(&device->vk.alloc, pAllocator, image);
-}
-
-static void anv_image_bind_memory_plane(struct anv_device *device,
-                                        struct anv_image *image,
-                                        uint32_t plane,
-                                        struct anv_device_memory *memory,
-                                        uint32_t memory_offset)
-{
-   assert(!image->planes[plane].bo_is_owned);
-
-   if (!memory) {
-      image->planes[plane].address = ANV_NULL_ADDRESS;
-      return;
-   }
-
-   image->planes[plane].address = (struct anv_address) {
-      .bo = memory->bo,
-      .offset = memory_offset,
-   };
-
-   /* If we're on a platform that uses implicit CCS and our buffer does not
-    * have any implicit CCS data, disable compression on that image.
-    */
-   if (device->physical->has_implicit_ccs && !memory->bo->has_implicit_ccs)
-      image->planes[plane].aux_usage = ISL_AUX_USAGE_NONE;
 }
 
 /* We are binding AHardwareBuffer. Get a description, resolve the
@@ -932,95 +2075,717 @@ resolve_ahw_image(struct anv_device *device,
                   struct anv_image *image,
                   struct anv_device_memory *mem)
 {
-#if defined(ANDROID) && ANDROID_API_LEVEL >= 26
-   assert(mem->ahw);
+#if DETECT_OS_ANDROID && ANDROID_API_LEVEL >= 26
+   assert(mem->vk.ahardware_buffer);
    AHardwareBuffer_Desc desc;
-   AHardwareBuffer_describe(mem->ahw, &desc);
+   AHardwareBuffer_describe(mem->vk.ahardware_buffer, &desc);
+   VkResult result;
 
    /* Check tiling. */
-   int i915_tiling = anv_gem_get_tiling(device, mem->bo->gem_handle);
-   VkImageTiling vk_tiling;
-   isl_tiling_flags_t isl_tiling_flags = 0;
-
-   switch (i915_tiling) {
-   case I915_TILING_NONE:
-      vk_tiling = VK_IMAGE_TILING_LINEAR;
-      isl_tiling_flags = ISL_TILING_LINEAR_BIT;
-      break;
-   case I915_TILING_X:
-      vk_tiling = VK_IMAGE_TILING_OPTIMAL;
-      isl_tiling_flags = ISL_TILING_X_BIT;
-      break;
-   case I915_TILING_Y:
-      vk_tiling = VK_IMAGE_TILING_OPTIMAL;
-      isl_tiling_flags = ISL_TILING_Y0_BIT;
-      break;
-   case -1:
-   default:
-      unreachable("Invalid tiling flags.");
-   }
-
-   assert(vk_tiling == VK_IMAGE_TILING_LINEAR ||
-          vk_tiling == VK_IMAGE_TILING_OPTIMAL);
+   enum isl_tiling tiling;
+   const native_handle_t *handle =
+      AHardwareBuffer_getNativeHandle(mem->vk.ahardware_buffer);
+   struct u_gralloc_buffer_handle gr_handle = {
+      .handle = handle,
+      .hal_format = desc.format,
+      .pixel_stride = desc.stride,
+   };
+   result = anv_android_get_tiling(device, &gr_handle, &tiling);
+   assert(result == VK_SUCCESS);
+   isl_tiling_flags_t isl_tiling_flags = (1u << tiling);
 
    /* Check format. */
    VkFormat vk_format = vk_format_from_android(desc.format, desc.usage);
-   enum isl_format isl_fmt = anv_get_isl_format(&device->info,
-                                                vk_format,
-                                                VK_IMAGE_ASPECT_COLOR_BIT,
-                                                vk_tiling);
-   assert(isl_fmt != ISL_FORMAT_UNSUPPORTED);
-
-   /* Handle RGB(X)->RGBA fallback. */
-   switch (desc.format) {
-   case AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM:
-   case AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM:
-      if (isl_format_is_rgb(isl_fmt))
-         isl_fmt = isl_format_rgb_to_rgba(isl_fmt);
-      break;
-   }
+   assert(vk_format != VK_FORMAT_UNDEFINED);
 
    /* Now we are able to fill anv_image fields properly and create
     * isl_surface for it.
     */
-   image->vk_format = vk_format;
-   image->format = anv_get_format(vk_format);
-   image->aspects = vk_format_aspects(image->vk_format);
-   image->n_planes = image->format->n_planes;
+   vk_image_set_format(&image->vk, vk_format);
+   image->n_planes = anv_get_format_planes(device->physical, image->vk.format);
 
-   uint32_t stride = desc.stride *
-                     (isl_format_get_layout(isl_fmt)->bpb / 8);
-
-   uint32_t b;
-   for_each_bit(b, image->aspects) {
-      VkResult r = make_surface(device, image, NULL, stride, isl_tiling_flags,
-                                ISL_SURF_USAGE_DISABLE_AUX_BIT, (1 << b));
-      assert(r == VK_SUCCESS);
-   }
+   result = add_all_surfaces_implicit_layout(device, image, NULL, desc.stride,
+                                             isl_tiling_flags,
+                                             ISL_SURF_USAGE_DISABLE_AUX_BIT);
+   assert(result == VK_SUCCESS);
 #endif
 }
 
-VkResult anv_BindImageMemory(
-    VkDevice                                    _device,
-    VkImage                                     _image,
-    VkDeviceMemory                              _memory,
-    VkDeviceSize                                memoryOffset)
+static void
+resolve_anb_image(struct anv_device *device,
+                  struct anv_image *image,
+                  const VkNativeBufferANDROID *gralloc_info)
 {
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(anv_device_memory, mem, _memory);
-   ANV_FROM_HANDLE(anv_image, image, _image);
+#if DETECT_OS_ANDROID && ANDROID_API_LEVEL >= 29
+   VkResult result;
 
-   if (mem->ahw)
-      resolve_ahw_image(device, image, mem);
+   /* Check tiling. */
+   enum isl_tiling tiling;
+   struct u_gralloc_buffer_handle gr_handle = {
+      .handle = gralloc_info->handle,
+      .hal_format = gralloc_info->format,
+      .pixel_stride = gralloc_info->stride,
+   };
+   result = anv_android_get_tiling(device, &gr_handle, &tiling);
+   assert(result == VK_SUCCESS);
 
-   uint32_t aspect_bit;
-   anv_foreach_image_aspect_bit(aspect_bit, image, image->aspects) {
-      uint32_t plane =
-         anv_image_aspect_to_plane(image->aspects, 1UL << aspect_bit);
-      anv_image_bind_memory_plane(device, image, plane, mem, memoryOffset);
+   isl_tiling_flags_t isl_tiling_flags = (1u << tiling);
+
+   /* Now we are able to fill anv_image fields properly and create
+    * isl_surface for it.
+    */
+   result = add_all_surfaces_implicit_layout(device, image, NULL, gralloc_info->stride,
+                                             isl_tiling_flags,
+                                             ISL_SURF_USAGE_DISABLE_AUX_BIT);
+   assert(result == VK_SUCCESS);
+#endif
+}
+
+static bool
+anv_image_is_pat_compressible(struct anv_device *device, struct anv_image *image)
+{
+   if (INTEL_DEBUG(DEBUG_NO_CCS))
+      return false;
+
+   if (device->info->ver < 20)
+      return false;
+
+   /*
+    * Be aware that Vulkan spec requires that Images with some properties
+    * always returns the same memory types, so this function also needs to
+    * have the same return for the same set of properties.
+    *
+    *    For images created with a color format, the memoryTypeBits member is
+    *    identical for all VkImage objects created with the same combination
+    *    of values for the tiling member, the
+    *    VK_IMAGE_CREATE_SPARSE_BINDING_BIT bit and
+    *    VK_IMAGE_CREATE_PROTECTED_BIT bit of the flags member, the
+    *    VK_IMAGE_CREATE_SPLIT_INSTANCE_BIND_REGIONS_BIT bit of the flags
+    *    member, the VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT bit of the usage
+    *    member if the
+    *    VkPhysicalDeviceHostImageCopyPropertiesEXT::identicalMemoryTypeRequirements
+    *    property is VK_FALSE, handleTypes member of
+    *    VkExternalMemoryImageCreateInfo, and the
+    *    VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT of the usage member in the
+    *    VkImageCreateInfo structure passed to vkCreateImage.
+    *
+    *    For images created with a depth/stencil format, the memoryTypeBits
+    *    member is identical for all VkImage objects created with the same
+    *    combination of values for the format member, the tiling member, the
+    *    VK_IMAGE_CREATE_SPARSE_BINDING_BIT bit and
+    *    VK_IMAGE_CREATE_PROTECTED_BIT bit of the flags member, the
+    *    VK_IMAGE_CREATE_SPLIT_INSTANCE_BIND_REGIONS_BIT bit of the flags
+    *    member, the VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT bit of the usage
+    *    member if the
+    *    VkPhysicalDeviceHostImageCopyPropertiesEXT::identicalMemoryTypeRequirements
+    *    property is VK_FALSE, handleTypes member of
+    *    VkExternalMemoryImageCreateInfo, and the
+    *    VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT of the usage member in the
+    *    VkImageCreateInfo structure passed to vkCreateImage.
+    */
+
+   /* There are no compression-enabled modifiers on Xe2, and all legacy
+    * modifiers are not defined with compression. We simply disable
+    * compression on all modifiers.
+    *
+    * We disable this in anv_AllocateMemory() as well.
+    */
+   if (image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+      return false;
+
+   /* Host accessed images cannot be compressed. */
+   if (image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT)
+      return false;
+
+   return true;
+}
+
+void
+anv_image_get_memory_requirements(struct anv_device *device,
+                                  struct anv_image *image,
+                                  VkImageAspectFlags aspects,
+                                  VkMemoryRequirements2 *pMemoryRequirements)
+{
+   /* The Vulkan spec (git aaed022) says:
+    *
+    *    memoryTypeBits is a bitfield and contains one bit set for every
+    *    supported memory type for the resource. The bit `1<<i` is set if and
+    *    only if the memory type `i` in the VkPhysicalDeviceMemoryProperties
+    *    structure for the physical device is supported.
+    */
+   uint32_t memory_types;
+
+   if (image->vk.create_flags & VK_IMAGE_CREATE_PROTECTED_BIT) {
+      memory_types = device->physical->memory.protected_mem_types;
+   } else {
+      memory_types = device->physical->memory.default_buffer_mem_types;
+      if (anv_image_is_pat_compressible(device, image))
+         memory_types |= device->physical->memory.compressed_mem_types;
    }
 
+   if (image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT) {
+      /* Remove non host visible heaps from the types for host transfers on
+       * non ReBAR devices
+       */
+      if (device->physical->has_small_bar) {
+         for (uint32_t i = 0; i < device->physical->memory.type_count; i++) {
+            if (!(device->physical->memory.types[i].propertyFlags &
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+               memory_types &= ~BITFIELD_BIT(i);
+         }
+      }
+   }
+
+   vk_foreach_struct(ext, pMemoryRequirements->pNext) {
+      switch (ext->sType) {
+      case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {
+         VkMemoryDedicatedRequirements *requirements = (void *)ext;
+         if (image->vk.wsi_legacy_scanout ||
+             image->from_ahb ||
+             (isl_drm_modifier_has_aux(image->vk.drm_format_mod) &&
+              anv_image_uses_aux_map(device, image))) {
+            /* If we need to set the tiling for external consumers or the
+             * modifier involves AUX tables, we need a dedicated allocation.
+             *
+             * See also anv_AllocateMemory.
+             */
+            requirements->prefersDedicatedAllocation = true;
+            requirements->requiresDedicatedAllocation = true;
+         } else {
+            requirements->prefersDedicatedAllocation = false;
+            requirements->requiresDedicatedAllocation = false;
+         }
+         break;
+      }
+
+      default:
+         vk_debug_ignored_stype(ext->sType);
+         break;
+      }
+   }
+
+   /* If the image is disjoint, then we must return the memory requirements for
+    * the single plane specified in VkImagePlaneMemoryRequirementsInfo. If
+    * non-disjoint, then exactly one set of memory requirements exists for the
+    * whole image.
+    *
+    * This is enforced by the Valid Usage for VkImageMemoryRequirementsInfo2,
+    * which requires that the app provide VkImagePlaneMemoryRequirementsInfo if
+    * and only if the image is disjoint (that is, multi-planar format and
+    * VK_IMAGE_CREATE_DISJOINT_BIT).
+    */
+   enum anv_image_memory_binding binding;
+   if (image->disjoint) {
+      assert(util_bitcount(aspects) == 1);
+      assert(aspects & image->vk.aspects);
+      binding = anv_image_aspect_to_binding(image, aspects);
+   } else {
+      assert(aspects == image->vk.aspects);
+      binding = ANV_IMAGE_MEMORY_BINDING_MAIN;
+   }
+
+   pMemoryRequirements->memoryRequirements = (VkMemoryRequirements) {
+      .size = image->bindings[binding].memory_range.size,
+      .alignment = image->bindings[binding].memory_range.alignment,
+      .memoryTypeBits = memory_types,
+   };
+}
+
+void anv_GetImageMemoryRequirements2(
+    VkDevice                                    _device,
+    const VkImageMemoryRequirementsInfo2*       pInfo,
+    VkMemoryRequirements2*                      pMemoryRequirements)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_image, image, pInfo->image);
+
+   VkImageAspectFlags aspects = image->vk.aspects;
+
+   vk_foreach_struct_const(ext, pInfo->pNext) {
+      switch (ext->sType) {
+      case VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO: {
+         assert(image->disjoint);
+         const VkImagePlaneMemoryRequirementsInfo *plane_reqs =
+            (const VkImagePlaneMemoryRequirementsInfo *) ext;
+         aspects = plane_reqs->planeAspect;
+         break;
+      }
+
+      default:
+         vk_debug_ignored_stype(ext->sType);
+         break;
+      }
+   }
+
+   anv_image_get_memory_requirements(device, image, aspects,
+                                     pMemoryRequirements);
+}
+
+void anv_GetDeviceImageMemoryRequirements(
+    VkDevice                                    _device,
+    const VkDeviceImageMemoryRequirements*   pInfo,
+    VkMemoryRequirements2*                      pMemoryRequirements)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_image image = { 0 };
+
+   if ((device->physical->sparse_type == ANV_SPARSE_TYPE_NOT_SUPPORTED) &&
+       INTEL_DEBUG(DEBUG_SPARSE) &&
+       pInfo->pCreateInfo->flags & (VK_IMAGE_CREATE_SPARSE_BINDING_BIT |
+                                    VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
+                                    VK_IMAGE_CREATE_SPARSE_ALIASED_BIT))
+      fprintf(stderr, "=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
+              __LINE__, pInfo->pCreateInfo->flags);
+
+   ASSERTED VkResult result =
+      anv_image_init_from_create_info(device, &image, pInfo->pCreateInfo, true);
+   assert(result == VK_SUCCESS);
+
+   VkImageAspectFlags aspects =
+      image.disjoint ? pInfo->planeAspect : image.vk.aspects;
+
+   anv_image_get_memory_requirements(device, &image, aspects,
+                                     pMemoryRequirements);
+   anv_image_finish(&image);
+}
+
+static void
+anv_image_get_sparse_memory_requirements(
+      struct anv_device *device,
+      struct anv_image *image,
+      VkImageAspectFlags aspects,
+      uint32_t *pSparseMemoryRequirementCount,
+      VkSparseImageMemoryRequirements2 *pSparseMemoryRequirements)
+{
+   VK_OUTARRAY_MAKE_TYPED(VkSparseImageMemoryRequirements2, reqs,
+                          pSparseMemoryRequirements,
+                          pSparseMemoryRequirementCount);
+
+   /* From the spec:
+    *   "The sparse image must have been created using the
+    *    VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT flag to retrieve valid sparse
+    *    image memory requirements."
+    */
+   if (!(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
+      return;
+
+   VkSparseImageMemoryRequirements ds_mem_reqs = {};
+   VkSparseImageMemoryRequirements2 *ds_reqs_ptr = NULL;
+
+   u_foreach_bit(b, aspects) {
+      VkImageAspectFlagBits aspect = 1 << b;
+      const uint32_t plane = anv_image_aspect_to_plane(image, aspect);
+      struct isl_surf *surf = &image->planes[plane].primary_surface.isl;
+
+      VkSparseImageFormatProperties format_props =
+         anv_sparse_calc_image_format_properties(device->physical, aspect,
+                                                 image->vk.image_type,
+                                                 image->vk.samples, surf);
+
+      uint32_t miptail_first_lod;
+      VkDeviceSize miptail_size, miptail_offset, miptail_stride;
+      anv_sparse_calc_miptail_properties(device, image, aspect,
+                                         &miptail_first_lod, &miptail_size,
+                                         &miptail_offset, &miptail_stride);
+
+      VkSparseImageMemoryRequirements mem_reqs = {
+         .formatProperties = format_props,
+         .imageMipTailFirstLod = miptail_first_lod,
+         .imageMipTailSize = miptail_size,
+         .imageMipTailOffset = miptail_offset,
+         .imageMipTailStride = miptail_stride,
+      };
+
+      /* If both depth and stencil are the same, unify them if possible. */
+      if (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT |
+                    VK_IMAGE_ASPECT_STENCIL_BIT)) {
+         if (!ds_reqs_ptr) {
+            ds_mem_reqs = mem_reqs;
+         } else if (ds_mem_reqs.formatProperties.imageGranularity.width ==
+                       mem_reqs.formatProperties.imageGranularity.width &&
+                    ds_mem_reqs.formatProperties.imageGranularity.height ==
+                       mem_reqs.formatProperties.imageGranularity.height &&
+                    ds_mem_reqs.formatProperties.imageGranularity.depth ==
+                       mem_reqs.formatProperties.imageGranularity.depth &&
+                    ds_mem_reqs.imageMipTailFirstLod ==
+                       mem_reqs.imageMipTailFirstLod &&
+                    ds_mem_reqs.imageMipTailSize ==
+                       mem_reqs.imageMipTailSize &&
+                    ds_mem_reqs.imageMipTailOffset ==
+                       mem_reqs.imageMipTailOffset &&
+                    ds_mem_reqs.imageMipTailStride ==
+                       mem_reqs.imageMipTailStride) {
+            ds_reqs_ptr->memoryRequirements.formatProperties.aspectMask |=
+               aspect;
+            continue;
+         }
+      }
+
+      vk_outarray_append_typed(VkSparseImageMemoryRequirements2, &reqs, r) {
+         r->memoryRequirements = mem_reqs;
+         if (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT |
+                       VK_IMAGE_ASPECT_STENCIL_BIT))
+            ds_reqs_ptr = r;
+      }
+   }
+}
+
+void anv_GetImageSparseMemoryRequirements2(
+    VkDevice                                    _device,
+    const VkImageSparseMemoryRequirementsInfo2* pInfo,
+    uint32_t*                                   pSparseMemoryRequirementCount,
+    VkSparseImageMemoryRequirements2*           pSparseMemoryRequirements)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_image, image, pInfo->image);
+
+   if (!anv_sparse_residency_is_enabled(device)) {
+      if ((device->physical->sparse_type == ANV_SPARSE_TYPE_NOT_SUPPORTED) &&
+          INTEL_DEBUG(DEBUG_SPARSE))
+         fprintf(stderr, "=== [%s:%d] [%s]\n", __FILE__, __LINE__, __func__);
+
+      *pSparseMemoryRequirementCount = 0;
+      return;
+   }
+
+   anv_image_get_sparse_memory_requirements(device, image, image->vk.aspects,
+                                            pSparseMemoryRequirementCount,
+                                            pSparseMemoryRequirements);
+}
+
+void anv_GetDeviceImageSparseMemoryRequirements(
+    VkDevice                                    _device,
+    const VkDeviceImageMemoryRequirements*      pInfo,
+    uint32_t*                                   pSparseMemoryRequirementCount,
+    VkSparseImageMemoryRequirements2*           pSparseMemoryRequirements)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_image image = { 0 };
+
+   if (!anv_sparse_residency_is_enabled(device)) {
+      if ((device->physical->sparse_type == ANV_SPARSE_TYPE_NOT_SUPPORTED) &&
+          INTEL_DEBUG(DEBUG_SPARSE))
+         fprintf(stderr, "=== [%s:%d] [%s]\n", __FILE__, __LINE__, __func__);
+
+      *pSparseMemoryRequirementCount = 0;
+      return;
+   }
+
+   /* This function is similar to anv_GetDeviceImageMemoryRequirements, in
+    * which it actually creates an image, gets the properties and then
+    * destroys the image.
+    *
+    * We could one day refactor things to allow us to gather the properties
+    * without having to actually create the image, maybe by reworking ISL to
+    * separate creation from parameter computing.
+    */
+   VkResult result =
+      anv_image_init_from_create_info(device, &image, pInfo->pCreateInfo,
+                                      true /* no_private_binding_alloc */);
+   if (result != VK_SUCCESS) {
+      *pSparseMemoryRequirementCount = 0;
+      return;
+   }
+
+   /* The spec says:
+    *  "planeAspect is a VkImageAspectFlagBits value specifying the aspect
+    *   corresponding to the image plane to query. This parameter is ignored
+    *   unless pCreateInfo::tiling is VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+    *   or pCreateInfo::flags has VK_IMAGE_CREATE_DISJOINT_BIT set."
+    */
+   VkImageAspectFlags aspects =
+      (pInfo->pCreateInfo->flags & VK_IMAGE_CREATE_DISJOINT_BIT) ||
+      (pInfo->pCreateInfo->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+         ? pInfo->planeAspect : image.vk.aspects;
+
+   anv_image_get_sparse_memory_requirements(device, &image, aspects,
+                                            pSparseMemoryRequirementCount,
+                                            pSparseMemoryRequirements);
+
+   anv_image_finish(&image);
+}
+
+static bool
+anv_image_map_aux_tt(struct anv_device *device,
+                     struct anv_image *image, uint32_t plane)
+{
+   const struct anv_address main_addr = anv_image_address(
+      image, &image->planes[plane].primary_surface.memory_range);
+   struct anv_bo *bo = main_addr.bo;
+   assert(bo != NULL);
+
+   /* If the additional memory padding was added at the end of the BO for CCS
+    * data, map this region at the granularity of the main/CCS pages.
+    *
+    * Otherwise the image should have additional CCS data at the computed
+    * offset.
+    */
+   if (device->physical->alloc_aux_tt_mem &&
+       (bo->alloc_flags & ANV_BO_ALLOC_AUX_CCS)) {
+      uint64_t main_aux_alignment =
+         intel_aux_map_get_alignment(device->aux_map_ctx);
+      assert(bo->offset % main_aux_alignment == 0);
+      const struct anv_address start_addr = (struct anv_address) {
+         .bo = bo,
+         .offset = ROUND_DOWN_TO(main_addr.offset, main_aux_alignment),
+      };
+      const struct anv_address aux_addr = (struct anv_address) {
+         .bo = bo,
+         .offset = bo->ccs_offset +
+                   intel_aux_main_to_aux_offset(device->aux_map_ctx,
+                                                start_addr.offset),
+      };
+      const struct isl_surf *surf = &image->planes[plane].primary_surface.isl;
+      const uint64_t format_bits =
+         intel_aux_map_format_bits_for_isl_surf(surf);
+      /* Make sure to have the mapping cover the entire image from the aux
+       * aligned start.
+       */
+      const uint64_t main_size = align(
+         (main_addr.offset - start_addr.offset) + surf->size_B,
+         main_aux_alignment);
+
+      if (intel_aux_map_add_mapping(device->aux_map_ctx,
+                                    anv_address_physical(start_addr),
+                                    anv_address_physical(aux_addr),
+                                    main_size, format_bits)) {
+         image->planes[plane].aux_tt.mapped = true;
+         image->planes[plane].aux_tt.addr = anv_address_physical(start_addr);
+         image->planes[plane].aux_tt.size = main_size;
+         return true;
+      }
+   } else {
+      if (anv_address_allows_aux_map(device, main_addr)) {
+         const struct anv_address aux_addr =
+            anv_image_address(image,
+                              &image->planes[plane].compr_ctrl_memory_range);
+         const struct isl_surf *surf =
+            &image->planes[plane].primary_surface.isl;
+         const uint64_t format_bits =
+            intel_aux_map_format_bits_for_isl_surf(surf);
+         if (intel_aux_map_add_mapping(device->aux_map_ctx,
+                                       anv_address_physical(main_addr),
+                                       anv_address_physical(aux_addr),
+                                       surf->size_B, format_bits)) {
+            image->planes[plane].aux_tt.mapped = true;
+            image->planes[plane].aux_tt.addr = anv_address_physical(main_addr);
+            image->planes[plane].aux_tt.size = surf->size_B;
+            return true;
+         }
+      }
+   }
+
+   return false;
+
+}
+
+static VkResult
+anv_image_bind_address(struct anv_device *device,
+                        struct anv_image *image,
+                        enum anv_image_memory_binding binding,
+                        struct anv_address address)
+{
+   image->bindings[binding].address = address;
+
+   /* Map bindings for images with host transfer usage, so that we don't have
+    * to map/unmap things at every host operation. We map cached, that means
+    * that the copy operations need to cflush on platforms that have no
+    * host_cache+host_coherent memory types.
+    */
+   if (image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT) {
+      uint64_t offset = image->bindings[binding].address.offset +
+                        image->bindings[binding].memory_range.offset;
+      uint64_t map_offset, map_size;
+      anv_sanitize_map_params(device, offset,
+                              image->bindings[binding].memory_range.size,
+                              &map_offset, &map_size);
+
+      VkResult result = anv_device_map_bo(device,
+                                          image->bindings[binding].address.bo,
+                                          map_offset, map_size,
+                                          NULL /* placed_addr */,
+                                          &image->bindings[binding].host_map);
+      if (result != VK_SUCCESS)
+         return result;
+
+      image->bindings[binding].map_delta = (offset - map_offset);
+      image->bindings[binding].map_size = map_size;
+   }
+
+   ANV_RMV(image_bind, device, image, binding);
+
    return VK_SUCCESS;
+}
+
+static VkResult
+anv_bind_image_memory(struct anv_device *device,
+                      const VkBindImageMemoryInfo *bind_info)
+{
+   ANV_FROM_HANDLE(anv_device_memory, mem, bind_info->memory);
+   ANV_FROM_HANDLE(anv_image, image, bind_info->image);
+   bool did_bind = false;
+   VkResult result = VK_SUCCESS;
+
+   const VkBindMemoryStatusKHR *bind_status =
+      vk_find_struct_const(bind_info->pNext, BIND_MEMORY_STATUS_KHR);
+
+   assert(!anv_image_is_sparse(image));
+
+   /* Resolve will alter the image's aspects, do this first. */
+   if (mem && mem->vk.ahardware_buffer)
+      resolve_ahw_image(device, image, mem);
+
+   vk_foreach_struct_const(s, bind_info->pNext) {
+      switch (s->sType) {
+      case VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO: {
+         const VkBindImagePlaneMemoryInfo *plane_info =
+            (const VkBindImagePlaneMemoryInfo *) s;
+
+         /* Workaround for possible spec bug.
+          *
+          * Unlike VkImagePlaneMemoryRequirementsInfo, which requires that
+          * the image be disjoint (that is, multi-planar format and
+          * VK_IMAGE_CREATE_DISJOINT_BIT), VkBindImagePlaneMemoryInfo allows
+          * the image to be non-disjoint and requires only that the image
+          * have the DISJOINT flag. In this case, regardless of the value of
+          * VkImagePlaneMemoryRequirementsInfo::planeAspect, the behavior is
+          * the same as if VkImagePlaneMemoryRequirementsInfo were omitted.
+          */
+         if (!image->disjoint)
+            break;
+
+         enum anv_image_memory_binding binding =
+            anv_image_aspect_to_binding(image, plane_info->planeAspect);
+
+         anv_image_bind_address(device, image, binding,
+                                (struct anv_address) {
+                                   .bo = mem->bo,
+                                   .offset = bind_info->memoryOffset,
+                                });
+
+         did_bind = true;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR: {
+         /* Ignore this struct on Android, we cannot access swapchain
+          * structures there.
+          */
+#ifndef VK_USE_PLATFORM_ANDROID_KHR
+         const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
+            (const VkBindImageMemorySwapchainInfoKHR *) s;
+         struct anv_image *swapchain_image =
+            anv_swapchain_get_image(swapchain_info->swapchain,
+                                    swapchain_info->imageIndex);
+         assert(swapchain_image);
+         assert(image->vk.aspects == swapchain_image->vk.aspects);
+         assert(mem == NULL);
+
+         for (int j = 0; j < ARRAY_SIZE(image->bindings); ++j) {
+            assert(memory_ranges_equal(image->bindings[j].memory_range,
+                                       swapchain_image->bindings[j].memory_range));
+            if (image->bindings[j].memory_range.size != 0) {
+               anv_image_bind_address(device, image, j,
+                                      swapchain_image->bindings[j].address);
+            }
+         }
+
+         /* We must bump the private binding's bo's refcount because, unlike the other
+          * bindings, its lifetime is not application-managed.
+          */
+         struct anv_bo *private_bo =
+            image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE].address.bo;
+         if (private_bo)
+            anv_bo_ref(private_bo);
+
+         did_bind = true;
+#endif
+         break;
+      }
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch"
+      case VK_STRUCTURE_TYPE_NATIVE_BUFFER_ANDROID: {
+         const VkNativeBufferANDROID *gralloc_info =
+            (const VkNativeBufferANDROID *)s;
+         result = anv_image_bind_from_gralloc(device, image, gralloc_info);
+         if (result != VK_SUCCESS)
+            return result;
+
+         resolve_anb_image(device, image, gralloc_info);
+         did_bind = true;
+         break;
+      }
+#pragma GCC diagnostic pop
+      default:
+         vk_debug_ignored_stype(s->sType);
+         break;
+      }
+   }
+
+   if (!did_bind) {
+      assert(!image->disjoint);
+      result = anv_image_bind_address(device, image,
+                                      ANV_IMAGE_MEMORY_BINDING_MAIN,
+                                      (struct anv_address) {
+                                         .bo = mem->bo,
+                                         .offset = bind_info->memoryOffset,
+                                      });
+      did_bind = true;
+   }
+
+   /* Now that we have the BO, finalize CCS setup. */
+   for (int p = 0; p < image->n_planes; ++p) {
+      enum anv_image_memory_binding binding =
+         image->planes[p].primary_surface.memory_range.binding;
+      const struct anv_bo *bo =
+         image->bindings[binding].address.bo;
+
+      if (!bo || !isl_aux_usage_has_ccs(image->planes[p].aux_usage))
+         continue;
+
+      /* Do nothing if flat CCS requirements are satisfied.
+       *
+       * Also, assume that imported BOs with a modifier including
+       * CCS live only in local memory. Otherwise the exporter should
+       * have failed the creation of the BO.
+       */
+      if (device->info->has_flat_ccs &&
+          (anv_bo_is_vram_only(bo) ||
+           (bo->alloc_flags & ANV_BO_ALLOC_IMPORTED)))
+         continue;
+
+      /* If the AUX-TT mapping succeeds, there is nothing else to do. */
+      if (device->info->has_aux_map && anv_image_map_aux_tt(device, image, p))
+         continue;
+
+      /* Do nothing except for gfx12. There are no special requirements. */
+      if (device->info->ver != 12)
+         continue;
+
+      /* The plane's BO cannot support CCS, disable compression on it. */
+      assert(!isl_drm_modifier_has_aux(image->vk.drm_format_mod));
+
+      anv_perf_warn(VK_LOG_OBJS(&image->vk.base),
+                    "BO lacks CCS support. Disabling the CCS aux usage.");
+
+      if (image->planes[p].aux_usage == ISL_AUX_USAGE_MCS_CCS) {
+         assert(image->planes[p].aux_surface.memory_range.size);
+         image->planes[p].aux_usage = ISL_AUX_USAGE_MCS;
+      } else if (image->planes[p].aux_usage == ISL_AUX_USAGE_HIZ_CCS ||
+                 image->planes[p].aux_usage == ISL_AUX_USAGE_HIZ_CCS_WT) {
+         assert(image->planes[p].aux_surface.memory_range.size);
+         image->planes[p].aux_usage = ISL_AUX_USAGE_HIZ;
+      } else {
+         assert(image->planes[p].aux_usage == ISL_AUX_USAGE_CCS_E ||
+                image->planes[p].aux_usage == ISL_AUX_USAGE_FCV_CCS_E ||
+                image->planes[p].aux_usage == ISL_AUX_USAGE_STC_CCS);
+         image->planes[p].aux_usage = ISL_AUX_USAGE_NONE;
+      }
+   }
+
+   if (bind_status)
+      *bind_status->pResult = result;
+
+   return result;
 }
 
 VkResult anv_BindImageMemory2(
@@ -1029,281 +2794,255 @@ VkResult anv_BindImageMemory2(
     const VkBindImageMemoryInfo*                pBindInfos)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
+   VkResult result = VK_SUCCESS;
 
    for (uint32_t i = 0; i < bindInfoCount; i++) {
-      const VkBindImageMemoryInfo *bind_info = &pBindInfos[i];
-      ANV_FROM_HANDLE(anv_device_memory, mem, bind_info->memory);
-      ANV_FROM_HANDLE(anv_image, image, bind_info->image);
+      VkResult res = anv_bind_image_memory(device, &pBindInfos[i]);
+      if (result == VK_SUCCESS && res != VK_SUCCESS)
+         result = res;
+   }
 
-      /* Resolve will alter the image's aspects, do this first. */
-      if (mem && mem->ahw)
-         resolve_ahw_image(device, image, mem);
+   return result;
+}
 
-      VkImageAspectFlags aspects = image->aspects;
-      vk_foreach_struct_const(s, bind_info->pNext) {
-         switch (s->sType) {
-         case VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO: {
-            const VkBindImagePlaneMemoryInfo *plane_info =
-               (const VkBindImagePlaneMemoryInfo *) s;
+static void
+anv_get_image_subresource_layout(struct anv_device *device,
+                                 const struct anv_image *image,
+                                 const VkImageSubresource2KHR *subresource,
+                                 VkSubresourceLayout2KHR *layout)
+{
+   const struct isl_surf *isl_surf = NULL;
+   const struct anv_image_memory_range *mem_range;
+   uint64_t row_pitch_B;
 
-            aspects = plane_info->planeAspect;
-            break;
-         }
-         case VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR: {
-            const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
-               (const VkBindImageMemorySwapchainInfoKHR *) s;
-            struct anv_image *swapchain_image =
-               anv_swapchain_get_image(swapchain_info->swapchain,
-                                       swapchain_info->imageIndex);
-            assert(swapchain_image);
-            assert(image->aspects == swapchain_image->aspects);
-            assert(mem == NULL);
+   assert(__builtin_popcount(subresource->imageSubresource.aspectMask) == 1);
 
-            uint32_t aspect_bit;
-            anv_foreach_image_aspect_bit(aspect_bit, image, aspects) {
-               uint32_t plane =
-                  anv_image_aspect_to_plane(image->aspects, 1UL << aspect_bit);
-               struct anv_device_memory mem = {
-                  .bo = swapchain_image->planes[plane].address.bo,
-               };
-               anv_image_bind_memory_plane(device, image, plane,
-                                           &mem, bind_info->memoryOffset);
-            }
-            break;
-         }
-         default:
-            anv_debug_ignored_stype(s->sType);
-            break;
-         }
+   /* The Vulkan spec requires that aspectMask be
+    * VK_IMAGE_ASPECT_MEMORY_PLANE_i_BIT_EXT if tiling is
+    * VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT.
+    *
+    * For swapchain images, the Vulkan spec says that every swapchain image has
+    * tiling VK_IMAGE_TILING_OPTIMAL, but we may choose
+    * VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT internally.  Vulkan doesn't allow
+    * vkGetImageSubresourceLayout for images with VK_IMAGE_TILING_OPTIMAL,
+    * therefore it's invalid for the application to call this on a swapchain
+    * image.  The WSI code, however, knows when it has internally created
+    * a swapchain image with VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+    * so it _should_ correctly use VK_IMAGE_ASPECT_MEMORY_PLANE_* in that case.
+    * But it incorrectly uses VK_IMAGE_ASPECT_PLANE_*, so we have a temporary
+    * workaround.
+    *
+    * https://gitlab.freedesktop.org/mesa/mesa/-/issues/10176
+    */
+   if (image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
+      /* TODO(chadv): Drop this workaround when WSI gets fixed. */
+      uint32_t mem_plane;
+      switch (subresource->imageSubresource.aspectMask) {
+      case VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT:
+      case VK_IMAGE_ASPECT_PLANE_0_BIT:
+         mem_plane = 0;
+         break;
+      case VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT:
+      case VK_IMAGE_ASPECT_PLANE_1_BIT:
+         mem_plane = 1;
+         break;
+      case VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT:
+      case VK_IMAGE_ASPECT_PLANE_2_BIT:
+         mem_plane = 2;
+         break;
+      default:
+         unreachable("bad VkImageAspectFlags");
       }
 
-      /* VkBindImageMemorySwapchainInfoKHR requires memory to be
-       * VK_NULL_HANDLE. In such case, just carry one with the next bind
-       * item.
+      if (isl_drm_modifier_plane_is_clear_color(image->vk.drm_format_mod,
+                                                mem_plane)) {
+         assert(image->n_planes == 1);
+
+         mem_range = &image->planes[0].fast_clear_memory_range;
+         row_pitch_B = ISL_DRM_CC_PLANE_PITCH_B;
+      } else if (mem_plane == 1 &&
+                 image->planes[0].compr_ctrl_memory_range.size > 0) {
+         assert(image->n_planes == 1);
+         assert(isl_drm_modifier_has_aux(image->vk.drm_format_mod));
+
+         mem_range = &image->planes[0].compr_ctrl_memory_range;
+         row_pitch_B = image->planes[0].primary_surface.isl.row_pitch_B /
+                       INTEL_AUX_MAP_MAIN_PITCH_SCALEDOWN;
+      } else if (mem_plane == 1 &&
+                 image->planes[0].aux_surface.memory_range.size > 0) {
+         assert(image->n_planes == 1);
+         assert(image->vk.drm_format_mod == I915_FORMAT_MOD_Y_TILED_CCS);
+
+         mem_range = &image->planes[0].aux_surface.memory_range;
+         row_pitch_B = image->planes[0].aux_surface.isl.row_pitch_B;
+      } else {
+         assert(mem_plane < image->n_planes);
+
+         mem_range = &image->planes[mem_plane].primary_surface.memory_range;
+         row_pitch_B =
+            image->planes[mem_plane].primary_surface.isl.row_pitch_B;
+
+         isl_surf = &image->planes[mem_plane].primary_surface.isl;
+      }
+
+      /* If the memory binding differs between the primary plane and the
+       * specified memory plane, the returned offset will be incorrect.
        */
-      if (!mem)
-         continue;
+      assert(mem_range->binding ==
+             image->planes[0].primary_surface.memory_range.binding);
 
-      uint32_t aspect_bit;
-      anv_foreach_image_aspect_bit(aspect_bit, image, aspects) {
-         uint32_t plane =
-            anv_image_aspect_to_plane(image->aspects, 1UL << aspect_bit);
-         anv_image_bind_memory_plane(device, image, plane,
-                                     mem, bind_info->memoryOffset);
+      /* We are working with a non-arrayed 2D image. */
+      assert(image->vk.image_type == VK_IMAGE_TYPE_2D);
+      assert(image->vk.array_layers == 1);
+   } else {
+      const uint32_t plane =
+         anv_image_aspect_to_plane(image,
+                                   subresource->imageSubresource.aspectMask);
+      isl_surf = &image->planes[plane].primary_surface.isl;
+      mem_range = &image->planes[plane].primary_surface.memory_range;
+      row_pitch_B = isl_surf->row_pitch_B;
+   }
+
+   const uint32_t level = subresource->imageSubresource.mipLevel;
+   if (isl_surf) {
+      /* ISL tries to give us a single layer but the Vulkan API expect the
+       * entire 3D size.
+       */
+      const uint32_t layer = subresource->imageSubresource.arrayLayer;
+      const uint32_t z = u_minify(isl_surf->logical_level0_px.d, level) - 1;
+      uint64_t z0_start_tile_B, z0_end_tile_B;
+      uint64_t zX_start_tile_B, zX_end_tile_B;
+      isl_surf_get_image_range_B_tile(isl_surf, level, layer, 0,
+                                      &z0_start_tile_B, &z0_end_tile_B);
+      isl_surf_get_image_range_B_tile(isl_surf, level, layer, z,
+                                      &zX_start_tile_B, &zX_end_tile_B);
+
+      layout->subresourceLayout.offset = mem_range->offset + z0_start_tile_B;
+      layout->subresourceLayout.size = zX_end_tile_B - z0_start_tile_B;
+      layout->subresourceLayout.rowPitch = row_pitch_B;
+      layout->subresourceLayout.depthPitch =
+         isl_surf_get_array_pitch(isl_surf);
+      layout->subresourceLayout.arrayPitch =
+         isl_surf_get_array_pitch(isl_surf);
+   } else {
+      layout->subresourceLayout.offset = mem_range->offset;
+      layout->subresourceLayout.size = mem_range->size;
+      layout->subresourceLayout.rowPitch = row_pitch_B;
+      /* Not a surface so those fields don't make sense */
+      layout->subresourceLayout.depthPitch = 0;
+      layout->subresourceLayout.arrayPitch = 0;
+   }
+
+   VkSubresourceHostMemcpySizeEXT *host_memcpy_size =
+      vk_find_struct(layout->pNext, SUBRESOURCE_HOST_MEMCPY_SIZE_EXT);
+   if (host_memcpy_size) {
+      if (!isl_surf) {
+         host_memcpy_size->size = 0;
+      } else if (anv_image_can_host_memcpy(image)) {
+         host_memcpy_size->size = layout->subresourceLayout.size;
+      } else {
+         /* If we cannot do straight memcpy of the image, compute a linear
+          * size. This will be the format in which we store the data.
+          */
+         struct isl_surf lin_surf;
+         bool ok =
+            isl_surf_init(&device->physical->isl_dev, &lin_surf,
+                          .dim          = isl_surf->dim,
+                          .format       = isl_surf->format,
+                          .width        = u_minify(
+                             isl_surf->logical_level0_px.w, level),
+                          .height       = u_minify(
+                             isl_surf->logical_level0_px.h, level),
+                          .depth        = u_minify(
+                             isl_surf->logical_level0_px.d, level),
+                          .array_len    = 1,
+                          .levels       = 1,
+                          .samples      = isl_surf->samples,
+                          .tiling_flags = ISL_TILING_LINEAR_BIT);
+         assert(ok);
+         host_memcpy_size->size = lin_surf.size_B;
       }
    }
 
-   return VK_SUCCESS;
-}
-
-void anv_GetImageSubresourceLayout(
-    VkDevice                                    device,
-    VkImage                                     _image,
-    const VkImageSubresource*                   subresource,
-    VkSubresourceLayout*                        layout)
-{
-   ANV_FROM_HANDLE(anv_image, image, _image);
-
-   const struct anv_surface *surface;
-   if (subresource->aspectMask == VK_IMAGE_ASPECT_PLANE_1_BIT &&
-       image->drm_format_mod != DRM_FORMAT_MOD_INVALID &&
-       isl_drm_modifier_has_aux(image->drm_format_mod)) {
-      surface = &image->planes[0].aux_surface;
-   } else {
-      uint32_t plane = anv_image_aspect_to_plane(image->aspects,
-                                                 subresource->aspectMask);
-      surface = &image->planes[plane].surface;
-   }
-
-   assert(__builtin_popcount(subresource->aspectMask) == 1);
-
-   layout->offset = surface->offset;
-   layout->rowPitch = surface->isl.row_pitch_B;
-   layout->depthPitch = isl_surf_get_array_pitch(&surface->isl);
-   layout->arrayPitch = isl_surf_get_array_pitch(&surface->isl);
-
-   if (subresource->mipLevel > 0 || subresource->arrayLayer > 0) {
-      assert(surface->isl.tiling == ISL_TILING_LINEAR);
-
-      uint32_t offset_B;
-      isl_surf_get_image_offset_B_tile_sa(&surface->isl,
-                                          subresource->mipLevel,
-                                          subresource->arrayLayer,
-                                          0 /* logical_z_offset_px */,
-                                          &offset_B, NULL, NULL);
-      layout->offset += offset_B;
-      layout->size = layout->rowPitch * anv_minify(image->extent.height,
-                                                   subresource->mipLevel) *
-                     image->extent.depth;
-   } else {
-      layout->size = surface->isl.size_B;
+   VkImageCompressionPropertiesEXT *comp_props =
+      vk_find_struct(layout->pNext, IMAGE_COMPRESSION_PROPERTIES_EXT);
+   if (comp_props) {
+      comp_props->imageCompressionFixedRateFlags =
+         VK_IMAGE_COMPRESSION_FIXED_RATE_NONE_EXT;
+      comp_props->imageCompressionFlags = VK_IMAGE_COMPRESSION_DISABLED_EXT;
+      for (uint32_t p = 0; p < image->n_planes; p++) {
+         if (image->planes[p].aux_usage != ISL_AUX_USAGE_NONE) {
+            comp_props->imageCompressionFlags = VK_IMAGE_COMPRESSION_DEFAULT_EXT;
+            break;
+         }
+      }
    }
 }
 
-VkResult anv_GetImageDrmFormatModifierPropertiesEXT(
-    VkDevice                                    device,
-    VkImage                                     _image,
-    VkImageDrmFormatModifierPropertiesEXT*      pProperties)
+void anv_GetDeviceImageSubresourceLayoutKHR(
+    VkDevice                                    _device,
+    const VkDeviceImageSubresourceInfoKHR*      pInfo,
+    VkSubresourceLayout2KHR*                    pLayout)
 {
+   ANV_FROM_HANDLE(anv_device, device, _device);
+
+   struct anv_image image = { 0 };
+
+   if (anv_image_init_from_create_info(device, &image, pInfo->pCreateInfo,
+                                       true) != VK_SUCCESS) {
+      pLayout->subresourceLayout = (VkSubresourceLayout) { 0, };
+      return;
+   }
+
+   anv_get_image_subresource_layout(device, &image, pInfo->pSubresource, pLayout);
+}
+
+void anv_GetImageSubresourceLayout2KHR(
+    VkDevice                                    _device,
+    VkImage                                     _image,
+    const VkImageSubresource2KHR*               pSubresource,
+    VkSubresourceLayout2KHR*                    pLayout)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_image, image, _image);
 
-   assert(pProperties->sType ==
-          VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT);
-
-   pProperties->drmFormatModifier = image->drm_format_mod;
-
-   return VK_SUCCESS;
+   anv_get_image_subresource_layout(device, image, pSubresource, pLayout);
 }
 
 static VkImageUsageFlags
-vk_image_layout_to_usage_flags(VkImageLayout layout,
-                               VkImageAspectFlagBits aspect)
+anv_image_flags_filter_for_queue(VkImageUsageFlags usages,
+                                 VkQueueFlagBits queue_flags)
 {
-   assert(util_bitcount(aspect) == 1);
-
-   switch (layout) {
-   case VK_IMAGE_LAYOUT_UNDEFINED:
-   case VK_IMAGE_LAYOUT_PREINITIALIZED:
-      return 0u;
-
-   case VK_IMAGE_LAYOUT_GENERAL:
-      return ~0u;
-
-   case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-      assert(aspect & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
-      return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-      assert(aspect & (VK_IMAGE_ASPECT_DEPTH_BIT |
-                       VK_IMAGE_ASPECT_STENCIL_BIT));
-      return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-
-   case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
-      assert(aspect & VK_IMAGE_ASPECT_DEPTH_BIT);
-      return vk_image_layout_to_usage_flags(
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, aspect);
-
-   case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
-      assert(aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
-      return vk_image_layout_to_usage_flags(
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, aspect);
-
-   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-      assert(aspect & (VK_IMAGE_ASPECT_DEPTH_BIT |
-                       VK_IMAGE_ASPECT_STENCIL_BIT));
-      return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-             VK_IMAGE_USAGE_SAMPLED_BIT |
-             VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-
-   case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
-      assert(aspect & VK_IMAGE_ASPECT_DEPTH_BIT);
-      return vk_image_layout_to_usage_flags(
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, aspect);
-
-   case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
-      assert(aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
-      return vk_image_layout_to_usage_flags(
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, aspect);
-
-   case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-      return VK_IMAGE_USAGE_SAMPLED_BIT |
-             VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-
-   case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-      return VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-
-   case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-      return VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-
-   case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
-      if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
-         return vk_image_layout_to_usage_flags(
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, aspect);
-      } else if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT) {
-         return vk_image_layout_to_usage_flags(
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, aspect);
-      } else {
-         assert(!"Must be a depth/stencil aspect");
-         return 0;
-      }
-
-   case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
-      if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
-         return vk_image_layout_to_usage_flags(
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, aspect);
-      } else if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT) {
-         return vk_image_layout_to_usage_flags(
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, aspect);
-      } else {
-         assert(!"Must be a depth/stencil aspect");
-         return 0;
-      }
-
-   case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-      assert(aspect == VK_IMAGE_ASPECT_COLOR_BIT);
-      /* This needs to be handled specially by the caller */
-      return 0;
-
-   case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
-      assert(aspect == VK_IMAGE_ASPECT_COLOR_BIT);
-      return vk_image_layout_to_usage_flags(VK_IMAGE_LAYOUT_GENERAL, aspect);
-
-   case VK_IMAGE_LAYOUT_SHADING_RATE_OPTIMAL_NV:
-      assert(aspect == VK_IMAGE_ASPECT_COLOR_BIT);
-      return VK_IMAGE_USAGE_SHADING_RATE_IMAGE_BIT_NV;
-
-   case VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT:
-      assert(aspect == VK_IMAGE_ASPECT_COLOR_BIT);
-      return VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT;
-
-   case VK_IMAGE_LAYOUT_MAX_ENUM:
-      unreachable("Invalid image layout.");
+   /* Eliminate graphics usages if the queue is not graphics capable */
+   if (!(queue_flags & VK_QUEUE_GRAPHICS_BIT)) {
+      usages &= ~(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                  VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT |
+                  VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                  VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT |
+                  VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR |
+                  VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT);
    }
 
-   unreachable("Invalid image layout.");
-}
-
-static bool
-vk_image_layout_is_read_only(VkImageLayout layout,
-                             VkImageAspectFlagBits aspect)
-{
-   assert(util_bitcount(aspect) == 1);
-
-   switch (layout) {
-   case VK_IMAGE_LAYOUT_UNDEFINED:
-   case VK_IMAGE_LAYOUT_PREINITIALIZED:
-      return true; /* These are only used for layout transitions */
-
-   case VK_IMAGE_LAYOUT_GENERAL:
-   case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-   case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-   case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
-   case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
-   case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
-      return false;
-
-   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-   case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-   case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-   case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-   case VK_IMAGE_LAYOUT_SHADING_RATE_OPTIMAL_NV:
-   case VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT:
-   case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
-   case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
-      return true;
-
-   case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
-      return aspect == VK_IMAGE_ASPECT_DEPTH_BIT;
-
-   case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
-      return aspect == VK_IMAGE_ASPECT_STENCIL_BIT;
-
-   case VK_IMAGE_LAYOUT_MAX_ENUM:
-      unreachable("Invalid image layout.");
+   /* Eliminate sampling & storage usages if the queue is neither graphics nor
+    * compute capable
+    */
+   if (!(queue_flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))) {
+      usages &= ~(VK_IMAGE_USAGE_SAMPLED_BIT |
+                  VK_IMAGE_USAGE_STORAGE_BIT);
    }
 
-   unreachable("Invalid image layout.");
+   /* Eliminate transfer usages if the queue is neither transfer, compute or
+    * graphics capable
+    */
+   if (!(queue_flags & (VK_QUEUE_TRANSFER_BIT |
+                        VK_QUEUE_COMPUTE_BIT |
+                        VK_QUEUE_GRAPHICS_BIT))) {
+      usages &= ~(VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+   }
+
+   return usages;
 }
 
 /**
@@ -1318,11 +3057,12 @@ vk_image_layout_is_read_only(VkImageLayout layout,
  *
  * @return The primary buffer that should be used for the given layout.
  */
-enum isl_aux_state
-anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
+enum isl_aux_state ATTRIBUTE_PURE
+anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
                         const struct anv_image * const image,
                         const VkImageAspectFlagBits aspect,
-                        const VkImageLayout layout)
+                        const VkImageLayout layout,
+                        const VkQueueFlagBits queue_flags)
 {
    /* Validate the inputs. */
 
@@ -1333,21 +3073,18 @@ anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
    assert(image != NULL);
 
    /* The aspect must be exactly one of the image aspects. */
-   assert(util_bitcount(aspect) == 1 && (aspect & image->aspects));
+   assert(util_bitcount(aspect) == 1 && (aspect & image->vk.aspects));
 
    /* Determine the optimal buffer. */
 
-   uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
+   const uint32_t plane = anv_image_aspect_to_plane(image, aspect);
 
    /* If we don't have an aux buffer then aux state makes no sense */
    const enum isl_aux_usage aux_usage = image->planes[plane].aux_usage;
    assert(aux_usage != ISL_AUX_USAGE_NONE);
 
    /* All images that use an auxiliary surface are required to be tiled. */
-   assert(image->planes[plane].surface.isl.tiling != ISL_TILING_LINEAR);
-
-   /* Stencil has no aux */
-   assert(aspect != VK_IMAGE_ASPECT_STENCIL_BIT);
+   assert(image->planes[plane].primary_surface.isl.tiling != ISL_TILING_LINEAR);
 
    /* Handle a few special cases */
    switch (layout) {
@@ -1366,31 +3103,39 @@ anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
       return ISL_AUX_STATE_AUX_INVALID;
 
    case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: {
-      assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+      assert(image->vk.aspects == VK_IMAGE_ASPECT_COLOR_BIT);
 
       enum isl_aux_state aux_state =
-         isl_drm_modifier_get_default_aux_state(image->drm_format_mod);
+         isl_drm_modifier_get_default_aux_state(image->vk.drm_format_mod);
 
       switch (aux_state) {
-      default:
-         assert(!"unexpected isl_aux_state");
       case ISL_AUX_STATE_AUX_INVALID:
          /* The modifier does not support compression. But, if we arrived
-          * here, then we have enabled compression on it anyway, in which case
-          * we must resolve the aux surface before we release ownership to the
-          * presentation engine (because, having no modifier, the presentation
-          * engine will not be aware of the aux surface). The presentation
-          * engine will not access the aux surface (because it is unware of
-          * it), and so the aux surface will still be resolved when we
-          * re-acquire ownership.
+          * here, then we have enabled compression on it anyway. If this is a
+          * WSI blit source, keep compression as we can do a compressed to
+          * uncompressed copy.
+          */
+         if (image->wsi_blit_src)
+            return ISL_AUX_STATE_COMPRESSED_CLEAR;
+
+         /* If this is not a WSI blit source, we must resolve the aux surface
+          * before we release ownership to the presentation engine (because,
+          * having no modifier, the presentation engine will not be aware of
+          * the aux surface). The presentation engine will not access the aux
+          * surface (because it is unware of it), and so the aux surface will
+          * still be resolved when we re-acquire ownership.
           *
           * Therefore, at ownership transfers in either direction, there does
           * exist an aux surface despite the lack of modifier and its state is
           * pass-through.
           */
          return ISL_AUX_STATE_PASS_THROUGH;
+      case ISL_AUX_STATE_COMPRESSED_CLEAR:
+         return ISL_AUX_STATE_COMPRESSED_CLEAR;
       case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
          return ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
+      default:
+         unreachable("unexpected isl_aux_state");
       }
    }
 
@@ -1401,14 +3146,17 @@ anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
    const bool read_only = vk_image_layout_is_read_only(layout, aspect);
 
    const VkImageUsageFlags image_aspect_usage =
-      aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? image->stencil_usage :
-                                              image->usage;
+      anv_image_flags_filter_for_queue(
+         vk_image_usage(&image->vk, aspect), queue_flags);
    const VkImageUsageFlags usage =
       vk_image_layout_to_usage_flags(layout, aspect) & image_aspect_usage;
 
    bool aux_supported = true;
+   bool clear_supported = isl_aux_usage_has_fast_clears(aux_usage);
 
-   if ((usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) && !read_only) {
+   if ((usage & (VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                 VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT)) &&
+       !read_only) {
       /* This image could be used as both an input attachment and a render
        * target (depth, stencil, or color) at the same time and this can cause
        * corruption.
@@ -1418,24 +3166,26 @@ anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
        *
        * TODO: Should we be disabling this in more cases?
        */
-      if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT)
+      if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT && devinfo->ver <= 9) {
          aux_supported = false;
+         clear_supported = false;
+      }
    }
-
-   if (usage & VK_IMAGE_USAGE_STORAGE_BIT)
-      aux_supported = false;
 
    if (usage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                 VK_IMAGE_USAGE_SAMPLED_BIT |
                 VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) {
       switch (aux_usage) {
       case ISL_AUX_USAGE_HIZ:
-         if (!anv_can_sample_with_hiz(devinfo, image))
+         if (!anv_can_sample_with_hiz(devinfo, image)) {
             aux_supported = false;
+            clear_supported = false;
+         }
          break;
 
       case ISL_AUX_USAGE_HIZ_CCS:
          aux_supported = false;
+         clear_supported = false;
          break;
 
       case ISL_AUX_USAGE_HIZ_CCS_WT:
@@ -1443,10 +3193,18 @@ anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
 
       case ISL_AUX_USAGE_CCS_D:
          aux_supported = false;
+         clear_supported = false;
+         break;
+
+      case ISL_AUX_USAGE_MCS:
+      case ISL_AUX_USAGE_MCS_CCS:
+         if (!anv_can_sample_mcs_with_clear(devinfo, image))
+            clear_supported = false;
          break;
 
       case ISL_AUX_USAGE_CCS_E:
-      case ISL_AUX_USAGE_MCS:
+      case ISL_AUX_USAGE_FCV_CCS_E:
+      case ISL_AUX_USAGE_STC_CCS:
          break;
 
       default:
@@ -1459,6 +3217,7 @@ anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
    case ISL_AUX_USAGE_HIZ_CCS:
    case ISL_AUX_USAGE_HIZ_CCS_WT:
       if (aux_supported) {
+         assert(clear_supported);
          return ISL_AUX_STATE_COMPRESSED_CLEAR;
       } else if (read_only) {
          return ISL_AUX_STATE_RESOLVED;
@@ -1468,20 +3227,37 @@ anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
 
    case ISL_AUX_USAGE_CCS_D:
       /* We only support clear in exactly one state */
-      if (layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+      if (layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL ||
+          layout == VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL) {
          assert(aux_supported);
+         assert(clear_supported);
          return ISL_AUX_STATE_PARTIAL_CLEAR;
       } else {
          return ISL_AUX_STATE_PASS_THROUGH;
       }
 
    case ISL_AUX_USAGE_CCS_E:
-   case ISL_AUX_USAGE_MCS:
+   case ISL_AUX_USAGE_FCV_CCS_E:
       if (aux_supported) {
+         assert(clear_supported);
          return ISL_AUX_STATE_COMPRESSED_CLEAR;
       } else {
          return ISL_AUX_STATE_PASS_THROUGH;
       }
+
+   case ISL_AUX_USAGE_MCS:
+   case ISL_AUX_USAGE_MCS_CCS:
+      assert(aux_supported);
+      if (clear_supported) {
+         return ISL_AUX_STATE_COMPRESSED_CLEAR;
+      } else {
+         return ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
+      }
+
+   case ISL_AUX_USAGE_STC_CCS:
+      assert(aux_supported);
+      assert(!clear_supported);
+      return ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
 
    default:
       unreachable("Unsupported aux usage");
@@ -1502,14 +3278,15 @@ anv_layout_to_aux_state(const struct gen_device_info * const devinfo,
  *
  * @return The primary buffer that should be used for the given layout.
  */
-enum isl_aux_usage
-anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
+enum isl_aux_usage ATTRIBUTE_PURE
+anv_layout_to_aux_usage(const struct intel_device_info * const devinfo,
                         const struct anv_image * const image,
                         const VkImageAspectFlagBits aspect,
                         const VkImageUsageFlagBits usage,
-                        const VkImageLayout layout)
+                        const VkImageLayout layout,
+                        const VkQueueFlagBits queue_flags)
 {
-   uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
+   const uint32_t plane = anv_image_aspect_to_plane(image, aspect);
 
    /* If there is no auxiliary surface allocated, we must use the one and only
     * main buffer.
@@ -1518,16 +3295,16 @@ anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
       return ISL_AUX_USAGE_NONE;
 
    enum isl_aux_state aux_state =
-      anv_layout_to_aux_state(devinfo, image, aspect, layout);
+      anv_layout_to_aux_state(devinfo, image, aspect, layout, queue_flags);
 
    switch (aux_state) {
    case ISL_AUX_STATE_CLEAR:
       unreachable("We never use this state");
 
    case ISL_AUX_STATE_PARTIAL_CLEAR:
-      assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
+      assert(image->vk.aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
       assert(image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_D);
-      assert(image->samples == 1);
+      assert(image->vk.samples == 1);
       return ISL_AUX_USAGE_CCS_D;
 
    case ISL_AUX_STATE_COMPRESSED_CLEAR:
@@ -1569,29 +3346,37 @@ anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
  * @param usage The usage which describes how the image will be accessed.
  * @param layout The current layout of the image aspect(s).
  */
-enum anv_fast_clear_type
-anv_layout_to_fast_clear_type(const struct gen_device_info * const devinfo,
+enum anv_fast_clear_type ATTRIBUTE_PURE
+anv_layout_to_fast_clear_type(const struct intel_device_info * const devinfo,
                               const struct anv_image * const image,
                               const VkImageAspectFlagBits aspect,
-                              const VkImageLayout layout)
+                              const VkImageLayout layout,
+                              const VkQueueFlagBits queue_flags)
 {
-   if (INTEL_DEBUG & DEBUG_NO_FAST_CLEAR)
+   if (INTEL_DEBUG(DEBUG_NO_FAST_CLEAR))
       return ANV_FAST_CLEAR_NONE;
 
-   uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
+   const uint32_t plane = anv_image_aspect_to_plane(image, aspect);
 
    /* If there is no auxiliary surface allocated, there are no fast-clears */
    if (image->planes[plane].aux_usage == ISL_AUX_USAGE_NONE)
       return ANV_FAST_CLEAR_NONE;
 
-   /* We don't support MSAA fast-clears on Ivybridge or Bay Trail because they
-    * lack the MI ALU which we need to determine the predicates.
+   /* Xe2+ platforms don't have fast clear type and can always support
+    * arbitrary fast-clear values.
     */
-   if (devinfo->gen == 7 && !devinfo->is_haswell && image->samples > 1)
-      return ANV_FAST_CLEAR_NONE;
+   if (devinfo->ver >= 20)
+      return ANV_FAST_CLEAR_ANY;
 
    enum isl_aux_state aux_state =
-      anv_layout_to_aux_state(devinfo, image, aspect, layout);
+      anv_layout_to_aux_state(devinfo, image, aspect, layout, queue_flags);
+
+   const VkImageUsageFlags layout_usage =
+      vk_image_layout_to_usage_flags(layout, aspect) & image->vk.usage;
+
+   const struct isl_drm_modifier_info *isl_mod_info =
+      image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT ?
+      isl_drm_modifier_get_info(image->vk.drm_format_mod) : NULL;
 
    switch (aux_state) {
    case ISL_AUX_STATE_CLEAR:
@@ -1599,33 +3384,43 @@ anv_layout_to_fast_clear_type(const struct gen_device_info * const devinfo,
 
    case ISL_AUX_STATE_PARTIAL_CLEAR:
    case ISL_AUX_STATE_COMPRESSED_CLEAR:
-      if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
+
+      /* Generally, enabling non-zero fast-clears is dependent on knowing which
+       * formats will be used with the surface. So, disable them if we lack
+       * this knowledge.
+       *
+       * For dmabufs with clear color modifiers, we already restrict
+       * problematic accesses for the clear color during the negotiation
+       * phase. So, don't restrict clear color support in this case.
+       */
+      if (anv_image_view_formats_incomplete(image) &&
+          !(isl_mod_info && isl_mod_info->supports_clear_color)) {
          return ANV_FAST_CLEAR_DEFAULT_VALUE;
-      } else if (layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-         /* When we're in a render pass we have the clear color data from the
-          * VkRenderPassBeginInfo and we can use arbitrary clear colors.  They
-          * must get partially resolved before we leave the render pass.
-          */
-         return ANV_FAST_CLEAR_ANY;
-      } else if (image->planes[plane].aux_usage == ISL_AUX_USAGE_MCS ||
-                 image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E) {
-         if (devinfo->gen >= 11) {
-            /* On ICL and later, the sampler hardware uses a copy of the clear
-             * value that is encoded as a pixel value.  Therefore, we can use
-             * any clear color we like for sampling.
-             */
-            return ANV_FAST_CLEAR_ANY;
-         } else {
-            /* If the image has MCS or CCS_E enabled all the time then we can
-             * use fast-clear as long as the clear color is the default value
-             * of zero since this is the default value we program into every
-             * surface state used for texturing.
-             */
-            return ANV_FAST_CLEAR_DEFAULT_VALUE;
-         }
-      } else {
-         return ANV_FAST_CLEAR_NONE;
       }
+
+      /* On gfx12, the FCV feature may convert a block of fragment shader
+       * outputs to fast-clears. If this image has multiple subresources,
+       * restrict the clear color to zero to keep the fast cleared blocks in
+       * sync.
+       */
+      if (image->planes[plane].aux_usage == ISL_AUX_USAGE_FCV_CCS_E &&
+          (image->vk.mip_levels > 1 ||
+           image->vk.array_layers > 1 ||
+           image->vk.extent.depth > 1)) {
+         return ANV_FAST_CLEAR_DEFAULT_VALUE;
+      }
+
+      /* On gfx9, we only load clear colors for attachments and for BLORP
+       * surfaces. Outside of those surfaces, we can only support the default
+       * clear value of zero.
+       */
+      if (devinfo->ver == 9 &&
+          (layout_usage & (VK_IMAGE_USAGE_SAMPLED_BIT |
+                           VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))) {
+         return ANV_FAST_CLEAR_DEFAULT_VALUE;
+      }
+
+      return ANV_FAST_CLEAR_ANY;
 
    case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
    case ISL_AUX_STATE_RESOLVED:
@@ -1637,645 +3432,170 @@ anv_layout_to_fast_clear_type(const struct gen_device_info * const devinfo,
    unreachable("Invalid isl_aux_state");
 }
 
-
-static struct anv_state
-alloc_surface_state(struct anv_device *device)
+bool
+anv_can_fast_clear_color(const struct anv_cmd_buffer *cmd_buffer,
+                         const struct anv_image *image,
+                         unsigned level,
+                         const struct VkClearRect *clear_rect,
+                         VkImageLayout layout,
+                         enum isl_format view_format,
+                         union isl_color_value clear_color)
 {
-   return anv_state_pool_alloc(&device->surface_state_pool, 64, 64);
-}
+   if (INTEL_DEBUG(DEBUG_NO_FAST_CLEAR))
+      return false;
 
-static enum isl_channel_select
-remap_swizzle(VkComponentSwizzle swizzle, VkComponentSwizzle component,
-              struct isl_swizzle format_swizzle)
-{
-   if (swizzle == VK_COMPONENT_SWIZZLE_IDENTITY)
-      swizzle = component;
+   /* We only have fast-clears implemented for the render engine. */
+   if (cmd_buffer->queue_family->engine_class != INTEL_ENGINE_CLASS_RENDER)
+      return false;
 
-   switch (swizzle) {
-   case VK_COMPONENT_SWIZZLE_ZERO:  return ISL_CHANNEL_SELECT_ZERO;
-   case VK_COMPONENT_SWIZZLE_ONE:   return ISL_CHANNEL_SELECT_ONE;
-   case VK_COMPONENT_SWIZZLE_R:     return format_swizzle.r;
-   case VK_COMPONENT_SWIZZLE_G:     return format_swizzle.g;
-   case VK_COMPONENT_SWIZZLE_B:     return format_swizzle.b;
-   case VK_COMPONENT_SWIZZLE_A:     return format_swizzle.a;
-   default:
-      unreachable("Invalid swizzle");
-   }
-}
-
-void
-anv_image_fill_surface_state(struct anv_device *device,
-                             const struct anv_image *image,
-                             VkImageAspectFlagBits aspect,
-                             const struct isl_view *view_in,
-                             isl_surf_usage_flags_t view_usage,
-                             enum isl_aux_usage aux_usage,
-                             const union isl_color_value *clear_color,
-                             enum anv_image_view_state_flags flags,
-                             struct anv_surface_state *state_inout,
-                             struct brw_image_param *image_param_out)
-{
-   uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
-
-   const struct anv_surface *surface = &image->planes[plane].surface,
-      *aux_surface = &image->planes[plane].aux_surface;
-
-   struct isl_view view = *view_in;
-   view.usage |= view_usage;
-
-   /* For texturing with VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL from a
-    * compressed surface with a shadow surface, we use the shadow instead of
-    * the primary surface.  The shadow surface will be tiled, unlike the main
-    * surface, so it should get significantly better performance.
+   /* Start by getting the fast clear type.  We use the first subpass
+    * layout here because we don't want to fast-clear if the first subpass
+    * to use the attachment can't handle fast-clears.
     */
-   if (image->planes[plane].shadow_surface.isl.size_B > 0 &&
-       isl_format_is_compressed(view.format) &&
-       (flags & ANV_IMAGE_VIEW_STATE_TEXTURE_OPTIMAL)) {
-      assert(isl_format_is_compressed(surface->isl.format));
-      assert(surface->isl.tiling == ISL_TILING_LINEAR);
-      assert(image->planes[plane].shadow_surface.isl.tiling != ISL_TILING_LINEAR);
-      surface = &image->planes[plane].shadow_surface;
-   }
-
-   /* For texturing from stencil on gen7, we have to sample from a shadow
-    * surface because we don't support W-tiling in the sampler.
-    */
-   if (image->planes[plane].shadow_surface.isl.size_B > 0 &&
-       aspect == VK_IMAGE_ASPECT_STENCIL_BIT) {
-      assert(device->info.gen == 7);
-      assert(view_usage & ISL_SURF_USAGE_TEXTURE_BIT);
-      surface = &image->planes[plane].shadow_surface;
-   }
-
-   if (view_usage == ISL_SURF_USAGE_RENDER_TARGET_BIT)
-      view.swizzle = anv_swizzle_for_render(view.swizzle);
-
-   /* On Ivy Bridge and Bay Trail we do the swizzle in the shader */
-   if (device->info.gen == 7 && !device->info.is_haswell)
-      view.swizzle = ISL_SWIZZLE_IDENTITY;
-
-   /* If this is a HiZ buffer we can sample from with a programmable clear
-    * value (SKL+), define the clear value to the optimal constant.
-    */
-   union isl_color_value default_clear_color = { .u32 = { 0, } };
-   if (device->info.gen >= 9 && aspect == VK_IMAGE_ASPECT_DEPTH_BIT)
-      default_clear_color.f32[0] = ANV_HZ_FC_VAL;
-   if (!clear_color)
-      clear_color = &default_clear_color;
-
-   const struct anv_address address =
-      anv_address_add(image->planes[plane].address, surface->offset);
-
-   if (view_usage == ISL_SURF_USAGE_STORAGE_BIT &&
-       !(flags & ANV_IMAGE_VIEW_STATE_STORAGE_WRITE_ONLY) &&
-       !isl_has_matching_typed_storage_image_format(&device->info,
-                                                    view.format)) {
-      /* In this case, we are a writeable storage buffer which needs to be
-       * lowered to linear. All tiling and offset calculations will be done in
-       * the shader.
-       */
-      assert(aux_usage == ISL_AUX_USAGE_NONE);
-      isl_buffer_fill_state(&device->isl_dev, state_inout->state.map,
-                            .address = anv_address_physical(address),
-                            .size_B = surface->isl.size_B,
-                            .format = ISL_FORMAT_RAW,
-                            .swizzle = ISL_SWIZZLE_IDENTITY,
-                            .stride_B = 1,
-                            .mocs = anv_mocs_for_bo(device, address.bo));
-      state_inout->address = address,
-      state_inout->aux_address = ANV_NULL_ADDRESS;
-      state_inout->clear_address = ANV_NULL_ADDRESS;
-   } else {
-      if (view_usage == ISL_SURF_USAGE_STORAGE_BIT &&
-          !(flags & ANV_IMAGE_VIEW_STATE_STORAGE_WRITE_ONLY)) {
-         /* Typed surface reads support a very limited subset of the shader
-          * image formats.  Translate it into the closest format the hardware
-          * supports.
-          */
-         assert(aux_usage == ISL_AUX_USAGE_NONE);
-         view.format = isl_lower_storage_image_format(&device->info,
-                                                      view.format);
-      }
-
-      const struct isl_surf *isl_surf = &surface->isl;
-
-      struct isl_surf tmp_surf;
-      uint32_t offset_B = 0, tile_x_sa = 0, tile_y_sa = 0;
-      if (isl_format_is_compressed(surface->isl.format) &&
-          !isl_format_is_compressed(view.format)) {
-         /* We're creating an uncompressed view of a compressed surface.  This
-          * is allowed but only for a single level/layer.
-          */
-         assert(surface->isl.samples == 1);
-         assert(view.levels == 1);
-         assert(view.array_len == 1);
-
-         isl_surf_get_image_surf(&device->isl_dev, isl_surf,
-                                 view.base_level,
-                                 surface->isl.dim == ISL_SURF_DIM_3D ?
-                                    0 : view.base_array_layer,
-                                 surface->isl.dim == ISL_SURF_DIM_3D ?
-                                    view.base_array_layer : 0,
-                                 &tmp_surf,
-                                 &offset_B, &tile_x_sa, &tile_y_sa);
-
-         /* The newly created image represents the one subimage we're
-          * referencing with this view so it only has one array slice and
-          * miplevel.
-          */
-         view.base_array_layer = 0;
-         view.base_level = 0;
-
-         /* We're making an uncompressed view here.  The image dimensions need
-          * to be scaled down by the block size.
-          */
-         const struct isl_format_layout *fmtl =
-            isl_format_get_layout(surface->isl.format);
-         tmp_surf.logical_level0_px =
-            isl_surf_get_logical_level0_el(&tmp_surf);
-         tmp_surf.phys_level0_sa = isl_surf_get_phys_level0_el(&tmp_surf);
-         tmp_surf.format = view.format;
-         tile_x_sa /= fmtl->bw;
-         tile_y_sa /= fmtl->bh;
-
-         isl_surf = &tmp_surf;
-
-         if (device->info.gen <= 8) {
-            assert(surface->isl.tiling == ISL_TILING_LINEAR);
-            assert(tile_x_sa == 0);
-            assert(tile_y_sa == 0);
-         }
-      }
-
-      state_inout->address = anv_address_add(address, offset_B);
-
-      struct anv_address aux_address = ANV_NULL_ADDRESS;
-      if (aux_usage != ISL_AUX_USAGE_NONE) {
-         aux_address = anv_address_add(image->planes[plane].address,
-                                       aux_surface->offset);
-      }
-      state_inout->aux_address = aux_address;
-
-      struct anv_address clear_address = ANV_NULL_ADDRESS;
-      if (device->info.gen >= 10 && aux_usage != ISL_AUX_USAGE_NONE) {
-         if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
-            clear_address = (struct anv_address) {
-               .bo = device->hiz_clear_bo,
-               .offset = 0,
-            };
-         } else {
-            clear_address = anv_image_get_clear_color_addr(device, image, aspect);
-         }
-      }
-      state_inout->clear_address = clear_address;
-
-      isl_surf_fill_state(&device->isl_dev, state_inout->state.map,
-                          .surf = isl_surf,
-                          .view = &view,
-                          .address = anv_address_physical(state_inout->address),
-                          .clear_color = *clear_color,
-                          .aux_surf = &aux_surface->isl,
-                          .aux_usage = aux_usage,
-                          .aux_address = anv_address_physical(aux_address),
-                          .clear_address = anv_address_physical(clear_address),
-                          .use_clear_address = !anv_address_is_null(clear_address),
-                          .mocs = anv_mocs_for_bo(device,
-                                                  state_inout->address.bo),
-                          .x_offset_sa = tile_x_sa,
-                          .y_offset_sa = tile_y_sa);
-
-      /* With the exception of gen8, the bottom 12 bits of the MCS base address
-       * are used to store other information.  This should be ok, however,
-       * because the surface buffer addresses are always 4K page aligned.
-       */
-      uint32_t *aux_addr_dw = state_inout->state.map +
-         device->isl_dev.ss.aux_addr_offset;
-      assert((aux_address.offset & 0xfff) == 0);
-      state_inout->aux_address.offset |= *aux_addr_dw & 0xfff;
-
-      if (device->info.gen >= 10 && clear_address.bo) {
-         uint32_t *clear_addr_dw = state_inout->state.map +
-                                   device->isl_dev.ss.clear_color_state_offset;
-         assert((clear_address.offset & 0x3f) == 0);
-         state_inout->clear_address.offset |= *clear_addr_dw & 0x3f;
-      }
-   }
-
-   if (image_param_out) {
-      assert(view_usage == ISL_SURF_USAGE_STORAGE_BIT);
-      isl_surf_fill_image_param(&device->isl_dev, image_param_out,
-                                &surface->isl, &view);
-   }
-}
-
-static VkImageAspectFlags
-remap_aspect_flags(VkImageAspectFlags view_aspects)
-{
-   if (view_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
-      if (util_bitcount(view_aspects) == 1)
-         return VK_IMAGE_ASPECT_COLOR_BIT;
-
-      VkImageAspectFlags color_aspects = 0;
-      for (uint32_t i = 0; i < util_bitcount(view_aspects); i++)
-         color_aspects |= VK_IMAGE_ASPECT_PLANE_0_BIT << i;
-      return color_aspects;
-   }
-   /* No special remapping needed for depth & stencil aspects. */
-   return view_aspects;
-}
-
-static uint32_t
-anv_image_aspect_get_planes(VkImageAspectFlags aspect_mask)
-{
-   uint32_t planes = 0;
-
-   if (aspect_mask & (VK_IMAGE_ASPECT_COLOR_BIT |
-                      VK_IMAGE_ASPECT_DEPTH_BIT |
-                      VK_IMAGE_ASPECT_STENCIL_BIT |
-                      VK_IMAGE_ASPECT_PLANE_0_BIT))
-      planes++;
-   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_1_BIT)
-      planes++;
-   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_2_BIT)
-      planes++;
-
-   if ((aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 &&
-       (aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0)
-      planes++;
-
-   return planes;
-}
-
-VkResult
-anv_CreateImageView(VkDevice _device,
-                    const VkImageViewCreateInfo *pCreateInfo,
-                    const VkAllocationCallbacks *pAllocator,
-                    VkImageView *pView)
-{
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(anv_image, image, pCreateInfo->image);
-   struct anv_image_view *iview;
-
-   iview = vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*iview), 8,
-                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-   if (iview == NULL)
-      return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   vk_object_base_init(&device->vk, &iview->base, VK_OBJECT_TYPE_IMAGE_VIEW);
-
-   const VkImageSubresourceRange *range = &pCreateInfo->subresourceRange;
-
-   assert(range->layerCount > 0);
-   assert(range->baseMipLevel < image->levels);
-
-   /* Check if a conversion info was passed. */
-   const struct anv_format *conv_format = NULL;
-   const VkSamplerYcbcrConversionInfo *conv_info =
-      vk_find_struct_const(pCreateInfo->pNext, SAMPLER_YCBCR_CONVERSION_INFO);
-
-   /* If image has an external format, the pNext chain must contain an instance of
-    * VKSamplerYcbcrConversionInfo with a conversion object created with the same
-    * external format as image."
-    */
-   assert(!image->external_format || conv_info);
-
-   if (conv_info) {
-      ANV_FROM_HANDLE(anv_ycbcr_conversion, conversion, conv_info->conversion);
-      conv_format = conversion->format;
-   }
-
-   VkImageUsageFlags image_usage = image->usage;
-   if (range->aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT |
-                            VK_IMAGE_ASPECT_STENCIL_BIT)) {
-      assert(!(range->aspectMask & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV));
-      /* From the Vulkan 1.2.131 spec:
-       *
-       *    "If the image was has a depth-stencil format and was created with
-       *    a VkImageStencilUsageCreateInfo structure included in the pNext
-       *    chain of VkImageCreateInfo, the usage is calculated based on the
-       *    subresource.aspectMask provided:
-       *
-       *     - If aspectMask includes only VK_IMAGE_ASPECT_STENCIL_BIT, the
-       *       implicit usage is equal to
-       *       VkImageStencilUsageCreateInfo::stencilUsage.
-       *
-       *     - If aspectMask includes only VK_IMAGE_ASPECT_DEPTH_BIT, the
-       *       implicit usage is equal to VkImageCreateInfo::usage.
-       *
-       *     - If both aspects are included in aspectMask, the implicit usage
-       *       is equal to the intersection of VkImageCreateInfo::usage and
-       *       VkImageStencilUsageCreateInfo::stencilUsage.
-       */
-      if (range->aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT) {
-         image_usage = image->stencil_usage;
-      } else if (range->aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT) {
-         image_usage = image->usage;
-      } else {
-         assert(range->aspectMask == (VK_IMAGE_ASPECT_DEPTH_BIT |
-                                      VK_IMAGE_ASPECT_STENCIL_BIT));
-         image_usage = image->usage & image->stencil_usage;
-      }
-   }
-
-   const VkImageViewUsageCreateInfo *usage_info =
-      vk_find_struct_const(pCreateInfo, IMAGE_VIEW_USAGE_CREATE_INFO);
-   VkImageUsageFlags view_usage = usage_info ? usage_info->usage : image_usage;
-
-   /* View usage should be a subset of image usage */
-   assert((view_usage & ~image_usage) == 0);
-   assert(view_usage & (VK_IMAGE_USAGE_SAMPLED_BIT |
-                        VK_IMAGE_USAGE_STORAGE_BIT |
-                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                        VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
-                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
-
-   switch (image->type) {
-   default:
-      unreachable("bad VkImageType");
-   case VK_IMAGE_TYPE_1D:
-   case VK_IMAGE_TYPE_2D:
-      assert(range->baseArrayLayer + anv_get_layerCount(image, range) - 1 <= image->array_size);
+   enum anv_fast_clear_type fast_clear_type =
+      anv_layout_to_fast_clear_type(cmd_buffer->device->info, image,
+                                    VK_IMAGE_ASPECT_COLOR_BIT, layout,
+                                    cmd_buffer->queue_family->queueFlags);
+   switch (fast_clear_type) {
+   case ANV_FAST_CLEAR_NONE:
+      return false;
+   case ANV_FAST_CLEAR_DEFAULT_VALUE:
+      if (!isl_color_value_is_zero(clear_color, view_format))
+         return false;
       break;
-   case VK_IMAGE_TYPE_3D:
-      assert(range->baseArrayLayer + anv_get_layerCount(image, range) - 1
-             <= anv_minify(image->extent.depth, range->baseMipLevel));
+   case ANV_FAST_CLEAR_ANY:
       break;
    }
 
-   /* First expand aspects to the image's ones (for example
-    * VK_IMAGE_ASPECT_COLOR_BIT will be converted to
-    * VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT |
-    * VK_IMAGE_ASPECT_PLANE_2_BIT for an image of format
-    * VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM.
+   /* Potentially, we could do partial fast-clears but doing so has crazy
+    * alignment restrictions.  It's easier to just restrict to full size
+    * fast clears for now.
     */
-   VkImageAspectFlags expanded_aspects =
-      anv_image_expand_aspects(image, range->aspectMask);
+   if (clear_rect->rect.offset.x != 0 ||
+       clear_rect->rect.offset.y != 0 ||
+       clear_rect->rect.extent.width != image->vk.extent.width ||
+       clear_rect->rect.extent.height != image->vk.extent.height)
+      return false;
 
-   iview->image = image;
-
-   /* Remap the expanded aspects for the image view. For example if only
-    * VK_IMAGE_ASPECT_PLANE_1_BIT was given in range->aspectMask, we will
-    * convert it to VK_IMAGE_ASPECT_COLOR_BIT since from the point of view of
-    * the image view, it only has a single plane.
+   /* We only allow fast clears to the first slice of an image (level 0,
+    * layer 0) and only for the entire slice.  This guarantees us that, at
+    * any given time, there is only one clear color on any given image at
+    * any given time.  At the time of our testing (Jan 17, 2018), there
+    * were no known applications which would benefit from fast-clearing
+    * more than just the first slice.
     */
-   iview->aspect_mask = remap_aspect_flags(expanded_aspects);
-   iview->n_planes = anv_image_aspect_get_planes(iview->aspect_mask);
-   iview->vk_format = pCreateInfo->format;
+   if (level > 0) {
+      anv_perf_warn(VK_LOG_OBJS(&image->vk.base),
+                    "level > 0.  Not fast clearing.");
+      return false;
+   }
 
-   /* "If image has an external format, format must be VK_FORMAT_UNDEFINED." */
-   assert(!image->external_format || pCreateInfo->format == VK_FORMAT_UNDEFINED);
+   if (clear_rect->baseArrayLayer > 0) {
+      anv_perf_warn(VK_LOG_OBJS(&image->vk.base),
+                    "baseArrayLayer > 0.  Not fast clearing.");
+      return false;
+   }
 
-   /* Format is undefined, this can happen when using external formats. Set
-    * view format from the passed conversion info.
+
+   if (clear_rect->layerCount > 1) {
+      anv_perf_warn(VK_LOG_OBJS(&image->vk.base),
+                    "layerCount > 1.  Only fast-clearing the first slice");
+   }
+
+   /* Wa_18020603990 - slow clear surfaces up to 256x256, 32bpp. */
+   if (intel_needs_workaround(cmd_buffer->device->info, 18020603990)) {
+      const struct anv_surface *anv_surf = &image->planes->primary_surface;
+      if (isl_format_get_layout(anv_surf->isl.format)->bpb <= 32 &&
+          anv_surf->isl.logical_level0_px.w <= 256 &&
+          anv_surf->isl.logical_level0_px.h <= 256)
+         return false;
+   }
+
+   /* On gfx12.0, CCS fast clears don't seem to cover the correct portion of
+    * the aux buffer when the pitch is not 512B-aligned.
     */
-   if (iview->vk_format == VK_FORMAT_UNDEFINED && conv_format)
-      iview->vk_format = conv_format->vk_format;
+   if (cmd_buffer->device->info->verx10 == 120 &&
+       image->planes->primary_surface.isl.samples == 1 &&
+       image->planes->primary_surface.isl.row_pitch_B % 512) {
+      anv_perf_warn(VK_LOG_OBJS(&image->vk.base),
+                    "Pitch not 512B-aligned. Slow clearing surface.");
+      return false;
+   }
 
-   iview->extent = (VkExtent3D) {
-      .width  = anv_minify(image->extent.width , range->baseMipLevel),
-      .height = anv_minify(image->extent.height, range->baseMipLevel),
-      .depth  = anv_minify(image->extent.depth , range->baseMipLevel),
+   /* Wa_16021232440: Disable fast clear when height is 16k */
+   if (intel_needs_workaround(cmd_buffer->device->info, 16021232440) &&
+       image->vk.extent.height == 16 * 1024) {
+      return false;
+   }
+
+   /* The fast-clear preamble and/or postamble flushes are more expensive than
+    * the flushes performed by BLORP during slow clears. Use a heuristic to
+    * determine if the cost of the flushes are worth fast-clearing. See
+    * genX(cmd_buffer_update_color_aux_op)() and blorp_exec_on_render().
+    * TODO: Tune for Xe2
+    */
+   if (cmd_buffer->device->info->verx10 <= 125 &&
+       cmd_buffer->num_independent_clears >= 16 &&
+       cmd_buffer->num_independent_clears >
+       cmd_buffer->num_dependent_clears * 2) {
+      anv_perf_warn(VK_LOG_OBJS(&image->vk.base),
+                    "Not enough back-to-back fast-clears. Slow clearing.");
+      return false;
+   }
+
+   return true;
+}
+
+/**
+ * This function determines if the layout & usage of an image can have
+ * untracked aux writes. When we see a transition that matches this criteria,
+ * we need to mark the image as compressed written so that our predicated
+ * resolves work properly.
+ *
+ * @param devinfo The device information of the Intel GPU.
+ * @param image The image that may contain a collection of buffers.
+ * @param aspect The aspect of the image to be accessed.
+ * @param layout The current layout of the image aspect(s).
+ */
+bool
+anv_layout_has_untracked_aux_writes(const struct intel_device_info * const devinfo,
+                                    const struct anv_image * const image,
+                                    const VkImageAspectFlagBits aspect,
+                                    const VkImageLayout layout,
+                                    const VkQueueFlagBits queue_flags)
+{
+   const VkImageUsageFlags image_aspect_usage =
+      vk_image_usage(&image->vk, aspect);
+   const VkImageUsageFlags usage =
+      vk_image_layout_to_usage_flags(layout, aspect) & image_aspect_usage;
+
+   /* Storage is the only usage where we do not write the image through a
+    * render target but through a descriptor. Since VK_EXT_descriptor_indexing
+    * and the update-after-bind feature, it has become impossible to track
+    * writes to images in descriptor at the command buffer build time. So it's
+    * not possible to mark an image as compressed like we do in
+    * genX_cmd_buffer.c(EndRendering) or anv_blorp.c for all transfer
+    * operations.
+    */
+   if (!(usage & VK_IMAGE_USAGE_STORAGE_BIT))
+      return false;
+
+   /* No AUX, no writes to the AUX surface :) */
+   const uint32_t plane = anv_image_aspect_to_plane(image, aspect);
+   const enum isl_aux_usage aux_usage = image->planes[plane].aux_usage;
+   if (aux_usage == ISL_AUX_USAGE_NONE)
+      return false;
+
+   return true;
+}
+
+void anv_GetRenderingAreaGranularityKHR(
+    VkDevice                                    _device,
+    const VkRenderingAreaInfoKHR*               pRenderingAreaInfo,
+    VkExtent2D*                                 pGranularity)
+{
+   *pGranularity = (VkExtent2D) {
+      .width = 1,
+      .height = 1,
    };
-
-   /* Now go through the underlying image selected planes (computed in
-    * expanded_aspects) and map them to planes in the image view.
-    */
-   uint32_t iaspect_bit, vplane = 0;
-   anv_foreach_image_aspect_bit(iaspect_bit, image, expanded_aspects) {
-      uint32_t iplane =
-         anv_image_aspect_to_plane(image->aspects, 1UL << iaspect_bit);
-      VkImageAspectFlags vplane_aspect =
-         anv_plane_to_aspect(iview->aspect_mask, vplane);
-      struct anv_format_plane format =
-         anv_get_format_plane(&device->info, iview->vk_format,
-                              vplane_aspect, image->tiling);
-
-      iview->planes[vplane].image_plane = iplane;
-
-      iview->planes[vplane].isl = (struct isl_view) {
-         .format = format.isl_format,
-         .base_level = range->baseMipLevel,
-         .levels = anv_get_levelCount(image, range),
-         .base_array_layer = range->baseArrayLayer,
-         .array_len = anv_get_layerCount(image, range),
-         .swizzle = {
-            .r = remap_swizzle(pCreateInfo->components.r,
-                               VK_COMPONENT_SWIZZLE_R, format.swizzle),
-            .g = remap_swizzle(pCreateInfo->components.g,
-                               VK_COMPONENT_SWIZZLE_G, format.swizzle),
-            .b = remap_swizzle(pCreateInfo->components.b,
-                               VK_COMPONENT_SWIZZLE_B, format.swizzle),
-            .a = remap_swizzle(pCreateInfo->components.a,
-                               VK_COMPONENT_SWIZZLE_A, format.swizzle),
-         },
-      };
-
-      if (pCreateInfo->viewType == VK_IMAGE_VIEW_TYPE_3D) {
-         iview->planes[vplane].isl.base_array_layer = 0;
-         iview->planes[vplane].isl.array_len = iview->extent.depth;
-      }
-
-      if (pCreateInfo->viewType == VK_IMAGE_VIEW_TYPE_CUBE ||
-          pCreateInfo->viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
-         iview->planes[vplane].isl.usage = ISL_SURF_USAGE_CUBE_BIT;
-      } else {
-         iview->planes[vplane].isl.usage = 0;
-      }
-
-      if (view_usage & VK_IMAGE_USAGE_SAMPLED_BIT ||
-          (view_usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT &&
-           !(iview->aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT))) {
-         iview->planes[vplane].optimal_sampler_surface_state.state = alloc_surface_state(device);
-         iview->planes[vplane].general_sampler_surface_state.state = alloc_surface_state(device);
-
-         enum isl_aux_usage general_aux_usage =
-            anv_layout_to_aux_usage(&device->info, image, 1UL << iaspect_bit,
-                                    VK_IMAGE_USAGE_SAMPLED_BIT,
-                                    VK_IMAGE_LAYOUT_GENERAL);
-         enum isl_aux_usage optimal_aux_usage =
-            anv_layout_to_aux_usage(&device->info, image, 1UL << iaspect_bit,
-                                    VK_IMAGE_USAGE_SAMPLED_BIT,
-                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-         anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
-                                      &iview->planes[vplane].isl,
-                                      ISL_SURF_USAGE_TEXTURE_BIT,
-                                      optimal_aux_usage, NULL,
-                                      ANV_IMAGE_VIEW_STATE_TEXTURE_OPTIMAL,
-                                      &iview->planes[vplane].optimal_sampler_surface_state,
-                                      NULL);
-
-         anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
-                                      &iview->planes[vplane].isl,
-                                      ISL_SURF_USAGE_TEXTURE_BIT,
-                                      general_aux_usage, NULL,
-                                      0,
-                                      &iview->planes[vplane].general_sampler_surface_state,
-                                      NULL);
-      }
-
-      /* NOTE: This one needs to go last since it may stomp isl_view.format */
-      if (view_usage & VK_IMAGE_USAGE_STORAGE_BIT) {
-         iview->planes[vplane].storage_surface_state.state = alloc_surface_state(device);
-         iview->planes[vplane].writeonly_storage_surface_state.state = alloc_surface_state(device);
-
-         anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
-                                      &iview->planes[vplane].isl,
-                                      ISL_SURF_USAGE_STORAGE_BIT,
-                                      ISL_AUX_USAGE_NONE, NULL,
-                                      0,
-                                      &iview->planes[vplane].storage_surface_state,
-                                      &iview->planes[vplane].storage_image_param);
-
-         anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
-                                      &iview->planes[vplane].isl,
-                                      ISL_SURF_USAGE_STORAGE_BIT,
-                                      ISL_AUX_USAGE_NONE, NULL,
-                                      ANV_IMAGE_VIEW_STATE_STORAGE_WRITE_ONLY,
-                                      &iview->planes[vplane].writeonly_storage_surface_state,
-                                      NULL);
-      }
-
-      vplane++;
-   }
-
-   *pView = anv_image_view_to_handle(iview);
-
-   return VK_SUCCESS;
-}
-
-void
-anv_DestroyImageView(VkDevice _device, VkImageView _iview,
-                     const VkAllocationCallbacks *pAllocator)
-{
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(anv_image_view, iview, _iview);
-
-   if (!iview)
-      return;
-
-   for (uint32_t plane = 0; plane < iview->n_planes; plane++) {
-      if (iview->planes[plane].optimal_sampler_surface_state.state.alloc_size > 0) {
-         anv_state_pool_free(&device->surface_state_pool,
-                             iview->planes[plane].optimal_sampler_surface_state.state);
-      }
-
-      if (iview->planes[plane].general_sampler_surface_state.state.alloc_size > 0) {
-         anv_state_pool_free(&device->surface_state_pool,
-                             iview->planes[plane].general_sampler_surface_state.state);
-      }
-
-      if (iview->planes[plane].storage_surface_state.state.alloc_size > 0) {
-         anv_state_pool_free(&device->surface_state_pool,
-                             iview->planes[plane].storage_surface_state.state);
-      }
-
-      if (iview->planes[plane].writeonly_storage_surface_state.state.alloc_size > 0) {
-         anv_state_pool_free(&device->surface_state_pool,
-                             iview->planes[plane].writeonly_storage_surface_state.state);
-      }
-   }
-
-   vk_object_base_finish(&iview->base);
-   vk_free2(&device->vk.alloc, pAllocator, iview);
-}
-
-
-VkResult
-anv_CreateBufferView(VkDevice _device,
-                     const VkBufferViewCreateInfo *pCreateInfo,
-                     const VkAllocationCallbacks *pAllocator,
-                     VkBufferView *pView)
-{
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(anv_buffer, buffer, pCreateInfo->buffer);
-   struct anv_buffer_view *view;
-
-   view = vk_alloc2(&device->vk.alloc, pAllocator, sizeof(*view), 8,
-                     VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-   if (!view)
-      return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   /* TODO: Handle the format swizzle? */
-
-   vk_object_base_init(&device->vk, &view->base, VK_OBJECT_TYPE_BUFFER_VIEW);
-   view->format = anv_get_isl_format(&device->info, pCreateInfo->format,
-                                     VK_IMAGE_ASPECT_COLOR_BIT,
-                                     VK_IMAGE_TILING_LINEAR);
-   const uint32_t format_bs = isl_format_get_layout(view->format)->bpb / 8;
-   view->range = anv_buffer_get_range(buffer, pCreateInfo->offset,
-                                              pCreateInfo->range);
-   view->range = align_down_npot_u32(view->range, format_bs);
-
-   view->address = anv_address_add(buffer->address, pCreateInfo->offset);
-
-   if (buffer->usage & VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT) {
-      view->surface_state = alloc_surface_state(device);
-
-      anv_fill_buffer_surface_state(device, view->surface_state,
-                                    view->format,
-                                    view->address, view->range, format_bs);
-   } else {
-      view->surface_state = (struct anv_state){ 0 };
-   }
-
-   if (buffer->usage & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT) {
-      view->storage_surface_state = alloc_surface_state(device);
-      view->writeonly_storage_surface_state = alloc_surface_state(device);
-
-      enum isl_format storage_format =
-         isl_has_matching_typed_storage_image_format(&device->info,
-                                                     view->format) ?
-         isl_lower_storage_image_format(&device->info, view->format) :
-         ISL_FORMAT_RAW;
-
-      anv_fill_buffer_surface_state(device, view->storage_surface_state,
-                                    storage_format,
-                                    view->address, view->range,
-                                    (storage_format == ISL_FORMAT_RAW ? 1 :
-                                     isl_format_get_layout(storage_format)->bpb / 8));
-
-      /* Write-only accesses should use the original format. */
-      anv_fill_buffer_surface_state(device, view->writeonly_storage_surface_state,
-                                    view->format,
-                                    view->address, view->range,
-                                    isl_format_get_layout(view->format)->bpb / 8);
-
-      isl_buffer_fill_image_param(&device->isl_dev,
-                                  &view->storage_image_param,
-                                  view->format, view->range);
-   } else {
-      view->storage_surface_state = (struct anv_state){ 0 };
-      view->writeonly_storage_surface_state = (struct anv_state){ 0 };
-   }
-
-   *pView = anv_buffer_view_to_handle(view);
-
-   return VK_SUCCESS;
-}
-
-void
-anv_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
-                      const VkAllocationCallbacks *pAllocator)
-{
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(anv_buffer_view, view, bufferView);
-
-   if (!view)
-      return;
-
-   if (view->surface_state.alloc_size > 0)
-      anv_state_pool_free(&device->surface_state_pool,
-                          view->surface_state);
-
-   if (view->storage_surface_state.alloc_size > 0)
-      anv_state_pool_free(&device->surface_state_pool,
-                          view->storage_surface_state);
-
-   if (view->writeonly_storage_surface_state.alloc_size > 0)
-      anv_state_pool_free(&device->surface_state_pool,
-                          view->writeonly_storage_surface_state);
-
-   vk_object_base_finish(&view->base);
-   vk_free2(&device->vk.alloc, pAllocator, view);
 }

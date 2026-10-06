@@ -31,7 +31,7 @@
 
 #include <inttypes.h>  /* for PRIx64 macro */
 
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/context.h"
 
 #include "prog_instruction.h"
@@ -51,8 +51,6 @@ _mesa_register_file_name(gl_register_file f)
    switch (f) {
    case PROGRAM_TEMPORARY:
       return "TEMP";
-   case PROGRAM_ARRAY:
-      return "ARRAY";
    case PROGRAM_INPUT:
       return "INPUT";
    case PROGRAM_OUTPUT:
@@ -65,22 +63,8 @@ _mesa_register_file_name(gl_register_file f)
       return "UNIFORM";
    case PROGRAM_ADDRESS:
       return "ADDR";
-   case PROGRAM_SAMPLER:
-      return "SAMPLER";
-   case PROGRAM_SYSTEM_VALUE:
-      return "SYSVAL";
    case PROGRAM_UNDEFINED:
       return "UNDEFINED";
-   case PROGRAM_IMMEDIATE:
-      return "IMM";
-   case PROGRAM_BUFFER:
-      return "BUFFER";
-   case PROGRAM_MEMORY:
-      return "MEMORY";
-   case PROGRAM_IMAGE:
-      return "IMAGE";
-   case PROGRAM_HW_ATOMIC:
-      return "HWATOMIC";
    default:
       {
          static char s[20];
@@ -107,7 +91,6 @@ arb_input_attrib_string(GLuint index, GLenum progType)
       "vertex.color.secondary",
       "vertex.fogcoord",
       "vertex.(six)", /* VERT_ATTRIB_COLOR_INDEX */
-      "vertex.(seven)", /* VERT_ATTRIB_EDGEFLAG */
       "vertex.texcoord[0]",
       "vertex.texcoord[1]",
       "vertex.texcoord[2]",
@@ -116,7 +99,7 @@ arb_input_attrib_string(GLuint index, GLenum progType)
       "vertex.texcoord[5]",
       "vertex.texcoord[6]",
       "vertex.texcoord[7]",
-      "vertex.(sixteen)", /* VERT_ATTRIB_POINT_SIZE */
+      "vertex.(pointsize)", /* VERT_ATTRIB_POINT_SIZE */
       "vertex.attrib[0]",
       "vertex.attrib[1]",
       "vertex.attrib[2]",
@@ -132,7 +115,8 @@ arb_input_attrib_string(GLuint index, GLenum progType)
       "vertex.attrib[12]",
       "vertex.attrib[13]",
       "vertex.attrib[14]",
-      "vertex.attrib[15]" /* MAX_VARYING = 16 */
+      "vertex.attrib[15]", /* MAX_VARYING = 16 */
+      "vertex.(edgeflag)", /* VERT_ATTRIB_EDGEFLAG */
    };
    static const char *const fragAttribs[] = {
       "fragment.position",
@@ -408,9 +392,6 @@ reg_string(gl_register_file f, GLint index, gl_prog_print_mode mode,
       case PROGRAM_UNIFORM: /* extension */
          sprintf(str, "uniform[%s%d]", addr, index);
          break;
-      case PROGRAM_SYSTEM_VALUE:
-         sprintf(str, "sysvalue[%s%d]", addr, index);
-         break;
       case PROGRAM_STATE_VAR:
          {
             struct gl_program_parameter *param
@@ -624,12 +605,6 @@ _mesa_fprint_instruction_opt(FILE *f,
 {
    GLint i;
 
-   if (inst->Opcode == OPCODE_ELSE ||
-       inst->Opcode == OPCODE_ENDIF ||
-       inst->Opcode == OPCODE_ENDLOOP ||
-       inst->Opcode == OPCODE_ENDSUB) {
-      indent -= 3;
-   }
    for (i = 0; i < indent; i++) {
       fprintf(f, " ");
    }
@@ -694,51 +669,6 @@ _mesa_fprint_instruction_opt(FILE *f,
       fprint_dst_reg(f, &inst->DstReg, mode, prog);
       fprintf(f, ", ");
       fprint_src_reg(f, &inst->SrcReg[0], mode, prog);
-      fprintf(f, ";\n");
-      break;
-   case OPCODE_IF:
-      fprintf(f, "IF ");
-      fprint_src_reg(f, &inst->SrcReg[0], mode, prog);
-      fprintf(f, "; ");
-      fprintf(f, " # (if false, goto %d)", inst->BranchTarget);
-      fprintf(f, ";\n");
-      return indent + 3;
-   case OPCODE_ELSE:
-      fprintf(f, "ELSE; # (goto %d)\n", inst->BranchTarget);
-      return indent + 3;
-   case OPCODE_ENDIF:
-      fprintf(f, "ENDIF;\n");
-      break;
-   case OPCODE_BGNLOOP:
-      fprintf(f, "BGNLOOP; # (end at %d)\n", inst->BranchTarget);
-      return indent + 3;
-   case OPCODE_ENDLOOP:
-      fprintf(f, "ENDLOOP; # (goto %d)\n", inst->BranchTarget);
-      break;
-   case OPCODE_BRK:
-   case OPCODE_CONT:
-      fprintf(f, "%s; # (goto %d)",
-	      _mesa_opcode_string(inst->Opcode),
-	      inst->BranchTarget);
-      fprintf(f, ";\n");
-      break;
-
-   case OPCODE_BGNSUB:
-      fprintf(f, "BGNSUB");
-      fprintf(f, ";\n");
-      return indent + 3;
-   case OPCODE_ENDSUB:
-      if (mode == PROG_PRINT_DEBUG) {
-         fprintf(f, "ENDSUB");
-         fprintf(f, ";\n");
-      }
-      break;
-   case OPCODE_CAL:
-      fprintf(f, "CAL %u", inst->BranchTarget);
-      fprintf(f, ";\n");
-      break;
-   case OPCODE_RET:
-      fprintf(f, "RET");
       fprintf(f, ";\n");
       break;
 
@@ -934,7 +864,7 @@ _mesa_fprint_parameter_list(FILE *f,
    fprintf(f, "dirty state flags: 0x%x\n", list->StateFlags);
    for (i = 0; i < list->NumParameters; i++){
       struct gl_program_parameter *param = list->Parameters + i;
-      unsigned pvo = list->ParameterValueOffset[i];
+      unsigned pvo = list->Parameters[i].ValueOffset;
       const GLfloat *v = (GLfloat *) list->ParameterValues + pvo;
 
       fprintf(f, "param[%d] sz=%d %s %s = {%.3g, %.3g, %.3g, %.3g}",
@@ -962,6 +892,7 @@ _mesa_print_parameter_list(const struct gl_program_parameter_list *list)
 void
 _mesa_write_shader_to_file(const struct gl_shader *shader)
 {
+#ifndef CUSTOM_SHADER_REPLACEMENT
    const char *type = "????";
    char filename[100];
    FILE *f;
@@ -996,11 +927,7 @@ _mesa_write_shader_to_file(const struct gl_shader *shader)
       return;
    }
 
-#ifdef DEBUG
-   fprintf(f, "/* Shader %u source, checksum %u */\n", shader->Name, shader->SourceChecksum);
-#else
    fprintf(f, "/* Shader %u source */\n", shader->Name);
-#endif
    fputs(shader->Source, f);
    fprintf(f, "\n");
 
@@ -1012,6 +939,7 @@ _mesa_write_shader_to_file(const struct gl_shader *shader)
    }
 
    fclose(f);
+#endif
 }
 
 

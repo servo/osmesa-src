@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 Raspberry Pi
+ * Copyright © 2019 Raspberry Pi Ltd
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -32,42 +32,43 @@
  * the driver must clamp the point size written by the shader manually to a
  * valid range.
  */
-
-static void
-lower_point_size_instr(nir_builder *b, nir_instr *psiz_instr,
-                       float min, float max)
-{
-   b->cursor = nir_before_instr(psiz_instr);
-
-   nir_intrinsic_instr *instr = nir_instr_as_intrinsic(psiz_instr);
-
-   assert(instr->src[1].is_ssa);
-   assert(instr->src[1].ssa->num_components == 1);
-   nir_ssa_def *psiz = instr->src[1].ssa;
-
-   if (min > 0.0f)
-      psiz = nir_fmax(b, psiz, nir_imm_float(b, min));
-
-   if (max > 0.0f)
-      psiz = nir_fmin(b, psiz, nir_imm_float(b, max));
-
-   nir_instr_rewrite_src(&instr->instr, &instr->src[1], nir_src_for_ssa(psiz));
-}
-
 static bool
-instr_is_point_size(const nir_instr *instr)
+lower_point_size_intrin(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
-   if (instr->type != nir_instr_type_intrinsic)
+   float *minmax = (float *)data;
+
+   gl_varying_slot location = VARYING_SLOT_MAX;
+   nir_src *psiz_src;
+
+   if (intr->intrinsic == nir_intrinsic_store_deref) {
+      nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
+      nir_variable *var = nir_deref_instr_get_variable(deref);
+      if (!var)
+         return false;
+
+      location = var->data.location;
+      psiz_src = &intr->src[1];
+   } else if (intr->intrinsic == nir_intrinsic_store_output ||
+              intr->intrinsic == nir_intrinsic_store_per_view_output) {
+      location = nir_intrinsic_io_semantics(intr).location;
+      psiz_src = &intr->src[0];
+   }
+
+   if (location != VARYING_SLOT_PSIZ)
       return false;
 
-   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-   if (intr->intrinsic != nir_intrinsic_store_deref)
-      return false;
+   b->cursor = nir_before_instr(&intr->instr);
 
-   nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
-   nir_variable *var = nir_deref_instr_get_variable(deref);
-   if (var->data.location != VARYING_SLOT_PSIZ)
-      return false;
+   nir_def *psiz = psiz_src->ssa;
+   assert(psiz->num_components == 1);
+
+   if (minmax[0] > 0.0f)
+      psiz = nir_fmax(b, psiz, nir_imm_float(b, minmax[0]));
+
+   if (minmax[1] > 0.0f)
+      psiz = nir_fmin(b, psiz, nir_imm_float(b, minmax[1]));
+
+   nir_src_rewrite(psiz_src, psiz);
 
    return true;
 }
@@ -85,29 +86,8 @@ nir_lower_point_size(nir_shader *s, float min, float max)
    assert(min > 0.0f || max > 0.0f);
    assert(min <= 0.0f || max <= 0.0f || min <= max);
 
-   bool progress = false;
-   nir_foreach_function(function, s) {
-      if (!function->impl)
-         continue;
-
-      nir_builder b;
-      nir_builder_init(&b, function->impl);
-
-      nir_foreach_block(block, function->impl) {
-         nir_foreach_instr_safe(instr, block) {
-            if (instr_is_point_size(instr)) {
-               lower_point_size_instr(&b, instr, min, max);
-               progress = true;
-            }
-         }
-      }
-
-      if (progress) {
-         nir_metadata_preserve(function->impl,
-                               nir_metadata_block_index |
-                               nir_metadata_dominance);
-      }
-   }
-
-   return progress;
+   float minmax[] = { min, max };
+   return nir_shader_intrinsics_pass(s, lower_point_size_intrin,
+                                     nir_metadata_control_flow,
+                                     minmax);
 }

@@ -21,23 +21,17 @@
  * SOFTWARE.
  */
 
-
 #include "nir.h"
 #include "nir_builder.h"
 
-typedef struct {
-   nir_shader *shader;
-   nir_builder b;
-} lower_state;
-
 static bool
-is_color_output(lower_state *state, nir_variable *out)
+is_color_output(nir_shader *shader, int location)
 {
-   switch (state->shader->info.stage) {
+   switch (shader->info.stage) {
    case MESA_SHADER_VERTEX:
    case MESA_SHADER_GEOMETRY:
    case MESA_SHADER_TESS_EVAL:
-      switch (out->data.location) {
+      switch (location) {
       case VARYING_SLOT_COL0:
       case VARYING_SLOT_COL1:
       case VARYING_SLOT_BFC0:
@@ -48,93 +42,51 @@ is_color_output(lower_state *state, nir_variable *out)
       }
       break;
    case MESA_SHADER_FRAGMENT:
-      return (out->data.location == FRAG_RESULT_COLOR ||
-              out->data.location >= FRAG_RESULT_DATA0);
+      return (location == FRAG_RESULT_COLOR ||
+              location >= FRAG_RESULT_DATA0);
    default:
       return false;
    }
 }
 
 static bool
-lower_intrinsic(lower_state *state, nir_intrinsic_instr *intr)
+lower_intrinsic(nir_builder *b, nir_intrinsic_instr *intr, nir_shader *shader)
 {
-   nir_variable *out = NULL;
-   nir_builder *b = &state->b;
-   nir_ssa_def *s;
+   int loc = -1;
 
    switch (intr->intrinsic) {
-   case nir_intrinsic_store_deref:
-      out = nir_deref_instr_get_variable(nir_src_as_deref(intr->src[0]));
-      break;
    case nir_intrinsic_store_output:
-      /* already had i/o lowered.. lookup the matching output var: */
-      nir_foreach_shader_out_variable(var, state->shader) {
-         int drvloc = var->data.driver_location;
-         if (nir_intrinsic_base(intr) == drvloc) {
-            out = var;
-            break;
-         }
-      }
-      assume(out);
+   case nir_intrinsic_store_per_view_output:
+      loc = nir_intrinsic_io_semantics(intr).location;
       break;
    default:
       return false;
    }
 
-   if (out->data.mode != nir_var_shader_out)
-      return false;
-
-   if (is_color_output(state, out)) {
+   if (is_color_output(shader, loc)) {
       b->cursor = nir_before_instr(&intr->instr);
-      int src = intr->intrinsic == nir_intrinsic_store_deref ? 1 : 0;
-      s = nir_ssa_for_src(b, intr->src[src], intr->num_components);
+      nir_def *s = intr->src[0].ssa;
       s = nir_fsat(b, s);
-      nir_instr_rewrite_src(&intr->instr, &intr->src[src], nir_src_for_ssa(s));
+      nir_src_rewrite(&intr->src[0], s);
+      return true;
    }
 
-   return true;
+   return false;
 }
 
 static bool
-lower_block(lower_state *state, nir_block *block)
+lower_instr(nir_builder *b, nir_instr *instr, void *cb_data)
 {
-   bool progress = false;
-
-   nir_foreach_instr_safe(instr, block) {
-      if (instr->type == nir_instr_type_intrinsic)
-         progress |= lower_intrinsic(state, nir_instr_as_intrinsic(instr));
-   }
-
-   return progress;
-}
-
-static bool
-lower_impl(lower_state *state, nir_function_impl *impl)
-{
-   nir_builder_init(&state->b, impl);
-   bool progress = false;
-
-   nir_foreach_block(block, impl) {
-      progress |= lower_block(state, block);
-   }
-   nir_metadata_preserve(impl, nir_metadata_block_index |
-                               nir_metadata_dominance);
-
-   return progress;
+   if (instr->type == nir_instr_type_intrinsic)
+      return lower_intrinsic(b, nir_instr_as_intrinsic(instr), cb_data);
+   return false;
 }
 
 bool
 nir_lower_clamp_color_outputs(nir_shader *shader)
 {
-   bool progress = false;
-   lower_state state = {
-      .shader = shader,
-   };
-
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= lower_impl(&state, function->impl);
-   }
-
-   return progress;
+   assert(shader->info.io_lowered);
+   return nir_shader_instructions_pass(shader, lower_instr,
+                                       nir_metadata_control_flow,
+                                       shader);
 }

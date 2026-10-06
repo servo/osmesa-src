@@ -1,28 +1,11 @@
 /*
  * Copyright 2011 Joakim Sindholt <opensource@zhasha.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "iunknown.h"
 #include "util/u_atomic.h"
-#include "util/u_hash_table.h"
+#include "util/hash_table.h"
 
 #include "nine_helpers.h"
 #include "nine_pdata.h"
@@ -48,6 +31,7 @@ NineUnknown_ctor( struct NineUnknown *This,
         This->forward = false;
         This->bind = 0;
     }
+    This->has_bind_or_refs = This->bind + This->refs;
 
     This->container = pParams->container;
     This->device = pParams->device;
@@ -72,10 +56,8 @@ NineUnknown_dtor( struct NineUnknown *This )
     if (This->refs && This->device) /* Possible only if early exit after a ctor failed */
         (void) NineUnknown_Release(NineUnknown(This->device));
 
-    if (This->pdata) {
-        util_hash_table_foreach(This->pdata, ht_guid_delete, NULL);
-        _mesa_hash_table_destroy(This->pdata, NULL);
-    }
+    if (This->pdata)
+        _mesa_hash_table_destroy(This->pdata, ht_guid_delete);
 
     FREE(This);
 }
@@ -121,6 +103,7 @@ NineUnknown_AddRef( struct NineUnknown *This )
         r = p_atomic_inc_return(&This->refs);
 
     if (r == 1) {
+        p_atomic_inc(&This->has_bind_or_refs);
         if (This->device)
             NineUnknown_AddRef(NineUnknown(This->device));
     }
@@ -133,16 +116,26 @@ NineUnknown_Release( struct NineUnknown *This )
     if (This->forward)
         return NineUnknown_Release(This->container);
 
+    /* Cannot decrease lower than 0. This is a thing
+     * according to wine tests. It's not just clamping
+     * the result as AddRef after Release while refs is 0
+     * will give 1 */
+    if (!p_atomic_read(&This->refs))
+        return 0;
+
     ULONG r = p_atomic_dec_return(&This->refs);
 
     if (r == 0) {
-        if (This->device) {
-            if (NineUnknown_Release(NineUnknown(This->device)) == 0)
-                return r; /* everything's gone */
-        }
+        struct NineDevice9 *device = This->device;
+        UINT b_or_ref = p_atomic_dec_return(&This->has_bind_or_refs);
         /* Containers (here with !forward) take care of item destruction */
-        if (!This->container && This->bind == 0) {
+
+        if (!This->container && b_or_ref == 0) {
+            assert(p_atomic_read(&This->bind) == 0);
             This->dtor(This);
+        }
+        if (device) {
+            NineUnknown_Release(NineUnknown(device));
         }
     }
     return r;
@@ -159,15 +152,17 @@ NineUnknown_ReleaseWithDtorLock( struct NineUnknown *This )
     ULONG r = p_atomic_dec_return(&This->refs);
 
     if (r == 0) {
-        if (This->device) {
-            if (NineUnknown_ReleaseWithDtorLock(NineUnknown(This->device)) == 0)
-                return r; /* everything's gone */
-        }
+        struct NineDevice9 *device = This->device;
+        UINT b_or_ref = p_atomic_dec_return(&This->has_bind_or_refs);
         /* Containers (here with !forward) take care of item destruction */
-        if (!This->container && This->bind == 0) {
+        if (!This->container && b_or_ref == 0) {
+            assert(p_atomic_read(&This->bind) == 0);
             NineLockGlobalMutex();
             This->dtor(This);
             NineUnlockGlobalMutex();
+        }
+        if (device) {
+            NineUnknown_ReleaseWithDtorLock(NineUnknown(device));
         }
     }
     return r;
@@ -205,8 +200,8 @@ NineUnknown_SetPrivateData( struct NineUnknown *This,
 
     /* data consists of a header and the actual data. avoiding 2 mallocs */
     header = CALLOC_VARIANT_LENGTH_STRUCT(pheader, SizeOfData);
-    if (!header) { return E_OUTOFMEMORY; }
-    header->unknown = (Flags & D3DSPD_IUNKNOWN) ? TRUE : FALSE;
+    if (!header) { DBG("Returning E_OUTOFMEMORY\n"); return E_OUTOFMEMORY; }
+    header->unknown = (Flags & D3DSPD_IUNKNOWN) ? true : false;
 
     /* if the refguid already exists, delete it */
     NineUnknown_FreePrivateData(This, refguid);
@@ -223,6 +218,7 @@ NineUnknown_SetPrivateData( struct NineUnknown *This,
     memcpy(header_data, user_data, header->size);
     memcpy(&header->guid, refguid, sizeof(header->guid));
 
+    DBG("New header %p, size %d\n", header, (int)header->size);
     _mesa_hash_table_insert(This->pdata, &header->guid, header);
     if (header->unknown) { IUnknown_AddRef(*(IUnknown **)header_data); }
     return D3D_OK;
@@ -234,6 +230,7 @@ NineUnknown_GetPrivateData( struct NineUnknown *This,
                             void *pData,
                             DWORD *pSizeOfData )
 {
+    struct hash_entry *entry;
     struct pheader *header;
     DWORD sizeofdata;
     char guid_str[64];
@@ -244,23 +241,29 @@ NineUnknown_GetPrivateData( struct NineUnknown *This,
 
     (void)guid_str;
 
-    header = util_hash_table_get(This->pdata, refguid);
-    if (!header) { return D3DERR_NOTFOUND; }
+    entry = _mesa_hash_table_search(This->pdata, refguid);
+    if (!entry) { DBG("Returning D3DERR_NOTFOUND\n"); return D3DERR_NOTFOUND; }
+
+    header = entry->data;
 
     user_assert(pSizeOfData, E_POINTER);
     sizeofdata = *pSizeOfData;
     *pSizeOfData = header->size;
+    DBG("Found header %p, size %d. Requested max %d\n", header, (int)header->size, (int)sizeofdata);
 
     if (!pData) {
+        DBG("Returning early D3D_OK\n");
         return D3D_OK;
     }
     if (sizeofdata < header->size) {
+        DBG("Returning D3DERR_MOREDATA\n");
         return D3DERR_MOREDATA;
     }
 
     header_data = (void *)header + sizeof(*header);
     if (header->unknown) { IUnknown_AddRef(*(IUnknown **)header_data); }
     memcpy(pData, header_data, header->size);
+    DBG("Returning D3D_OK\n");
 
     return D3D_OK;
 }
@@ -269,19 +272,22 @@ HRESULT NINE_WINAPI
 NineUnknown_FreePrivateData( struct NineUnknown *This,
                              REFGUID refguid )
 {
-    struct pheader *header;
+    struct hash_entry *entry;
     char guid_str[64];
 
     DBG("This=%p GUID=%s\n", This, GUID_sprintf(guid_str, refguid));
 
     (void)guid_str;
 
-    header = util_hash_table_get(This->pdata, refguid);
-    if (!header)
+    entry = _mesa_hash_table_search(This->pdata, refguid);
+    if (!entry) {
+        DBG("Nothing to free\n");
         return D3DERR_NOTFOUND;
+    }
 
-    ht_guid_delete(NULL, header, NULL);
-    _mesa_hash_table_remove_key(This->pdata, refguid);
+    DBG("Freeing %p\n", entry->data);
+    ht_guid_delete(entry);
+    _mesa_hash_table_remove(This->pdata, entry);
 
     return D3D_OK;
 }

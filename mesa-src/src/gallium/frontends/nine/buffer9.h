@@ -1,25 +1,8 @@
 /*
  * Copyright 2011 Joakim Sindholt <opensource@zhasha.com>
  * Copyright 2015 Patrick Rudolph <siro@das-labor.org>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef _NINE_BUFFER9_H_
 #define _NINE_BUFFER9_H_
@@ -29,8 +12,11 @@
 #include "nine_state.h"
 #include "resource9.h"
 #include "pipe/p_context.h"
+#include "pipe/p_defines.h"
 #include "pipe/p_state.h"
 #include "util/list.h"
+#include "util/box.h"
+#include "util/u_upload_mgr.h"
 
 struct pipe_screen;
 struct pipe_context;
@@ -49,24 +35,32 @@ struct NineBuffer9
 
     /* G3D */
     struct NineTransfer *maps;
-    int nmaps, maxmaps;
+    int nlocks, nmaps, maxmaps;
     UINT size;
 
     int16_t bind_count; /* to Device9->state.stream */
     /* Whether only discard and nooverwrite were used so far
      * for this buffer. Allows some optimization. */
-    boolean discard_nooverwrite_only;
-    boolean need_sync_if_nooverwrite;
+    bool discard_nooverwrite_only;
+    bool need_sync_if_nooverwrite;
     struct nine_subbuffer *buf;
 
     /* Specific to managed buffers */
     struct {
         void *data;
-        boolean dirty;
-        struct pipe_box dirty_box;
+        bool dirty;
+        struct pipe_box dirty_box; /* region in the resource to update */
+        struct pipe_box upload_pending_regions; /* region with uploads pending */
         struct list_head list; /* for update_buffers */
         struct list_head list2; /* for managed_buffers */
         unsigned pending_upload; /* for uploads */
+        /* SYSTEMMEM DYNAMIC */
+        bool can_unsynchronized; /* Whether the upload can use nooverwrite */
+        struct pipe_box valid_region; /* Region in the GPU buffer with valid content */
+        struct pipe_box required_valid_region; /* Region that needs to be valid right now. */
+        struct pipe_box filled_region; /* Region in the GPU buffer filled since last discard */
+        unsigned num_worker_thread_syncs;
+        unsigned frame_count_last_discard;
     } managed;
 };
 static inline struct NineBuffer9 *
@@ -99,20 +93,8 @@ NineBuffer9_Lock( struct NineBuffer9 *This,
 HRESULT NINE_WINAPI
 NineBuffer9_Unlock( struct NineBuffer9 *This );
 
-static inline void
-NineBuffer9_Upload( struct NineBuffer9 *This )
-{
-    struct NineDevice9 *device = This->base.base.device;
-
-    assert(This->base.pool == D3DPOOL_MANAGED && This->managed.dirty);
-    nine_context_range_upload(device, &This->managed.pending_upload,
-                              (struct NineUnknown *)This,
-                              This->base.resource,
-                              This->managed.dirty_box.x,
-                              This->managed.dirty_box.width,
-                              (char *)This->managed.data + This->managed.dirty_box.x);
-    This->managed.dirty = FALSE;
-}
+void
+NineBuffer9_Upload( struct NineBuffer9 *This );
 
 static void inline
 NineBindBufferToDevice( struct NineDevice9 *device,

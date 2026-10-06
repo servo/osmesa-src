@@ -31,16 +31,14 @@ from mako.template import Template
 def find_result_types(spirv):
     seen = set()
     for inst in spirv['instructions']:
-        # Handle aliases by choosing the first one in the grammar.
-        if inst['opcode'] in seen:
-            continue
-        seen.add(inst['opcode'])
-
-        name = inst['opname']
+        opcode = inst['opcode']
+        assert(opcode not in seen)
+        seen.add(opcode)
 
         if 'operands' not in inst:
             continue
 
+        name = inst['opname']
         res_arg_idx = -1
         res_type_arg_idx = -1
         for idx, arg in enumerate(inst['operands']):
@@ -54,11 +52,13 @@ def find_result_types(spirv):
         elif res_arg_idx >= 0:
             untyped_insts = [
                 'OpString',
+                'OpConstantStringAMDX',
+                'OpSpecConstantStringAMDX',
                 'OpExtInstImport',
                 'OpDecorationGroup',
                 'OpLabel',
             ]
-            assert name.startswith('OpType') or name in untyped_insts
+            assert name.startswith('OpType') or name.startswith('OpAlias') or name in untyped_insts
 
         if res_arg_idx >= 0 or res_type_arg_idx >= 0:
             yield (name, res_arg_idx, res_type_arg_idx)
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     opcodes = list(find_result_types(spirv_info))
 
     try:
-        with open(args.out, 'w') as f:
+        with open(args.out, 'w', encoding='utf-8') as f:
             f.write(TEMPLATE.render(opcodes=opcodes))
     except Exception:
         # In the even there's an error this imports some helpers from mako

@@ -25,16 +25,30 @@
 
 #ifndef NIR_DRAW_HELPERS_H
 #define NIR_DRAW_HELPERS_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct nir_shader;
 void
 nir_lower_pstipple_fs(struct nir_shader *shader,
                       unsigned *samplerUnitOut,
                       unsigned fixedUnit,
-                      bool fs_pos_is_sysval);
+                      bool fs_pos_is_sysval,
+                      nir_alu_type bool_type);
 
 void
-nir_lower_aaline_fs(struct nir_shader *shader, int *varying);
+nir_lower_aaline_fs(struct nir_shader *shader, int *varying,
+                    nir_variable *stipple_counter,
+                    nir_variable *stipple_pattern);
 
 void
-nir_lower_aapoint_fs(struct nir_shader *shader, int *varying);
+nir_lower_aapoint_fs(struct nir_shader *shader, int *varying,
+                     nir_alu_type bool_type);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

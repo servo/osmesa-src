@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2009-2015 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2009-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 /**
  * @author Jose Fonseca <jfonseca@vmware.com>
@@ -32,7 +14,7 @@
 #define VMW_CONTEXT_H_
 
 #include <stdio.h>
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 struct svga_winsys_screen;
 struct svga_winsys_context;
@@ -45,7 +27,7 @@ struct pipe_screen;
 
 #if VMW_DEBUG
 #define vmw_printf debug_printf
-#define VMW_FUNC  debug_printf("%s\n", __FUNCTION__)
+#define VMW_FUNC  debug_printf("%s\n", __func__)
 #else
 #define VMW_FUNC
 #define vmw_printf(...)
@@ -69,5 +51,14 @@ void
 vmw_swc_surface_clear_reference(struct svga_winsys_context *swc,
                                 struct vmw_svga_winsys_surface *vsurf);
 
+void
+vmw_swc_unref(struct svga_winsys_context *swc);
+
+void
+vmw_swc_surface_clear_userspace_id(struct svga_winsys_context *swc,
+                                   uint32_t sid);
+
+uint32_t
+vmw_swc_surface_add_userspace_id(struct svga_winsys_context *swc);
 
 #endif /* VMW_CONTEXT_H_ */

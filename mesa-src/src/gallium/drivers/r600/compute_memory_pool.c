@@ -1,25 +1,7 @@
 /*
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
  * Authors:
  *      Adam Rak <adam.rak@streamnovation.com>
+ * SPDX-License-Identifier: MIT
  */
 
 #include "pipe/p_defines.h"
@@ -253,6 +235,43 @@ int compute_memory_finalize_pending(struct compute_memory_pool* pool,
 			return -1;
 	}
 	else if (pool->status & POOL_FRAGMENTED) {
+		/* Loop through all unallocated items marked for promoting to
+		 * insert them into an appropriate existing hole prior to defrag. */
+		LIST_FOR_EACH_ENTRY_SAFE(item, next, pool->unallocated_list, link) {
+			if (!(item->status & ITEM_FOR_PROMOTING))
+				continue;
+
+			int64_t hole_start = 0, hole_size = 0;
+			int64_t item_size = align(item->size_in_dw, ITEM_ALIGNMENT);
+			struct compute_memory_item *alloc_item, *alloc_next;
+			LIST_FOR_EACH_ENTRY_SAFE(alloc_item, alloc_next, pool->item_list, link) {
+				if (alloc_item->start_in_dw == hole_start) {
+					hole_start += align(alloc_item->size_in_dw, ITEM_ALIGNMENT);
+					hole_size = 0;
+				} else if (alloc_item->start_in_dw > hole_start) {
+					hole_size = alloc_item->start_in_dw - hole_start;
+				}
+			}
+
+			/* Space after all items is also a hole. */
+			if (hole_size == 0 && hole_start < pool->size_in_dw)
+				hole_size = pool->size_in_dw - hole_start;
+
+			if (hole_size >= item_size) {
+				if (compute_memory_promote_item(pool, item, pipe, hole_start) != -1) {
+					item->status &= ~ITEM_FOR_PROMOTING;
+					unallocated -= item_size;
+					allocated += item_size;
+				}
+			}
+		}
+
+		if (allocated == pool->size_in_dw)
+			pool->status &= ~POOL_FRAGMENTED;
+
+		if (unallocated == 0)
+			return 0;
+
 		struct pipe_resource *src = (struct pipe_resource *)pool->bo;
 		compute_memory_defrag(pool, src, src, pipe);
 	}
@@ -350,7 +369,7 @@ static int compute_memory_promote_item(struct compute_memory_pool *pool,
 		 * In this case, we need to keep the temporary buffer 'alive'
 		 * because it is possible to keep a map active for reading
 		 * while a kernel (that reads from it) executes */
-		if (!(item->status & ITEM_MAPPED_FOR_READING)) {
+		if (!(item->status & ITEM_MAPPED_FOR_READING) && !is_item_user_ptr(item)) {
 			pool->screen->b.b.resource_destroy(screen, src);
 			item->real_buffer = NULL;
 		}
@@ -393,12 +412,17 @@ void compute_memory_demote_item(struct compute_memory_pool *pool,
 	dst = (struct pipe_resource *)item->real_buffer;
 
 	/* We transfer the memory from the item in the pool to the
-	 * temporary buffer */
-	u_box_1d(item->start_in_dw * 4, item->size_in_dw * 4, &box);
+	 * temporary buffer. Download is skipped for items:
+	 * - Not mapped for reading or writing (PIPE_MAP_DISCARD_RANGE).
+	 * - Not writable by the device. */
+	if ((item->status & (ITEM_MAPPED_FOR_READING|ITEM_MAPPED_FOR_WRITING))) {
 
-	rctx->b.b.resource_copy_region(pipe,
-		dst, 0, 0, 0, 0,
-		src, 0, &box);
+		u_box_1d(item->start_in_dw * 4, item->size_in_dw * 4, &box);
+
+		rctx->b.b.resource_copy_region(pipe,
+			dst, 0, 0, 0, 0,
+			src, 0, &box);
+	}
 
 	/* Remember to mark the buffer as 'pending' by setting start_in_dw to -1 */
 	item->start_in_dw = -1;
@@ -436,7 +460,7 @@ static void compute_memory_move_item(struct compute_memory_pool *pool,
 
 	if (pool->item_list != item->link.prev) {
 		ASSERTED struct compute_memory_item *prev;
-		prev = container_of(item->link.prev, item, link);
+		prev = container_of(item->link.prev, struct compute_memory_item, link);
 		assert(prev->start_in_dw + prev->size_in_dw <= new_start_in_dw);
 	}
 
@@ -479,7 +503,7 @@ static void compute_memory_move_item(struct compute_memory_pool *pool,
 
 			u_box_1d(new_start_in_dw * 4, (offset + item->size_in_dw) * 4, &box);
 
-			map = pipe->transfer_map(pipe, src, 0, PIPE_TRANSFER_READ_WRITE,
+			map = pipe->buffer_map(pipe, src, 0, PIPE_MAP_READ_WRITE,
 				&box, &trans);
 
 			assert(map);
@@ -487,7 +511,7 @@ static void compute_memory_move_item(struct compute_memory_pool *pool,
 
 			memmove(map, map + offset, item->size_in_dw * 4);
 
-			pipe->transfer_unmap(pipe, trans);
+			pipe->buffer_unmap(pipe, trans);
 		}
 	}
 
@@ -495,52 +519,46 @@ static void compute_memory_move_item(struct compute_memory_pool *pool,
 }
 
 /**
- * Frees the memory asociated to the item with id \a id from the pool.
+ * Frees one item for compute_memory_free()
+ */
+static void compute_memory_free_item(struct pipe_screen *screen,
+	struct compute_memory_item *item)
+{
+	struct pipe_resource *res = (struct pipe_resource *)item->real_buffer;
+
+	list_del(&item->link);
+
+	if (res && !is_item_user_ptr(item))
+		screen->resource_destroy(screen, res);
+
+	free(item);
+}
+
+/**
+ * Frees the memory associated to the item with id \a id from the pool.
  * \param id	The id of the item to be freed.
  */
 void compute_memory_free(struct compute_memory_pool* pool, int64_t id)
 {
 	struct compute_memory_item *item, *next;
 	struct pipe_screen *screen = (struct pipe_screen *)pool->screen;
-	struct pipe_resource *res;
 
 	COMPUTE_DBG(pool->screen, "* compute_memory_free() id + %"PRIi64" \n", id);
 
 	LIST_FOR_EACH_ENTRY_SAFE(item, next, pool->item_list, link) {
-
 		if (item->id == id) {
-
 			if (item->link.next != pool->item_list) {
 				pool->status |= POOL_FRAGMENTED;
 			}
 
-			list_del(&item->link);
-
-			if (item->real_buffer) {
-				res = (struct pipe_resource *)item->real_buffer;
-				pool->screen->b.b.resource_destroy(
-						screen, res);
-			}
-
-			free(item);
-
+			compute_memory_free_item(screen, item);
 			return;
 		}
 	}
 
 	LIST_FOR_EACH_ENTRY_SAFE(item, next, pool->unallocated_list, link) {
-
 		if (item->id == id) {
-			list_del(&item->link);
-
-			if (item->real_buffer) {
-				res = (struct pipe_resource *)item->real_buffer;
-				pool->screen->b.b.resource_destroy(
-						screen, res);
-			}
-
-			free(item);
-
+			compute_memory_free_item(screen, item);
 			return;
 		}
 	}
@@ -614,20 +632,20 @@ static void compute_memory_transfer(
 		offset_in_chunk, size);
 
 	if (device_to_host) {
-		map = pipe->transfer_map(pipe, gart, 0, PIPE_TRANSFER_READ,
+		map = pipe->buffer_map(pipe, gart, 0, PIPE_MAP_READ,
 			&(struct pipe_box) { .width = aligned_size * 4,
 			.height = 1, .depth = 1 }, &xfer);
 		assert(xfer);
 		assert(map);
 		memcpy(data, map + internal_offset, size);
-		pipe->transfer_unmap(pipe, xfer);
+		pipe->buffer_unmap(pipe, xfer);
 	} else {
-		map = pipe->transfer_map(pipe, gart, 0, PIPE_TRANSFER_WRITE,
+		map = pipe->buffer_map(pipe, gart, 0, PIPE_MAP_WRITE,
 			&(struct pipe_box) { .width = aligned_size * 4,
 			.height = 1, .depth = 1 }, &xfer);
 		assert(xfer);
 		assert(map);
 		memcpy(map + internal_offset, data, size);
-		pipe->transfer_unmap(pipe, xfer);
+		pipe->buffer_unmap(pipe, xfer);
 	}
 }

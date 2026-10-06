@@ -76,6 +76,9 @@ _mesa_delete_program(struct gl_context *ctx, struct gl_program *prog);
 extern struct gl_program *
 _mesa_lookup_program(struct gl_context *ctx, GLuint id);
 
+extern struct gl_program *
+_mesa_lookup_program_locked(struct gl_context *ctx, GLuint id);
+
 extern void
 _mesa_reference_program_(struct gl_context *ctx,
                          struct gl_program **ptr,
@@ -89,22 +92,6 @@ _mesa_reference_program(struct gl_context *ctx,
    if (*ptr != prog)
       _mesa_reference_program_(ctx, ptr, prog);
 }
-
-extern  GLboolean
-_mesa_insert_instructions(struct gl_program *prog, GLuint start, GLuint count);
-
-extern  GLboolean
-_mesa_delete_instructions(struct gl_program *prog, GLuint start, GLuint count,
-                          void *mem_ctx);
-
-extern void
-_mesa_find_used_registers(const struct gl_program *prog,
-                          gl_register_file file,
-                          GLboolean used[], GLuint usedSize);
-
-extern GLint
-_mesa_find_free_register(const GLboolean used[],
-                         GLuint maxRegs, GLuint firstReg);
 
 extern GLint
 _mesa_get_min_invocations_per_fragment(struct gl_context *ctx,
@@ -161,6 +148,9 @@ _mesa_shader_stage_to_program(unsigned stage)
 GLbitfield
 gl_external_samplers(const struct gl_program *prog);
 
+void
+_mesa_add_separate_state_parameters(struct gl_program *prog,
+                                    struct gl_program_parameter_list *state_params);
 
 #ifdef __cplusplus
 } /* extern "C" */

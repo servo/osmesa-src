@@ -1,30 +1,18 @@
 /*
- * Copyright (C) 2019 Google, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright © 2019 Google, Inc.
+ * SPDX-License-Identifier: MIT
  *
  * Authors:
  *    Rob Clark <robclark@freedesktop.org>
  */
 
 #include "ir3.h"
+
+#include "ir3_compiler.h"
+
+/* The maximum number of nop's we may need to insert between two instructions.
+ */
+#define MAX_NOPS 6
 
 /*
  * Helpers to figure out the necessary delay slots between instructions.  Used
@@ -35,349 +23,179 @@
  * src iterators work.
  */
 
-/* generally don't count false dependencies, since this can just be
- * something like a barrier, or SSBO store.  The exception is array
- * dependencies if the assigner is an array write and the consumer
- * reads the same array.
+/* Return the number of cycles from the start of the instruction until src_n is
+ * read.
  */
-static bool
-ignore_dep(struct ir3_instruction *assigner,
-		struct ir3_instruction *consumer, unsigned n)
+unsigned
+ir3_src_read_delay(struct ir3_compiler *compiler, struct ir3_instruction *instr,
+                   unsigned src_n)
 {
-	if (!__is_false_dep(consumer, n))
-		return false;
+   /* gat and swz have scalar sources and each source is read in a subsequent
+    * cycle.
+    */
+   if (instr->opc == OPC_GAT || instr->opc == OPC_SWZ) {
+      return src_n;
+   }
 
-	if (assigner->barrier_class & IR3_BARRIER_ARRAY_W) {
-		struct ir3_register *dst = assigner->regs[0];
+   /* cat3 instructions consume their last source one or two cycles later. Note
+    * that not all cat3 instructions seem to do this pre-a7xx.
+    */
+   bool cat3_reads_later = compiler->gen >= 7
+                              ? (opc_cat(instr->opc) == 3)
+                              : (is_mad(instr->opc) || is_madsh(instr->opc));
+   if (cat3_reads_later && src_n == 2) {
+      return compiler->delay_slots.cat3_src2_read;
+   }
 
-		debug_assert(dst->flags & IR3_REG_ARRAY);
-
-		foreach_src (src, consumer) {
-			if ((src->flags & IR3_REG_ARRAY) &&
-					(dst->array.id == src->array.id)) {
-				return false;
-			}
-		}
-	}
-
-	return true;
+   return 0;
 }
 
 /* calculate required # of delay slots between the instruction that
  * assigns a value and the one that consumes
  */
 int
-ir3_delayslots(struct ir3_instruction *assigner,
-		struct ir3_instruction *consumer, unsigned n, bool soft)
+ir3_delayslots(struct ir3_compiler *compiler,
+               struct ir3_instruction *assigner,
+               struct ir3_instruction *consumer, unsigned n, bool soft)
 {
-	if (ignore_dep(assigner, consumer, n))
-		return 0;
+   /* generally don't count false dependencies, since this can just be
+    * something like a barrier, or SSBO store.
+    */
+   if (__is_false_dep(consumer, n))
+      return 0;
 
-	/* worst case is cat1-3 (alu) -> cat4/5 needing 6 cycles, normal
-	 * alu -> alu needs 3 cycles, cat4 -> alu and texture fetch
-	 * handled with sync bits
-	 */
+   /* worst case is cat1-3 (alu) -> cat4/5 needing 6 cycles, normal
+    * alu -> alu needs 3 cycles, cat4 -> alu and texture fetch
+    * handled with sync bits
+    */
 
-	if (is_meta(assigner) || is_meta(consumer))
-		return 0;
+   if (is_meta(assigner) || is_meta(consumer))
+      return 0;
 
-	if (writes_addr0(assigner) || writes_addr1(assigner))
-		return 6;
+   if (writes_addr0(assigner) || writes_addr1(assigner))
+      return compiler->delay_slots.non_alu;
 
-	/* On a6xx, it takes the number of delay slots to get a SFU result
-	 * back (ie. using nop's instead of (ss) is:
-	 *
-	 *     8 - single warp
-	 *     9 - two warps
-	 *    10 - four warps
-	 *
-	 * and so on.  Not quite sure where it tapers out (ie. how many
-	 * warps share an SFU unit).  But 10 seems like a reasonable #
-	 * to choose:
-	 */
-	if (soft && is_sfu(assigner))
-		return 10;
+   if (soft && needs_ss(compiler, assigner, consumer))
+      return soft_ss_delay(assigner);
 
-	/* handled via sync flags: */
-	if (is_sfu(assigner) || is_tex(assigner) || is_mem(assigner))
-		return 0;
+   /* handled via sync flags: */
+   if (needs_ss(compiler, assigner, consumer) ||
+       is_sy_producer(assigner))
+      return 0;
 
-	/* assigner must be alu: */
-	if (is_flow(consumer) || is_sfu(consumer) || is_tex(consumer) ||
-			is_mem(consumer)) {
-		return 6;
-	} else if ((is_mad(consumer->opc) || is_madsh(consumer->opc)) &&
-			(n == 3)) {
-		/* special case, 3rd src to cat3 not required on first cycle */
-		return 1;
-	} else {
-		return 3;
-	}
+   /* scalar ALU -> scalar ALU depdendencies where the source and destination
+    * register sizes match don't require any nops.
+    */
+   if (is_scalar_alu(assigner, compiler)) {
+      assert(is_scalar_alu(consumer, compiler));
+      /* If the sizes don't match then we need (ss) and needs_ss() should've
+       * returned above.
+       */
+      assert((assigner->dsts[0]->flags & IR3_REG_HALF) ==
+             (consumer->srcs[n]->flags & IR3_REG_HALF));
+      return 0;
+   }
+
+   /* As far as we know, shader outputs don't need any delay. */
+   if (consumer->opc == OPC_END || consumer->opc == OPC_CHMASK)
+      return 0;
+
+   /* assigner must be alu: */
+   if (is_flow(consumer) || is_sfu(consumer) || is_tex(consumer) ||
+       is_mem(consumer)) {
+      return compiler->delay_slots.non_alu;
+   } else {
+      /* In mergedregs mode, there is an extra 2-cycle penalty when half of
+       * a full-reg is read as a half-reg or when a half-reg is read as a
+       * full-reg.
+       */
+      bool mismatched_half = (assigner->dsts[0]->flags & IR3_REG_HALF) !=
+                             (consumer->srcs[n]->flags & IR3_REG_HALF);
+      unsigned penalty = mismatched_half ? 3 : 0;
+      return compiler->delay_slots.alu_to_alu + penalty -
+             ir3_src_read_delay(compiler, consumer, n);
+   }
 }
 
-static bool
-count_instruction(struct ir3_instruction *n)
-{
-	/* NOTE: don't count branch/jump since we don't know yet if they will
-	 * be eliminated later in resolve_jumps().. really should do that
-	 * earlier so we don't have this constraint.
-	 */
-	return is_alu(n) || (is_flow(n) && (n->opc != OPC_JUMP) && (n->opc != OPC_B));
-}
-
-/**
- * @block: the block to search in, starting from end; in first pass,
- *    this will be the block the instruction would be inserted into
- *    (but has not yet, ie. it only contains already scheduled
- *    instructions).  For intra-block scheduling (second pass), this
- *    would be one of the predecessor blocks.
- * @instr: the instruction to search for
- * @maxd:  max distance, bail after searching this # of instruction
- *    slots, since it means the instruction we are looking for is
- *    far enough away
- * @pred:  if true, recursively search into predecessor blocks to
- *    find the worst case (shortest) distance (only possible after
- *    individual blocks are all scheduled)
- */
-static unsigned
-distance(struct ir3_block *block, struct ir3_instruction *instr,
-		unsigned maxd, bool pred)
-{
-	unsigned d = 0;
-
-	/* Note that this relies on incrementally building up the block's
-	 * instruction list.. but this is how scheduling and nopsched
-	 * work.
-	 */
-	foreach_instr_rev (n, &block->instr_list) {
-		if ((n == instr) || (d >= maxd))
-			return MIN2(maxd, d + n->nop);
-		if (count_instruction(n))
-			d = MIN2(maxd, d + 1 + n->repeat + n->nop);
-	}
-
-	/* if coming from a predecessor block, assume it is assigned far
-	 * enough away.. we'll fix up later.
-	 */
-	if (!pred)
-		return maxd;
-
-	if (pred && (block->data != block)) {
-		/* Search into predecessor blocks, finding the one with the
-		 * shortest distance, since that will be the worst case
-		 */
-		unsigned min = maxd - d;
-
-		/* (ab)use block->data to prevent recursion: */
-		block->data = block;
-
-		set_foreach (block->predecessors, entry) {
-			struct ir3_block *pred = (struct ir3_block *)entry->key;
-			unsigned n;
-
-			n = distance(pred, instr, min, pred);
-
-			min = MIN2(min, n);
-		}
-
-		block->data = NULL;
-		d += min;
-	}
-
-	return d;
-}
-
-/* calculate delay for specified src: */
-static unsigned
-delay_calc_srcn(struct ir3_block *block,
-		struct ir3_instruction *assigner,
-		struct ir3_instruction *consumer,
-		unsigned srcn, bool soft, bool pred)
-{
-	unsigned delay = 0;
-
-	if (is_meta(assigner)) {
-		foreach_src_n (src, n, assigner) {
-			unsigned d;
-
-			if (!src->instr)
-				continue;
-
-			d = delay_calc_srcn(block, src->instr, consumer, srcn, soft, pred);
-
-			/* A (rptN) instruction executes in consecutive cycles so
-			 * it's outputs are written in successive cycles.  And
-			 * likewise for it's (r)'d (incremented) inputs, they are
-			 * read on successive cycles.
-			 *
-			 * So we need to adjust the delay for (rptN)'s assigners
-			 * and consumers accordingly.
-			 *
-			 * Note that the dst of a (rptN) instruction is implicitly
-			 * (r) (the assigner case), although that is not the case
-			 * for src registers.  There is exactly one case, bary.f,
-			 * which has a vecN (collect) src that is not (r)'d.
-			 */
-			if ((assigner->opc == OPC_META_SPLIT) && src->instr->repeat) {
-				/* (rptN) assigner case: */
-				d -= MIN2(d, src->instr->repeat - assigner->split.off);
-			} else if ((assigner->opc == OPC_META_COLLECT) && consumer->repeat &&
-					(consumer->regs[srcn]->flags & IR3_REG_R)) {
-				d -= MIN2(d, n);
-			}
-
-			delay = MAX2(delay, d);
-		}
-	} else {
-		delay = ir3_delayslots(assigner, consumer, srcn, soft);
-		delay -= distance(block, assigner, delay, pred);
-	}
-
-	return delay;
-}
-
-static struct ir3_instruction *
-find_array_write(struct ir3_block *block, unsigned array_id, unsigned maxd)
-{
-	unsigned d = 0;
-
-	/* Note that this relies on incrementally building up the block's
-	 * instruction list.. but this is how scheduling and nopsched
-	 * work.
-	 */
-	foreach_instr_rev (n, &block->instr_list) {
-		if (d >= maxd)
-			return NULL;
-		if (count_instruction(n))
-			d++;
-		if (dest_regs(n) == 0)
-			continue;
-
-		/* note that a dest reg will never be an immediate */
-		if (n->regs[0]->array.id == array_id)
-			return n;
-	}
-
-	return NULL;
-}
-
-/* like list_length() but only counts instructions which count in the
- * delay determination:
- */
-static unsigned
-count_block_delay(struct ir3_block *block)
-{
-	unsigned delay = 0;
-	foreach_instr (n, &block->instr_list) {
-		if (!count_instruction(n))
-			continue;
-		delay++;
-	}
-	return delay;
-}
-
-static unsigned
-delay_calc_array(struct ir3_block *block, unsigned array_id,
-		struct ir3_instruction *consumer, unsigned srcn,
-		bool soft, bool pred, unsigned maxd)
-{
-	struct ir3_instruction *assigner;
-
-	assigner = find_array_write(block, array_id, maxd);
-	if (assigner)
-		return delay_calc_srcn(block, assigner, consumer, srcn, soft, pred);
-
-	if (!pred)
-		return 0;
-
-	unsigned len = count_block_delay(block);
-	if (maxd <= len)
-		return 0;
-
-	maxd -= len;
-
-	if (block->data == block) {
-		/* we have a loop, return worst case: */
-		return maxd;
-	}
-
-	/* If we need to search into predecessors, find the one with the
-	 * max delay.. the resulting delay is that minus the number of
-	 * counted instructions in this block:
-	 */
-	unsigned max = 0;
-
-	/* (ab)use block->data to prevent recursion: */
-	block->data = block;
-
-	set_foreach (block->predecessors, entry) {
-		struct ir3_block *pred = (struct ir3_block *)entry->key;
-		unsigned delay =
-			delay_calc_array(pred, array_id, consumer, srcn, soft, pred, maxd);
-
-		max = MAX2(max, delay);
-	}
-
-	block->data = NULL;
-
-	if (max < len)
-		return 0;
-
-	return max - len;
-}
-
-/**
- * Calculate delay for instruction (maximum of delay for all srcs):
- *
- * @soft:  If true, add additional delay for situations where they
- *    would not be strictly required because a sync flag would be
- *    used (but scheduler would prefer to schedule some other
- *    instructions first to avoid stalling on sync flag)
- * @pred:  If true, recurse into predecessor blocks
- */
 unsigned
-ir3_delay_calc(struct ir3_block *block, struct ir3_instruction *instr,
-		bool soft, bool pred)
+ir3_delayslots_with_repeat(struct ir3_compiler *compiler,
+                           struct ir3_instruction *assigner,
+                           struct ir3_instruction *consumer,
+                           unsigned assigner_n, unsigned consumer_n)
 {
-	unsigned delay = 0;
+   unsigned delay = ir3_delayslots(compiler, assigner, consumer, consumer_n, false);
 
-	foreach_src_n (src, i, instr) {
-		unsigned d = 0;
+   struct ir3_register *src = consumer->srcs[consumer_n];
+   struct ir3_register *dst = assigner->dsts[assigner_n];
 
-		if ((src->flags & IR3_REG_RELATIV) && !(src->flags & IR3_REG_CONST)) {
-			d = delay_calc_array(block, src->array.id, instr, i+1, soft, pred, 6);
-		} else if (src->instr) {
-			d = delay_calc_srcn(block, src->instr, instr, i+1, soft, pred);
-		}
+   if (assigner->repeat == 0 && consumer->repeat == 0)
+      return delay;
 
-		delay = MAX2(delay, d);
-	}
+   unsigned src_start = post_ra_reg_num(src) * reg_elem_size(src);
+   unsigned dst_start = post_ra_reg_num(dst) * reg_elem_size(dst);
 
-	if (instr->address) {
-		unsigned d = delay_calc_srcn(block, instr->address, instr, 0, soft, pred);
-		delay = MAX2(delay, d);
-	}
+   /* If either side is a relative access, we can't really apply most of the
+    * reasoning below because we don't know which component aliases which.
+    * Just bail in this case.
+    */
+   if ((src->flags & IR3_REG_RELATIV) || (dst->flags & IR3_REG_RELATIV))
+      return delay;
 
-	return delay;
+   /* MOVMSK seems to require that all users wait until the entire
+    * instruction is finished, so just bail here.
+    */
+   if (assigner->opc == OPC_MOVMSK)
+      return delay;
+
+   /* TODO: Handle the combination of (rpt) and different component sizes
+    * better like below. This complicates things significantly because the
+    * components don't line up.
+    */
+   if ((src->flags & IR3_REG_HALF) != (dst->flags & IR3_REG_HALF))
+      return delay;
+
+   /* If an instruction has a (rpt), then it acts as a sequence of
+    * instructions, reading its non-(r) sources at each cycle. First, get the
+    * register num for the first instruction where they interfere:
+    */
+
+   unsigned first_num = MAX2(src_start, dst_start) / reg_elem_size(dst);
+
+   /* Now, for that first conflicting half/full register, figure out the
+    * sub-instruction within assigner/consumer it corresponds to. For (r)
+    * sources, this should already return the correct answer of 0. However we
+    * have to special-case the multi-mov instructions, where the
+    * sub-instructions sometimes come from the src/dst indices instead.
+    */
+   unsigned first_src_instr;
+   if (consumer->opc == OPC_SWZ || consumer->opc == OPC_GAT)
+      first_src_instr = consumer_n;
+   else
+      first_src_instr = first_num - src->num;
+
+   unsigned first_dst_instr;
+   if (assigner->opc == OPC_SWZ || assigner->opc == OPC_SCT)
+      first_dst_instr = assigner_n;
+   else
+      first_dst_instr = first_num - dst->num;
+
+   /* The delay we return is relative to the *end* of assigner and the
+    * *beginning* of consumer, because it's the number of nops (or other
+    * things) needed between them. Any instructions after first_dst_instr
+    * subtract from the delay, and so do any instructions before
+    * first_src_instr. Calculate an offset to subtract from the non-rpt-aware
+    * delay to account for that.
+    *
+    * Now, a priori, we need to go through this process for every
+    * conflicting regnum and take the minimum of the offsets to make sure
+    * that the appropriate number of nop's is inserted for every conflicting
+    * pair of sub-instructions. However, as we go to the next conflicting
+    * regnum (if any), the number of instructions after first_dst_instr
+    * decreases by 1 and the number of source instructions before
+    * first_src_instr correspondingly increases by 1, so the offset stays the
+    * same for all conflicting registers.
+    */
+   unsigned offset = first_src_instr + (assigner->repeat - first_dst_instr);
+   return offset > delay ? 0 : delay - offset;
 }
 
-/**
- * Remove nop instructions.  The scheduler can insert placeholder nop's
- * so that ir3_delay_calc() can account for nop's that won't be needed
- * due to nop's triggered by a previous instruction.  However, before
- * legalize, we want to remove these.  The legalize pass can insert
- * some nop's if needed to hold (for example) sync flags.  This final
- * remaining nops are inserted by legalize after this.
- */
-void
-ir3_remove_nops(struct ir3 *ir)
-{
-	foreach_block (block, &ir->block_list) {
-		foreach_instr_safe (instr, &block->instr_list) {
-			if (instr->opc == OPC_NOP) {
-				list_del(&instr->node);
-			}
-		}
-	}
-
-}

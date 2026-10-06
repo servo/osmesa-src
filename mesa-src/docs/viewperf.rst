@@ -2,8 +2,9 @@ Viewperf Issues
 ===============
 
 This page lists known issues with `SPEC Viewperf
-11 <https://www.spec.org/gwpg/gpc.static/vp11info.html>`__ and `SPEC
-Viewperf 12 <https://www.spec.org/gwpg/gpc.static/vp12info.html>`__ when
+11 <https://gwpg.spec.org/benchmarks/benchmark/specviewperf-11/>`__ and
+`SPEC Viewperf
+12 <https://gwpg.spec.org/benchmarks/benchmark/specviewperf-12/>`__ when
 running on Mesa-based drivers.
 
 The Viewperf data sets are basically GL API traces that are recorded
@@ -37,10 +38,8 @@ Catia-03 tests 3, 4, 8
 ~~~~~~~~~~~~~~~~~~~~~~
 
 These tests use features of the
-`GL_NV_fragment_program2 <https://www.opengl.org/registry/specs/NV/fragment_program2.txt>`__
-and
-`GL_NV_vertex_program3 <https://www.opengl.org/registry/specs/NV/vertex_program3.txt>`__
-extensions without checking if the driver supports them.
+:ext:`GL_NV_fragment_program2` and :ext:`GL_NV_vertex_program3` extensions
+without checking if the driver supports them.
 
 When Mesa tries to compile the vertex/fragment programs it generates
 errors (which Viewperf ignores). Subsequent drawing calls become no-ops
@@ -49,9 +48,7 @@ and the rendering is incorrect.
 sw-02 tests 1, 2, 4, 6
 ~~~~~~~~~~~~~~~~~~~~~~
 
-These tests depend on the
-`GL_NV_primitive_restart <https://www.opengl.org/registry/specs/NV/primitive_restart.txt>`__
-extension.
+These tests depend on the :ext:`GL_NV_primitive_restart` extension.
 
 If the Mesa driver doesn't support this extension the rendering will be
 incorrect and the test will fail.
@@ -121,7 +118,7 @@ Maya-03 test 2
 
 This test makes some unusual calls to glRotate. For example:
 
-::
+.. code-block:: c
 
    glRotate(50, 50, 50, 1);
    glRotate(100, 100, 100, 1);
@@ -130,21 +127,25 @@ This test makes some unusual calls to glRotate. For example:
 These unusual values lead to invalid modelview matrices. For example,
 the last glRotate command above produces this matrix with Mesa:
 
-::
+.. math::
 
-   1.08536e+24 2.55321e-23 -0.000160389 0
-   5.96937e-25 1.08536e+24 103408 0
-   103408 -0.000160389 1.74755e+09 0
-   0 0 0 nan
+   \begin{matrix}
+   1.08536 \times 10^{24} & 2.55321 \times 10^{-23} & -0.000160389         & 0\\
+   5.96937 \times 10^{25} & 1.08536 \times 10^{24}  & 103408               & 0\\
+                   103408 & -0.000160389            & 1.74755\times 10^{9} & 0\\
+   0                      &                       0 &                      0 & nan
+   \end{matrix}
 
 and with NVIDIA's OpenGL:
 
-::
+.. math::
 
-   1.4013e-45 0 -nan 0
-   0 1.4013e-45 1.4013e-45 0
-   1.4013e-45 -nan 1.4013e-45 0
-   0 0 0 1.4013e-45
+   \begin{matrix}
+   1.4013 \times 10^{-45} &                      0 &                   -nan & 0\\
+                        0 & 1.4013 \times 10^{-45} & 1.4013 \times 10^{-45} & 0\\
+   1.4013 \times 10^{-45} &                   -nan & 1.4013 \times 10^{-45} & 0\\
+                        0 &                      0 &                      0 & 1.4013 \times 10^{-45}
+   \end{matrix}
 
 This causes the object in question to be drawn in a strange orientation
 and with a semi-random color (between white and black) since GL_FOG is
@@ -185,7 +186,7 @@ If either of the two passes happen to use a software fallback of some
 sort, the Z values of fragments may be different between the two passes.
 This leads to incorrect rendering.
 
-For example, the VMware SVGA gallium driver uses a special semi-fallback
+For example, the VMware SVGA Gallium driver uses a special semi-fallback
 path for drawing with polygon stipple. Since the two passes are rendered
 with different vertex transformation implementations, the rendering
 doesn't appear as expected. Setting the SVGA_FORCE_SWTNL environment
@@ -207,11 +208,11 @@ catia-04
 ~~~~~~~~
 
 One of the catia tests calls wglGetProcAddress() to get some
-GL_EXT_direct_state_access functions (such as glBindMultiTextureEXT) and
-some GL_NV_half_float functions (such as glMultiTexCoord3hNV). If the
-extension/function is not supported, wglGetProcAddress() can return
-NULL. Unfortunately, Viewperf doesn't check for null pointers and
-crashes when it later tries to use the pointer.
+:ext:`GL_EXT_direct_state_access` functions (such as
+glBindMultiTextureEXT) and some :ext:`GL_NV_half_float` functions (such
+as glMultiTexCoord3hNV). If the extension/function is not supported,
+wglGetProcAddress() can return NULL. Unfortunately, Viewperf doesn't check
+for null pointers and crashes when it later tries to use the pointer.
 
 Another catia test uses OpenGL 3.1's primitive restart feature. But when
 Viewperf creates an OpenGL context, it doesn't request version 3.1 If

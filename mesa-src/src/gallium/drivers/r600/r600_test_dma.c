@@ -1,25 +1,6 @@
 /*
  * Copyright 2016 Advanced Micro Devices, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
+ * SPDX-License-Identifier: MIT
  */
 
 /* This file implements randomized SDMA texture blit tests. */
@@ -59,7 +40,7 @@ static void set_random_pixels(struct pipe_context *ctx,
 	uint8_t *map;
 	unsigned x,y,z;
 
-	map = pipe_transfer_map_3d(ctx, tex, 0, PIPE_TRANSFER_WRITE,
+	map = pipe_texture_map_3d(ctx, tex, 0, PIPE_MAP_WRITE,
 				   0, 0, 0, tex->width0, tex->height0,
 				   tex->array_size, &t);
 	assert(map);
@@ -82,7 +63,7 @@ static void set_random_pixels(struct pipe_context *ctx,
 		}
 	}
 
-	pipe_transfer_unmap(ctx, t);
+	pipe_texture_unmap(ctx, t);
 }
 
 static bool compare_textures(struct pipe_context *ctx,
@@ -94,7 +75,7 @@ static bool compare_textures(struct pipe_context *ctx,
 	int y,z;
 	bool pass = true;
 
-	map = pipe_transfer_map_3d(ctx, tex, 0, PIPE_TRANSFER_READ,
+	map = pipe_texture_map_3d(ctx, tex, 0, PIPE_MAP_READ,
 				   0, 0, 0, tex->width0, tex->height0,
 				   tex->array_size, &t);
 	assert(map);
@@ -112,7 +93,7 @@ static bool compare_textures(struct pipe_context *ctx,
 		}
 	}
 done:
-	pipe_transfer_unmap(ctx, t);
+	pipe_texture_unmap(ctx, t);
 	return pass;
 }
 
@@ -138,7 +119,7 @@ static enum pipe_format get_format_from_bpp(int bpp)
 static const char *array_mode_to_string(struct r600_common_screen *rscreen,
 					struct radeon_surf *surf)
 {
-	if (rscreen->chip_class >= GFX9) {
+	if (rscreen->gfx_level >= GFX9) {
 		/* TODO */
 		return "       UNKNOWN";
 	} else {
@@ -180,7 +161,7 @@ void r600_test_dma(struct r600_common_screen *rscreen)
 	unsigned i, iterations, num_partial_copies, max_tex_side;
 	unsigned num_pass = 0, num_fail = 0;
 
-	max_tex_side = screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_2D_SIZE);
+	max_tex_side = screen->caps.max_texture_2d_size;
 
 	/* Max 128 MB allowed for both textures. */
 	max_alloc_size = 128 * 1024 * 1024;

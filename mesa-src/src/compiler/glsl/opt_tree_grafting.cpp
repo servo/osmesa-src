@@ -177,8 +177,7 @@ ir_tree_grafting_visitor::check_graft(ir_instruction *ir, ir_variable *var)
 ir_visitor_status
 ir_tree_grafting_visitor::visit_leave(ir_assignment *ir)
 {
-   if (do_graft(&ir->rhs) ||
-       do_graft(&ir->condition))
+   if (do_graft(&ir->rhs))
       return visit_stop;
 
    /* If this assignment updates a variable used in the assignment
@@ -267,7 +266,8 @@ ir_tree_grafting_visitor::visit_enter(ir_texture *ir)
    if (do_graft(&ir->coordinate) ||
        do_graft(&ir->projector) ||
        do_graft(&ir->offset) ||
-       do_graft(&ir->shadow_comparator))
+       do_graft(&ir->shadow_comparator) ||
+       do_graft(&ir->clamp))
 	 return visit_stop;
 
    switch (ir->op) {
@@ -323,9 +323,10 @@ try_tree_grafting(ir_assignment *start,
       fprintf(stderr, "\n");
    }
 
-   for (ir_instruction *ir = (ir_instruction *)start->next;
-	ir != bb_last->next;
-	ir = (ir_instruction *)ir->next) {
+   for (exec_node *node = start->next;
+	node != bb_last->next;
+	node = node->next) {
+      ir_instruction *ir = (ir_instruction *) node;
 
       if (debug) {
 	 fprintf(stderr, "- ");
@@ -347,11 +348,13 @@ tree_grafting_basic_block(ir_instruction *bb_first,
 			  void *data)
 {
    struct tree_grafting_info *info = (struct tree_grafting_info *)data;
-   ir_instruction *ir, *next;
+   ir_instruction *ir;
+   exec_node *node, *node_next;
 
-   for (ir = bb_first, next = (ir_instruction *)ir->next;
-	ir != bb_last->next;
-	ir = next, next = (ir_instruction *)ir->next) {
+   for (node = bb_first, node_next = bb_first->next;
+	node != bb_last->next;
+	node = node_next, node_next = node->next) {
+      ir = (ir_instruction *) node;
       ir_assignment *assign = ir->as_assignment();
 
       if (!assign)
@@ -379,14 +382,15 @@ tree_grafting_basic_block(ir_instruction *bb_first,
        * any image layout qualifiers (including the image format) are set,
        * since we must not lose those.
        */
-      if (lhs_var->type->is_sampler() || lhs_var->type->is_image())
+      if (glsl_type_is_sampler(lhs_var->type) || glsl_type_is_image(lhs_var->type))
          continue;
 
       ir_variable_refcount_entry *entry = info->refs->get_variable_entry(lhs_var);
 
       if (!entry->declaration ||
 	  entry->assigned_count != 1 ||
-	  entry->referenced_count != 2)
+          entry->referenced_count != 2 ||
+          entry->is_global)
 	 continue;
 
       /* Found a possibly graftable assignment.  Now, walk through the

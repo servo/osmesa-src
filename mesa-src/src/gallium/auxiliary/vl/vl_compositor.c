@@ -35,6 +35,9 @@ init_shaders(struct vl_compositor *c)
 {
    assert(c);
 
+   if (c->shaders_initialized)
+      return true;
+
    if (c->pipe_cs_composit_supported) {
       if (!vl_compositor_cs_init_shaders(c))
          return false;
@@ -61,6 +64,13 @@ init_shaders(struct vl_compositor *c)
          debug_printf("Unable to create YCbCr i-to-YCbCr p deint fragment shader.\n");
          return false;
       }
+
+      c->fs_rgb_yuv.y = create_frag_shader_rgb_yuv(c, true);
+      c->fs_rgb_yuv.uv = create_frag_shader_rgb_yuv(c, false);
+      if (!c->fs_rgb_yuv.y || !c->fs_rgb_yuv.uv) {
+         debug_printf("Unable to create RGB-to-YUV fragment shader.\n");
+         return false;
+      }
    }
 
    if (c->pipe_gfx_supported) {
@@ -82,13 +92,6 @@ init_shaders(struct vl_compositor *c)
          return false;
       }
 
-      c->fs_rgb_yuv.y = create_frag_shader_rgb_yuv(c, true);
-      c->fs_rgb_yuv.uv = create_frag_shader_rgb_yuv(c, false);
-      if (!c->fs_rgb_yuv.y || !c->fs_rgb_yuv.uv) {
-         debug_printf("Unable to create RGB-to-YUV fragment shader.\n");
-         return false;
-      }
-
       c->fs_rgba = create_frag_shader_rgba(c);
       if (!c->fs_rgba) {
          debug_printf("Unable to create RGB-to-RGB fragment shader.\n");
@@ -96,12 +99,17 @@ init_shaders(struct vl_compositor *c)
       }
    }
 
+   c->shaders_initialized = true;
+
    return true;
 }
 
 static void cleanup_shaders(struct vl_compositor *c)
 {
    assert(c);
+
+   if (!c->shaders_initialized)
+      return;
 
    if (c->pipe_cs_composit_supported) {
       vl_compositor_cs_cleanup_shaders(c);
@@ -112,14 +120,14 @@ static void cleanup_shaders(struct vl_compositor *c)
       c->pipe->delete_fs_state(c->pipe, c->fs_yuv.weave.uv);
       c->pipe->delete_fs_state(c->pipe, c->fs_yuv.bob.y);
       c->pipe->delete_fs_state(c->pipe, c->fs_yuv.bob.uv);
+      c->pipe->delete_fs_state(c->pipe, c->fs_rgb_yuv.y);
+      c->pipe->delete_fs_state(c->pipe, c->fs_rgb_yuv.uv);
    }
 
    if (c->pipe_gfx_supported) {
       c->pipe->delete_vs_state(c->pipe, c->vs);
       c->pipe->delete_fs_state(c->pipe, c->fs_palette.yuv);
       c->pipe->delete_fs_state(c->pipe, c->fs_palette.rgb);
-      c->pipe->delete_fs_state(c->pipe, c->fs_rgb_yuv.y);
-      c->pipe->delete_fs_state(c->pipe, c->fs_rgb_yuv.uv);
       c->pipe->delete_fs_state(c->pipe, c->fs_rgba);
    }
 }
@@ -147,8 +155,6 @@ init_pipe_state(struct vl_compositor *c)
    sampler.mag_img_filter = PIPE_TEX_FILTER_LINEAR;
    sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
    sampler.compare_func = PIPE_FUNC_ALWAYS;
-   sampler.normalized_coords = 1;
-
    c->sampler_linear = c->pipe->create_sampler_state(c->pipe, &sampler);
 
    sampler.min_img_filter = PIPE_TEX_FILTER_NEAREST;
@@ -193,9 +199,9 @@ init_pipe_state(struct vl_compositor *c)
            c->rast = c->pipe->create_rasterizer_state(c->pipe, &rast);
 
            memset(&dsa, 0, sizeof dsa);
-           dsa.depth.enabled = 0;
-           dsa.depth.writemask = 0;
-           dsa.depth.func = PIPE_FUNC_ALWAYS;
+           dsa.depth_enabled = 0;
+           dsa.depth_writemask = 0;
+           dsa.depth_func = PIPE_FUNC_ALWAYS;
            for (i = 0; i < 2; ++i) {
                    dsa.stencil[i].enabled = 0;
                    dsa.stencil[i].func = PIPE_FUNC_ALWAYS;
@@ -205,9 +211,9 @@ init_pipe_state(struct vl_compositor *c)
                    dsa.stencil[i].valuemask = 0;
                    dsa.stencil[i].writemask = 0;
            }
-           dsa.alpha.enabled = 0;
-           dsa.alpha.func = PIPE_FUNC_ALWAYS;
-           dsa.alpha.ref_value = 0;
+           dsa.alpha_enabled = 0;
+           dsa.alpha_func = PIPE_FUNC_ALWAYS;
+           dsa.alpha_ref_value = 0;
            c->dsa = c->pipe->create_depth_stencil_alpha_state(c->pipe, &dsa);
            c->pipe->bind_depth_stencil_alpha_state(c->pipe, c->dsa);
    }
@@ -229,35 +235,40 @@ static void cleanup_pipe_state(struct vl_compositor *c)
            c->pipe->delete_blend_state(c->pipe, c->blend_add);
            c->pipe->delete_rasterizer_state(c->pipe, c->rast);
    }
-   c->pipe->delete_sampler_state(c->pipe, c->sampler_linear);
-   c->pipe->delete_sampler_state(c->pipe, c->sampler_nearest);
+   if (c->sampler_linear)
+      c->pipe->delete_sampler_state(c->pipe, c->sampler_linear);
+   if (c->sampler_nearest)
+      c->pipe->delete_sampler_state(c->pipe, c->sampler_nearest);
 }
 
 static bool
 init_buffers(struct vl_compositor *c)
 {
    struct pipe_vertex_element vertex_elems[3];
+   memset(vertex_elems, 0, sizeof(vertex_elems));
 
    assert(c);
 
    /*
     * Create our vertex buffer and vertex buffer elements
     */
-   c->vertex_buf.stride = sizeof(struct vertex2f) + sizeof(struct vertex4f) * 2;
    c->vertex_buf.buffer_offset = 0;
    c->vertex_buf.buffer.resource = NULL;
    c->vertex_buf.is_user_buffer = false;
 
    if (c->pipe_gfx_supported) {
            vertex_elems[0].src_offset = 0;
+           vertex_elems[0].src_stride = VL_COMPOSITOR_VB_STRIDE;
            vertex_elems[0].instance_divisor = 0;
            vertex_elems[0].vertex_buffer_index = 0;
            vertex_elems[0].src_format = PIPE_FORMAT_R32G32_FLOAT;
            vertex_elems[1].src_offset = sizeof(struct vertex2f);
+           vertex_elems[1].src_stride = VL_COMPOSITOR_VB_STRIDE;
            vertex_elems[1].instance_divisor = 0;
            vertex_elems[1].vertex_buffer_index = 0;
            vertex_elems[1].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
            vertex_elems[2].src_offset = sizeof(struct vertex2f) + sizeof(struct vertex4f);
+           vertex_elems[2].src_stride = VL_COMPOSITOR_VB_STRIDE;
            vertex_elems[2].instance_divisor = 0;
            vertex_elems[2].vertex_buffer_index = 0;
            vertex_elems[2].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
@@ -318,17 +329,21 @@ static void
 set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
               unsigned layer, struct pipe_video_buffer *buffer,
               struct u_rect *src_rect, struct u_rect *dst_rect,
-              bool y, enum vl_compositor_deinterlace deinterlace)
+              enum vl_compositor_plane plane,
+              enum vl_compositor_deinterlace deinterlace)
 {
    struct pipe_sampler_view **sampler_views;
    float half_a_line;
    unsigned i;
+   bool y = plane == VL_COMPOSITOR_PLANE_Y;
 
    assert(s && c && buffer);
 
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
 
-   s->interlaced = buffer->interlaced;
+   if (!init_shaders(c))
+      return;
+
    s->used_layers |= 1 << layer;
    sampler_views = buffer->get_sampler_view_components(buffer);
    for (i = 0; i < 3; ++i) {
@@ -350,7 +365,7 @@ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
       if (c->pipe_gfx_supported)
           s->layers[layer].fs = (y) ? c->fs_yuv.bob.y : c->fs_yuv.bob.uv;
       if (c->pipe_cs_composit_supported)
-          s->layers[layer].cs = (y) ? c->cs_yuv.bob.y : c->cs_yuv.bob.uv;
+          s->layers[layer].cs = (y) ? c->cs_yuv.progressive.y : c->cs_yuv.progressive.uv;
       break;
 
    case VL_COMPOSITOR_BOB_BOTTOM:
@@ -360,8 +375,22 @@ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
       if (c->pipe_gfx_supported)
           s->layers[layer].fs = (y) ? c->fs_yuv.bob.y : c->fs_yuv.bob.uv;
       if (c->pipe_cs_composit_supported)
-          s->layers[layer].cs = (y) ? c->cs_yuv.bob.y : c->cs_yuv.bob.uv;
+          s->layers[layer].cs = (y) ? c->cs_yuv.progressive.y : c->cs_yuv.progressive.uv;
       break;
+
+   case VL_COMPOSITOR_NONE:
+      if (c->pipe_cs_composit_supported) {
+         if (plane == VL_COMPOSITOR_PLANE_Y)
+            s->layers[layer].cs = c->cs_yuv.progressive.y;
+         else if (plane == VL_COMPOSITOR_PLANE_U)
+            s->layers[layer].cs = c->cs_yuv.progressive.u;
+         else if (plane == VL_COMPOSITOR_PLANE_V)
+            s->layers[layer].cs = c->cs_yuv.progressive.v;
+         else if (plane == VL_COMPOSITOR_PLANE_UV)
+            s->layers[layer].cs = c->cs_yuv.progressive.uv;
+         break;
+      }
+      FALLTHROUGH;
 
    default:
       if (c->pipe_gfx_supported)
@@ -375,20 +404,30 @@ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
 static void
 set_rgb_to_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
                      unsigned layer, struct pipe_sampler_view *v,
-                     struct u_rect *src_rect, struct u_rect *dst_rect, bool y)
+                     struct u_rect *src_rect, struct u_rect *dst_rect,
+                     enum vl_compositor_plane plane)
 {
-   vl_csc_matrix csc_matrix;
+   bool y = plane == VL_COMPOSITOR_PLANE_Y;
 
    assert(s && c && v);
-
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
+
+   if (!init_shaders(c))
+      return;
 
    s->used_layers |= 1 << layer;
 
-   s->layers[layer].fs = y? c->fs_rgb_yuv.y : c->fs_rgb_yuv.uv;
-
-   vl_csc_get_matrix(VL_CSC_COLOR_STANDARD_BT_709_REV, NULL, false, &csc_matrix);
-   vl_compositor_set_csc_matrix(s, (const vl_csc_matrix *)&csc_matrix, 1.0f, 0.0f);
+   if (c->pipe_cs_composit_supported) {
+      if (plane == VL_COMPOSITOR_PLANE_Y)
+         s->layers[layer].cs = c->cs_rgb_yuv.y;
+      else if (plane == VL_COMPOSITOR_PLANE_U)
+         s->layers[layer].cs = c->cs_rgb_yuv.u;
+      else if (plane == VL_COMPOSITOR_PLANE_V)
+         s->layers[layer].cs = c->cs_rgb_yuv.v;
+      else if (plane == VL_COMPOSITOR_PLANE_UV)
+         s->layers[layer].cs = c->cs_rgb_yuv.uv;
+   } else if (c->pipe_gfx_supported)
+      s->layers[layer].fs = y ? c->fs_rgb_yuv.y : c->fs_rgb_yuv.uv;
 
    s->layers[layer].samplers[0] = c->sampler_linear;
    s->layers[layer].samplers[1] = NULL;
@@ -436,7 +475,6 @@ vl_compositor_clear_layers(struct vl_compositor_state *s)
    unsigned i, j;
 
    assert(s);
-   s->interlaced = false;
    s->used_layers = 0;
    for ( i = 0; i < VL_COMPOSITOR_MAX_LAYERS; ++i) {
       struct vertex4f v_one = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -446,7 +484,12 @@ vl_compositor_clear_layers(struct vl_compositor_state *s)
       s->layers[i].cs = NULL;
       s->layers[i].viewport.scale[2] = 1;
       s->layers[i].viewport.translate[2] = 0;
+      s->layers[i].viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+      s->layers[i].viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+      s->layers[i].viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+      s->layers[i].viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
       s->layers[i].rotate = VL_COMPOSITOR_ROTATE_0;
+      s->layers[i].mirror = VL_COMPOSITOR_MIRROR_NONE;
 
       for ( j = 0; j < 3; j++)
          pipe_sampler_view_reference(&s->layers[i].sampler_views[j], NULL);
@@ -470,24 +513,11 @@ vl_compositor_set_csc_matrix(struct vl_compositor_state *s,
                              vl_csc_matrix const *matrix,
                              float luma_min, float luma_max)
 {
-   struct pipe_transfer *buf_transfer;
-
    assert(s);
 
-   float *ptr = pipe_buffer_map(s->pipe, s->shader_params,
-                               PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE,
-                               &buf_transfer);
-
-   if (!ptr)
-      return false;
-
-   memcpy(ptr, matrix, sizeof(vl_csc_matrix));
-
-   ptr += sizeof(vl_csc_matrix)/sizeof(float);
-   ptr[0] = luma_min;
-   ptr[1] = luma_max;
-
-   pipe_buffer_unmap(s->pipe, buf_transfer);
+   memcpy(&s->csc_matrix, matrix, sizeof(vl_csc_matrix));
+   s->luma_min = luma_min;
+   s->luma_max = luma_max;
 
    return true;
 }
@@ -552,7 +582,9 @@ vl_compositor_set_buffer_layer(struct vl_compositor_state *s,
 
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
 
-   s->interlaced = buffer->interlaced;
+   if (!init_shaders(c))
+      return;
+
    s->used_layers |= 1 << layer;
    sampler_views = buffer->get_sampler_view_components(buffer);
    for (i = 0; i < 3; ++i) {
@@ -567,6 +599,8 @@ vl_compositor_set_buffer_layer(struct vl_compositor_state *s,
    if (buffer->interlaced) {
       float half_a_line = 0.5f / s->layers[layer].zw.y;
       switch(deinterlace) {
+      case VL_COMPOSITOR_NONE:
+      case VL_COMPOSITOR_MOTION_ADAPTIVE:
       case VL_COMPOSITOR_WEAVE:
          if (c->pipe_cs_composit_supported)
             s->layers[layer].cs = c->cs_weave_rgb;
@@ -617,6 +651,9 @@ vl_compositor_set_palette_layer(struct vl_compositor_state *s,
 
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
 
+   if (!init_shaders(c))
+      return;
+
    s->used_layers |= 1 << layer;
 
    s->layers[layer].fs = include_color_conversion ?
@@ -648,8 +685,14 @@ vl_compositor_set_rgba_layer(struct vl_compositor_state *s,
 
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
 
+   if (!init_shaders(c))
+      return;
+
    s->used_layers |= 1 << layer;
-   s->layers[layer].fs = c->fs_rgba;
+   if (c->fs_rgba)
+      s->layers[layer].fs = c->fs_rgba;
+   else if (c->cs_rgba)
+      s->layers[layer].cs = c->cs_rgba;
    s->layers[layer].samplers[0] = c->sampler_linear;
    s->layers[layer].samplers[1] = NULL;
    s->layers[layer].samplers[2] = NULL;
@@ -676,6 +719,16 @@ vl_compositor_set_layer_rotation(struct vl_compositor_state *s,
 }
 
 void
+vl_compositor_set_layer_mirror(struct vl_compositor_state *s,
+                               unsigned layer,
+                               enum vl_compositor_mirror mirror)
+{
+   assert(s);
+   assert(layer < VL_COMPOSITOR_MAX_LAYERS);
+   s->layers[layer].mirror = mirror;
+}
+
+void
 vl_compositor_yuv_deint_full(struct vl_compositor_state *s,
                              struct vl_compositor *c,
                              struct pipe_video_buffer *src,
@@ -687,22 +740,43 @@ vl_compositor_yuv_deint_full(struct vl_compositor_state *s,
    struct pipe_surface **dst_surfaces;
 
    dst_surfaces = dst->get_surfaces(dst);
-   vl_compositor_clear_layers(s);
 
-   set_yuv_layer(s, c, 0, src, src_rect, NULL, true, deinterlace);
+   set_yuv_layer(s, c, 0, src, src_rect, NULL, VL_COMPOSITOR_PLANE_Y, deinterlace);
    vl_compositor_set_layer_dst_area(s, 0, dst_rect);
    vl_compositor_render(s, c, dst_surfaces[0], NULL, false);
 
-   if (dst_rect) {
-      dst_rect->x1 /= 2;
-      dst_rect->y1 /= 2;
+   if (dst_surfaces[1]) {
+      bool clear = util_format_get_nr_components(src->buffer_format) == 1;
+      union pipe_color_union clear_color = { .f = {0.5, 0.5} };
+      dst_rect->x0 = util_format_get_plane_width(dst->buffer_format, 1, dst_rect->x0);
+      dst_rect->x1 = util_format_get_plane_width(dst->buffer_format, 1, dst_rect->x1);
+      dst_rect->y0 = util_format_get_plane_height(dst->buffer_format, 1, dst_rect->y0);
+      dst_rect->y1 = util_format_get_plane_height(dst->buffer_format, 1, dst_rect->y1);
+      set_yuv_layer(s, c, 0, src, src_rect, NULL, dst_surfaces[2] ? VL_COMPOSITOR_PLANE_U :
+                    VL_COMPOSITOR_PLANE_UV, deinterlace);
+      vl_compositor_set_layer_dst_area(s, 0, dst_rect);
+      if (clear) {
+         struct u_rect clear_rect = *dst_rect;
+         s->used_layers = 0;
+         vl_compositor_set_clear_color(s, &clear_color);
+         vl_compositor_render(s, c, dst_surfaces[1], &clear_rect, true);
+      } else {
+         vl_compositor_render(s, c, dst_surfaces[1], NULL, false);
+      }
+
+      if (dst_surfaces[2]) {
+         set_yuv_layer(s, c, 0, src, src_rect, NULL, VL_COMPOSITOR_PLANE_V, deinterlace);
+         vl_compositor_set_layer_dst_area(s, 0, dst_rect);
+         if (clear) {
+            struct u_rect clear_rect = *dst_rect;
+            s->used_layers = 0;
+            vl_compositor_set_clear_color(s, &clear_color);
+            vl_compositor_render(s, c, dst_surfaces[2], &clear_rect, true);
+         } else {
+            vl_compositor_render(s, c, dst_surfaces[2], NULL, false);
+         }
+      }
    }
-
-   set_yuv_layer(s, c, 0, src, src_rect, NULL, false, deinterlace);
-   vl_compositor_set_layer_dst_area(s, 0, dst_rect);
-   vl_compositor_render(s, c, dst_surfaces[1], NULL, false);
-
-   s->pipe->flush(s->pipe, NULL, 0);
 }
 
 void
@@ -723,23 +797,28 @@ vl_compositor_convert_rgb_to_yuv(struct vl_compositor_state *s,
    u_sampler_view_default_template(&sv_templ, src_res, src_res->format);
    sv = s->pipe->create_sampler_view(s->pipe, src_res, &sv_templ);
 
-   vl_compositor_clear_layers(s);
-
-   set_rgb_to_yuv_layer(s, c, 0, sv, src_rect, NULL, true);
+   set_rgb_to_yuv_layer(s, c, 0, sv, src_rect, NULL, VL_COMPOSITOR_PLANE_Y);
    vl_compositor_set_layer_dst_area(s, 0, dst_rect);
    vl_compositor_render(s, c, dst_surfaces[0], NULL, false);
 
-   if (dst_rect) {
-      dst_rect->x1 /= 2;
-      dst_rect->y1 /= 2;
+   if (dst_surfaces[1]) {
+      dst_rect->x0 = util_format_get_plane_width(dst->buffer_format, 1, dst_rect->x0);
+      dst_rect->x1 = util_format_get_plane_width(dst->buffer_format, 1, dst_rect->x1);
+      dst_rect->y0 = util_format_get_plane_height(dst->buffer_format, 1, dst_rect->y0);
+      dst_rect->y1 = util_format_get_plane_height(dst->buffer_format, 1, dst_rect->y1);
+      set_rgb_to_yuv_layer(s, c, 0, sv, src_rect, NULL, dst_surfaces[2] ? VL_COMPOSITOR_PLANE_U :
+                           VL_COMPOSITOR_PLANE_UV);
+      vl_compositor_set_layer_dst_area(s, 0, dst_rect);
+      vl_compositor_render(s, c, dst_surfaces[1], NULL, false);
+
+      if (dst_surfaces[2]) {
+         set_rgb_to_yuv_layer(s, c, 0, sv, src_rect, NULL, VL_COMPOSITOR_PLANE_V);
+         vl_compositor_set_layer_dst_area(s, 0, dst_rect);
+         vl_compositor_render(s, c, dst_surfaces[2], NULL, false);
+      }
    }
 
-   set_rgb_to_yuv_layer(s, c, 0, sv, src_rect, NULL, false);
-   vl_compositor_set_layer_dst_area(s, 0, dst_rect);
-   vl_compositor_render(s, c, dst_surfaces[1], NULL, false);
    pipe_sampler_view_reference(&sv, NULL);
-
-   s->pipe->flush(s->pipe, NULL, 0);
 }
 
 void
@@ -760,25 +839,19 @@ vl_compositor_render(struct vl_compositor_state *s,
 }
 
 bool
-vl_compositor_init(struct vl_compositor *c, struct pipe_context *pipe)
+vl_compositor_init(struct vl_compositor *c, struct pipe_context *pipe, bool compute_only)
 {
    assert(c);
 
    memset(c, 0, sizeof(*c));
 
-   c->pipe_cs_composit_supported = pipe->screen->get_param(pipe->screen, PIPE_CAP_PREFER_COMPUTE_FOR_MULTIMEDIA) &&
-            pipe->screen->get_param(pipe->screen, PIPE_CAP_TGSI_TEX_TXF_LZ) &&
-            pipe->screen->get_param(pipe->screen, PIPE_CAP_TGSI_DIV);
-
-   c->pipe_gfx_supported = pipe->screen->get_param(pipe->screen, PIPE_CAP_GRAPHICS);
+   c->pipe_cs_composit_supported = compute_only || pipe->screen->caps.prefer_compute_for_multimedia;
+   c->pipe_gfx_supported = !compute_only && pipe->screen->caps.graphics;
    c->pipe = pipe;
 
-   if (!init_pipe_state(c)) {
-      return false;
-   }
+   c->deinterlace = VL_COMPOSITOR_NONE;
 
-   if (!init_shaders(c)) {
-      cleanup_pipe_state(c);
+   if (!init_pipe_state(c)) {
       return false;
    }
 
@@ -815,7 +888,7 @@ vl_compositor_init_state(struct vl_compositor_state *s, struct pipe_context *pip
       pipe->screen,
       PIPE_BIND_CONSTANT_BUFFER,
       PIPE_USAGE_DEFAULT,
-      sizeof(csc_matrix) + 6*sizeof(float) + 10*sizeof(int)
+      sizeof(csc_matrix) + 32 * sizeof(float) + 2 * sizeof(int)
    );
 
    if (!s->shader_params)

@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "util/u_inlines.h"
 #include "pipe/p_defines.h"
@@ -56,7 +38,7 @@ emit_fb_vgpu9(struct svga_context *svga)
    struct svga_screen *svgascreen = svga_screen(svga->pipe.screen);
    const struct pipe_framebuffer_state *curr = &svga->curr.framebuffer;
    struct pipe_framebuffer_state *hw = &svga->state.hw_clear.framebuffer;
-   boolean reemit = svga->rebind.flags.rendertargets;
+   bool reemit = svga->rebind.flags.rendertargets;
    unsigned i;
    enum pipe_error ret;
 
@@ -74,7 +56,7 @@ emit_fb_vgpu9(struct svga_context *svga)
 
          /* Check to see if we need to propagate the render target surface */
          if (hw->cbufs[i] && svga_surface_needs_propagation(hw->cbufs[i]))
-            svga_propagate_surface(svga, hw->cbufs[i], TRUE);
+            svga_propagate_surface(svga, hw->cbufs[i], true);
 
          ret = SVGA3D_SetRenderTarget(svga->swc, SVGA3D_RT_COLOR0 + i,
                                       curr->cbufs[i]);
@@ -87,8 +69,7 @@ emit_fb_vgpu9(struct svga_context *svga)
       /* Set the rendered-to flag */
       struct pipe_surface *s = curr->cbufs[i];
       if (s) {
-         svga_set_texture_rendered_to(svga_texture(s->texture),
-                                      s->u.tex.first_layer, s->u.tex.level);
+         svga_set_texture_rendered_to(svga_texture(s->texture));
       }
    }
 
@@ -99,7 +80,7 @@ emit_fb_vgpu9(struct svga_context *svga)
 
       /* Check to see if we need to propagate the depth stencil surface */
       if (hw->zsbuf && svga_surface_needs_propagation(hw->zsbuf))
-         svga_propagate_surface(svga, hw->zsbuf, TRUE);
+         svga_propagate_surface(svga, hw->zsbuf, true);
 
       if (curr->zsbuf &&
           util_format_is_depth_and_stencil(curr->zsbuf->format)) {
@@ -119,8 +100,7 @@ emit_fb_vgpu9(struct svga_context *svga)
       /* Set the rendered-to flag */
       struct pipe_surface *s = curr->zsbuf;
       if (s) {
-         svga_set_texture_rendered_to(svga_texture(s->texture),
-                                      s->u.tex.first_layer, s->u.tex.level);
+         svga_set_texture_rendered_to(svga_texture(s->texture));
       }
    }
 
@@ -186,7 +166,7 @@ static enum pipe_error
 emit_fb_vgpu10(struct svga_context *svga)
 {
    const struct svga_screen *ss = svga_screen(svga->pipe.screen);
-   struct pipe_surface *rtv[SVGA3D_MAX_RENDER_TARGETS];
+   struct pipe_surface *rtv[SVGA3D_DX_MAX_RENDER_TARGETS];
    struct pipe_surface *dsv;
    struct pipe_framebuffer_state *curr = &svga->curr.framebuffer;
    struct pipe_framebuffer_state *hw = &svga->state.hw_clear.framebuffer;
@@ -201,7 +181,7 @@ emit_fb_vgpu10(struct svga_context *svga)
     * The flag is set in svga_validate_surface_view() if
     * a backed surface view is used.
     */
-   svga->state.hw_draw.has_backed_views = FALSE;
+   svga->state.hw_draw.has_backed_views = false;
 
    /* Setup render targets array.  Note that we loop over the max of the
     * number of previously bound buffers and the new buffers to unbind
@@ -225,8 +205,7 @@ emit_fb_vgpu10(struct svga_context *svga)
          last_rtv = i;
 
          /* Set the rendered-to flag */
-         svga_set_texture_rendered_to(svga_texture(s->texture),
-                                      s->u.tex.first_layer, s->u.tex.level);
+         svga_set_texture_rendered_to(svga_texture(s->texture));
       }
       else {
          rtv[i] = NULL;
@@ -247,8 +226,7 @@ emit_fb_vgpu10(struct svga_context *svga)
       }
 
       /* Set the rendered-to flag */
-      svga_set_texture_rendered_to(svga_texture(s->texture),
-                                      s->u.tex.first_layer, s->u.tex.level);
+      svga_set_texture_rendered_to(svga_texture(s->texture));
    }
    else {
       dsv = NULL;
@@ -272,7 +250,7 @@ emit_fb_vgpu10(struct svga_context *svga)
             if (hw->cbufs[i] && svga_surface(hw->cbufs[i])->backed) {
                svga_propagate_surface(svga,
                                       &svga_surface(hw->cbufs[i])->backed->base,
-                                      TRUE);
+                                      true);
             }
             else if (svga->state.hw_clear.rtv[i] != hw->cbufs[i] &&
                      svga->state.hw_clear.rtv[i]) {
@@ -291,7 +269,7 @@ emit_fb_vgpu10(struct svga_context *svga)
          if (hw->zsbuf && svga_surface(hw->zsbuf)->backed) {
             svga_propagate_surface(svga,
                                    &svga_surface(hw->zsbuf)->backed->base,
-                                   TRUE);
+                                   true);
          }
          else if (svga->state.hw_clear.dsv != hw->zsbuf && svga->state.hw_clear.dsv) {
             /* Free the alternate surface view when it is unbound.  */
@@ -340,7 +318,7 @@ svga_reemit_framebuffer_bindings(struct svga_context *svga)
       ret = svga_reemit_framebuffer_bindings_vgpu9(svga);
    }
 
-   svga->rebind.flags.rendertargets = FALSE;
+   svga->rebind.flags.rendertargets = false;
 
    return ret;
 }
@@ -414,8 +392,8 @@ get_viewport_prescale(struct svga_context *svga,
    float range_min = 0.0;
    float range_max = 1.0;
    float flip = -1.0;
-   boolean degenerate = FALSE;
-   boolean invertY = FALSE;
+   bool degenerate = false;
+   bool invertY = false;
 
    float fb_width = (float) svga->curr.framebuffer.width;
    float fb_height = (float) svga->curr.framebuffer.height;
@@ -452,10 +430,10 @@ get_viewport_prescale(struct svga_context *svga,
       VGPU10 convention only if rasterization is enabled.
     */
    if (svga->curr.rast && svga->curr.rast->templ.rasterizer_discard) {
-      degenerate = TRUE;
+      degenerate = true;
       goto out;
    } else {
-      prescale->enabled = TRUE;
+      prescale->enabled = true;
    }
 
    if (fw < 0) {
@@ -477,7 +455,7 @@ get_viewport_prescale(struct svga_context *svga,
       fh = -fh;
       fy -= fh;
       prescale->scale[1] = -1.0f;
-      invertY = TRUE;
+      invertY = true;
    }
 
    if (fx < 0) {
@@ -522,7 +500,7 @@ get_viewport_prescale(struct svga_context *svga,
 
    if (fw < 0 || fh < 0) {
       fw = fh = fx = fy = 0;
-      degenerate = TRUE;
+      degenerate = true;
       goto out;
    }
 
@@ -564,7 +542,7 @@ get_viewport_prescale(struct svga_context *svga,
           * adjustments for VGPU10.  But when we draw wide points with
           * a GS we need an X adjustment in order to be conformant.
           */
-         if (svga->curr.reduced_prim == PIPE_PRIM_POINTS &&
+         if (svga->curr.reduced_prim == MESA_PRIM_POINTS &&
              svga->curr.rast->pointsize > 1.0f) {
             adjust_x = 0.5;
          }
@@ -613,6 +591,10 @@ get_viewport_prescale(struct svga_context *svga,
       prescale->scale[2] *= 2.0f;
       prescale->translate[2] -= 0.5f;
    }
+
+   /* Clamp depth range, making sure it's between 0 and 1 */
+   range_min = CLAMP(range_min, 0.0f, 1.0f);
+   range_max = CLAMP(range_max, 0.0f, 1.0f);
 
    if (prescale->enabled) {
       float H[2];
@@ -679,7 +661,7 @@ out:
       rect.y = 0;
       rect.w = 1;
       rect.h = 1;
-      prescale->enabled = FALSE;
+      prescale->enabled = false;
    }
 
    vp->x = (float) rect.x;

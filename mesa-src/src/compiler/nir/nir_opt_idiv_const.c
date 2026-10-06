@@ -21,13 +21,13 @@
  * IN THE SOFTWARE.
  */
 
-#include "nir.h"
-#include "nir_builder.h"
 #include "util/fast_idiv_by_const.h"
 #include "util/u_math.h"
+#include "nir.h"
+#include "nir_builder.h"
 
-static nir_ssa_def *
-build_udiv(nir_builder *b, nir_ssa_def *n, uint64_t d)
+static nir_def *
+build_udiv(nir_builder *b, nir_def *n, uint64_t d)
 {
    if (d == 0) {
       return nir_imm_intN_t(b, 0, n->bit_size);
@@ -49,22 +49,25 @@ build_udiv(nir_builder *b, nir_ssa_def *n, uint64_t d)
    }
 }
 
-static nir_ssa_def *
-build_umod(nir_builder *b, nir_ssa_def *n, uint64_t d)
+static nir_def *
+build_umod(nir_builder *b, nir_def *n, uint64_t d)
 {
    if (d == 0) {
       return nir_imm_intN_t(b, 0, n->bit_size);
    } else if (util_is_power_of_two_or_zero64(d)) {
-      return nir_iand(b, n, nir_imm_intN_t(b, d - 1, n->bit_size));
+      return nir_iand_imm(b, n, d - 1);
    } else {
-      return nir_isub(b, n, nir_imul(b, build_udiv(b, n, d),
-                                        nir_imm_intN_t(b, d, n->bit_size)));
+      return nir_isub(b, n, nir_imul_imm(b, build_udiv(b, n, d), d));
    }
 }
 
-static nir_ssa_def *
-build_idiv(nir_builder *b, nir_ssa_def *n, int64_t d)
+static nir_def *
+build_idiv(nir_builder *b, nir_def *n, int64_t d)
 {
+   int64_t int_min = u_intN_min(n->bit_size);
+   if (d == int_min)
+      return nir_b2iN(b, nir_ieq_imm(b, n, int_min), n->bit_size);
+
    uint64_t abs_d = d < 0 ? -d : d;
 
    if (d == 0) {
@@ -74,15 +77,15 @@ build_idiv(nir_builder *b, nir_ssa_def *n, int64_t d)
    } else if (d == -1) {
       return nir_ineg(b, n);
    } else if (util_is_power_of_two_or_zero64(abs_d)) {
-      nir_ssa_def *uq = nir_ushr_imm(b, nir_iabs(b, n), util_logbase2_64(abs_d));
-      nir_ssa_def *n_neg = nir_ilt(b, n, nir_imm_intN_t(b, 0, n->bit_size));
-      nir_ssa_def *neg = d < 0 ? nir_inot(b, n_neg) : n_neg;
+      nir_def *uq = nir_ushr_imm(b, nir_iabs(b, n), util_logbase2_64(abs_d));
+      nir_def *n_neg = nir_ilt_imm(b, n, 0);
+      nir_def *neg = d < 0 ? nir_inot(b, n_neg) : n_neg;
       return nir_bcsel(b, neg, nir_ineg(b, uq), uq);
    } else {
       struct util_fast_sdiv_info m =
          util_compute_fast_sdiv_info(d, n->bit_size);
 
-      nir_ssa_def *res =
+      nir_def *res =
          nir_imul_high(b, n, nir_imm_intN_t(b, m.multiplier, n->bit_size));
       if (d > 0 && m.multiplier < 0)
          res = nir_iadd(b, res, n);
@@ -96,44 +99,83 @@ build_idiv(nir_builder *b, nir_ssa_def *n, int64_t d)
    }
 }
 
-static bool
-nir_opt_idiv_const_instr(nir_builder *b, nir_alu_instr *alu)
+static nir_def *
+build_irem(nir_builder *b, nir_def *n, int64_t d)
 {
-   assert(alu->dest.dest.is_ssa);
-   assert(alu->src[0].src.is_ssa && alu->src[1].src.is_ssa);
+   int64_t int_min = u_intN_min(n->bit_size);
+   if (d == 0) {
+      return nir_imm_intN_t(b, 0, n->bit_size);
+   } else if (d == int_min) {
+      return nir_bcsel(b, nir_ieq_imm(b, n, int_min), nir_imm_intN_t(b, 0, n->bit_size), n);
+   } else {
+      d = d < 0 ? -d : d;
+      if (util_is_power_of_two_or_zero64(d)) {
+         nir_def *tmp = nir_bcsel(b, nir_ilt_imm(b, n, 0),
+                                  nir_iadd_imm(b, n, d - 1), n);
+         return nir_isub(b, n, nir_iand_imm(b, tmp, -d));
+      } else {
+         return nir_isub(b, n, nir_imul_imm(b, build_idiv(b, n, d), d));
+      }
+   }
+}
 
-   nir_const_value *const_denom = nir_src_as_const_value(alu->src[1].src);
-   if (!const_denom)
+static nir_def *
+build_imod(nir_builder *b, nir_def *n, int64_t d)
+{
+   int64_t int_min = u_intN_min(n->bit_size);
+   if (d == 0) {
+      return nir_imm_intN_t(b, 0, n->bit_size);
+   } else if (d == int_min) {
+      nir_def *int_min_def = nir_imm_intN_t(b, int_min, n->bit_size);
+      nir_def *is_neg_not_int_min = nir_ult(b, int_min_def, n);
+      nir_def *is_zero = nir_ieq_imm(b, n, 0);
+      return nir_bcsel(b, nir_ior(b, is_neg_not_int_min, is_zero), n, nir_iadd(b, int_min_def, n));
+   } else if (d > 0 && util_is_power_of_two_or_zero64(d)) {
+      return nir_iand_imm(b, n, d - 1);
+   } else if (d < 0 && util_is_power_of_two_or_zero64(-d)) {
+      nir_def *d_def = nir_imm_intN_t(b, d, n->bit_size);
+      nir_def *res = nir_ior(b, n, d_def);
+      return nir_bcsel(b, nir_ieq(b, res, d_def), nir_imm_intN_t(b, 0, n->bit_size), res);
+   } else {
+      nir_def *rem = build_irem(b, n, d);
+      nir_def *zero = nir_imm_intN_t(b, 0, n->bit_size);
+      nir_def *sign_same = d < 0 ? nir_ilt(b, n, zero) : nir_ige(b, n, zero);
+      nir_def *rem_zero = nir_ieq(b, rem, zero);
+      return nir_bcsel(b, nir_ior(b, rem_zero, sign_same), rem, nir_iadd_imm(b, rem, d));
+   }
+}
+
+static bool
+nir_opt_idiv_const_instr(nir_builder *b, nir_alu_instr *alu, void *user_data)
+{
+   unsigned *min_bit_size = user_data;
+
+   if (alu->op != nir_op_udiv &&
+       alu->op != nir_op_idiv &&
+       alu->op != nir_op_umod &&
+       alu->op != nir_op_imod &&
+       alu->op != nir_op_irem)
+      return false;
+
+   if (alu->def.bit_size < *min_bit_size)
+      return false;
+
+   if (!nir_src_is_const(alu->src[1].src))
       return false;
 
    unsigned bit_size = alu->src[1].src.ssa->bit_size;
 
    b->cursor = nir_before_instr(&alu->instr);
 
-   nir_ssa_def *q[4];
-   for (unsigned comp = 0; comp < alu->dest.dest.ssa.num_components; comp++) {
+   nir_def *q[NIR_MAX_VEC_COMPONENTS];
+   for (unsigned comp = 0; comp < alu->def.num_components; comp++) {
       /* Get the numerator for the channel */
-      nir_ssa_def *n = nir_channel(b, alu->src[0].src.ssa,
-                                   alu->src[0].swizzle[comp]);
+      nir_def *n = nir_channel(b, alu->src[0].src.ssa,
+                               alu->src[0].swizzle[comp]);
 
       /* Get the denominator for the channel */
-      int64_t d;
-      switch (bit_size) {
-      case 8:
-         d = const_denom[alu->src[1].swizzle[comp]].i8;
-         break;
-      case 16:
-         d = const_denom[alu->src[1].swizzle[comp]].i16;
-         break;
-      case 32:
-         d = const_denom[alu->src[1].swizzle[comp]].i32;
-         break;
-      case 64:
-         d = const_denom[alu->src[1].swizzle[comp]].i64;
-         break;
-      default:
-         unreachable("Invalid bit size");
-      }
+      int64_t d = nir_src_comp_as_int(alu->src[1].src,
+                                      alu->src[1].swizzle[comp]);
 
       nir_alu_type d_type = nir_op_infos[alu->op].input_types[1];
       if (nir_alu_type_get_base_type(d_type) == nir_type_uint) {
@@ -155,64 +197,27 @@ nir_opt_idiv_const_instr(nir_builder *b, nir_alu_instr *alu)
       case nir_op_umod:
          q[comp] = build_umod(b, n, d);
          break;
+      case nir_op_imod:
+         q[comp] = build_imod(b, n, d);
+         break;
+      case nir_op_irem:
+         q[comp] = build_irem(b, n, d);
+         break;
       default:
          unreachable("Unknown integer division op");
       }
    }
 
-   nir_ssa_def *qvec = nir_vec(b, q, alu->dest.dest.ssa.num_components);
-   nir_ssa_def_rewrite_uses(&alu->dest.dest.ssa, nir_src_for_ssa(qvec));
-   nir_instr_remove(&alu->instr);
+   nir_def *qvec = nir_vec(b, q, alu->def.num_components);
+   nir_def_replace(&alu->def, qvec);
 
    return true;
-}
-
-static bool
-nir_opt_idiv_const_impl(nir_function_impl *impl, unsigned min_bit_size)
-{
-   bool progress = false;
-
-   nir_builder b;
-   nir_builder_init(&b, impl);
-
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr_safe(instr, block) {
-         if (instr->type != nir_instr_type_alu)
-            continue;
-
-         nir_alu_instr *alu = nir_instr_as_alu(instr);
-         if (alu->op != nir_op_udiv &&
-             alu->op != nir_op_idiv &&
-             alu->op != nir_op_umod)
-            continue;
-
-         assert(alu->dest.dest.is_ssa);
-         if (alu->dest.dest.ssa.bit_size < min_bit_size)
-            continue;
-
-         progress |= nir_opt_idiv_const_instr(&b, alu);
-      }
-   }
-
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
-   } else {
-      nir_metadata_preserve(impl, nir_metadata_all);
-   }
-
-   return progress;
 }
 
 bool
 nir_opt_idiv_const(nir_shader *shader, unsigned min_bit_size)
 {
-   bool progress = false;
-
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= nir_opt_idiv_const_impl(function->impl, min_bit_size);
-   }
-
-   return progress;
+   return nir_shader_alu_pass(shader, nir_opt_idiv_const_instr,
+                              nir_metadata_control_flow,
+                              &min_bit_size);
 }

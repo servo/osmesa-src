@@ -38,8 +38,27 @@
 
 
 struct pipe_resource;
-struct st_framebuffer_iface;
+struct pipe_frontend_drawable;
 struct stw_pixelformat_info;
+struct pipe_frontend_screen;
+
+enum stw_framebuffer_owner
+{
+   /* WGL window framebuffers have no corresponding destroy, and therefore
+    * a window hook is needed to clean them up.
+    */
+   STW_FRAMEBUFFER_WGL_WINDOW,
+   /* PBuffers behave like WGL window framebuffers, except that the window
+    * lifetime is managed by us. We can explicitly clean up the window.
+    */
+   STW_FRAMEBUFFER_PBUFFER,
+   /* EGL window framebuffers do have a corresponding destroy, so they don't
+    * need to be registered in the global framebuffer list. This means they
+    * will only be cleaned up from a destroy, and don't need to live until the
+    * window goes away.
+    */
+   STW_FRAMEBUFFER_EGL_WINDOW,
+};
 
 /**
  * Windows framebuffer.
@@ -65,14 +84,13 @@ struct stw_framebuffer
    
    HWND hWnd;
 
-   int iPixelFormat;
    const struct stw_pixelformat_info *pfi;
 
    /* A pixel format that can be used by GDI */
    int iDisplayablePixelFormat;
-   boolean bPbuffer;
+   enum stw_framebuffer_owner owner;
 
-   struct st_framebuffer_iface *stfb;
+   struct pipe_frontend_drawable *drawable;
 
    /*
     * Mutable members. 
@@ -82,9 +100,9 @@ struct stw_framebuffer
 
    
    /* FIXME: Make this work for multiple contexts bound to the same framebuffer */
-   boolean must_resize;
+   bool must_resize;
 
-   boolean minimized;  /**< Is the window currently minimized? */
+   bool minimized;  /**< Is the window currently minimized? */
 
    unsigned width;
    unsigned height;
@@ -93,7 +111,7 @@ struct stw_framebuffer
    unsigned textureFormat;  /**< WGL_NO_TEXTURE or WGL_TEXTURE_RGB[A]_ARB */
    unsigned textureTarget;  /**< WGL_NO_TEXTURE or WGL_TEXTURE_1D/2D/
                                  CUBE_MAP_ARB */
-   boolean textureMipmap;   /**< TRUE/FALSE */
+   bool textureMipmap;   /**< TRUE/FALSE */
    /** WGL_ARB_render_texture - set with wglSetPbufferAttribARB() */
    unsigned textureLevel;
    unsigned textureFace;    /**< [0..6] */
@@ -108,8 +126,16 @@ struct stw_framebuffer
    HANDLE hSharedSurface;
    struct stw_shared_surface *shared_surface;
 
+   struct stw_winsys_framebuffer *winsys_framebuffer;
+
    /* For WGL_EXT_swap_control */
+   int swap_interval;
    int64_t prev_swap_time;
+
+#ifdef _GAMING_XBOX
+   /* For the WndProc hook chain */
+   WNDPROC prev_wndproc;
+#endif
 
    /** 
     * This is protected by stw_device::fb_mutex, not the mutex above.
@@ -125,7 +151,6 @@ struct stw_framebuffer
    struct stw_framebuffer *next;
 };
 
-
 /**
  * Create a new framebuffer object which will correspond to the given HDC.
  * 
@@ -133,7 +158,11 @@ struct stw_framebuffer
  * must be called when done 
  */
 struct stw_framebuffer *
-stw_framebuffer_create(HDC hdc, int iPixelFormat);
+stw_framebuffer_create(HWND hwnd, const struct stw_pixelformat_info *pfi, enum stw_framebuffer_owner owner,
+                       struct pipe_frontend_screen *fscreen);
+
+struct stw_framebuffer *
+stw_pbuffer_create(const struct stw_pixelformat_info *pfi, int iWidth, int iHeight, struct pipe_frontend_screen *fscreen);
 
 
 /**
@@ -141,18 +170,13 @@ stw_framebuffer_create(HDC hdc, int iPixelFormat);
  *
  * It's not necessary to hold stw_dev::fb_mutex global lock.
  */
-static inline void
-stw_framebuffer_reference_locked(struct stw_framebuffer *fb)
-{
-   if (fb) {
-      assert(stw_own_mutex(&fb->mutex));
-      fb->refcnt++;
-   }
-}
+void
+stw_framebuffer_reference_locked(struct stw_framebuffer *fb);
 
 
 void
-stw_framebuffer_release_locked(struct stw_framebuffer *fb);
+stw_framebuffer_release_locked(struct stw_framebuffer *fb,
+                               struct st_context *st);
 
 /**
  * Search a framebuffer with a matching HWND.
@@ -180,6 +204,9 @@ stw_framebuffer_present_locked(HDC hdc,
 void
 stw_framebuffer_update(struct stw_framebuffer *fb);
 
+BOOL
+stw_framebuffer_swap_locked(HDC hdc, struct stw_framebuffer *fb);
+
 
 static inline void
 stw_framebuffer_lock(struct stw_framebuffer *fb)
@@ -194,13 +221,8 @@ stw_framebuffer_lock(struct stw_framebuffer *fb)
  * after calling this function, as it may have been deleted by another thread
  * in the meanwhile.
  */
-static inline void
-stw_framebuffer_unlock(struct stw_framebuffer *fb)
-{
-   assert(fb);
-   assert(stw_own_mutex(&fb->mutex));
-   LeaveCriticalSection(&fb->mutex);
-}
+void
+stw_framebuffer_unlock(struct stw_framebuffer *fb);
 
 
 /**
@@ -211,9 +233,9 @@ stw_framebuffer_cleanup(void);
 
 
 static inline struct stw_st_framebuffer *
-stw_st_framebuffer(struct st_framebuffer_iface *stfb)
+stw_st_framebuffer(struct pipe_frontend_drawable *drawable)
 {
-   return (struct stw_st_framebuffer *) stfb;
+   return (struct stw_st_framebuffer *) drawable;
 }
 
 

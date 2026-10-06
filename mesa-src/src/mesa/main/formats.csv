@@ -93,6 +93,11 @@ MESA_FORMAT_A2R10G10B10_UNORM             , packed, 1, 1, 1, un2 , un10, un10, u
 MESA_FORMAT_YCBCR                         , other , 1, 1, 1, x16 ,     ,     ,     , xyzw, yuv
 MESA_FORMAT_YCBCR_REV                     , other , 1, 1, 1, x16 ,     ,     ,     , xyzw, yuv
 
+MESA_FORMAT_RG_RB_UNORM8                  , other , 2, 1, 1, x16 ,     ,     ,     , xyz1, rgb
+MESA_FORMAT_RB_RG_UNORM8                  , other , 2, 1, 1, x16 ,     ,     ,     , xyz1, rgb
+MESA_FORMAT_GR_BR_UNORM8                  , other , 2, 1, 1, x16 ,     ,     ,     , xyz1, rgb
+MESA_FORMAT_BR_GR_UNORM8                  , other , 2, 1, 1, x16 ,     ,     ,     , xyz1, rgb
+
 # Array normalized formats
 MESA_FORMAT_A_UNORM8                      , array , 1, 1, 1, un8 ,     ,     ,     , 000x, rgb
 MESA_FORMAT_A_UNORM16                     , array , 1, 1, 1, un16,     ,     ,     , 000x, rgb
@@ -151,6 +156,7 @@ MESA_FORMAT_X8B8G8R8_SRGB                 , packed, 1, 1, 1, x8  , un8 , un8 , u
 # Array sRGB formats
 MESA_FORMAT_R_SRGB8                       , array , 1, 1, 1, un8 ,     ,     ,     , x001, srgb
 MESA_FORMAT_L_SRGB8                       , array , 1, 1, 1, un8 ,     ,     ,     , xxx1, srgb
+MESA_FORMAT_RG_SRGB8                      , array , 1, 1, 1, un8 , un8 ,     ,     , xy01, srgb
 MESA_FORMAT_LA_SRGB8                      , array , 1, 1, 1, un8 , un8 ,     ,     , xxxy, srgb
 MESA_FORMAT_BGR_SRGB8                     , array , 1, 1, 1, un8 , un8 , un8 ,     , zyx1, srgb
 

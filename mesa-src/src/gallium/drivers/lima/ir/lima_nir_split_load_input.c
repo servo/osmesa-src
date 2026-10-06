@@ -27,82 +27,61 @@
 #include "lima_ir.h"
 
 static bool
-lima_nir_split_load_input_block(nir_block *block, nir_builder *b)
+lima_nir_split_load_input_instr(nir_builder *b,
+                                nir_instr *instr,
+                                UNUSED void *cb_data)
 {
-   bool progress = false;
+   if (instr->type != nir_instr_type_alu)
+      return false;
 
-   nir_foreach_instr_safe(instr, block) {
-      if (instr->type != nir_instr_type_alu)
-         continue;
+   nir_alu_instr *alu = nir_instr_as_alu(instr);
+   if (alu->op != nir_op_mov)
+      return false;
 
-      nir_alu_instr *alu = nir_instr_as_alu(instr);
-      if (alu->op != nir_op_mov)
-         continue;
+   nir_def *ssa = alu->src[0].src.ssa;
+   if (ssa->parent_instr->type != nir_instr_type_intrinsic)
+      return false;
 
-      if (!alu->dest.dest.is_ssa)
-         continue;
+   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(ssa->parent_instr);
+   if (intrin->intrinsic != nir_intrinsic_load_input)
+      return false;
 
-      if (!alu->src[0].src.is_ssa)
-         continue;
+   uint8_t swizzle = alu->src[0].swizzle[0];
+   int i;
 
-      nir_ssa_def *ssa = alu->src[0].src.ssa;
-      if (ssa->parent_instr->type != nir_instr_type_intrinsic)
-         continue;
+   for (i = 1; i < alu->def.num_components; i++)
+      if (alu->src[0].swizzle[i] != (swizzle + i))
+         break;
 
-      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(ssa->parent_instr);
-      if (intrin->intrinsic != nir_intrinsic_load_input)
-         continue;
+   if (i != alu->def.num_components)
+      return false;
 
-      uint8_t swizzle = alu->src[0].swizzle[0];
-      int i;
+   /* mali4xx can't access unaligned vec3, don't split load input */
+   if (alu->def.num_components == 3 && swizzle > 0)
+      return false;
 
-      for (i = 1; i < nir_dest_num_components(alu->dest.dest); i++)
-         if (alu->src[0].swizzle[i] != (swizzle + i))
-            break;
+   /* mali4xx can't access unaligned vec2, don't split load input */
+   if (alu->def.num_components == 2 &&
+       swizzle != 0 && swizzle != 2)
+      return false;
 
-      if (i != nir_dest_num_components(alu->dest.dest))
-         continue;
+   b->cursor = nir_before_instr(&intrin->instr);
+   nir_intrinsic_instr *new_intrin = nir_intrinsic_instr_create(
+                                          b->shader,
+                                          intrin->intrinsic);
+   nir_def_init(&new_intrin->instr, &new_intrin->def,
+                alu->def.num_components, ssa->bit_size);
+   new_intrin->num_components = alu->def.num_components;
+   nir_intrinsic_set_base(new_intrin, nir_intrinsic_base(intrin));
+   nir_intrinsic_set_component(new_intrin, nir_intrinsic_component(intrin) + swizzle);
+   nir_intrinsic_set_dest_type(new_intrin, nir_intrinsic_dest_type(intrin));
 
-      b->cursor = nir_before_instr(&intrin->instr);
-      nir_intrinsic_instr *new_intrin = nir_intrinsic_instr_create(
-                                             b->shader,
-                                             intrin->intrinsic);
-      nir_ssa_dest_init(&new_intrin->instr, &new_intrin->dest,
-                        nir_dest_num_components(alu->dest.dest),
-                        ssa->bit_size,
-                        NULL);
-      new_intrin->num_components = nir_dest_num_components(alu->dest.dest);
-      nir_intrinsic_set_base(new_intrin, nir_intrinsic_base(intrin));
-      nir_intrinsic_set_component(new_intrin, nir_intrinsic_component(intrin) + swizzle);
-      nir_intrinsic_set_type(new_intrin, nir_intrinsic_type(intrin));
+   /* offset */
+   new_intrin->src[0] = nir_src_for_ssa(intrin->src[0].ssa);
 
-      /* offset */
-      nir_src_copy(&new_intrin->src[0], &intrin->src[0], new_intrin);
-
-      nir_builder_instr_insert(b, &new_intrin->instr);
-      nir_ssa_def_rewrite_uses(&alu->dest.dest.ssa,
-                               nir_src_for_ssa(&new_intrin->dest.ssa));
-      nir_instr_remove(&alu->instr);
-      progress = true;
-   }
-
-   return progress;
-}
-
-static bool
-lima_nir_split_load_input_impl(nir_function_impl *impl)
-{
-   bool progress = false;
-   nir_builder builder;
-   nir_builder_init(&builder, impl);
-
-   nir_foreach_block(block, impl) {
-      progress |= lima_nir_split_load_input_block(block, &builder);
-   }
-
-   nir_metadata_preserve(impl, nir_metadata_block_index |
-                               nir_metadata_dominance);
-   return progress;
+   nir_builder_instr_insert(b, &new_intrin->instr);
+   nir_def_replace(&alu->def, &new_intrin->def);
+   return true;
 }
 
 /* Replaces a single load of several packed varyings and number of movs with
@@ -111,13 +90,7 @@ lima_nir_split_load_input_impl(nir_function_impl *impl)
 bool
 lima_nir_split_load_input(nir_shader *shader)
 {
-   bool progress = false;
-
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= lima_nir_split_load_input_impl(function->impl);
-   }
-
-   return progress;
+   return nir_shader_instructions_pass(shader, lima_nir_split_load_input_instr,
+                                       nir_metadata_control_flow,
+                                       NULL);
 }
-

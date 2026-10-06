@@ -1,31 +1,16 @@
 /*
  * Copyright 2012 Vadim Girlin <vadimgirlin@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
  * Authors:
  *      Vadim Girlin
+ * SPDX-License-Identifier: MIT
  */
 
-#include "r600_pipe.h"
 #include "r600_isa.h"
+
+#include "util/macros.h"
+
+#include <assert.h>
+#include <stdlib.h>
 
 const struct alu_op_info r600_alu_op_table[] = {
 		{"ADD",                       2, { 0x00, 0x00 },{  AF_VS, AF_VS, AF_VS, AF_VS},  AF_M_COMM | AF_M_ASSOC },
@@ -194,8 +179,8 @@ const struct alu_op_info r600_alu_op_table[] = {
 		{"MULADD_IEEE_PREV",          2, {   -1, 0xD5 },{      0,     0,  AF_V,  AF_V},  AF_PREV_INTERLEAVE | AF_IEEE },
 		{"INTERP_XY",                 2, {   -1, 0xD6 },{      0,     0, AF_4V, AF_4V},  AF_INTERP },
 		{"INTERP_ZW",                 2, {   -1, 0xD7 },{      0,     0, AF_4V, AF_4V},  AF_INTERP },
-		{"INTERP_X",                  2, {   -1, 0xD8 },{      0,     0,  AF_V,  AF_V},  AF_INTERP },
-		{"INTERP_Z",                  2, {   -1, 0xD9 },{      0,     0,  AF_V,  AF_V},  AF_INTERP },
+		{"INTERP_X",                  2, {   -1, 0xD8 },{      0,     0, AF_2V, AF_2V},  AF_INTERP },
+		{"INTERP_Z",                  2, {   -1, 0xD9 },{      0,     0, AF_2V, AF_2V},  AF_INTERP },
 		{"STORE_FLAGS",               1, {   -1, 0xDA },{      0,     0,  AF_V,  AF_V},  0 },
 		{"LOAD_STORE_FLAGS",          1, {   -1, 0xDB },{      0,     0,  AF_V,  AF_V},  0 },
 		{"LDS_1A",                    2, {   -1, 0xDC },{      0,     0,  AF_V,  AF_V},  0 },
@@ -535,11 +520,11 @@ r600_isa_cf(unsigned op) {
 	return &cf_op_table[op];
 }
 
-int r600_isa_init(struct r600_context *ctx, struct r600_isa *isa) {
+int r600_isa_init(enum amd_gfx_level gfx_level, struct r600_isa *isa) {
 	unsigned i;
 
-	assert(ctx->b.chip_class >= R600 && ctx->b.chip_class <= CAYMAN);
-	isa->hw_class = ctx->b.chip_class - R600;
+	assert(gfx_level >= R600 && gfx_level <= CAYMAN);
+	isa->hw_class = gfx_level - R600;
 
 	/* reverse lookup maps are required for bytecode parsing */
 

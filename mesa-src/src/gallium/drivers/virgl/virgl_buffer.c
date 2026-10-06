@@ -28,14 +28,16 @@
 #include "virgl_resource.h"
 #include "virgl_screen.h"
 
-static void virgl_buffer_transfer_unmap(struct pipe_context *ctx,
-                                        struct pipe_transfer *transfer)
+void virgl_buffer_transfer_unmap(struct pipe_context *ctx,
+                                 struct pipe_transfer *transfer)
 {
    struct virgl_context *vctx = virgl_context(ctx);
    struct virgl_transfer *trans = virgl_transfer(transfer);
+   bool persistent_coherent = trans->base.usage & (PIPE_MAP_PERSISTENT |
+                                                   PIPE_MAP_COHERENT);
 
-   if (trans->base.usage & PIPE_TRANSFER_WRITE) {
-      if (transfer->usage & PIPE_TRANSFER_FLUSH_EXPLICIT) {
+   if ((trans->base.usage & PIPE_MAP_WRITE) && !persistent_coherent) {
+      if (transfer->usage & PIPE_MAP_FLUSH_EXPLICIT) {
          if (trans->range.end <= trans->range.start) {
             virgl_resource_destroy_transfer(vctx, trans);
             return;
@@ -46,8 +48,11 @@ static void virgl_buffer_transfer_unmap(struct pipe_context *ctx,
          trans->offset = transfer->box.x;
       }
 
-      if (trans->copy_src_hw_res) {
+      if (trans->copy_src_hw_res && trans->direction == VIRGL_TRANSFER_TO_HOST) {
          virgl_encode_copy_transfer(vctx, trans);
+         virgl_resource_destroy_transfer(vctx, trans);
+      } else if (trans->copy_src_hw_res && trans->direction == VIRGL_TRANSFER_FROM_HOST) {
+         // if it is readback, then we have already encoded transfer
          virgl_resource_destroy_transfer(vctx, trans);
       } else {
          virgl_transfer_queue_unmap(&vctx->queue, trans);
@@ -56,9 +61,9 @@ static void virgl_buffer_transfer_unmap(struct pipe_context *ctx,
       virgl_resource_destroy_transfer(vctx, trans);
 }
 
-static void virgl_buffer_transfer_flush_region(struct pipe_context *ctx,
-                                               struct pipe_transfer *transfer,
-                                               const struct pipe_box *box)
+void virgl_buffer_transfer_flush_region(struct pipe_context *ctx,
+                                        struct pipe_transfer *transfer,
+                                        const struct pipe_box *box)
 {
    struct virgl_transfer *trans = virgl_transfer(transfer);
 
@@ -74,16 +79,6 @@ static void virgl_buffer_transfer_flush_region(struct pipe_context *ctx,
    util_range_add(transfer->resource, &trans->range, box->x, box->x + box->width);
 }
 
-static const struct u_resource_vtbl virgl_buffer_vtbl =
-{
-   u_default_resource_get_handle,            /* get_handle */
-   virgl_resource_destroy,                   /* resource_destroy */
-   virgl_resource_transfer_map,              /* transfer_map */
-   virgl_buffer_transfer_flush_region,       /* transfer_flush_region */
-   virgl_buffer_transfer_unmap,              /* transfer_unmap */
-};
-
 void virgl_buffer_init(struct virgl_resource *res)
 {
-   res->u.vtbl = &virgl_buffer_vtbl;
 }

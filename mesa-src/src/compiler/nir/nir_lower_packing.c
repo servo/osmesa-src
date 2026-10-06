@@ -34,133 +34,160 @@
  * unpackInt2x32(foo) -> vec2(unpackInt2x32_x(foo), unpackInt2x32_y(foo))
  */
 
-static nir_ssa_def *
-lower_pack_64_from_32(nir_builder *b, nir_ssa_def *src)
+static nir_def *
+lower_pack_64_from_32(nir_builder *b, nir_def *src)
 {
    return nir_pack_64_2x32_split(b, nir_channel(b, src, 0),
-                                    nir_channel(b, src, 1));
+                                 nir_channel(b, src, 1));
 }
 
-static nir_ssa_def *
-lower_unpack_64_to_32(nir_builder *b, nir_ssa_def *src)
+static nir_def *
+lower_unpack_64_to_32(nir_builder *b, nir_def *src)
 {
    return nir_vec2(b, nir_unpack_64_2x32_split_x(b, src),
-                      nir_unpack_64_2x32_split_y(b, src));
+                   nir_unpack_64_2x32_split_y(b, src));
 }
 
-static nir_ssa_def *
-lower_pack_32_from_16(nir_builder *b, nir_ssa_def *src)
+static nir_def *
+lower_pack_32_from_16(nir_builder *b, nir_def *src)
 {
    return nir_pack_32_2x16_split(b, nir_channel(b, src, 0),
-                                    nir_channel(b, src, 1));
+                                 nir_channel(b, src, 1));
 }
 
-static nir_ssa_def *
-lower_unpack_32_to_16(nir_builder *b, nir_ssa_def *src)
+static nir_def *
+lower_unpack_32_to_16(nir_builder *b, nir_def *src)
 {
    return nir_vec2(b, nir_unpack_32_2x16_split_x(b, src),
-                      nir_unpack_32_2x16_split_y(b, src));
+                   nir_unpack_32_2x16_split_y(b, src));
 }
 
-static nir_ssa_def *
-lower_pack_64_from_16(nir_builder *b, nir_ssa_def *src)
+static nir_def *
+lower_pack_64_from_16(nir_builder *b, nir_def *src)
 {
-   nir_ssa_def *xy = nir_pack_32_2x16_split(b, nir_channel(b, src, 0),
-                                               nir_channel(b, src, 1));
+   nir_def *xy = nir_pack_32_2x16_split(b, nir_channel(b, src, 0),
+                                        nir_channel(b, src, 1));
 
-   nir_ssa_def *zw = nir_pack_32_2x16_split(b, nir_channel(b, src, 2),
-                                               nir_channel(b, src, 3));
+   nir_def *zw = nir_pack_32_2x16_split(b, nir_channel(b, src, 2),
+                                        nir_channel(b, src, 3));
 
    return nir_pack_64_2x32_split(b, xy, zw);
 }
 
-static nir_ssa_def *
-lower_unpack_64_to_16(nir_builder *b, nir_ssa_def *src)
+static nir_def *
+lower_unpack_64_to_16(nir_builder *b, nir_def *src)
 {
-   nir_ssa_def *xy = nir_unpack_64_2x32_split_x(b, src);
-   nir_ssa_def *zw = nir_unpack_64_2x32_split_y(b, src);
+   nir_def *xy = nir_unpack_64_2x32_split_x(b, src);
+   nir_def *zw = nir_unpack_64_2x32_split_y(b, src);
 
    return nir_vec4(b, nir_unpack_32_2x16_split_x(b, xy),
-                      nir_unpack_32_2x16_split_y(b, xy),
-                      nir_unpack_32_2x16_split_x(b, zw),
-                      nir_unpack_32_2x16_split_y(b, zw));
+                   nir_unpack_32_2x16_split_y(b, xy),
+                   nir_unpack_32_2x16_split_x(b, zw),
+                   nir_unpack_32_2x16_split_y(b, zw));
+}
+
+static nir_def *
+lower_pack_32_from_8(nir_builder *b, nir_def *src)
+{
+   if (b->shader->options->has_pack_32_4x8) {
+      return nir_pack_32_4x8_split(b,
+                                   nir_channel(b, src, 0),
+                                   nir_channel(b, src, 1),
+                                   nir_channel(b, src, 2),
+                                   nir_channel(b, src, 3));
+   } else {
+      nir_def *src32 = nir_u2u32(b, src);
+
+      return nir_ior(b,
+                     nir_ior(b,
+                                             nir_channel(b, src32, 0)     ,
+                             nir_ishl_imm(b, nir_channel(b, src32, 1), 8)),
+                     nir_ior(b,
+                             nir_ishl_imm(b, nir_channel(b, src32, 2), 16),
+                             nir_ishl_imm(b, nir_channel(b, src32, 3), 24)));
+   }
+}
+
+static nir_def *
+lower_unpack_32_to_8(nir_builder *b, nir_def *src)
+{
+   /* Some drivers call nir_lower_pack after the last time nir_opt_algebraic
+    * is called. To prevent issues there, don't generate byte extraction
+    * instructions when the lowering flag is set.
+    */
+   if (b->shader->options->lower_extract_byte) {
+      return nir_vec4(b, nir_u2u8(b,                 src     ),
+                         nir_u2u8(b, nir_ushr_imm(b, src,  8)),
+                         nir_u2u8(b, nir_ushr_imm(b, src, 16)),
+                         nir_u2u8(b, nir_ushr_imm(b, src, 24)));
+   } else {
+      return nir_vec4(b, nir_u2u8(b, nir_extract_u8_imm(b, src, 0)),
+                         nir_u2u8(b, nir_extract_u8_imm(b, src, 1)),
+                         nir_u2u8(b, nir_extract_u8_imm(b, src, 2)),
+                         nir_u2u8(b, nir_extract_u8_imm(b, src, 3)));
+   }
 }
 
 static bool
-lower_pack_impl(nir_function_impl *impl)
+lower_pack_instr(nir_builder *b, nir_alu_instr *alu_instr, void *data)
 {
-   nir_builder b;
-   nir_builder_init(&b, impl);
-   bool progress = false;
-
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr_safe(instr, block) {
-         if (instr->type != nir_instr_type_alu)
-            continue;
-
-         nir_alu_instr *alu_instr = (nir_alu_instr *) instr;
-
-         if (alu_instr->op != nir_op_pack_64_2x32 &&
-             alu_instr->op != nir_op_unpack_64_2x32 &&
-             alu_instr->op != nir_op_pack_64_4x16 &&
-             alu_instr->op != nir_op_unpack_64_4x16 &&
-             alu_instr->op != nir_op_pack_32_2x16 &&
-             alu_instr->op != nir_op_unpack_32_2x16)
-            continue;
-
-         b.cursor = nir_before_instr(&alu_instr->instr);
-
-         nir_ssa_def *src = nir_ssa_for_alu_src(&b, alu_instr, 0);
-         nir_ssa_def *dest;
-
-         switch (alu_instr->op) {
-         case nir_op_pack_64_2x32:
-            dest = lower_pack_64_from_32(&b, src);
-            break;
-         case nir_op_unpack_64_2x32:
-            dest = lower_unpack_64_to_32(&b, src);
-            break;
-         case nir_op_pack_64_4x16:
-            dest = lower_pack_64_from_16(&b, src);
-            break;
-         case nir_op_unpack_64_4x16:
-            dest = lower_unpack_64_to_16(&b, src);
-            break;
-         case nir_op_pack_32_2x16:
-            dest = lower_pack_32_from_16(&b, src);
-            break;
-         case nir_op_unpack_32_2x16:
-            dest = lower_unpack_32_to_16(&b, src);
-            break;
-         default:
-            unreachable("Impossible opcode");
-         }
-
-         nir_ssa_def_rewrite_uses(&alu_instr->dest.dest.ssa, nir_src_for_ssa(dest));
-         nir_instr_remove(&alu_instr->instr);
-         progress = true;
-      }
+   nir_lower_packing_op op;
+   switch (alu_instr->op) {
+   case nir_op_pack_64_2x32:
+      op = nir_lower_packing_op_pack_64_2x32;
+      break;
+   case nir_op_unpack_64_2x32:
+      op = nir_lower_packing_op_unpack_64_2x32;
+      break;
+   case nir_op_pack_64_4x16:
+      op = nir_lower_packing_op_pack_64_4x16;
+      break;
+   case nir_op_unpack_64_4x16:
+      op = nir_lower_packing_op_unpack_64_4x16;
+      break;
+   case nir_op_pack_32_2x16:
+      op = nir_lower_packing_op_pack_32_2x16;
+      break;
+   case nir_op_unpack_32_2x16:
+      op = nir_lower_packing_op_unpack_32_2x16;
+      break;
+   case nir_op_pack_32_4x8:
+      op = nir_lower_packing_op_pack_32_4x8;
+      break;
+   case nir_op_unpack_32_4x8:
+      op = nir_lower_packing_op_unpack_32_4x8;
+      break;
+   default:
+      return false;
    }
 
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
-   } else {
-      nir_metadata_preserve(impl, nir_metadata_all);
-   }
+   if (b->shader->options->skip_lower_packing_ops & BITFIELD_BIT(op))
+      return false;
 
-   return progress;
+   b->cursor = nir_before_instr(&alu_instr->instr);
+
+   typedef nir_def *(*lower_func_t)(nir_builder *b, nir_def *src);
+   static const lower_func_t lower_funcs[nir_lower_packing_num_ops] = {
+      [nir_lower_packing_op_pack_64_2x32]   = lower_pack_64_from_32,
+      [nir_lower_packing_op_unpack_64_2x32] = lower_unpack_64_to_32,
+      [nir_lower_packing_op_pack_64_4x16]   = lower_pack_64_from_16,
+      [nir_lower_packing_op_unpack_64_4x16] = lower_unpack_64_to_16,
+      [nir_lower_packing_op_pack_32_2x16]   = lower_pack_32_from_16,
+      [nir_lower_packing_op_unpack_32_2x16] = lower_unpack_32_to_16,
+      [nir_lower_packing_op_pack_32_4x8]    = lower_pack_32_from_8,
+      [nir_lower_packing_op_unpack_32_4x8]  = lower_unpack_32_to_8,
+   };
+
+   nir_def *src = nir_ssa_for_alu_src(b, alu_instr, 0);
+   nir_def *dest = lower_funcs[op](b, src);
+   nir_def_replace(&alu_instr->def, dest);
+
+   return true;
 }
 
 bool
 nir_lower_pack(nir_shader *shader)
 {
-   bool progress = false;
-
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= lower_pack_impl(function->impl);
-   }
-
-   return false;
+   return nir_shader_alu_pass(shader, lower_pack_instr,
+                              nir_metadata_control_flow, NULL);
 }

@@ -23,16 +23,18 @@
 
 /** @file v3d_job.c
  *
- * Functions for submitting VC5 render jobs to the kernel.
+ * Functions for submitting V3D render jobs to the kernel.
  */
 
 #include <xf86drm.h>
+#include <libsync.h>
 #include "v3d_context.h"
 /* The OQ/semaphore packets are the same across V3D versions. */
-#define V3D_VERSION 33
+#define V3D_VERSION 42
 #include "broadcom/cle/v3dx_pack.h"
 #include "broadcom/common/v3d_macros.h"
 #include "util/hash_table.h"
+#include "util/perf/cpu_trace.h"
 #include "util/ralloc.h"
 #include "util/set.h"
 #include "broadcom/clif/clif_dump.h"
@@ -55,7 +57,7 @@ v3d_job_free(struct v3d_context *v3d, struct v3d_job *job)
                 }
         }
 
-        for (int i = 0; i < V3D_MAX_DRAW_BUFFERS; i++) {
+        for (int i = 0; i < job->nr_cbufs; i++) {
                 if (job->cbufs[i]) {
                         _mesa_hash_table_remove_key(v3d->write_jobs,
                                                     job->cbufs[i]->texture);
@@ -72,6 +74,11 @@ v3d_job_free(struct v3d_context *v3d, struct v3d_job *job)
                                             job->zsbuf->texture);
                 pipe_surface_reference(&job->zsbuf, NULL);
         }
+        if (job->bbuf)
+                pipe_surface_reference(&job->bbuf, NULL);
+
+        if (job->dbuf)
+                pipe_surface_reference(&job->dbuf, NULL);
 
         if (v3d->job == job)
                 v3d->job = NULL;
@@ -149,6 +156,8 @@ v3d_job_add_write_resource(struct v3d_job *job, struct pipe_resource *prsc)
 void
 v3d_flush_jobs_using_bo(struct v3d_context *v3d, struct v3d_bo *bo)
 {
+        MESA_TRACE_FUNC();
+
         hash_table_foreach(v3d->jobs, entry) {
                 struct v3d_job *job = entry->data;
 
@@ -189,20 +198,23 @@ v3d_flush_jobs_writing_resource(struct v3d_context *v3d,
 {
         struct hash_entry *entry = _mesa_hash_table_search(v3d->write_jobs,
                                                            prsc);
+        if (!entry)
+                return;
+
         struct v3d_resource *rsc = v3d_resource(prsc);
 
         /* We need to sync if graphics pipeline reads a resource written
-         * by the compute pipeline. The same would be needed for the case of
-         * graphics-compute dependency but nowadays all compute jobs
-         * are serialized with the previous submitted job.
+         * by the compute pipeline. The same is needed for the case of
+         * graphics-compute dependency but flushing the job.
          */
         if (!is_compute_pipeline && rsc->bo != NULL && rsc->compute_written) {
-           v3d->sync_on_last_compute_job = true;
-           rsc->compute_written = false;
+                v3d->sync_on_last_compute_job = true;
+                rsc->compute_written = false;
         }
-
-        if (!entry)
-                return;
+        if (is_compute_pipeline && rsc->bo != NULL && rsc->graphics_written) {
+                flush_cond = V3D_FLUSH_ALWAYS;
+                rsc->graphics_written = false;
+        }
 
         struct v3d_job *job = entry->data;
 
@@ -226,8 +238,10 @@ v3d_flush_jobs_writing_resource(struct v3d_context *v3d,
                 needs_flush = !v3d_job_writes_resource_from_tf(job, prsc);
         }
 
-        if (needs_flush)
+        if (needs_flush) {
+                MESA_TRACE_FUNC();
                 v3d_job_submit(v3d, job);
+        }
 }
 
 void
@@ -264,8 +278,10 @@ v3d_flush_jobs_reading_resource(struct v3d_context *v3d,
                         needs_flush = true;
                 }
 
-                if (needs_flush)
+                if (needs_flush) {
+                        MESA_TRACE_FUNC();
                         v3d_job_submit(v3d, job);
+                }
 
                 /* Reminder: v3d->jobs is safe to keep iterating even
                  * after deletion of an entry.
@@ -274,43 +290,8 @@ v3d_flush_jobs_reading_resource(struct v3d_context *v3d,
         }
 }
 
-static void
-v3d_job_set_tile_buffer_size(struct v3d_job *job)
-{
-        static const uint8_t tile_sizes[] = {
-                64, 64,
-                64, 32,
-                32, 32,
-                32, 16,
-                16, 16,
-        };
-        int tile_size_index = 0;
-        if (job->msaa)
-                tile_size_index += 2;
-
-        if (job->cbufs[3] || job->cbufs[2])
-                tile_size_index += 2;
-        else if (job->cbufs[1])
-                tile_size_index++;
-
-        int max_bpp = RENDER_TARGET_MAXIMUM_32BPP;
-        for (int i = 0; i < V3D_MAX_DRAW_BUFFERS; i++) {
-                if (job->cbufs[i]) {
-                        struct v3d_surface *surf = v3d_surface(job->cbufs[i]);
-                        max_bpp = MAX2(max_bpp, surf->internal_bpp);
-                }
-        }
-        job->internal_bpp = max_bpp;
-        STATIC_ASSERT(RENDER_TARGET_MAXIMUM_32BPP == 0);
-        tile_size_index += max_bpp;
-
-        assert(tile_size_index < ARRAY_SIZE(tile_sizes));
-        job->tile_width = tile_sizes[tile_size_index * 2 + 0];
-        job->tile_height = tile_sizes[tile_size_index * 2 + 1];
-}
-
 /**
- * Returns a v3d_job struture for tracking V3D rendering to a particular FBO.
+ * Returns a v3d_job structure for tracking V3D rendering to a particular FBO.
  *
  * If we've already started rendering to this FBO, then return the same job,
  * otherwise make a new one.  If we're beginning rendering to an FBO, make
@@ -319,7 +300,10 @@ v3d_job_set_tile_buffer_size(struct v3d_job *job)
  */
 struct v3d_job *
 v3d_get_job(struct v3d_context *v3d,
-            struct pipe_surface **cbufs, struct pipe_surface *zsbuf)
+            uint32_t nr_cbufs,
+            struct pipe_surface **cbufs,
+            struct pipe_surface *zsbuf,
+            struct pipe_surface *bbuf)
 {
         /* Return the existing job for this FBO if we have one */
         struct v3d_job_key local_key = {
@@ -328,8 +312,13 @@ v3d_get_job(struct v3d_context *v3d,
                         cbufs[1],
                         cbufs[2],
                         cbufs[3],
+                        cbufs[4],
+                        cbufs[5],
+                        cbufs[6],
+                        cbufs[7],
                 },
                 .zsbuf = zsbuf,
+                .bbuf = bbuf,
         };
         struct hash_entry *entry = _mesa_hash_table_search(v3d->jobs,
                                                            &local_key);
@@ -340,8 +329,9 @@ v3d_get_job(struct v3d_context *v3d,
          * writing these buffers are flushed.
          */
         struct v3d_job *job = v3d_job_create(v3d);
+        job->nr_cbufs = nr_cbufs;
 
-        for (int i = 0; i < V3D_MAX_DRAW_BUFFERS; i++) {
+        for (int i = 0; i < job->nr_cbufs; i++) {
                 if (cbufs[i]) {
                         v3d_flush_jobs_reading_resource(v3d, cbufs[i]->texture,
                                                         V3D_FLUSH_DEFAULT,
@@ -360,8 +350,13 @@ v3d_get_job(struct v3d_context *v3d,
                 if (zsbuf->texture->nr_samples > 1)
                         job->msaa = true;
         }
+        if (bbuf) {
+                pipe_surface_reference(&job->bbuf, bbuf);
+                if (bbuf->texture->nr_samples > 1)
+                        job->msaa = true;
+        }
 
-        for (int i = 0; i < V3D_MAX_DRAW_BUFFERS; i++) {
+        for (int i = 0; i < job->nr_cbufs; i++) {
                 if (cbufs[i])
                         _mesa_hash_table_insert(v3d->write_jobs,
                                                 cbufs[i]->texture, job);
@@ -381,6 +376,13 @@ v3d_get_job(struct v3d_context *v3d,
                 }
         }
 
+        /* By default we disable double buffer but we allow it to be enabled
+         * later on (except for msaa) if we don't find any other reason
+         * to disable it.
+         */
+        job->can_use_double_buffer = !job->msaa && V3D_DBG(DOUBLE_BUFFER);
+        job->double_buffer = false;
+
         memcpy(&job->key, &local_key, sizeof(local_key));
         _mesa_hash_table_insert(v3d->jobs, &job->key, job);
 
@@ -393,14 +395,22 @@ v3d_get_job_for_fbo(struct v3d_context *v3d)
         if (v3d->job)
                 return v3d->job;
 
+        uint32_t nr_cbufs = v3d->framebuffer.nr_cbufs;
         struct pipe_surface **cbufs = v3d->framebuffer.cbufs;
         struct pipe_surface *zsbuf = v3d->framebuffer.zsbuf;
-        struct v3d_job *job = v3d_get_job(v3d, cbufs, zsbuf);
+        struct v3d_job *job = v3d_get_job(v3d, nr_cbufs, cbufs, zsbuf, NULL);
 
-        if (v3d->framebuffer.samples >= 1)
+        if (v3d->framebuffer.samples >= 1) {
                 job->msaa = true;
+                job->double_buffer = false;
+        }
 
-        v3d_job_set_tile_buffer_size(job);
+        v3d_get_tile_buffer_size(&v3d->screen->devinfo,
+                                 job->msaa, job->double_buffer,
+                                 job->nr_cbufs, job->cbufs, job->bbuf,
+                                 &job->tile_desc.width,
+                                 &job->tile_desc.height,
+                                 &job->internal_bpp);
 
         /* The dirty flags are tracking what's been updated while v3d->job has
          * been bound, so set them all to ~0 when switching between jobs.  We
@@ -411,30 +421,44 @@ v3d_get_job_for_fbo(struct v3d_context *v3d)
         /* If we're binding to uninitialized buffers, no need to load their
          * contents before drawing.
          */
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < nr_cbufs; i++) {
                 if (cbufs[i]) {
                         struct v3d_resource *rsc = v3d_resource(cbufs[i]->texture);
                         if (!rsc->writes)
-                                job->clear |= PIPE_CLEAR_COLOR0 << i;
+                                job->clear_tlb |= PIPE_CLEAR_COLOR0 << i;
+                        if (rsc->invalidated) {
+                                job->invalidated_load |= PIPE_CLEAR_COLOR0 << i;
+                                rsc->invalidated = false;
+                        }
                 }
         }
 
         if (zsbuf) {
                 struct v3d_resource *rsc = v3d_resource(zsbuf->texture);
                 if (!rsc->writes)
-                        job->clear |= PIPE_CLEAR_DEPTH;
+                        job->clear_tlb |= PIPE_CLEAR_DEPTH;
 
                 if (rsc->separate_stencil)
                         rsc = rsc->separate_stencil;
 
                 if (!rsc->writes)
-                        job->clear |= PIPE_CLEAR_STENCIL;
+                        job->clear_tlb |= PIPE_CLEAR_STENCIL;
+                if (rsc->invalidated) {
+                        /* Currently gallium only applies invalidates if it
+                         * affects both depth and stencil together.
+                         */
+                         job->invalidated_load |=
+                                 PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL;
+                        rsc->invalidated = false;
+                        if (rsc->separate_stencil)
+                                rsc->separate_stencil->invalidated = false;
+                }
         }
 
-        job->draw_tiles_x = DIV_ROUND_UP(v3d->framebuffer.width,
-                                         job->tile_width);
-        job->draw_tiles_y = DIV_ROUND_UP(v3d->framebuffer.height,
-                                         job->tile_height);
+        job->tile_desc.draw_x = DIV_ROUND_UP(v3d->framebuffer.width,
+                                             job->tile_desc.width);
+        job->tile_desc.draw_y = DIV_ROUND_UP(v3d->framebuffer.height,
+                                             job->tile_desc.height);
 
         v3d->job = job;
 
@@ -444,12 +468,16 @@ v3d_get_job_for_fbo(struct v3d_context *v3d)
 static void
 v3d_clif_dump(struct v3d_context *v3d, struct v3d_job *job)
 {
-        if (!(V3D_DEBUG & (V3D_DEBUG_CL | V3D_DEBUG_CLIF)))
+        if (!(V3D_DBG(CL) ||
+              V3D_DBG(CL_NO_BIN) ||
+              V3D_DBG(CLIF)))
                 return;
 
         struct clif_dump *clif = clif_dump_init(&v3d->screen->devinfo,
                                                 stderr,
-                                                V3D_DEBUG & V3D_DEBUG_CL);
+                                                V3D_DBG(CL) ||
+                                                V3D_DBG(CL_NO_BIN),
+                                                V3D_DBG(CL_NO_BIN));
 
         set_foreach(job->bos, entry) {
                 struct v3d_bo *bo = (void *)entry->key;
@@ -474,15 +502,114 @@ v3d_read_and_accumulate_primitive_counters(struct v3d_context *v3d)
 
         perf_debug("stalling on TF counts readback\n");
         struct v3d_resource *rsc = v3d_resource(v3d->prim_counts);
-        if (v3d_bo_wait(rsc->bo, PIPE_TIMEOUT_INFINITE, "prim-counts")) {
+        if (v3d_bo_wait(rsc->bo, OS_TIMEOUT_INFINITE, "prim-counts")) {
                 uint32_t *map = v3d_bo_map(rsc->bo) + v3d->prim_counts_offset;
                 v3d->tf_prims_generated += map[V3D_PRIM_COUNTS_TF_WRITTEN];
-                /* When we only have a vertex shader we determine the primitive
-                 * count in the CPU so don't update it here again.
+                /* When we only have a vertex shader with no primitive
+                 * restart, we determine the primitive count in the CPU so
+                 * don't update it here again.
                  */
-                if (v3d->prog.gs)
+                if (v3d->prog.gs || v3d->prim_restart) {
                         v3d->prims_generated += map[V3D_PRIM_COUNTS_WRITTEN];
+                        uint8_t prim_mode =
+                                v3d->prog.gs ? v3d->prog.gs->prog_data.gs->out_prim_type
+                                             : v3d->prim_mode;
+                        uint32_t vertices_written =
+                                map[V3D_PRIM_COUNTS_TF_WRITTEN] * mesa_vertices_per_prim(prim_mode);
+                        for (int i = 0; i < v3d->streamout.num_targets; i++) {
+                                v3d_stream_output_target(v3d->streamout.targets[i])->offset +=
+                                        vertices_written;
+                        }
+                }
         }
+}
+
+static void
+alloc_tile_state(struct v3d_job *job)
+{
+        assert(!job->tile_alloc && !job->tile_state);
+
+        /* The PTB will request the tile alloc initial size per tile at start
+         * of tile binning.
+         */
+        uint32_t tile_alloc_size =
+                MAX2(job->num_layers, 1) * job->tile_desc.draw_x *
+                job->tile_desc.draw_y * 64;
+
+        /* The PTB allocates in aligned 4k chunks after the initial setup. */
+        tile_alloc_size = align(tile_alloc_size, 4096);
+
+        /* Include the first two chunk allocations that the PTB does so that
+         * we definitely clear the OOM condition before triggering one (the HW
+         * won't trigger OOM during the first allocations).
+         */
+        tile_alloc_size += 8192;
+
+        /* For performance, allocate some extra initial memory after the PTB's
+         * minimal allocations, so that we hopefully don't have to block the
+         * GPU on the kernel handling an OOM signal.
+         */
+        tile_alloc_size += 512 * 1024;
+
+        job->tile_alloc = v3d_bo_alloc(job->v3d->screen, tile_alloc_size,
+                                       "tile_alloc");
+        uint32_t tsda_per_tile_size = 256;
+        job->tile_state = v3d_bo_alloc(job->v3d->screen,
+                                       MAX2(job->num_layers, 1) *
+                                       job->tile_desc.draw_y *
+                                       job->tile_desc.draw_x *
+                                       tsda_per_tile_size,
+                                       "TSDA");
+}
+
+static void
+enable_double_buffer_mode(struct v3d_job *job)
+{
+        /* Don't enable if we have seen incompatibilities */
+        if (!job->can_use_double_buffer)
+                return;
+
+         /* For now we only allow double buffer via envvar and only for jobs
+          * that are not MSAA, which is incompatible.
+          */
+        assert(V3D_DBG(DOUBLE_BUFFER) && !job->msaa);
+
+        /* Tile loads are serialized against stores, in which case we don't get
+         * any benefits from enabling double-buffer and would just pay the price
+         * of a smaller tile size instead. Similarly, we only benefit from
+         * double-buffer if we have tile stores, as the point of this mode is
+         * to execute rendering of a new tile while we store the previous one to
+         * hide latency on the tile store operation.
+         */
+        if (job->load)
+                return;
+
+        if (!job->store)
+               return;
+
+        if (!v3d_double_buffer_score_ok(&job->double_buffer_score))
+              return;
+
+        /* Enable double-buffer mode.
+         *
+         * This will reduce the tile size so we need to recompute state
+         * that depends on this and rewrite the TILE_BINNING_MODE_CFG
+         * we emitted earlier in the CL.
+         */
+        job->double_buffer = true;
+        v3d_get_tile_buffer_size(&job->v3d->screen->devinfo,
+                                 job->msaa, job->double_buffer,
+                                 job->nr_cbufs, job->cbufs, job->bbuf,
+                                 &job->tile_desc.width, &job->tile_desc.height,
+                                 &job->internal_bpp);
+
+        job->tile_desc.draw_x = DIV_ROUND_UP(job->draw_width,
+                                             job->tile_desc.width);
+        job->tile_desc.draw_y = DIV_ROUND_UP(job->draw_height,
+                                             job->tile_desc.height);
+
+        struct v3d_device_info *devinfo = &job->v3d->screen->devinfo;
+        v3d_X(devinfo, job_emit_enable_double_buffer)(job);
 }
 
 /**
@@ -492,33 +619,69 @@ void
 v3d_job_submit(struct v3d_context *v3d, struct v3d_job *job)
 {
         struct v3d_screen *screen = v3d->screen;
+        struct v3d_device_info *devinfo = &screen->devinfo;
+
+        MESA_TRACE_FUNC();
 
         if (!job->needs_flush)
                 goto done;
 
-        if (screen->devinfo.ver >= 41)
-                v3d41_emit_rcl(job);
-        else
-                v3d33_emit_rcl(job);
-
-        if (cl_offset(&job->bcl) > 0) {
-                if (screen->devinfo.ver >= 41)
-                        v3d41_bcl_epilogue(v3d, job);
-                else
-                        v3d33_bcl_epilogue(v3d, job);
-        }
-
-        /* While the RCL will implicitly depend on the last RCL to have
-         * finished, we also need to block on any previous TFU job we may have
-         * dispatched.
+        /* The GL_PRIMITIVES_GENERATED query is included with
+         * OES_geometry_shader.
          */
-        job->submit.in_sync_rcl = v3d->out_sync;
+        job->needs_primitives_generated =
+                v3d->n_primitives_generated_queries_in_flight > 0 &&
+                v3d->prog.gs;
+
+        if (job->needs_primitives_generated)
+                v3d_ensure_prim_counts_allocated(v3d);
+
+        enable_double_buffer_mode(job);
+
+        alloc_tile_state(job);
+
+        v3d_X(devinfo, emit_rcl)(job);
+
+        if (cl_offset(&job->bcl) > 0)
+                v3d_X(devinfo, bcl_epilogue)(v3d, job);
+
+        if (v3d->in_fence_fd >= 0) {
+                /* pipe_caps.native_fence */
+                if (drmSyncobjImportSyncFile(v3d->fd, v3d->in_syncobj,
+                                             v3d->in_fence_fd)) {
+                   fprintf(stderr, "Failed to import native fence.\n");
+                } else {
+                   job->submit.in_sync_bcl = v3d->in_syncobj;
+                }
+                close(v3d->in_fence_fd);
+                v3d->in_fence_fd = -1;
+        } else {
+                /* While the RCL will implicitly depend on the last RCL to have
+                 * finished, we also need to block on any previous TFU job we
+                 * may have dispatched.
+                 */
+                job->submit.in_sync_rcl = v3d->out_sync;
+        }
 
         /* Update the sync object for the last rendering by our context. */
         job->submit.out_sync = v3d->out_sync;
 
         job->submit.bcl_end = job->bcl.bo->offset + cl_offset(&job->bcl);
         job->submit.rcl_end = job->rcl.bo->offset + cl_offset(&job->rcl);
+
+        if (v3d->active_perfmon) {
+                assert(screen->has_perfmon);
+                job->submit.perfmon_id = v3d->active_perfmon->kperfmon_id;
+        }
+
+        /* If we are submitting a job with a different perfmon, we need to
+         * ensure the previous one fully finishes before starting this;
+         * otherwise it would wrongly mix counter results.
+         */
+        if (v3d->active_perfmon != v3d->last_perfmon) {
+                v3d->last_perfmon = v3d->active_perfmon;
+                job->submit.in_sync_bcl = v3d->out_sync;
+        }
 
         job->submit.flags = 0;
         if (job->tmu_dirty_rcl && screen->has_cache_flush)
@@ -527,7 +690,7 @@ v3d_job_submit(struct v3d_context *v3d, struct v3d_job *job)
         /* On V3D 4.1, the tile alloc/state setup moved to register writes
          * instead of binner packets.
          */
-        if (screen->devinfo.ver >= 41) {
+        if (devinfo->ver >= 42) {
                 v3d_job_add_bo(job, job->tile_alloc);
                 job->submit.qma = job->tile_alloc->offset;
                 job->submit.qms = job->tile_alloc->size;
@@ -538,21 +701,29 @@ v3d_job_submit(struct v3d_context *v3d, struct v3d_job *job)
 
         v3d_clif_dump(v3d, job);
 
-        if (!(V3D_DEBUG & V3D_DEBUG_NORAST)) {
+        if (!V3D_DBG(NORAST)) {
                 int ret;
-
                 ret = v3d_ioctl(v3d->fd, DRM_IOCTL_V3D_SUBMIT_CL, &job->submit);
                 static bool warned = false;
                 if (ret && !warned) {
                         fprintf(stderr, "Draw call returned %s.  "
                                         "Expect corruption.\n", strerror(errno));
                         warned = true;
+                } else if (!ret) {
+                        if (v3d->active_perfmon)
+                                v3d->active_perfmon->job_submitted = true;
+                        if (V3D_DBG(SYNC)) {
+                                drmSyncobjWait(v3d->fd, &v3d->out_sync, 1, INT64_MAX,
+                                               DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, NULL);
+                        }
                 }
 
                 /* If we are submitting a job in the middle of transform
-                 * feedback we need to read the primitive counts and accumulate
-                 * them, otherwise they will be reset at the start of the next
-                 * draw when we emit the Tile Binning Mode Configuration packet.
+                 * feedback or there is a primitives generated query with a
+                 * geometry shader then we need to read the primitive counts
+                 * and accumulate them, otherwise they will be reset at the
+                 * start of the next draw when we emit the Tile Binning Mode
+                 * Configuration packet.
                  *
                  * If the job doesn't have any TF draw calls, then we know
                  * the primitive count must be zero and we can skip stalling
@@ -562,7 +733,9 @@ v3d_job_submit(struct v3d_context *v3d, struct v3d_job *job)
                  * to us reading an obsolete (possibly non-zero) value from
                  * the GPU counters.
                  */
-                if (v3d->streamout.num_targets && job->tf_draw_calls_queued > 0)
+                if (job->needs_primitives_generated ||
+                    (v3d->streamout.num_targets &&
+                     job->tf_draw_calls_queued > 0))
                         v3d_read_and_accumulate_primitive_counters(v3d);
         }
 
@@ -570,24 +743,12 @@ done:
         v3d_job_free(v3d, job);
 }
 
-static bool
-v3d_job_compare(const void *a, const void *b)
-{
-        return memcmp(a, b, sizeof(struct v3d_job_key)) == 0;
-}
-
-static uint32_t
-v3d_job_hash(const void *key)
-{
-        return _mesa_hash_data(key, sizeof(struct v3d_job_key));
-}
+DERIVE_HASH_TABLE(v3d_job_key);
 
 void
 v3d_job_init(struct v3d_context *v3d)
 {
-        v3d->jobs = _mesa_hash_table_create(v3d,
-                                            v3d_job_hash,
-                                            v3d_job_compare);
+        v3d->jobs = v3d_job_key_table_create(v3d);
         v3d->write_jobs = _mesa_hash_table_create(v3d,
                                                   _mesa_hash_pointer,
                                                   _mesa_key_pointer_equal);

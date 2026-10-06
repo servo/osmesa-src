@@ -22,22 +22,25 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "glheader.h"
+#include "util/glheader.h"
 #include "draw_validate.h"
 #include "bufferobj.h"
 #include "context.h"
-#include "drawpix.h"
 #include "enums.h"
 #include "feedback.h"
 #include "framebuffer.h"
 #include "image.h"
 #include "pbo.h"
+#include "pixel.h"
 #include "state.h"
 #include "glformats.h"
 #include "fbobject.h"
 #include "util/u_math.h"
 #include "util/rounding.h"
+#include "api_exec_decl.h"
 
+#include "state_tracker/st_cb_bitmap.h"
+#include "state_tracker/st_cb_drawpixels.h"
 
 /*
  * Execute glDrawPixels
@@ -49,7 +52,7 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
    GLenum err;
    GET_CURRENT_CONTEXT(ctx);
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, 0);
 
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glDrawPixels(%d, %d, %s, %s, %p) // to %s at %ld, %ld\n",
@@ -72,9 +75,14 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
     */
    _mesa_set_vp_override(ctx, GL_TRUE);
 
-   /* Note: this call does state validation */
-   if (!_mesa_valid_to_render(ctx, "glDrawPixels")) {
-      goto end;      /* the error code was recorded */
+   _mesa_update_pixel(ctx);
+
+   if (ctx->NewState)
+      _mesa_update_state(ctx);
+
+   if (!ctx->DrawPixValid) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glDrawPixels");
+      goto end;
    }
 
    /* GL 3.0 introduced a new restriction on glDrawPixels() over what was in
@@ -160,8 +168,8 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
             }
          }
 
-         ctx->Driver.DrawPixels(ctx, x, y, width, height, format, type,
-                                &ctx->Unpack, pixels);
+         st_DrawPixels(ctx, x, y, width, height, format, type,
+                       &ctx->Unpack, pixels);
       }
    }
    else if (ctx->RenderMode == GL_FEEDBACK) {
@@ -193,7 +201,7 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
 {
    GET_CURRENT_CONTEXT(ctx);
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, 0);
 
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx,
@@ -238,9 +246,14 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
     */
    _mesa_set_vp_override(ctx, GL_TRUE);
 
-   /* Note: this call does state validation */
-   if (!_mesa_valid_to_render(ctx, "glCopyPixels")) {
-      goto end;      /* the error code was recorded */
+   _mesa_update_pixel(ctx);
+
+   if (ctx->NewState)
+      _mesa_update_state(ctx);
+
+   if (!ctx->DrawPixValid) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glCopyPixels");
+      goto end;
    }
 
    /* Check read buffer's status (draw buffer was already checked) */
@@ -277,8 +290,8 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
       if (width > 0 && height > 0) {
          GLint destx = lroundf(ctx->Current.RasterPos[0]);
          GLint desty = lroundf(ctx->Current.RasterPos[1]);
-         ctx->Driver.CopyPixels( ctx, srcx, srcy, width, height, destx, desty,
-                                 type );
+         st_CopyPixels( ctx, srcx, srcy, width, height, destx, desty,
+                        type );
       }
    }
    else if (ctx->RenderMode == GL_FEEDBACK) {
@@ -303,14 +316,12 @@ end:
 }
 
 
-void GLAPIENTRY
-_mesa_Bitmap( GLsizei width, GLsizei height,
-              GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove,
-              const GLubyte *bitmap )
+void
+_mesa_bitmap(struct gl_context *ctx, GLsizei width, GLsizei height,
+             GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove,
+             const GLubyte *bitmap, struct pipe_resource *tex)
 {
-   GET_CURRENT_CONTEXT(ctx);
-
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, 0);
 
    if (width < 0 || height < 0) {
       _mesa_error( ctx, GL_INVALID_VALUE, "glBitmap(width or height < 0)" );
@@ -321,9 +332,13 @@ _mesa_Bitmap( GLsizei width, GLsizei height,
       return;    /* do nothing */
    }
 
-   /* Note: this call does state validation */
-   if (!_mesa_valid_to_render(ctx, "glBitmap")) {
-      /* the error code was recorded */
+   _mesa_update_pixel(ctx);
+
+   if (ctx->NewState)
+      _mesa_update_state(ctx);
+
+   if (!ctx->DrawPixValid) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glBitmap");
       return;
    }
 
@@ -337,7 +352,7 @@ _mesa_Bitmap( GLsizei width, GLsizei height,
          GLint x = util_ifloor(ctx->Current.RasterPos[0] + epsilon - xorig);
          GLint y = util_ifloor(ctx->Current.RasterPos[1] + epsilon - yorig);
 
-         if (ctx->Unpack.BufferObj) {
+         if (!tex && ctx->Unpack.BufferObj) {
             /* unpack from PBO */
             if (!_mesa_validate_pbo_access(2, &ctx->Unpack, width, height,
                                            1, GL_COLOR_INDEX, GL_BITMAP,
@@ -354,7 +369,7 @@ _mesa_Bitmap( GLsizei width, GLsizei height,
             }
          }
 
-         ctx->Driver.Bitmap( ctx, x, y, width, height, &ctx->Unpack, bitmap );
+         st_Bitmap(ctx, x, y, width, height, &ctx->Unpack, bitmap, tex);
       }
    }
    else if (ctx->RenderMode == GL_FEEDBACK) {
@@ -373,8 +388,19 @@ _mesa_Bitmap( GLsizei width, GLsizei height,
    /* update raster position */
    ctx->Current.RasterPos[0] += xmove;
    ctx->Current.RasterPos[1] += ymove;
+   ctx->PopAttribState |= GL_CURRENT_BIT;
 
    if (MESA_DEBUG_FLAGS & DEBUG_ALWAYS_FLUSH) {
       _mesa_flush(ctx);
    }
+}
+
+void GLAPIENTRY
+_mesa_Bitmap(GLsizei width, GLsizei height,
+             GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove,
+             const GLubyte *bitmap)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   _mesa_bitmap(ctx, width, height, xorig, yorig, xmove, ymove, bitmap, NULL);
 }

@@ -394,7 +394,7 @@ static int gpir_get_slots_required(gpir_node *node)
    return 1;
 }
 
-static void verify_ready_list(sched_ctx *ctx)
+static void ASSERTED verify_ready_list(sched_ctx *ctx)
 {
    list_for_each_entry(gpir_node, node, &ctx->ready_list, list) {
       if (!gpir_is_input_node(node)) {
@@ -596,7 +596,7 @@ static bool _try_place_node(sched_ctx *ctx, gpir_instr *instr, gpir_node *node)
 }
 
 /* Try to place just the node given, updating the ready list. If "speculative"
- * is true, then this is part ofthe pre-commit phase. If false, then we have
+ * is true, then this is part of the pre-commit phase. If false, then we have
  * committed to placing this node, so update liveness and ready list
  * information.
  */
@@ -1123,7 +1123,7 @@ static bool try_spill_nodes(sched_ctx *ctx, gpir_node *orig_node)
    return ctx->total_spill_needed <= 0 && ctx->max_node_spill_needed <= 0;
 }
 
-static int gpir_get_curr_ready_list_slots(sched_ctx *ctx)
+static int ASSERTED gpir_get_curr_ready_list_slots(sched_ctx *ctx)
 {
    int total = 0;
    list_for_each_entry(gpir_node, node, &ctx->ready_list, list) {
@@ -1248,13 +1248,13 @@ static void sched_find_max_nodes(sched_ctx *ctx)
 /* Verify the invariants described in gpir.h, as well as making sure the
  * counts are correct.
  */
-static void verify_max_nodes(sched_ctx *ctx)
+static void ASSERTED verify_max_nodes(sched_ctx *ctx)
 {
    int alu_num_slot_needed_by_max = 0;
    int alu_num_unscheduled_next_max = 0;
    int alu_num_slot_needed_by_store = 0;
    int alu_num_slot_needed_by_non_cplx_store = 0;
-   int alu_max_allowed_next_max = 5;
+   ASSERTED int alu_max_allowed_next_max = 5;
 
    list_for_each_entry(gpir_node, node, &ctx->ready_list, list) {
       if (!gpir_is_input_node(node))
@@ -1297,9 +1297,9 @@ static bool try_node(sched_ctx *ctx)
     * the list at all. We know better here, so we have to open-code
     * list_for_each_entry() without the check in order to not assert.
     */
-   for (gpir_node *node = LIST_ENTRY(gpir_node, ctx->ready_list.next, list);
+   for (gpir_node *node = list_entry(ctx->ready_list.next, gpir_node, list);
         &node->list != &ctx->ready_list;
-        node = LIST_ENTRY(gpir_node, node->list.next, list)) {
+        node = list_entry(node->list.next, gpir_node, list)) {
       if (best_score != INT_MIN) {
          if (node->sched.dist < best_node->sched.dist)
             break;
@@ -1612,33 +1612,8 @@ static bool schedule_block(gpir_block *block)
    return true;
 }
 
-static void add_fake_dep(gpir_node *node, gpir_node *dep_node,
-                         gpir_node *last_written[])
-{
-      gpir_node_foreach_pred(node, dep) {
-         if (dep->type == GPIR_DEP_INPUT) {
-            int index = dep->pred->value_reg;
-            if (index >= 0 && last_written[index]) {
-               gpir_node_add_dep(last_written[index], dep_node,
-                                 GPIR_DEP_WRITE_AFTER_READ);
-            }
-            if (gpir_op_infos[dep->pred->op].schedule_first) {
-               /* Insert fake dependencies for any schedule_first children on
-                * this node as well. This guarantees that as soon as
-                * "dep_node" is ready to schedule, all of its schedule_first
-                * children, grandchildren, etc. are ready so that they can be
-                * scheduled as soon as possible.
-                */
-               add_fake_dep(dep->pred, dep_node, last_written);
-            }
-         }
-      }
-}
-
 static void schedule_build_dependency(gpir_block *block)
 {
-   gpir_node *last_written[GPIR_VALUE_REG_NUM + GPIR_PHYSICAL_REG_NUM] = {0};
-
    /* merge dummy_f/m to the node created from */
    list_for_each_entry_safe(gpir_node, node, &block->node_list, list) {
       if (node->op == gpir_op_dummy_m) {
@@ -1657,30 +1632,6 @@ static void schedule_build_dependency(gpir_block *block)
          gpir_node_delete(dummy_f);
          gpir_node_delete(node);
       }
-   }
-
-   memset(last_written, 0, sizeof(last_written));
-
-   /* False dependencies. For value registers, these exist only to make sure
-    * that the maximum pressure isn't exceeded and are hence "fake".
-    */
-   list_for_each_entry_rev(gpir_node, node, &block->node_list, list) {
-      if (node->op == gpir_op_load_reg) {
-         gpir_load_node *load = gpir_node_to_load(node);
-         unsigned index = 4 * load->index + load->component;
-         if (last_written[index]) {
-            gpir_node_add_dep(last_written[index], node, GPIR_DEP_WRITE_AFTER_READ);
-         }
-      } else if (node->op == gpir_op_store_reg) {
-         gpir_store_node *store = gpir_node_to_store(node);
-         unsigned index = 4 * store->index + store->component;
-         last_written[index] = node;
-      } else {
-         add_fake_dep(node, node, last_written);
-      }
-
-      if (node->value_reg >= 0)
-         last_written[node->value_reg] = node;
    }
 }
 

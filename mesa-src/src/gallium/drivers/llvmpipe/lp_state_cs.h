@@ -26,7 +26,6 @@
 #ifndef LP_STATE_CS_H
 #define LP_STATE_CS_H
 
-#include "os/os_thread.h"
 #include "util/u_thread.h"
 #include "pipe/p_state.h"
 
@@ -42,45 +41,57 @@ struct lp_compute_shader_variant_key
    unsigned nr_samplers:8;
    unsigned nr_sampler_views:8;
    unsigned nr_images:8;
-   /* followed by variable number of images */
-   struct lp_sampler_static_state samplers[1];
 };
 
 #define LP_CS_MAX_VARIANT_KEY_SIZE                                      \
    (sizeof(struct lp_compute_shader_variant_key) +                     \
-    PIPE_MAX_SHADER_SAMPLER_VIEWS * sizeof(struct lp_sampler_static_state) +\
+    PIPE_MAX_SHADER_SAMPLER_VIEWS * sizeof(struct lp_sampler_static_state) + \
     PIPE_MAX_SHADER_IMAGES * sizeof(struct lp_image_static_state))
 
 static inline size_t
 lp_cs_variant_key_size(unsigned nr_samplers, unsigned nr_images)
 {
-   unsigned samplers = nr_samplers > 1 ? (nr_samplers - 1) : 0;
    return (sizeof(struct lp_compute_shader_variant_key) +
-           samplers * sizeof(struct lp_sampler_static_state) +
+           nr_samplers * sizeof(struct lp_sampler_static_state) +
            nr_images * sizeof(struct lp_image_static_state));
+}
+
+static inline struct lp_sampler_static_state *
+lp_cs_variant_key_samplers(const struct lp_compute_shader_variant_key *key)
+{
+   return (struct lp_sampler_static_state *)&(key[1]);
 }
 
 static inline struct lp_image_static_state *
 lp_cs_variant_key_images(const struct lp_compute_shader_variant_key *key)
 {
    return (struct lp_image_static_state *)
-      &key->samplers[key->nr_samplers];
+      &(lp_cs_variant_key_samplers(key)[MAX2(key->nr_samplers, key->nr_sampler_views)]);
 }
 
 struct lp_cs_variant_list_item
 {
+   struct list_head list;
    struct lp_compute_shader_variant *base;
-   struct lp_cs_variant_list_item *next, *prev;
 };
 
 struct lp_compute_shader_variant
 {
    struct gallivm_state *gallivm;
 
+   LLVMTypeRef jit_cs_context_type;
    LLVMTypeRef jit_cs_context_ptr_type;
+   LLVMTypeRef jit_cs_thread_data_type;
+   LLVMTypeRef jit_resources_type;
+   LLVMTypeRef jit_resources_ptr_type;
    LLVMTypeRef jit_cs_thread_data_ptr_type;
 
+   /* for mesh shaders */
+   LLVMTypeRef jit_vertex_header_type;
+   LLVMTypeRef jit_vertex_header_ptr_type;
+   LLVMTypeRef jit_prim_type;
    LLVMValueRef function;
+   char *function_name;
    lp_jit_cs_func jit_function;
 
    /* Total number of LLVM instructions generated */
@@ -102,8 +113,7 @@ struct lp_compute_shader {
 
    struct lp_cs_variant_list_item variants;
 
-   struct lp_tgsi_info info;
-
+   struct draw_mesh_shader *draw_mesh_data;
    uint32_t req_local_mem;
 
    /* For debugging/profiling purposes */
@@ -111,6 +121,7 @@ struct lp_compute_shader {
    unsigned no;
    unsigned variants_created;
    unsigned variants_cached;
+   bool zero_initialize_shared_memory;
 
    int max_global_buffers;
    struct pipe_resource **global_buffers;
@@ -118,6 +129,7 @@ struct lp_compute_shader {
 
 struct lp_cs_exec {
    struct lp_jit_cs_context jit_context;
+   struct lp_jit_resources jit_resources;
    struct lp_compute_shader_variant *variant;
 };
 
@@ -146,7 +158,7 @@ struct lp_cs_context {
       struct pipe_image_view current;
    } images[LP_MAX_TGSI_SHADER_IMAGES];
 
-   void *input;
+   const void *input;
 };
 
 struct lp_cs_context *lp_csctx_create(struct pipe_context *pipe);

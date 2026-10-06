@@ -1,24 +1,7 @@
 /*
  * Copyright 2011 Joakim Sindholt <opensource@zhasha.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "nine_helpers.h"
 #include "nine_shader.h"
@@ -54,12 +37,16 @@ NinePixelShader9_ctor( struct NinePixelShader9 *This,
 
     info.type = PIPE_SHADER_FRAGMENT;
     info.byte_code = pFunction;
-    info.const_i_base = NINE_CONST_I_BASE(device->max_ps_const_f) / 16;
-    info.const_b_base = NINE_CONST_B_BASE(device->max_ps_const_f) / 16;
+    info.const_i_base = NINE_CONST_I_BASE(NINE_MAX_CONST_F_PS3) / 16;
+    info.const_b_base = NINE_CONST_B_BASE(NINE_MAX_CONST_F_PS3) / 16;
     info.sampler_mask_shadow = 0x0;
+    info.fetch4 = 0x0;
+    info.force_color_in_centroid = 0;
     info.sampler_ps1xtypes = 0x0;
     info.fog_enable = 0;
     info.projected = 0;
+    info.alpha_test_emulation = 0;
+    info.color_flatshade = 0;
     info.add_constants_defs.c_combination = NULL;
     info.add_constants_defs.int_const_added = NULL;
     info.add_constants_defs.bool_const_added = NULL;
@@ -116,8 +103,13 @@ NinePixelShader9_dtor( struct NinePixelShader9 *This )
 
         do {
             if (var->cso) {
-                if (This->base.device->context.cso_shader.ps == var->cso)
+                if (This->base.device->context.cso_shader.ps == var->cso) {
+                    /* unbind because it is illegal to delete something bound */
                     pipe->bind_fs_state(pipe, NULL);
+                    /* This will rebind cso_shader.ps in case somehow actually
+                     * an identical shader with same cso is bound */
+                    This->base.device->context.commit |= NINE_STATE_COMMIT_PS;
+                }
                 pipe->delete_fs_state(pipe, var->cso);
                 FREE(var->const_ranges);
             }
@@ -125,8 +117,10 @@ NinePixelShader9_dtor( struct NinePixelShader9 *This )
         } while (var);
 
         if (This->ff_cso) {
-            if (This->ff_cso == This->base.device->context.cso_shader.ps)
+            if (This->ff_cso == This->base.device->context.cso_shader.ps) {
                 pipe->bind_fs_state(pipe, NULL);
+                This->base.device->context.commit |= NINE_STATE_COMMIT_PS;
+            }
             pipe->delete_fs_state(pipe, This->ff_cso);
         }
     }
@@ -184,8 +178,8 @@ NinePixelShader9_GetVariant( struct NinePixelShader9 *This,
         HRESULT hr;
 
         info.type = PIPE_SHADER_FRAGMENT;
-        info.const_i_base = NINE_CONST_I_BASE(device->max_ps_const_f) / 16;
-        info.const_b_base = NINE_CONST_B_BASE(device->max_ps_const_f) / 16;
+        info.const_i_base = NINE_CONST_I_BASE(NINE_MAX_CONST_F_PS3) / 16;
+        info.const_b_base = NINE_CONST_B_BASE(NINE_MAX_CONST_F_PS3) / 16;
         info.byte_code = This->byte_code.tokens;
         info.sampler_mask_shadow = key & 0xffff;
         /* intended overlap with sampler_mask_shadow */
@@ -203,11 +197,16 @@ NinePixelShader9_GetVariant( struct NinePixelShader9 *This,
         }
         info.fog_enable = device->context.rs[D3DRS_FOGENABLE];
         info.fog_mode = device->context.rs[D3DRS_FOGTABLEMODE];
-        info.force_color_in_centroid = (key >> 22) & 1;
+        info.zfog = device->context.zfog;
         info.add_constants_defs.c_combination =
             nine_shader_constant_combination_get(This->c_combinations, (key >> 24) & 0xff);
         info.add_constants_defs.int_const_added = &This->int_slots_used;
         info.add_constants_defs.bool_const_added = &This->bool_slots_used;
+        info.fetch4 = (key >> 32) & 0xffff;
+        info.force_color_in_centroid = (key >> 48) & 1;
+        info.alpha_test_emulation = (key >> 49) & 0x7;
+        info.color_flatshade = (key >> 52) & 1;
+        info.force_color_in_centroid &= !info.color_flatshade; /* centroid doesn't make sense with flatshade */
         info.process_vertices = false;
         info.swvp_on = false;
 

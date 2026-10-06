@@ -21,10 +21,10 @@
  * IN THE SOFTWARE.
  */
 
+#include "util/u_vector.h"
+#include "nir_builder.h"
 #include "nir_instr_set.h"
 #include "nir_search_helpers.h"
-#include "nir_builder.h"
-#include "util/u_vector.h"
 
 /* Partial redundancy elimination of compares
  *
@@ -82,12 +82,12 @@ block_queue_finish(struct block_queue *bq)
 {
    struct block_instructions *n;
 
-   while ((n = (struct block_instructions *) exec_list_pop_head(&bq->blocks)) != NULL) {
+   while ((n = (struct block_instructions *)exec_list_pop_head(&bq->blocks)) != NULL) {
       u_vector_finish(&n->instructions);
       free(n);
    }
 
-   while ((n = (struct block_instructions *) exec_list_pop_head(&bq->reusable_blocks)) != NULL) {
+   while ((n = (struct block_instructions *)exec_list_pop_head(&bq->reusable_blocks)) != NULL) {
       free(n);
    }
 }
@@ -96,7 +96,7 @@ static struct block_instructions *
 push_block(struct block_queue *bq)
 {
    struct block_instructions *bi =
-      (struct block_instructions *) exec_list_pop_head(&bq->reusable_blocks);
+      (struct block_instructions *)exec_list_pop_head(&bq->reusable_blocks);
 
    if (bi == NULL) {
       bi = calloc(1, sizeof(struct block_instructions));
@@ -105,9 +105,7 @@ push_block(struct block_queue *bq)
          return NULL;
    }
 
-   if (!u_vector_init(&bi->instructions,
-                      sizeof(nir_alu_instr *),
-                      8 * sizeof(nir_alu_instr *))) {
+   if (!u_vector_init_pow2(&bi->instructions, 8, sizeof(nir_alu_instr *))) {
       free(bi);
       return NULL;
    }
@@ -135,12 +133,38 @@ add_instruction_for_block(struct block_instructions *bi,
    *data = alu;
 }
 
+/**
+ * Determine if the ALU instruction is used by an if-condition or used by a
+ * logic-not that is used by an if-condition.
+ */
+static bool
+is_compatible_condition(const nir_alu_instr *instr)
+{
+   if (is_used_by_if(instr))
+      return true;
+
+   nir_foreach_use(src, &instr->def) {
+      const nir_instr *const user_instr = nir_src_parent_instr(src);
+
+      if (user_instr->type != nir_instr_type_alu)
+         continue;
+
+      const nir_alu_instr *const user_alu = nir_instr_as_alu(user_instr);
+
+      if (user_alu->op != nir_op_inot)
+         continue;
+
+      if (is_used_by_if(user_alu))
+         return true;
+   }
+
+   return false;
+}
+
 static void
 rewrite_compare_instruction(nir_builder *bld, nir_alu_instr *orig_cmp,
                             nir_alu_instr *orig_add, bool zero_on_left)
 {
-   void *const mem_ctx = ralloc_parent(orig_cmp);
-
    bld->cursor = nir_before_instr(&orig_cmp->instr);
 
    /* This is somewhat tricky.  The compare instruction may be something like
@@ -155,47 +179,45 @@ rewrite_compare_instruction(nir_builder *bld, nir_alu_instr *orig_cmp,
     * zero_on_left is false, the resulting compare instruction is (fcmp,
     * (fadd, x, y), 0.0) and x = a and y = -b.
     */
-   nir_ssa_def *const a = nir_ssa_for_alu_src(bld, orig_cmp, 0);
-   nir_ssa_def *const b = nir_ssa_for_alu_src(bld, orig_cmp, 1);
+   nir_def *const a = nir_ssa_for_alu_src(bld, orig_cmp, 0);
+   nir_def *const b = nir_ssa_for_alu_src(bld, orig_cmp, 1);
 
-   nir_ssa_def *const fadd = zero_on_left
-      ? nir_fadd(bld, b, nir_fneg(bld, a))
-      : nir_fadd(bld, a, nir_fneg(bld, b));
+   nir_def *const fadd = zero_on_left
+                            ? nir_fadd(bld, b, nir_fneg(bld, a))
+                            : nir_fadd(bld, a, nir_fneg(bld, b));
 
-   nir_ssa_def *const zero =
-      nir_imm_floatN_t(bld, 0.0, orig_add->dest.dest.ssa.bit_size);
+   nir_def *const zero =
+      nir_imm_floatN_t(bld, 0.0, orig_add->def.bit_size);
 
-   nir_ssa_def *const cmp = zero_on_left
-      ? nir_build_alu(bld, orig_cmp->op, zero, fadd, NULL, NULL)
-      : nir_build_alu(bld, orig_cmp->op, fadd, zero, NULL, NULL);
+   nir_def *const cmp = zero_on_left
+                           ? nir_build_alu(bld, orig_cmp->op, zero, fadd, NULL, NULL)
+                           : nir_build_alu(bld, orig_cmp->op, fadd, zero, NULL, NULL);
 
    /* Generating extra moves of the results is the easy way to make sure the
     * writemasks match the original instructions.  Later optimization passes
     * will clean these up.  This is similar to nir_replace_instr (in
     * nir_search.c).
     */
-   nir_alu_instr *mov_add = nir_alu_instr_create(mem_ctx, nir_op_mov);
-   mov_add->dest.write_mask = orig_add->dest.write_mask;
-   nir_ssa_dest_init(&mov_add->instr, &mov_add->dest.dest,
-                     orig_add->dest.dest.ssa.num_components,
-                     orig_add->dest.dest.ssa.bit_size, NULL);
+   nir_alu_instr *mov_add = nir_alu_instr_create(bld->shader, nir_op_mov);
+   nir_def_init(&mov_add->instr, &mov_add->def,
+                orig_add->def.num_components,
+                orig_add->def.bit_size);
    mov_add->src[0].src = nir_src_for_ssa(fadd);
 
    nir_builder_instr_insert(bld, &mov_add->instr);
 
-   nir_alu_instr *mov_cmp = nir_alu_instr_create(mem_ctx, nir_op_mov);
-   mov_cmp->dest.write_mask = orig_cmp->dest.write_mask;
-   nir_ssa_dest_init(&mov_cmp->instr, &mov_cmp->dest.dest,
-                     orig_cmp->dest.dest.ssa.num_components,
-                     orig_cmp->dest.dest.ssa.bit_size, NULL);
+   nir_alu_instr *mov_cmp = nir_alu_instr_create(bld->shader, nir_op_mov);
+   nir_def_init(&mov_cmp->instr, &mov_cmp->def,
+                orig_cmp->def.num_components,
+                orig_cmp->def.bit_size);
    mov_cmp->src[0].src = nir_src_for_ssa(cmp);
 
    nir_builder_instr_insert(bld, &mov_cmp->instr);
 
-   nir_ssa_def_rewrite_uses(&orig_cmp->dest.dest.ssa,
-                            nir_src_for_ssa(&mov_cmp->dest.dest.ssa));
-   nir_ssa_def_rewrite_uses(&orig_add->dest.dest.ssa,
-                            nir_src_for_ssa(&mov_add->dest.dest.ssa));
+   nir_def_rewrite_uses(&orig_cmp->def,
+                        &mov_cmp->def);
+   nir_def_rewrite_uses(&orig_add->def,
+                        &mov_add->def);
 
    /* We know these have no more uses because we just rewrote them all, so we
     * can remove them.
@@ -231,13 +253,10 @@ comparison_pre_block(nir_block *block, struct block_queue *bq, nir_builder *bld)
 
       nir_alu_instr *const alu = nir_instr_as_alu(instr);
 
-      if (alu->dest.dest.ssa.num_components != 1)
+      if (alu->def.num_components != 1)
          continue;
 
-      if (alu->dest.saturate)
-         continue;
-
-      static const uint8_t swizzle[4] = { 0, 0, 0, 0 };
+      static const uint8_t swizzle[NIR_MAX_VEC_COMPONENTS] = { 0 };
 
       switch (alu->op) {
       case nir_op_fadd: {
@@ -245,13 +264,14 @@ comparison_pre_block(nir_block *block, struct block_queue *bq, nir_builder *bld)
           * instructions that dominate it.
           */
          struct block_instructions *b =
-            (struct block_instructions *) exec_list_get_head_raw(&bq->blocks);
+            (struct block_instructions *)exec_list_get_head_raw(&bq->blocks);
 
          while (b->node.next != NULL) {
             nir_alu_instr **a;
             bool rewrote_compare = false;
 
-            u_vector_foreach(a, &b->instructions) {
+            u_vector_foreach(a, &b->instructions)
+            {
                nir_alu_instr *const cmp = *a;
 
                if (cmp == NULL)
@@ -311,7 +331,7 @@ comparison_pre_block(nir_block *block, struct block_queue *bq, nir_builder *bld)
                break;
             }
 
-            b = (struct block_instructions *) b->node.next;
+            b = (struct block_instructions *)b->node.next;
          }
 
          break;
@@ -324,7 +344,7 @@ comparison_pre_block(nir_block *block, struct block_queue *bq, nir_builder *bld)
          /* If the instruction is a comparison that is used by an if-statement
           * and neither operand is immediate value 0, add it to the set.
           */
-         if (is_used_by_if(alu) &&
+         if (is_compatible_condition(alu) &&
              is_not_const_zero(NULL, alu, 0, 1, swizzle) &&
              is_not_const_zero(NULL, alu, 1, 1, swizzle))
             add_instruction_for_block(bi, alu);
@@ -355,7 +375,7 @@ nir_opt_comparison_pre_impl(nir_function_impl *impl)
    nir_builder bld;
 
    block_queue_init(&bq);
-   nir_builder_init(&bld, impl);
+   bld = nir_builder_create(impl);
 
    nir_metadata_require(impl, nir_metadata_dominance);
 
@@ -365,8 +385,7 @@ nir_opt_comparison_pre_impl(nir_function_impl *impl)
    block_queue_finish(&bq);
 
    if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
+      nir_metadata_preserve(impl, nir_metadata_control_flow);
    } else {
       nir_metadata_preserve(impl, nir_metadata_all);
    }
@@ -379,9 +398,8 @@ nir_opt_comparison_pre(nir_shader *shader)
 {
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= nir_opt_comparison_pre_impl(function->impl);
+   nir_foreach_function_impl(impl, shader) {
+      progress |= nir_opt_comparison_pre_impl(impl);
    }
 
    return progress;

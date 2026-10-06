@@ -62,7 +62,7 @@
  *    sext <4 x i1> %C to <4 x i32>
  *
  * is valid and supported (e.g., llvm/test/CodeGen/X86/vec_compare.ll), but
- * it causes assertion failures in LLVM 2.6. It appears to work correctly on 
+ * it causes assertion failures in LLVM 2.6. It appears to work correctly on
  * LLVM 2.7.
  */
 
@@ -77,10 +77,10 @@
 static LLVMValueRef
 lp_build_compare_ext(struct gallivm_state *gallivm,
                      const struct lp_type type,
-                     unsigned func,
+                     enum pipe_compare_func func,
                      LLVMValueRef a,
                      LLVMValueRef b,
-                     boolean ordered)
+                     bool ordered)
 {
    LLVMBuilderRef builder = gallivm->builder;
    LLVMTypeRef int_vec_type = lp_build_int_vec_type(gallivm, type);
@@ -92,15 +92,15 @@ lp_build_compare_ext(struct gallivm_state *gallivm,
    assert(lp_check_value(type, a));
    assert(lp_check_value(type, b));
 
-   if(func == PIPE_FUNC_NEVER)
+   if (func == PIPE_FUNC_NEVER)
       return zeros;
-   if(func == PIPE_FUNC_ALWAYS)
+   if (func == PIPE_FUNC_ALWAYS)
       return ones;
 
    assert(func > PIPE_FUNC_NEVER);
    assert(func < PIPE_FUNC_ALWAYS);
 
-   if(type.floating) {
+   if (type.floating) {
       LLVMRealPredicate op;
       switch(func) {
       case PIPE_FUNC_EQUAL:
@@ -170,7 +170,7 @@ lp_build_compare_ext(struct gallivm_state *gallivm,
 LLVMValueRef
 lp_build_compare(struct gallivm_state *gallivm,
                  const struct lp_type type,
-                 unsigned func,
+                 enum pipe_compare_func func,
                  LLVMValueRef a,
                  LLVMValueRef b)
 {
@@ -181,33 +181,33 @@ lp_build_compare(struct gallivm_state *gallivm,
    assert(lp_check_value(type, a));
    assert(lp_check_value(type, b));
 
-   if(func == PIPE_FUNC_NEVER)
+   if (func == PIPE_FUNC_NEVER)
       return zeros;
-   if(func == PIPE_FUNC_ALWAYS)
+   if (func == PIPE_FUNC_ALWAYS)
       return ones;
 
    assert(func > PIPE_FUNC_NEVER);
    assert(func < PIPE_FUNC_ALWAYS);
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
    /*
     * There are no unsigned integer comparison instructions in SSE.
     */
 
    if (!type.floating && !type.sign &&
        type.width * type.length == 128 &&
-       util_cpu_caps.has_sse2 &&
+       util_get_cpu_caps()->has_sse2 &&
        (func == PIPE_FUNC_LESS ||
         func == PIPE_FUNC_LEQUAL ||
         func == PIPE_FUNC_GREATER ||
         func == PIPE_FUNC_GEQUAL) &&
        (gallivm_debug & GALLIVM_DEBUG_PERF)) {
          debug_printf("%s: inefficient <%u x i%u> unsigned comparison\n",
-                      __FUNCTION__, type.length, type.width);
+                      __func__, type.length, type.width);
    }
 #endif
 
-   return lp_build_compare_ext(gallivm, type, func, a, b, FALSE);
+   return lp_build_compare_ext(gallivm, type, func, a, b, false);
 }
 
 /**
@@ -220,11 +220,11 @@ lp_build_compare(struct gallivm_state *gallivm,
  */
 LLVMValueRef
 lp_build_cmp_ordered(struct lp_build_context *bld,
-                     unsigned func,
+                     enum pipe_compare_func func,
                      LLVMValueRef a,
                      LLVMValueRef b)
 {
-   return lp_build_compare_ext(bld->gallivm, bld->type, func, a, b, TRUE);
+   return lp_build_compare_ext(bld->gallivm, bld->type, func, a, b, true);
 }
 
 /**
@@ -237,7 +237,7 @@ lp_build_cmp_ordered(struct lp_build_context *bld,
  */
 LLVMValueRef
 lp_build_cmp(struct lp_build_context *bld,
-             unsigned func,
+             enum pipe_compare_func func,
              LLVMValueRef a,
              LLVMValueRef b)
 {
@@ -266,7 +266,7 @@ lp_build_select_bitwise(struct lp_build_context *bld,
       return a;
    }
 
-   if(type.floating) {
+   if (type.floating) {
       a = LLVMBuildBitCast(builder, a, int_vec_type, "");
       b = LLVMBuildBitCast(builder, b, int_vec_type, "");
    }
@@ -284,7 +284,7 @@ lp_build_select_bitwise(struct lp_build_context *bld,
 
    res = LLVMBuildOr(builder, a, b, "");
 
-   if(type.floating) {
+   if (type.floating) {
       LLVMTypeRef vec_type = lp_build_vec_type(bld->gallivm, type);
       res = LLVMBuildBitCast(builder, res, vec_type, "");
    }
@@ -313,7 +313,7 @@ lp_build_select(struct lp_build_context *bld,
    assert(lp_check_value(type, a));
    assert(lp_check_value(type, b));
 
-   if(a == b)
+   if (a == b)
       return a;
 
    if (type.length == 1) {
@@ -339,20 +339,22 @@ lp_build_select(struct lp_build_context *bld,
        * what really happens is that LLVM will emit two shifts back to back.
        */
       if (0) {
-         LLVMValueRef shift = LLVMConstInt(bld->int_elem_type, bld->type.width - 1, 0);
+         LLVMValueRef shift =
+            LLVMConstInt(bld->int_elem_type, bld->type.width - 1, 0);
          shift = lp_build_broadcast(bld->gallivm, bld->int_vec_type, shift);
          mask = LLVMBuildLShr(builder, mask, shift, "");
       }
-      LLVMTypeRef bool_vec_type = LLVMVectorType(LLVMInt1TypeInContext(lc), type.length);
+      LLVMTypeRef bool_vec_type =
+         LLVMVectorType(LLVMInt1TypeInContext(lc), type.length);
       mask = LLVMBuildTrunc(builder, mask, bool_vec_type, "");
 
       res = LLVMBuildSelect(builder, mask, a, b, "");
    }
-   else if (((util_cpu_caps.has_sse4_1 &&
+   else if (((util_get_cpu_caps()->has_sse4_1 &&
               type.width * type.length == 128) ||
-             (util_cpu_caps.has_avx &&
+             (util_get_cpu_caps()->has_avx &&
               type.width * type.length == 256 && type.width >= 32) ||
-             (util_cpu_caps.has_avx2 &&
+             (util_get_cpu_caps()->has_avx2 &&
               type.width * type.length == 256)) &&
             !LLVMIsConstant(a) &&
             !LLVMIsConstant(b) &&
@@ -363,7 +365,8 @@ lp_build_select(struct lp_build_context *bld,
 
       LLVMTypeRef mask_type = LLVMGetElementType(LLVMTypeOf(mask));
       if (LLVMGetIntTypeWidth(mask_type) != type.width) {
-         LLVMTypeRef int_vec_type = LLVMVectorType(LLVMIntTypeInContext(lc, type.width), type.length);
+         LLVMTypeRef int_vec_type =
+            LLVMVectorType(LLVMIntTypeInContext(lc, type.width), type.length);
          mask = LLVMBuildSExt(builder, mask, int_vec_type, "");
       }
       /*
@@ -379,7 +382,7 @@ lp_build_select(struct lp_build_context *bld,
             intrinsic = "llvm.x86.avx.blendv.ps.256";
             arg_type = LLVMVectorType(LLVMFloatTypeInContext(lc), 8);
          } else {
-            assert(util_cpu_caps.has_avx2);
+            assert(util_get_cpu_caps()->has_avx2);
             intrinsic = "llvm.x86.avx2.pblendvb";
             arg_type = LLVMVectorType(LLVMInt8TypeInContext(lc), 32);
          }
@@ -440,19 +443,18 @@ lp_build_select_aos(struct lp_build_context *bld,
    LLVMBuilderRef builder = bld->gallivm->builder;
    const struct lp_type type = bld->type;
    const unsigned n = type.length;
-   unsigned i, j;
 
    assert((mask & ~0xf) == 0);
    assert(lp_check_value(type, a));
    assert(lp_check_value(type, b));
 
-   if(a == b)
+   if (a == b)
       return a;
-   if((mask & 0xf) == 0xf)
+   if ((mask & 0xf) == 0xf)
       return a;
-   if((mask & 0xf) == 0x0)
+   if ((mask & 0xf) == 0x0)
       return b;
-   if(a == bld->undef || b == bld->undef)
+   if (a == bld->undef || b == bld->undef)
       return bld->undef;
 
    /*
@@ -469,16 +471,18 @@ lp_build_select_aos(struct lp_build_context *bld,
       LLVMTypeRef elem_type = LLVMInt32TypeInContext(bld->gallivm->context);
       LLVMValueRef shuffles[LP_MAX_VECTOR_LENGTH];
 
-      for(j = 0; j < n; j += num_channels)
-         for(i = 0; i < num_channels; ++i)
+      for (unsigned j = 0; j < n; j += num_channels)
+         for (unsigned i = 0; i < num_channels; ++i)
             shuffles[j + i] = LLVMConstInt(elem_type,
                                            (mask & (1 << i) ? 0 : n) + j + i,
                                            0);
 
-      return LLVMBuildShuffleVector(builder, a, b, LLVMConstVector(shuffles, n), "");
+      return LLVMBuildShuffleVector(builder, a, b,
+                                    LLVMConstVector(shuffles, n), "");
    }
    else {
-      LLVMValueRef mask_vec = lp_build_const_mask_aos(bld->gallivm, type, mask, num_channels);
+      LLVMValueRef mask_vec = lp_build_const_mask_aos(bld->gallivm,
+                                                      type, mask, num_channels);
       return lp_build_select(bld, mask_vec, a, b);
    }
 }

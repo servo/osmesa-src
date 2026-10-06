@@ -24,77 +24,195 @@
 #ifndef ZINK_SCREEN_H
 #define ZINK_SCREEN_H
 
-#include "pipe/p_screen.h"
-#include "util/slab.h"
+#include "zink_types.h"
 
-#include <vulkan/vulkan.h>
 
-extern uint32_t zink_debug;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#define ZINK_DEBUG_NIR 0x1
-#define ZINK_DEBUG_SPIRV 0x2
-#define ZINK_DEBUG_TGSI 0x4
+struct util_dl_library;
 
-struct zink_screen {
-   struct pipe_screen base;
+void
+zink_init_screen_pipeline_libs(struct zink_screen *screen);
 
-   struct sw_winsys *winsys;
 
-   struct slab_parent_pool transfer_pool;
-
-   VkInstance instance;
-   VkPhysicalDevice pdev;
-
-   VkPhysicalDeviceProperties props;
-   VkPhysicalDeviceFeatures feats;
-   VkPhysicalDeviceMemoryProperties mem_props;
-   VkPhysicalDeviceTransformFeedbackPropertiesEXT tf_props;
-   VkPhysicalDeviceRobustness2PropertiesEXT rb2_props;
-   VkPhysicalDeviceRobustness2FeaturesEXT rb2_feats;
-   VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT vdiv_feats;
-   uint32_t max_vertex_attrib_divisor;
-
-   bool have_KHR_maintenance1;
-   bool have_KHR_external_memory_fd;
-   bool have_EXT_conditional_rendering;
-   bool have_EXT_transform_feedback;
-   bool have_EXT_index_type_uint8;
-   bool have_EXT_robustness2_features;
-   bool have_EXT_vertex_attribute_divisor;
-   bool have_EXT_calibrated_timestamps;
-
-   bool have_X8_D24_UNORM_PACK32;
-   bool have_D24_UNORM_S8_UINT;
-
-   uint32_t gfx_queue;
-   uint32_t timestamp_valid_bits;
-   VkDevice dev;
-
-   PFN_vkGetMemoryFdKHR vk_GetMemoryFdKHR;
-   PFN_vkCmdBeginConditionalRenderingEXT vk_CmdBeginConditionalRenderingEXT;
-   PFN_vkCmdEndConditionalRenderingEXT vk_CmdEndConditionalRenderingEXT;
-
-   PFN_vkCmdBindTransformFeedbackBuffersEXT vk_CmdBindTransformFeedbackBuffersEXT;
-   PFN_vkCmdBeginTransformFeedbackEXT vk_CmdBeginTransformFeedbackEXT;
-   PFN_vkCmdEndTransformFeedbackEXT vk_CmdEndTransformFeedbackEXT;
-   PFN_vkCmdBeginQueryIndexedEXT vk_CmdBeginQueryIndexedEXT;
-   PFN_vkCmdEndQueryIndexedEXT vk_CmdEndQueryIndexedEXT;
-   PFN_vkCmdDrawIndirectByteCountEXT vk_CmdDrawIndirectByteCountEXT;
-
-   PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT vk_GetPhysicalDeviceCalibrateableTimeDomainsEXT;
-   PFN_vkGetCalibratedTimestampsEXT vk_GetCalibratedTimestampsEXT;
-};
-
-static inline struct zink_screen *
-zink_screen(struct pipe_screen *pipe)
+/* update last_finished to account for batch_id wrapping */
+static inline void
+zink_screen_update_last_finished(struct zink_screen *screen, uint64_t batch_id)
 {
-   return (struct zink_screen *)pipe;
+   const uint32_t check_id = (uint32_t)batch_id;
+   /* last_finished may have wrapped */
+   if (screen->last_finished < UINT_MAX / 2) {
+      /* last_finished has wrapped, batch_id has not */
+      if (check_id > UINT_MAX / 2)
+         return;
+   } else if (check_id < UINT_MAX / 2) {
+      /* batch_id has wrapped, last_finished has not */
+      screen->last_finished = check_id;
+      return;
+   }
+   /* neither have wrapped */
+   screen->last_finished = MAX2(check_id, screen->last_finished);
+}
+
+/* check a batch_id against last_finished while accounting for wrapping */
+static inline bool
+zink_screen_check_last_finished(struct zink_screen *screen, uint32_t batch_id)
+{
+   const uint32_t check_id = (uint32_t)batch_id;
+   assert(check_id);
+   /* last_finished may have wrapped */
+   if (screen->last_finished < UINT_MAX / 2) {
+      /* last_finished has wrapped, batch_id has not */
+      if (check_id > UINT_MAX / 2)
+         return true;
+   } else if (check_id < UINT_MAX / 2) {
+      /* batch_id has wrapped, last_finished has not */
+      return false;
+   }
+   return screen->last_finished >= check_id;
+}
+
+bool
+zink_screen_init_semaphore(struct zink_screen *screen);
+
+static inline bool
+zink_screen_handle_vkresult(struct zink_screen *screen, VkResult ret)
+{
+   bool success = false;
+   switch (ret) {
+   case VK_SUCCESS:
+      success = true;
+      break;
+   case VK_ERROR_DEVICE_LOST:
+      screen->device_lost = true;
+      mesa_loge("zink: DEVICE LOST!\n");
+      /* if nothing can save us, abort */
+      if (screen->abort_on_hang && !screen->robust_ctx_count)
+         abort();
+      FALLTHROUGH;
+   default:
+      success = false;
+      break;
+   }
+   return success;
+}
+
+typedef const char *(*zink_vkflags_func)(uint64_t);
+
+static inline unsigned
+zink_string_vkflags_unroll(char *buf, size_t bufsize, uint64_t flags, zink_vkflags_func func)
+{
+   bool first = true;
+   unsigned idx = 0;
+   u_foreach_bit64(bit, flags) {
+      if (!first)
+         buf[idx++] = '|';
+      idx += snprintf(&buf[idx], bufsize - idx, "%s", func((BITFIELD64_BIT(bit))));
+      first = false;
+   }
+   return idx;
+}
+
+#define VRAM_ALLOC_LOOP(RET, DOIT, ...) \
+   do { \
+      unsigned _us[] = {0, 1000, 10000, 500000, 1000000}; \
+      for (unsigned _i = 0; _i < ARRAY_SIZE(_us); _i++) { \
+         RET = DOIT; \
+         if (RET == VK_SUCCESS || RET != VK_ERROR_OUT_OF_DEVICE_MEMORY) \
+            break; \
+         os_time_sleep(_us[_i]); \
+      } \
+      __VA_ARGS__ \
+   } while (0)
+
+VkSemaphore
+zink_create_semaphore(struct zink_screen *screen);
+
+static inline VkDriverId
+zink_driverid(const struct zink_screen *screen)
+{
+   if (!screen->info.have_KHR_maintenance7 || screen->info.layered_props.layeredAPI != VK_PHYSICAL_DEVICE_LAYERED_API_VULKAN_KHR)
+      return screen->info.driver_props.driverID;
+   /* if maint7 is supported, codegen ensures this will always be the "right" value */
+   return screen->info.vk_layered_driver_props.driverID;
+}
+
+void
+zink_screen_lock_context(struct zink_screen *screen);
+void
+zink_screen_unlock_context(struct zink_screen *screen);
+
+VkSemaphore
+zink_create_exportable_semaphore(struct zink_screen *screen);
+VkSemaphore
+zink_screen_export_dmabuf_semaphore(struct zink_screen *screen, struct zink_resource *res);
+bool
+zink_screen_import_dmabuf_semaphore(struct zink_screen *screen, struct zink_resource *res, VkSemaphore sem);
+
+void
+zink_init_format_props(struct zink_screen *screen, enum pipe_format pformat);
+
+static inline const struct zink_modifier_props *
+zink_get_modifier_props(struct zink_screen *screen, enum pipe_format pformat)
+{
+   if (unlikely(!screen->format_props_init[pformat]))
+      zink_init_format_props(screen, pformat);
+   return &screen->modifier_props[pformat];
+}
+
+static inline const struct zink_format_props *
+zink_get_format_props(struct zink_screen *screen, enum pipe_format pformat)
+{
+   if (unlikely(!screen->format_props_init[pformat]))
+      zink_init_format_props(screen, pformat);
+   return &screen->format_props[pformat];
 }
 
 VkFormat
 zink_get_format(struct zink_screen *screen, enum pipe_format format);
 
+void
+zink_convert_color(const struct zink_screen *screen, enum pipe_format format,
+                   union pipe_color_union *dst,
+                   const union pipe_color_union *src);
+
+bool
+zink_screen_timeline_wait(struct zink_screen *screen, uint64_t batch_id, uint64_t timeout);
+
 bool
 zink_is_depth_format_supported(struct zink_screen *screen, VkFormat format);
+
+#define GET_PROC_ADDR_INSTANCE_LOCAL(screen, instance, x) PFN_vk##x vk_##x = (PFN_vk##x)(screen)->vk_GetInstanceProcAddr(instance, "vk"#x)
+
+void
+zink_screen_update_pipeline_cache(struct zink_screen *screen, struct zink_program *pg, bool in_thread);
+
+void
+zink_screen_get_pipeline_cache(struct zink_screen *screen, struct zink_program *pg, bool in_thread);
+
+void VKAPI_PTR
+zink_stub_function_not_loaded(void);
+
+bool
+zink_screen_debug_marker_begin(struct zink_screen *screen, const char *fmt, ...);
+void
+zink_screen_debug_marker_end(struct zink_screen *screen, bool emitted);
+
+#define warn_missing_feature(warned, feat) \
+   do { \
+      if (!warned) { \
+         if (!(zink_debug & ZINK_DEBUG_QUIET)) \
+            mesa_logw("WARNING: Incorrect rendering will happen " \
+                           "because the Vulkan device doesn't support " \
+                           "the '%s' feature\n", feat); \
+         warned = true; \
+      } \
+   } while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

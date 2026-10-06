@@ -339,7 +339,7 @@ nv50_validate_derived_2(struct nv50_context *nv50)
 {
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
 
-   if (nv50->zsa && nv50->zsa->pipe.alpha.enabled &&
+   if (nv50->zsa && nv50->zsa->pipe.alpha_enabled &&
        nv50->framebuffer.nr_cbufs == 0) {
       nv50_fb_set_null_rt(push, 0);
       BEGIN_NV04(push, NV50_3D(RT_CONTROL), 1);
@@ -356,7 +356,7 @@ nv50_validate_clip(struct nv50_context *nv50)
 
    if (nv50->dirty_3d & NV50_NEW_3D_CLIP) {
       BEGIN_NV04(push, NV50_3D(CB_ADDR), 1);
-      PUSH_DATA (push, (NV50_CB_AUX_UCP_OFFSET << 8) | NV50_CB_AUX);
+      PUSH_DATA (push, NV50_CB_AUX_UCP_OFFSET << (8 - 2) | NV50_CB_AUX);
       BEGIN_NI04(push, NV50_3D(CB_DATA(0)), PIPE_MAX_CLIP_PLANES * 4);
       PUSH_DATAp(push, &nv50->clip.ucp[0][0], PIPE_MAX_CLIP_PLANES * 4);
    }
@@ -450,6 +450,7 @@ nv50_switch_pipe_context(struct nv50_context *ctx_to)
 {
    struct nv50_context *ctx_from = ctx_to->screen->cur_ctx;
 
+   simple_mtx_assert_locked(&ctx_to->screen->state_lock);
    if (ctx_from)
       ctx_to->state = ctx_from->state;
    else
@@ -460,9 +461,9 @@ nv50_switch_pipe_context(struct nv50_context *ctx_to)
    ctx_to->viewports_dirty = ~0;
    ctx_to->scissors_dirty = ~0;
 
-   ctx_to->constbuf_dirty[0] =
-   ctx_to->constbuf_dirty[1] =
-   ctx_to->constbuf_dirty[2] = (1 << NV50_MAX_PIPE_CONSTBUFS) - 1;
+   ctx_to->constbuf_dirty[NV50_SHADER_STAGE_VERTEX] =
+   ctx_to->constbuf_dirty[NV50_SHADER_STAGE_GEOMETRY] =
+   ctx_to->constbuf_dirty[NV50_SHADER_STAGE_FRAGMENT] = (1 << NV50_MAX_PIPE_CONSTBUFS) - 1;
 
    if (!ctx_to->vertex)
       ctx_to->dirty_3d &= ~(NV50_NEW_3D_VERTEX | NV50_NEW_3D_ARRAYS);
@@ -536,6 +537,8 @@ nv50_state_validate(struct nv50_context *nv50, uint32_t mask,
    int ret;
    unsigned i;
 
+   simple_mtx_assert_locked(&nv50->screen->state_lock);
+
    if (nv50->screen->cur_ctx != nv50)
       nv50_switch_pipe_context(nv50);
 
@@ -556,10 +559,10 @@ nv50_state_validate(struct nv50_context *nv50, uint32_t mask,
          PUSH_DATA (nv50->base.pushbuf, 0);
       }
 
-      nv50_bufctx_fence(bufctx, false);
+      nv50_bufctx_fence(nv50, bufctx, false);
    }
    nouveau_pushbuf_bufctx(nv50->base.pushbuf, bufctx);
-   ret = nouveau_pushbuf_validate(nv50->base.pushbuf);
+   ret = PUSH_VAL(nv50->base.pushbuf);
 
    return !ret;
 }
@@ -575,7 +578,7 @@ nv50_state_validate_3d(struct nv50_context *nv50, uint32_t mask)
 
    if (unlikely(nv50->state.flushed)) {
       nv50->state.flushed = false;
-      nv50_bufctx_fence(nv50->bufctx_3d, true);
+      nv50_bufctx_fence(nv50, nv50->bufctx_3d, true);
    }
    return ret;
 }

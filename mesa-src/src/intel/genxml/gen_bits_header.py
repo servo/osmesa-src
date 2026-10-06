@@ -19,13 +19,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from __future__ import (
-    absolute_import, division, print_function, unicode_literals
-)
-
 import argparse
+import intel_genxml
 import os
-import xml.parsers.expat
 
 from mako.template import Template
 from util import *
@@ -67,38 +63,38 @@ from operator import itemgetter
 
 #include <stdint.h>
 
-#include "dev/gen_device_info.h"
+#include "dev/intel_device_info.h"
 #include "util/macros.h"
 
-<%def name="emit_per_gen_prop_func(item, prop)">
+<%def name="emit_per_gen_prop_func(item, prop, protect_defines)">
 %if item.has_prop(prop):
 % for gen, value in sorted(item.iter_prop(prop), reverse=True):
+%  if protect_defines:
+#ifndef ${gen.prefix(item.token_name)}_${prop}
 #define ${gen.prefix(item.token_name)}_${prop}  ${value}
+#endif
+%  else:
+#define ${gen.prefix(item.token_name)}_${prop}  ${value}
+%  endif
 % endfor
 
 static inline uint32_t ATTRIBUTE_PURE
-${item.token_name}_${prop}(const struct gen_device_info *devinfo)
+${item.token_name}_${prop}(const struct intel_device_info *devinfo)
 {
-   switch (devinfo->gen) {
-   case 12: return ${item.get_prop(prop, 12)};
-   case 11: return ${item.get_prop(prop, 11)};
-   case 10: return ${item.get_prop(prop, 10)};
-   case 9: return ${item.get_prop(prop, 9)};
-   case 8: return ${item.get_prop(prop, 8)};
-   case 7:
-      if (devinfo->is_haswell) {
-         return ${item.get_prop(prop, 7.5)};
-      } else {
-         return ${item.get_prop(prop, 7)};
-      }
-   case 6: return ${item.get_prop(prop, 6)};
-   case 5: return ${item.get_prop(prop, 5)};
-   case 4:
-      if (devinfo->is_g4x) {
-         return ${item.get_prop(prop, 4.5)};
-      } else {
-         return ${item.get_prop(prop, 4)};
-      }
+   switch (devinfo->verx10) {
+   case 300: return ${item.get_prop(prop, 30)};
+   case 200: return ${item.get_prop(prop, 20)};
+   case 125: return ${item.get_prop(prop, 12.5)};
+   case 120: return ${item.get_prop(prop, 12)};
+   case 110: return ${item.get_prop(prop, 11)};
+   case 90: return ${item.get_prop(prop, 9)};
+   case 80: return ${item.get_prop(prop, 8)};
+   case 75: return ${item.get_prop(prop, 7.5)};
+   case 70: return ${item.get_prop(prop, 7)};
+   case 60: return ${item.get_prop(prop, 6)};
+   case 50: return ${item.get_prop(prop, 5)};
+   case 45: return ${item.get_prop(prop, 4.5)};
+   case 40: return ${item.get_prop(prop, 4)};
    default:
       unreachable("Invalid hardware generation");
    }
@@ -110,27 +106,30 @@ ${item.token_name}_${prop}(const struct gen_device_info *devinfo)
 extern "C" {
 #endif
 % for _, container in sorted(containers.items(), key=itemgetter(0)):
+%  if container.allowed:
 
 /* ${container.name} */
 
-${emit_per_gen_prop_func(container, 'length')}
+${emit_per_gen_prop_func(container, 'length', True)}
 
-% for _, field in sorted(container.fields.items(), key=itemgetter(0)):
+%   for _, field in sorted(container.fields.items(), key=itemgetter(0)):
+%    if field.allowed:
 
 /* ${container.name}::${field.name} */
 
-${emit_per_gen_prop_func(field, 'bits')}
+${emit_per_gen_prop_func(field, 'bits', False)}
 
-${emit_per_gen_prop_func(field, 'start')}
-
-% endfor
+${emit_per_gen_prop_func(field, 'start', False)}
+%    endif
+%   endfor
+%  endif
 % endfor
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* ${guard} */""", output_encoding='utf-8')
+#endif /* ${guard} */""")
 
 class Gen(object):
 
@@ -156,7 +155,7 @@ class Gen(object):
         if token[0] == '_':
             token = token[1:]
 
-        return 'GEN{}_{}'.format(gen, token)
+        return 'GFX{}_{}'.format(gen, token)
 
 class Container(object):
 
@@ -165,6 +164,7 @@ class Container(object):
         self.token_name = safe_name(name)
         self.length_by_gen = {}
         self.fields = {}
+        self.allowed = False
 
     def add_gen(self, gen, xml_attrs):
         assert isinstance(gen, Gen)
@@ -208,6 +208,7 @@ class Field(object):
         self.token_name = safe_name('_'.join([container.name, self.name]))
         self.bits_by_gen = {}
         self.start_by_gen = {}
+        self.allowed = False
 
     def add_gen(self, gen, xml_attrs):
         assert isinstance(gen, Gen)
@@ -241,43 +242,36 @@ class Field(object):
 class XmlParser(object):
 
     def __init__(self, containers):
-        self.parser = xml.parsers.expat.ParserCreate()
-        self.parser.StartElementHandler = self.start_element
-        self.parser.EndElementHandler = self.end_element
-
         self.gen = None
         self.containers = containers
         self.container_stack = []
         self.container_stack.append(None)
 
-    def parse(self, filename):
-        with open(filename, 'rb') as f:
-            self.parser.ParseFile(f)
+    def emit_genxml(self, genxml):
+        root = genxml.et.getroot()
+        self.gen = Gen(root.attrib['gen'])
+        for item in root:
+            self.process_item(item)
 
-    def start_element(self, name, attrs):
-        if name == 'genxml':
-            self.gen = Gen(attrs['gen'])
-        elif name in ('instruction', 'struct', 'register'):
-            if name == 'instruction' and 'engine' in attrs:
-                engines = set(attrs['engine'].split('|'))
-                if not engines & self.engines:
-                    self.container_stack.append(None)
-                    return
+    def process_item(self, item):
+        name = item.tag
+        attrs = item.attrib
+        if name in ('instruction', 'struct', 'register'):
             self.start_container(attrs)
+            for struct_item in item:
+                self.process_item(struct_item)
+            self.container_stack.pop()
         elif name == 'group':
             self.container_stack.append(None)
-        elif name == 'field':
-            self.start_field(attrs)
-        else:
-            pass
-
-    def end_element(self, name):
-        if name == 'genxml':
-            self.gen = None
-        elif name in ('instruction', 'struct', 'register', 'group'):
+            for group_item in item:
+                self.process_item(group_item)
             self.container_stack.pop()
-        else:
+        elif name == 'field':
+            self.process_field(attrs)
+        elif name in ('enum', 'import'):
             pass
+        else:
+            assert False
 
     def start_container(self, attrs):
         assert self.container_stack[-1] is None
@@ -287,7 +281,7 @@ class XmlParser(object):
         self.container_stack.append(self.containers[name])
         self.container_stack[-1].add_gen(self.gen, attrs)
 
-    def start_field(self, attrs):
+    def process_field(self, attrs):
         if self.container_stack[-1] is None:
             return
 
@@ -305,6 +299,9 @@ def parse_args():
                    help='If unset, then CPP_GUARD is derived from OUTPUT.')
     p.add_argument('--engines', nargs='?', type=str, default='render',
                    help="Comma-separated list of engines whose instructions should be parsed (default: %(default)s)")
+    p.add_argument('--include-symbols', type=str, action='store',
+                   help='List of instruction/structures to generate',
+                   required=True)
     p.add_argument('xml_sources', metavar='XML_SOURCE', nargs='+')
 
     pargs = p.parse_args()
@@ -320,9 +317,9 @@ def parse_args():
 def main():
     pargs = parse_args()
 
-    engines = pargs.engines.split(',')
+    engines = set(pargs.engines.split(','))
     valid_engines = [ 'render', 'blitter', 'video' ]
-    if set(engines) - set(valid_engines):
+    if engines - set(valid_engines):
         print("Invalid engine specified, valid engines are:\n")
         for e in valid_engines:
             print("\t%s" % e)
@@ -333,10 +330,22 @@ def main():
 
     for source in pargs.xml_sources:
         p = XmlParser(containers)
-        p.engines = set(engines)
-        p.parse(source)
+        genxml = intel_genxml.GenXml(source)
+        genxml.filter_engines(engines)
+        genxml.merge_imported()
+        p.emit_genxml(genxml)
 
-    with open(pargs.output, 'wb') as f:
+    included_symbols_list = pargs.include_symbols.split(',')
+    for _name_field in included_symbols_list:
+        name_field = _name_field.split('::')
+        container = containers[name_field[0]]
+        container.allowed = True
+        if len(name_field) > 1:
+            field = container.get_field(name_field[1])
+            assert field
+            field.allowed = True
+
+    with open(pargs.output, 'w', encoding='utf-8') as f:
         f.write(TEMPLATE.render(containers=containers, guard=pargs.cpp_guard))
 
 if __name__ == '__main__':

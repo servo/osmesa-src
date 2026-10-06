@@ -37,6 +37,7 @@ pp_nocolor(struct pp_queue_t *ppq, struct pipe_resource *in,
 {
 
    struct pp_program *p = ppq->p;
+   struct pipe_context *pipe = p->pipe;
    const struct pipe_sampler_state *samplers[] = {&p->sampler_point};
 
    pp_filter_setup_in(p, in);
@@ -46,7 +47,7 @@ pp_nocolor(struct pp_queue_t *ppq, struct pipe_resource *in,
    pp_filter_misc_state(p);
 
    cso_set_samplers(p->cso, PIPE_SHADER_FRAGMENT, 1, samplers);
-   cso_set_sampler_views(p->cso, PIPE_SHADER_FRAGMENT, 1, &p->view);
+   pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, 1, 0, false, &p->view);
 
    cso_set_vertex_shader_handle(p->cso, ppq->shaders[n][0]);
    cso_set_fragment_shader_handle(p->cso, ppq->shaders[n][1]);
@@ -64,7 +65,7 @@ pp_nored_init(struct pp_queue_t *ppq, unsigned int n, unsigned int val)
    ppq->shaders[n][1] =
       pp_tgsi_to_state(ppq->p->pipe, nored, false, "nored");
 
-   return (ppq->shaders[n][1] != NULL) ? TRUE : FALSE;
+   return (ppq->shaders[n][1] != NULL) ? true : false;
 }
 
 
@@ -74,7 +75,7 @@ pp_nogreen_init(struct pp_queue_t *ppq, unsigned int n, unsigned int val)
    ppq->shaders[n][1] =
       pp_tgsi_to_state(ppq->p->pipe, nogreen, false, "nogreen");
 
-   return (ppq->shaders[n][1] != NULL) ? TRUE : FALSE;
+   return (ppq->shaders[n][1] != NULL) ? true : false;
 }
 
 
@@ -84,7 +85,7 @@ pp_noblue_init(struct pp_queue_t *ppq, unsigned int n, unsigned int val)
    ppq->shaders[n][1] =
       pp_tgsi_to_state(ppq->p->pipe, noblue, false, "noblue");
 
-   return (ppq->shaders[n][1] != NULL) ? TRUE : FALSE;
+   return (ppq->shaders[n][1] != NULL) ? true : false;
 }
 
 /* Free functions */

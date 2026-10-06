@@ -30,6 +30,13 @@ context::context(const property_list &props,
    notify(notify), props(props), devs(devs) {
 }
 
+context::~context() {
+   while (_destroy_notify.size()) {
+      _destroy_notify.top()();
+      _destroy_notify.pop();
+   }
+}
+
 bool
 context::operator==(const context &ctx) const {
    return this == &ctx;
@@ -40,6 +47,11 @@ context::operator!=(const context &ctx) const {
    return this != &ctx;
 }
 
+void
+context::destroy_notify(std::function<void ()> f) {
+   _destroy_notify.push(f);
+}
+
 const context::property_list &
 context::properties() const {
    return props;
@@ -48,4 +60,33 @@ context::properties() const {
 context::device_range
 context::devices() const {
    return map(evals(), devs);
+}
+
+void
+context::add_svm_allocation(const void *ptr, size_t size) {
+   svm_ptrs.emplace(ptr, size);
+}
+
+void
+context::remove_svm_allocation(const void *ptr) {
+   svm_ptrs.erase(ptr);
+}
+
+context::svm_pointer_map::value_type
+context::find_svm_allocation(const void *ptr) const {
+   // std::prev on an iterator of an empty container causes SIGSEGVs
+   if (svm_ptrs.empty())
+      return { nullptr, 0 };
+
+   auto it = std::prev(svm_ptrs.upper_bound(ptr));
+   if (it == svm_ptrs.end())
+      return { nullptr, 0 };
+
+   uintptr_t base = reinterpret_cast<uintptr_t>((*it).first);
+   uintptr_t end  = (*it).second + base;
+   uintptr_t ptrv = reinterpret_cast<uintptr_t>(ptr);
+   if (ptrv >= base && ptrv < end)
+      return *it;
+
+   return { nullptr, 0 };
 }

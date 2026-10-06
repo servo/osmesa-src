@@ -1,5 +1,5 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2008 VMware, Inc.
  * All Rights Reserved.
  *
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,7 +22,7 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 /**
@@ -46,7 +46,7 @@
 #include "util/u_pstipple.h"
 #include "util/u_sampler.h"
 
-#include "tgsi/tgsi_transform.h"
+#include "tgsi/tgsi_parse.h"
 
 #include "draw_context.h"
 #include "draw_pipe.h"
@@ -66,7 +66,7 @@ struct pstip_fragment_shader
    struct pipe_shader_state state;
    void *driver_fs;
    void *pstip_fs;
-   uint sampler_unit;
+   unsigned sampler_unit;
 };
 
 
@@ -80,8 +80,8 @@ struct pstip_stage
    void *sampler_cso;
    struct pipe_resource *texture;
    struct pipe_sampler_view *sampler_view;
-   uint num_samplers;
-   uint num_sampler_views;
+   unsigned num_samplers;
+   unsigned num_sampler_views;
 
    /*
     * Currently bound state
@@ -108,6 +108,8 @@ struct pstip_stage
    void (*driver_set_sampler_views)(struct pipe_context *,
                                     enum pipe_shader_type shader,
                                     unsigned start, unsigned count,
+                                    unsigned unbind_num_trailing_slots,
+                                    bool take_ownership,
                                     struct pipe_sampler_view **);
 
    void (*driver_set_polygon_stipple)(struct pipe_context *,
@@ -121,7 +123,7 @@ struct pstip_stage
  * Generate the frag shader we'll use for doing polygon stipple.
  * This will be the user's shader prefixed with a TEX and KIL instruction.
  */
-static boolean
+static bool
 generate_pstip_fs(struct pstip_stage *pstip)
 {
    struct pipe_context *pipe = pstip->pipe;
@@ -131,7 +133,7 @@ generate_pstip_fs(struct pstip_stage *pstip)
    struct pipe_shader_state pstip_fs;
    enum tgsi_file_type wincoord_file;
 
-   wincoord_file = screen->get_param(screen, PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL) ?
+   wincoord_file = screen->caps.fs_position_is_sysval ?
                    TGSI_FILE_SYSTEM_VALUE : TGSI_FILE_INPUT;
 
    pstip_fs = *orig_fs; /* copy to init */
@@ -141,13 +143,12 @@ generate_pstip_fs(struct pstip_stage *pstip)
                                                              0,
                                                              wincoord_file);
       if (pstip_fs.tokens == NULL)
-         return FALSE;
+         return false;
    } else {
-#ifdef LLVM_AVAILABLE
       pstip_fs.ir.nir = nir_shader_clone(NULL, orig_fs->ir.nir);
       nir_lower_pstipple_fs(pstip_fs.ir.nir,
-                            &pstip->fs->sampler_unit, 0, wincoord_file == TGSI_FILE_SYSTEM_VALUE);
-#endif
+                            &pstip->fs->sampler_unit, 0, wincoord_file == TGSI_FILE_SYSTEM_VALUE,
+                            nir_type_bool32);
    }
 
    assert(pstip->fs->sampler_unit < PIPE_MAX_SAMPLERS);
@@ -157,9 +158,9 @@ generate_pstip_fs(struct pstip_stage *pstip)
    FREE((void *)pstip_fs.tokens);
 
    if (!pstip->fs->pstip_fs)
-      return FALSE;
+      return false;
 
-   return TRUE;
+   return true;
 }
 
 
@@ -167,23 +168,23 @@ generate_pstip_fs(struct pstip_stage *pstip)
  * When we're about to draw our first stipple polygon in a batch, this function
  * is called to tell the driver to bind our modified fragment shader.
  */
-static boolean
+static bool
 bind_pstip_fragment_shader(struct pstip_stage *pstip)
 {
    struct draw_context *draw = pstip->stage.draw;
    if (!pstip->fs->pstip_fs &&
        !generate_pstip_fs(pstip))
-      return FALSE;
+      return false;
 
-   draw->suspend_flushing = TRUE;
+   draw->suspend_flushing = true;
    pstip->driver_bind_fs_state(pstip->pipe, pstip->fs->pstip_fs);
-   draw->suspend_flushing = FALSE;
-   return TRUE;
+   draw->suspend_flushing = false;
+   return true;
 }
 
 
 static inline struct pstip_stage *
-pstip_stage( struct draw_stage *stage )
+pstip_stage(struct draw_stage *stage)
 {
    return (struct pstip_stage *) stage;
 }
@@ -195,8 +196,8 @@ pstip_first_tri(struct draw_stage *stage, struct prim_header *header)
    struct pstip_stage *pstip = pstip_stage(stage);
    struct pipe_context *pipe = pstip->pipe;
    struct draw_context *draw = stage->draw;
-   uint num_samplers;
-   uint num_sampler_views;
+   unsigned num_samplers;
+   unsigned num_sampler_views;
 
    assert(stage->draw->rasterizer->poly_stipple_enable);
 
@@ -219,15 +220,16 @@ pstip_first_tri(struct draw_stage *stage, struct prim_header *header)
 
    assert(num_samplers <= PIPE_MAX_SAMPLERS);
 
-   draw->suspend_flushing = TRUE;
+   draw->suspend_flushing = true;
 
    pstip->driver_bind_sampler_states(pipe, PIPE_SHADER_FRAGMENT, 0,
                                      num_samplers, pstip->state.samplers);
 
    pstip->driver_set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0,
-                                   num_sampler_views, pstip->state.sampler_views);
+                                   num_sampler_views, 0, false,
+                                   pstip->state.sampler_views);
 
-   draw->suspend_flushing = FALSE;
+   draw->suspend_flushing = false;
 
    /* now really draw first triangle */
    stage->tri = draw_pipe_passthrough_tri;
@@ -243,10 +245,10 @@ pstip_flush(struct draw_stage *stage, unsigned flags)
    struct pipe_context *pipe = pstip->pipe;
 
    stage->tri = pstip_first_tri;
-   stage->next->flush( stage->next, flags );
+   stage->next->flush(stage->next, flags);
 
    /* restore original frag shader, texture, sampler state */
-   draw->suspend_flushing = TRUE;
+   draw->suspend_flushing = true;
    pstip->driver_bind_fs_state(pipe, pstip->fs ? pstip->fs->driver_fs : NULL);
 
    pstip->driver_bind_sampler_states(pipe, PIPE_SHADER_FRAGMENT, 0,
@@ -254,17 +256,17 @@ pstip_flush(struct draw_stage *stage, unsigned flags)
                                      pstip->state.samplers);
 
    pstip->driver_set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0,
-                                   pstip->num_sampler_views,
+                                   pstip->num_sampler_views, 0, false,
                                    pstip->state.sampler_views);
 
-   draw->suspend_flushing = FALSE;
+   draw->suspend_flushing = false;
 }
 
 
 static void
 pstip_reset_stipple_counter(struct draw_stage *stage)
 {
-   stage->next->reset_stipple_counter( stage->next );
+   stage->next->reset_stipple_counter(stage->next);
 }
 
 
@@ -272,9 +274,8 @@ static void
 pstip_destroy(struct draw_stage *stage)
 {
    struct pstip_stage *pstip = pstip_stage(stage);
-   uint i;
 
-   for (i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++) {
+   for (unsigned i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++) {
       pipe_sampler_view_reference(&pstip->state.sampler_views[i], NULL);
    }
 
@@ -286,8 +287,8 @@ pstip_destroy(struct draw_stage *stage)
       pipe_sampler_view_reference(&pstip->sampler_view, NULL);
    }
 
-   draw_free_temp_verts( stage );
-   FREE( stage );
+   draw_free_temp_verts(stage);
+   FREE(stage);
 }
 
 
@@ -311,14 +312,14 @@ draw_pstip_stage(struct draw_context *draw, struct pipe_context *pipe)
    pstip->stage.reset_stipple_counter = pstip_reset_stipple_counter;
    pstip->stage.destroy = pstip_destroy;
 
-   if (!draw_alloc_temp_verts( &pstip->stage, 8 ))
+   if (!draw_alloc_temp_verts(&pstip->stage, 8))
       goto fail;
 
    return pstip;
 
 fail:
    if (pstip)
-      pstip->stage.destroy( &pstip->stage );
+      pstip->stage.destroy(&pstip->stage);
 
    return NULL;
 }
@@ -396,14 +397,13 @@ pstip_bind_sampler_states(struct pipe_context *pipe,
                           unsigned start, unsigned num, void **sampler)
 {
    struct pstip_stage *pstip = pstip_stage_from_pipe(pipe);
-   uint i;
 
    assert(start == 0);
 
    if (shader == PIPE_SHADER_FRAGMENT) {
       /* save current */
       memcpy(pstip->state.samplers, sampler, num * sizeof(void *));
-      for (i = num; i < PIPE_MAX_SAMPLERS; i++) {
+      for (unsigned i = num; i < PIPE_MAX_SAMPLERS; i++) {
          pstip->state.samplers[i] = NULL;
       }
       pstip->num_samplers = num;
@@ -418,22 +418,29 @@ static void
 pstip_set_sampler_views(struct pipe_context *pipe,
                         enum pipe_shader_type shader,
                         unsigned start, unsigned num,
+                        unsigned unbind_num_trailing_slots,
+                        bool take_ownership,
                         struct pipe_sampler_view **views)
 {
    struct pstip_stage *pstip = pstip_stage_from_pipe(pipe);
-   uint i;
 
    if (shader == PIPE_SHADER_FRAGMENT) {
       /* save current */
+      unsigned i;
       for (i = 0; i < num; i++) {
          pipe_sampler_view_reference(&pstip->state.sampler_views[start + i],
                                      views[i]);
+      }
+      for (; i < num + unbind_num_trailing_slots; i++) {
+         pipe_sampler_view_reference(&pstip->state.sampler_views[start + i],
+                                     NULL);
       }
       pstip->num_sampler_views = num;
    }
 
    /* pass-through */
-   pstip->driver_set_sampler_views(pstip->pipe, shader, start, num, views);
+   pstip->driver_set_sampler_views(pstip->pipe, shader, start, num,
+                                   unbind_num_trailing_slots, take_ownership, views);
 }
 
 
@@ -459,18 +466,16 @@ pstip_set_polygon_stipple(struct pipe_context *pipe,
  * into the draw module's pipeline.  This will not be used if the
  * hardware has native support for polygon stipple.
  */
-boolean
+bool
 draw_install_pstipple_stage(struct draw_context *draw,
                             struct pipe_context *pipe)
 {
-   struct pstip_stage *pstip;
-
    pipe->draw = (void *) draw;
 
    /*
     * Create / install pgon stipple drawing / prim stage
     */
-   pstip = draw_pstip_stage( draw, pipe );
+   struct pstip_stage *pstip = draw_pstip_stage(draw, pipe);
    if (!pstip)
       goto fail;
 
@@ -508,11 +513,11 @@ draw_install_pstipple_stage(struct draw_context *draw,
    pipe->set_sampler_views = pstip_set_sampler_views;
    pipe->set_polygon_stipple = pstip_set_polygon_stipple;
 
-   return TRUE;
+   return true;
 
  fail:
    if (pstip)
-      pstip->stage.destroy( &pstip->stage );
+      pstip->stage.destroy(&pstip->stage);
 
-   return FALSE;
+   return false;
 }

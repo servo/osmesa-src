@@ -1,10 +1,16 @@
+/*
+ * Copyright 2011 Joakim Sindholt <opensource@zhasha.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef _NINE_PDATA_H_
 #define _NINE_PDATA_H_
 
+#include "util/hash_table.h"
+
 struct pheader
 {
-    boolean unknown;
+    bool unknown;
     GUID guid;
     DWORD size;
 };
@@ -29,18 +35,14 @@ ht_guid_hash( const void *key )
     return hash;
 }
 
-static enum pipe_error
-ht_guid_delete( void *key,
-                void *value,
-                void *data )
+static void
+ht_guid_delete( struct hash_entry *entry )
 {
-    struct pheader *header = value;
+    struct pheader *header = entry->data;
     void *header_data = (void *)header + sizeof(*header);
 
     if (header->unknown) { IUnknown_Release(*(IUnknown **)header_data); }
     FREE(header);
-
-    return PIPE_OK;
 }
 
 #endif /* _NINE_PDATA_H_ */

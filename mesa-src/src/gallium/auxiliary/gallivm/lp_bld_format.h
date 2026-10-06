@@ -37,7 +37,7 @@
 #include "gallivm/lp_bld.h"
 #include "gallivm/lp_bld_init.h"
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 
 struct util_format_description;
 struct lp_type;
@@ -59,7 +59,7 @@ struct lp_build_context;
  */
 struct lp_build_format_cache
 {
-   PIPE_ALIGN_VAR(16) uint32_t cache_data[LP_BUILD_FORMAT_CACHE_SIZE][4][4];
+   alignas(16) uint32_t cache_data[LP_BUILD_FORMAT_CACHE_SIZE][4][4];
    uint64_t cache_tags[LP_BUILD_FORMAT_CACHE_SIZE];
 #if LP_BUILD_FORMAT_CACHE_DEBUG
    uint64_t cache_access_total;
@@ -68,7 +68,7 @@ struct lp_build_format_cache
 };
 
 
-enum {
+enum cache_member {
    LP_BUILD_FORMAT_CACHE_MEMBER_DATA = 0,
    LP_BUILD_FORMAT_CACHE_MEMBER_TAGS,
 #if LP_BUILD_FORMAT_CACHE_DEBUG
@@ -82,6 +82,11 @@ enum {
 LLVMTypeRef
 lp_build_format_cache_type(struct gallivm_state *gallivm);
 
+LLVMTypeRef
+lp_build_format_cache_member_type(struct gallivm_state *gallivm, enum cache_member member);
+
+LLVMTypeRef
+lp_build_format_cache_elem_type(struct gallivm_state *gallivm, enum cache_member member);
 
 /*
  * AoS
@@ -101,7 +106,7 @@ LLVMValueRef
 lp_build_fetch_rgba_aos(struct gallivm_state *gallivm,
                         const struct util_format_description *format_desc,
                         struct lp_type type,
-                        boolean aligned,
+                        bool aligned,
                         LLVMValueRef base_ptr,
                         LLVMValueRef offset,
                         LLVMValueRef i,
@@ -143,7 +148,7 @@ void
 lp_build_fetch_rgba_soa(struct gallivm_state *gallivm,
                         const struct util_format_description *format_desc,
                         struct lp_type type,
-                        boolean aligned,
+                        bool aligned,
                         LLVMValueRef base_ptr,
                         LLVMValueRef offsets,
                         LLVMValueRef i,
@@ -214,7 +219,7 @@ lp_build_float_to_smallfloat(struct gallivm_state *gallivm,
                              unsigned mantissa_bits,
                              unsigned exponent_bits,
                              unsigned mantissa_start,
-                             boolean has_sign);
+                             bool has_sign);
 
 LLVMValueRef
 lp_build_smallfloat_to_float(struct gallivm_state *gallivm,
@@ -223,7 +228,7 @@ lp_build_smallfloat_to_float(struct gallivm_state *gallivm,
                              unsigned mantissa_bits,
                              unsigned exponent_bits,
                              unsigned mantissa_start,
-                             boolean has_sign);
+                             bool has_sign);
 
 LLVMValueRef
 lp_build_float_to_r11g11b10(struct gallivm_state *gallivm,

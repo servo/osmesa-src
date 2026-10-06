@@ -43,7 +43,7 @@ static bool debug = false;
  * for usage on an unlinked instruction stream.
  */
 bool
-do_dead_code(exec_list *instructions, bool uniform_locations_assigned)
+do_dead_code(exec_list *instructions)
 {
    ir_variable_refcount_visitor v;
    bool progress = false;
@@ -73,20 +73,6 @@ do_dead_code(exec_list *instructions, bool uniform_locations_assigned)
       if ((entry->referenced_count > entry->assigned_count)
 	  || !entry->declaration)
 	 continue;
-
-      /* Section 7.4.1 (Shader Interface Matching) of the OpenGL 4.5
-       * (Core Profile) spec says:
-       *
-       *    "With separable program objects, interfaces between shader
-       *    stages may involve the outputs from one program object and the
-       *    inputs from a second program object.  For such interfaces, it is
-       *    not possible to detect mismatches at link time, because the
-       *    programs are linked separately. When each such program is
-       *    linked, all inputs or outputs interfacing with another program
-       *    stage are treated as active."
-       */
-      if (entry->var->data.always_active_io)
-         continue;
 
       if (!entry->assign_list.is_empty()) {
 	 /* Remove all the dead assignments to the variable we found.
@@ -122,12 +108,11 @@ do_dead_code(exec_list *instructions, bool uniform_locations_assigned)
 	  */
 
 	 /* uniform initializers are precious, and could get used by another
-	  * stage.  Also, once uniform locations have been assigned, the
-	  * declaration cannot be deleted.
+	  * stage.
 	  */
          if (entry->var->data.mode == ir_var_uniform ||
              entry->var->data.mode == ir_var_shader_storage) {
-            if (uniform_locations_assigned || entry->var->constant_initializer)
+            if (entry->var->constant_initializer)
                continue;
 
             /* Section 2.11.6 (Uniform Variables) of the OpenGL ES 3.0.3 spec
@@ -155,7 +140,7 @@ do_dead_code(exec_list *instructions, bool uniform_locations_assigned)
                }
             }
 
-            if (entry->var->type->is_subroutine())
+            if (glsl_type_is_subroutine(entry->var->type))
                continue;
          }
 
@@ -188,12 +173,7 @@ do_dead_code_unlinked(exec_list *instructions)
       ir_function *f = ir->as_function();
       if (f) {
 	 foreach_in_list(ir_function_signature, sig, &f->signatures) {
-	    /* The setting of the uniform_locations_assigned flag here is
-	     * irrelevent.  If there is a uniform declaration encountered
-	     * inside the body of the function, something has already gone
-	     * terribly, terribly wrong.
-	     */
-	    if (do_dead_code(&sig->body, false))
+	    if (do_dead_code(&sig->body))
 	       progress = true;
 	 }
       }

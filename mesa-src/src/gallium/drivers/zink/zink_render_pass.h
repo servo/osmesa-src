@@ -24,52 +24,41 @@
 #ifndef ZINK_RENDERPASS_H
 #define ZINK_RENDERPASS_H
 
-#include <vulkan/vulkan.h>
-
-#include "pipe/p_state.h"
-#include "util/u_inlines.h"
-
-struct zink_screen;
-
-struct zink_rt_attrib {
-  VkFormat format;
-  VkSampleCountFlagBits samples;
-};
-
-struct zink_render_pass_state {
-   uint8_t num_cbufs : 4; /* PIPE_MAX_COLOR_BUFS = 8 */
-   uint8_t have_zsbuf : 1;
-   struct zink_rt_attrib rts[PIPE_MAX_COLOR_BUFS + 1];
-};
-
-struct zink_render_pass {
-   struct pipe_reference reference;
-
-   VkRenderPass render_pass;
-};
+#include "zink_types.h"
 
 struct zink_render_pass *
 zink_create_render_pass(struct zink_screen *screen,
-                        struct zink_render_pass_state *state);
+                        struct zink_render_pass_state *state,
+                        struct zink_render_pass_pipeline_state *pstate);
 
 void
 zink_destroy_render_pass(struct zink_screen *screen,
                          struct zink_render_pass *rp);
 
+
+unsigned
+zink_begin_render_pass(struct zink_context *ctx);
 void
-debug_describe_zink_render_pass(char* buf, const struct zink_render_pass *ptr);
+zink_end_render_pass(struct zink_context *ctx);
 
-static inline void
-zink_render_pass_reference(struct zink_screen *screen,
-                           struct zink_render_pass **dst,
-                           struct zink_render_pass *src)
-{
-   struct zink_render_pass *old_dst = *dst;
-
-   if (pipe_reference_described(&old_dst->reference, &src->reference,
-                                (debug_reference_descriptor)debug_describe_zink_render_pass))
-      zink_destroy_render_pass(screen, old_dst);
-   *dst = src;
-}
-
+VkImageLayout
+zink_render_pass_attachment_get_barrier_info(const struct zink_rt_attrib *rt, bool color, VkPipelineStageFlags *pipeline, VkAccessFlags *access);
+VkImageLayout
+zink_tc_renderpass_info_parse(struct zink_context *ctx, const struct tc_renderpass_info *info, unsigned idx, VkPipelineStageFlags *pipeline, VkAccessFlags *access);
+bool
+zink_init_render_pass(struct zink_context *ctx);
+bool
+zink_render_update_swapchain(struct zink_context *ctx);
+void
+zink_render_fixup_swapchain(struct zink_context *ctx);
+void
+zink_init_zs_attachment(struct zink_context *ctx, struct zink_rt_attrib *rt);
+void
+zink_init_color_attachment(struct zink_context *ctx, unsigned i, struct zink_rt_attrib *rt);
+void
+zink_tc_init_zs_attachment(struct zink_context *ctx, const struct tc_renderpass_info *info, struct zink_rt_attrib *rt);
+void
+zink_tc_init_color_attachment(struct zink_context *ctx, const struct tc_renderpass_info *info, unsigned i, struct zink_rt_attrib *rt);
+void
+zink_render_msaa_expand(struct zink_context *ctx, uint32_t msaa_expand_mask);
 #endif

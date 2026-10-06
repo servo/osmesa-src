@@ -26,114 +26,74 @@
 
 #include <sys/stat.h>
 
-#include "util/u_hash_table.h"
-#include "util/u_memory.h"
-#include "util/u_pointer.h"
+#include "util/u_screen.h"
 
 #include "etnaviv/etnaviv_screen.h"
-#include "etnaviv/hw/common.xml.h"
 #include "etnaviv_drm_public.h"
 
 #include <stdio.h>
 
+
 static struct pipe_screen *
-screen_create(struct renderonly *ro)
+screen_create(int gpu_fd, const struct pipe_screen_config *config, struct renderonly *ro)
 {
    struct etna_device *dev;
-   struct etna_gpu *gpu;
-   uint64_t val;
+   struct etna_gpu *gpu = NULL;
+   struct etna_gpu *npu = NULL;
    int i;
 
-   dev = etna_device_new_dup(ro->gpu_fd);
+   dev = etna_device_new_dup(gpu_fd);
    if (!dev) {
       fprintf(stderr, "Error creating device\n");
       return NULL;
    }
 
-   for (i = 0;; i++) {
-      gpu = etna_gpu_new(dev, i);
-      if (!gpu) {
-         fprintf(stderr, "Error creating gpu\n");
-         return NULL;
-      }
+   for (i = 0; !gpu || !npu; i++) {
+      struct etna_core_info *info;
+      struct etna_gpu *core = etna_gpu_new(dev, i);
 
-      /* Look for a 3D capable GPU */
-      int ret = etna_gpu_get_param(gpu, ETNA_GPU_FEATURES_0, &val);
-      if (ret == 0 && (val & chipFeatures_PIPE_3D))
+      if (!core)
          break;
 
-      etna_gpu_del(gpu);
+      info = etna_gpu_get_core_info(core);
+      switch (info->type) {
+      case ETNA_CORE_GPU:
+         /* Look for a 3D capable GPU */
+         if (!gpu && etna_core_has_feature(info, ETNA_FEATURE_PIPE_3D)) {
+            gpu = core;
+            continue;
+         }
+         break;
+      case ETNA_CORE_NPU:
+         if (!npu) {
+            npu = core;
+            continue;
+         }
+         break;
+      default:
+         unreachable("invalid core type");
+      }
+
+      etna_gpu_del(core);
    }
 
-   return etna_screen_create(dev, gpu, ro);
-}
-
-static struct hash_table *etna_tab = NULL;
-
-static mtx_t etna_screen_mutex = _MTX_INITIALIZER_NP;
-
-static void
-etna_drm_screen_destroy(struct pipe_screen *pscreen)
-{
-   struct etna_screen *screen = etna_screen(pscreen);
-   boolean destroy;
-
-   mtx_lock(&etna_screen_mutex);
-   destroy = --screen->refcnt == 0;
-   if (destroy) {
-      int fd = etna_device_fd(screen->dev);
-      _mesa_hash_table_remove_key(etna_tab, intptr_to_pointer(fd));
+   if (!gpu && !npu) {
+      fprintf(stderr, "Error creating gpu or npu\n");
+      return NULL;
    }
-   mtx_unlock(&etna_screen_mutex);
 
-   if (destroy) {
-      pscreen->destroy = screen->winsys_priv;
-      pscreen->destroy(pscreen);
-   }
+   return etna_screen_create(dev, gpu, npu, ro);
 }
 
 struct pipe_screen *
-etna_drm_screen_create_renderonly(struct renderonly *ro)
+etna_drm_screen_create_renderonly(int fd, struct renderonly *ro,
+                                  const struct pipe_screen_config *config)
 {
-   struct pipe_screen *pscreen = NULL;
-
-   mtx_lock(&etna_screen_mutex);
-   if (!etna_tab) {
-      etna_tab = util_hash_table_create_fd_keys();
-      if (!etna_tab)
-         goto unlock;
-   }
-
-   pscreen = util_hash_table_get(etna_tab, intptr_to_pointer(ro->gpu_fd));
-   if (pscreen) {
-      etna_screen(pscreen)->refcnt++;
-   } else {
-      pscreen = screen_create(ro);
-      if (pscreen) {
-         int fd = etna_device_fd(etna_screen(pscreen)->dev);
-         _mesa_hash_table_insert(etna_tab, intptr_to_pointer(fd), pscreen);
-
-         /* Bit of a hack, to avoid circular linkage dependency,
-         * ie. pipe driver having to call in to winsys, we
-         * override the pipe drivers screen->destroy() */
-         etna_screen(pscreen)->winsys_priv = pscreen->destroy;
-      pscreen->destroy = etna_drm_screen_destroy;
-      }
-   }
-
-unlock:
-   mtx_unlock(&etna_screen_mutex);
-   return pscreen;
+   return u_pipe_screen_lookup_or_create(fd, config, ro, screen_create);
 }
 
 struct pipe_screen *
 etna_drm_screen_create(int fd)
 {
-   struct renderonly ro = {
-      .create_for_resource = renderonly_create_gpu_import_for_resource,
-      .kms_fd = -1,
-      .gpu_fd = fd
-   };
-
-   return etna_drm_screen_create_renderonly(&ro);
+   return u_pipe_screen_lookup_or_create(fd, NULL, NULL, screen_create);
 }

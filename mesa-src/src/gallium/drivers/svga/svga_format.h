@@ -1,35 +1,16 @@
-/**********************************************************
- * Copyright 2011 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2011-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef SVGA_FORMAT_H_
 #define SVGA_FORMAT_H_
 
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "svga_context.h"
-#include "svga_types.h"
 #include "svga_reg.h"
 #include "svga3d_reg.h"
 
@@ -60,6 +41,8 @@ struct svga_screen;
 #define TF_XXXX             (1 << 10) /* swizzle <X, X, X, X> */
 #define TF_XXX1             (1 << 11) /* swizzle <X, X, X, 1> */
 #define TF_XXXY             (1 << 12) /* swizzle <X, X, X, Y> */
+#define TF_UAV              (1 << 13) /* supports uav */
+#define TF_SM5              (1 << 14) /* supported in SM5 */
 
 void
 svga_translate_vertex_format_vgpu10(enum pipe_format format,
@@ -90,10 +73,10 @@ svga_format_size(SVGA3dSurfaceFormat format,
 const char *
 svga_format_name(SVGA3dSurfaceFormat format);
 
-boolean
+bool
 svga_format_is_integer(SVGA3dSurfaceFormat format);
 
-boolean
+bool
 svga_format_support_gen_mips(enum pipe_format format);
 
 enum tgsi_return_type
@@ -101,7 +84,7 @@ svga_get_texture_datatype(enum pipe_format format);
 
 
 // XXX: Move this to svga_context?
-boolean
+bool
 svga_has_any_integer_cbufs(const struct svga_context *svga);
 
 

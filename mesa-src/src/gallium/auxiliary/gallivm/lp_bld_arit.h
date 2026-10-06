@@ -38,7 +38,7 @@
 
 
 #include "gallivm/lp_bld.h"
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 
 struct lp_type;
@@ -173,8 +173,6 @@ lp_build_lerp_3d(struct lp_build_context *bld,
 enum gallivm_nan_behavior {
    /* Results are undefined with NaN. Results in fastest code */
    GALLIVM_NAN_BEHAVIOR_UNDEFINED,
-   /* If one of the inputs is NaN, NaN is returned */
-   GALLIVM_NAN_RETURN_NAN,
    /* If one of the inputs is NaN, the other operand is returned */
    GALLIVM_NAN_RETURN_OTHER,
    /* If one of the inputs is NaN, the other operand is returned,
@@ -305,7 +303,7 @@ LLVMValueRef
 lp_build_rsqrt(struct lp_build_context *bld,
                LLVMValueRef a);
 
-boolean
+bool
 lp_build_fast_rsqrt_available(struct lp_type type);
 
 LLVMValueRef
@@ -378,7 +376,7 @@ lp_build_log2_approx(struct lp_build_context *bld,
                      LLVMValueRef *p_exp,
                      LLVMValueRef *p_floor_log2,
                      LLVMValueRef *p_log2,
-                     boolean handle_nans);
+                     bool handle_nans);
 
 LLVMValueRef
 lp_build_mod(struct lp_build_context *bld,
@@ -405,7 +403,7 @@ lp_build_fpstate_get(struct gallivm_state *gallivm);
 
 void
 lp_build_fpstate_set_denorms_zero(struct gallivm_state *gallivm,
-                                  boolean zero);
+                                  bool zero);
 void
 lp_build_fpstate_set(struct gallivm_state *gallivm,
                      LLVMValueRef mxcsr);

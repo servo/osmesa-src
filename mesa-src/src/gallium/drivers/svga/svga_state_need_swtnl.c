@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "util/u_inlines.h"
 #include "pipe/p_state.h"
@@ -60,7 +42,7 @@ struct svga_tracked_state svga_update_need_swvfetch =
 static enum pipe_error
 update_need_pipeline(struct svga_context *svga, uint64_t dirty)
 {
-   boolean need_pipeline = FALSE;
+   bool need_pipeline = false;
    struct svga_vertex_shader *vs = svga->curr.vs;
    const char *reason = "";
 
@@ -69,24 +51,24 @@ update_need_pipeline(struct svga_context *svga, uint64_t dirty)
    if (svga->curr.rast &&
        (svga->curr.rast->need_pipeline & (1 << svga->curr.reduced_prim))) {
       SVGA_DBG(DEBUG_SWTNL, "%s: rast need_pipeline (0x%x) & prim (0x%x)\n",
-                 __FUNCTION__,
+                 __func__,
                  svga->curr.rast->need_pipeline,
                  (1 << svga->curr.reduced_prim) );
       SVGA_DBG(DEBUG_SWTNL, "%s: rast need_pipeline tris (%s), lines (%s), points (%s)\n",
-                 __FUNCTION__,
+                 __func__,
                  svga->curr.rast->need_pipeline_tris_str,
                  svga->curr.rast->need_pipeline_lines_str,
                  svga->curr.rast->need_pipeline_points_str);
-      need_pipeline = TRUE;
+      need_pipeline = true;
 
       switch (svga->curr.reduced_prim) {
-      case PIPE_PRIM_POINTS:
+      case MESA_PRIM_POINTS:
          reason = svga->curr.rast->need_pipeline_points_str;
          break;
-      case PIPE_PRIM_LINES:
+      case MESA_PRIM_LINES:
          reason = svga->curr.rast->need_pipeline_lines_str;
          break;
-      case PIPE_PRIM_TRIANGLES:
+      case MESA_PRIM_TRIANGLES:
          reason = svga->curr.rast->need_pipeline_tris_str;
          break;
       default:
@@ -97,14 +79,14 @@ update_need_pipeline(struct svga_context *svga, uint64_t dirty)
    /* EDGEFLAGS
     */
     if (vs && vs->base.info.writes_edgeflag) {
-      SVGA_DBG(DEBUG_SWTNL, "%s: edgeflags\n", __FUNCTION__);
-      need_pipeline = TRUE;
+      SVGA_DBG(DEBUG_SWTNL, "%s: edgeflags\n", __func__);
+      need_pipeline = true;
       reason = "edge flags";
    }
 
    /* SVGA_NEW_FS, SVGA_NEW_RAST, SVGA_NEW_REDUCED_PRIMITIVE
     */
-   if (svga->curr.rast && svga->curr.reduced_prim == PIPE_PRIM_POINTS) {
+   if (svga->curr.rast && svga->curr.reduced_prim == MESA_PRIM_POINTS) {
       unsigned sprite_coord_gen = svga->curr.rast->templ.sprite_coord_enable;
       unsigned generic_inputs =
          svga->curr.fs ? svga->curr.fs->generic_inputs : 0;
@@ -120,7 +102,7 @@ update_need_pipeline(struct svga_context *svga, uint64_t dirty)
           * To solve this, we have to use the draw-module's wide/sprite
           * point stage.
           */
-         need_pipeline = TRUE;
+         need_pipeline = true;
          reason = "point sprite coordinate generation";
       }
    }
@@ -130,13 +112,13 @@ update_need_pipeline(struct svga_context *svga, uint64_t dirty)
       svga->dirty |= SVGA_NEW_NEED_PIPELINE;
    }
 
-   /* DEBUG */
+   /* debug */
    if (0 && svga->state.sw.need_pipeline)
       debug_printf("sw.need_pipeline = %d\n", svga->state.sw.need_pipeline);
 
    if (svga->state.sw.need_pipeline) {
       assert(reason);
-      pipe_debug_message(&svga->debug.callback, FALLBACK,
+      util_debug_message(&svga->debug.callback, FALLBACK,
                          "Using semi-fallback for %s", reason);
    }
 
@@ -158,18 +140,18 @@ struct svga_tracked_state svga_update_need_pipeline =
 static enum pipe_error
 update_need_swtnl(struct svga_context *svga, uint64_t dirty)
 {
-   boolean need_swtnl;
+   bool need_swtnl;
 
    if (svga->debug.no_swtnl) {
-      svga->state.sw.need_swvfetch = FALSE;
-      svga->state.sw.need_pipeline = FALSE;
+      svga->state.sw.need_swvfetch = false;
+      svga->state.sw.need_pipeline = false;
    }
 
    need_swtnl = (svga->state.sw.need_swvfetch ||
                  svga->state.sw.need_pipeline);
 
    if (svga->debug.force_swtnl) {
-      need_swtnl = TRUE;
+      need_swtnl = true;
    }
 
    /*
@@ -178,18 +160,18 @@ update_need_swtnl(struct svga_context *svga, uint64_t dirty)
     * the wrong buffers and vertex formats. Try trivial/line-wide.
     */
    if (svga->state.sw.in_swtnl_draw)
-      need_swtnl = TRUE;
+      need_swtnl = true;
 
    if (need_swtnl != svga->state.sw.need_swtnl) {
       SVGA_DBG(DEBUG_SWTNL|DEBUG_PERF,
                "%s: need_swvfetch %s, need_pipeline %s\n",
-               __FUNCTION__,
+               __func__,
                svga->state.sw.need_swvfetch ? "true" : "false",
                svga->state.sw.need_pipeline ? "true" : "false");
 
       svga->state.sw.need_swtnl = need_swtnl;
       svga->dirty |= SVGA_NEW_NEED_SWTNL;
-      svga->swtnl.new_vdecl = TRUE;
+      svga->swtnl.new_vdecl = true;
    }
 
    return PIPE_OK;

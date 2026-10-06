@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright (C) 2010 LunarG Inc.
 # (C) Copyright 2015, NVIDIA CORPORATION.
@@ -57,7 +57,6 @@ def _main():
 
 #ifndef _GLAPI_TMP_H_
 #define _GLAPI_TMP_H_
-typedef int GLclampx;
 #endif /* _GLAPI_TMP_H_ */
 """.lstrip("\n"))
 
@@ -75,13 +74,11 @@ typedef int GLclampx;
 def generate_defines(functions):
     text = r"""
 #ifdef MAPI_TMP_DEFINES
-#define GL_GLEXT_PROTOTYPES
-#include "GL/gl.h"
-#include "GL/glext.h"
+#include "util/glheader.h"
 
 """.lstrip("\n")
     for func in functions:
-        text += "GLAPI {f.rt} APIENTRY {f.name}({f.decArgs});\n".format(f=func)
+        text += "GLAPI {f.rt} GLAPIENTRY {f.name}({f.decArgs});\n".format(f=func)
     text += "#undef MAPI_TMP_DEFINES\n"
     text += "#endif /* MAPI_TMP_DEFINES */\n"
     return text
@@ -96,10 +93,10 @@ def generate_table(functions, allFunctions):
 
 def generate_noop_array(functions):
     text = "#ifdef MAPI_TMP_NOOP_ARRAY\n"
-    text += "#ifdef DEBUG\n\n"
+    text += "#if MESA_DEBUG\n\n"
 
     for func in functions:
-        text += "static {f.rt} APIENTRY noop{f.basename}({f.decArgs})\n".format(f=func)
+        text += "static {f.rt} GLAPIENTRY noop{f.basename}({f.decArgs})\n".format(f=func)
         text += "{\n"
         if (len(func.args) > 0):
             text += "  "
@@ -118,14 +115,14 @@ def generate_noop_array(functions):
         text += "   (mapi_func) noop_generic,\n"
     text += "   (mapi_func) noop_generic\n"
     text += "};\n\n"
-    text += "#else /* DEBUG */\n\n"
+    text += "#else /* !MESA_DEBUG */\n\n"
     text += "const mapi_func table_noop_array[] = {\n"
     for i in range(len(functions) + genCommon.MAPI_TABLE_NUM_DYNAMIC - 1):
         text += "   (mapi_func) noop_generic,\n"
     text += "   (mapi_func) noop_generic\n"
 
     text += "};\n\n"
-    text += "#endif /* DEBUG */\n"
+    text += "#endif /* MESA_DEBUG */\n"
     text += "#undef MAPI_TMP_NOOP_ARRAY\n"
     text += "#endif /* MAPI_TMP_NOOP_ARRAY */\n"
     return text
@@ -147,11 +144,11 @@ def generate_public_entries(functions):
     for func in functions:
         retStr = ("return " if func.hasReturn() else "")
         text += r"""
-GLAPI {f.rt} APIENTRY {f.name}({f.decArgs})
+GLAPI {f.rt} GLAPIENTRY {f.name}({f.decArgs})
 {{
    const struct _glapi_table *_tbl = entry_current_get();
    mapi_func _func = ((const mapi_func *) _tbl)[{f.slot}];
-   {retStr}(({f.rt} (APIENTRY *)({f.decArgs})) _func)({f.callArgs});
+   {retStr}(({f.rt} (GLAPIENTRY *)({f.decArgs})) _func)({f.callArgs});
 }}
 
 """.lstrip("\n").format(f=func, retStr=retStr)

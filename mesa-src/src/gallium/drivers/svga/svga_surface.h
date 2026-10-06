@@ -1,33 +1,15 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef SVGA_SURFACE_H
 #define SVGA_SURFACE_H
 
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_state.h"
 #include "util/u_inlines.h"
 #include "svga_screen_cache.h"
@@ -57,7 +39,7 @@ struct svga_surface
    unsigned real_level;
    unsigned real_zslice;
 
-   boolean dirty;
+   bool dirty;
 
    /* VGPU10 */
    SVGA3dRenderTargetViewId view_id;
@@ -83,12 +65,12 @@ svga_mark_surfaces_dirty(struct svga_context *svga);
 
 extern void
 svga_propagate_surface(struct svga_context *svga, struct pipe_surface *surf,
-                       boolean reset);
+                       bool reset);
 
 void
 svga_propagate_rendertargets(struct svga_context *svga);
 
-extern boolean
+extern bool
 svga_surface_needs_propagation(const struct pipe_surface *surf);
 
 struct svga_winsys_surface *
@@ -102,7 +84,7 @@ svga_texture_view_surface(struct svga_context *svga,
                           int layer_pick,
                           unsigned num_layers,
                           int zslice_pick,
-                          boolean cacheable,
+                          bool cacheable,
                           struct svga_host_surface_cache_key *key); /* OUT */
 
 void
@@ -141,6 +123,10 @@ svga_surface_const(const struct pipe_surface *surface)
 
 struct pipe_surface *
 svga_validate_surface_view(struct svga_context *svga, struct svga_surface *s);
+
+void
+svga_propagate_surface(struct svga_context *svga, struct pipe_surface *surf,
+                       bool reset);
 
 static inline SVGA3dResourceType
 svga_resource_type(enum pipe_texture_target target)

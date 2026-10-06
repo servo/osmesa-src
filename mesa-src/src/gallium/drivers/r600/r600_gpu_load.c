@@ -1,27 +1,7 @@
 /*
  * Copyright 2015 Advanced Micro Devices, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
  * Authors: Marek Olšák <maraeo@gmail.com>
- *
+ * SPDX-License-Identifier: MIT
  */
 
 /* The GPU load is measured as follows.
@@ -144,24 +124,27 @@ r600_gpu_load_thread(void *param)
 
 void r600_gpu_load_kill_thread(struct r600_common_screen *rscreen)
 {
-	if (!rscreen->gpu_load_thread)
+	if (!rscreen->gpu_load_thread_created)
 		return;
 
 	p_atomic_inc(&rscreen->gpu_load_stop_thread);
 	thrd_join(rscreen->gpu_load_thread, NULL);
-	rscreen->gpu_load_thread = 0;
+	rscreen->gpu_load_thread_created = false;
 }
 
 static uint64_t r600_read_mmio_counter(struct r600_common_screen *rscreen,
 				       unsigned busy_index)
 {
 	/* Start the thread if needed. */
-	if (!rscreen->gpu_load_thread) {
+	if (!rscreen->gpu_load_thread_created) {
 		mtx_lock(&rscreen->gpu_load_mutex);
 		/* Check again inside the mutex. */
-		if (!rscreen->gpu_load_thread)
-			rscreen->gpu_load_thread =
-				u_thread_create(r600_gpu_load_thread, rscreen);
+		if (!rscreen->gpu_load_thread_created) {
+			int ret = u_thread_create(&rscreen->gpu_load_thread, r600_gpu_load_thread, rscreen);
+			if (ret == thrd_success) {
+				rscreen->gpu_load_thread_created = true;
+			}
+		}
 		mtx_unlock(&rscreen->gpu_load_mutex);
 	}
 

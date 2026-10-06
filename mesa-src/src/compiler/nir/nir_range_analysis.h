@@ -23,7 +23,9 @@
 #ifndef _NIR_RANGE_ANALYSIS_H_
 #define _NIR_RANGE_ANALYSIS_H_
 
-enum PACKED ssa_ranges {
+#include "nir.h"
+
+enum ENUM_PACKED ssa_ranges {
    unknown = 0,
    lt_zero,
    le_zero,
@@ -39,10 +41,25 @@ struct ssa_result_range {
 
    /** A floating-point value that can only have integer values. */
    bool is_integral;
+
+   /** A floating-point value that cannot be NaN. */
+   bool is_a_number;
+
+   /** Is the value known to be a finite number? */
+   bool is_finite;
 };
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 extern struct ssa_result_range
 nir_analyze_range(struct hash_table *range_ht,
                   const nir_alu_instr *instr, unsigned src);
 
+uint64_t nir_def_bits_used(const nir_def *def);
+
+#ifdef __cplusplus
+}
+#endif
 #endif /* _NIR_RANGE_ANALYSIS_H_ */

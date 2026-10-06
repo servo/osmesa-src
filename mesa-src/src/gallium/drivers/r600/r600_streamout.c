@@ -1,27 +1,7 @@
 /*
  * Copyright 2013 Advanced Micro Devices, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
  * Authors: Marek Olšák <maraeo@gmail.com>
- *
+ * SPDX-License-Identifier: MIT
  */
 
 #include "r600_pipe_common.h"
@@ -51,7 +31,7 @@ r600_create_so_target(struct pipe_context *ctx,
 		return NULL;
 	}
 
-	u_suballocator_alloc(rctx->allocator_zeroed_memory, 4, 4,
+	u_suballocator_alloc(&rctx->allocator_zeroed_memory, 4, 4,
 			     &t->buf_filled_size_offset,
 			     (struct pipe_resource**)&t->buf_filled_size);
 	if (!t->buf_filled_size) {
@@ -113,7 +93,8 @@ void r600_streamout_buffers_dirty(struct r600_common_context *rctx)
 void r600_set_streamout_targets(struct pipe_context *ctx,
 				unsigned num_targets,
 				struct pipe_stream_output_target **targets,
-				const unsigned *offsets)
+				const unsigned *offsets,
+                                enum mesa_prim output_prim)
 {
 	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
 	unsigned i;
@@ -154,11 +135,11 @@ void r600_set_streamout_targets(struct pipe_context *ctx,
 
 static void r600_flush_vgt_streamout(struct r600_common_context *rctx)
 {
-	struct radeon_cmdbuf *cs = rctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &rctx->gfx.cs;
 	unsigned reg_strmout_cntl;
 
 	/* The register is at different places on different ASICs. */
-	if (rctx->chip_class >= EVERGREEN) {
+	if (rctx->gfx_level >= EVERGREEN) {
 		reg_strmout_cntl = R_0084FC_CP_STRMOUT_CNTL;
 	} else {
 		reg_strmout_cntl = R_008490_CP_STRMOUT_CNTL;
@@ -180,7 +161,7 @@ static void r600_flush_vgt_streamout(struct r600_common_context *rctx)
 
 static void r600_emit_streamout_begin(struct r600_common_context *rctx, struct r600_atom *atom)
 {
-	struct radeon_cmdbuf *cs = rctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &rctx->gfx.cs;
 	struct r600_so_target **t = rctx->streamout.targets;
 	uint16_t *stride_in_dw = rctx->streamout.stride_in_dw;
 	unsigned i, update_flags = 0;
@@ -204,7 +185,7 @@ static void r600_emit_streamout_begin(struct r600_common_context *rctx, struct r
 		radeon_emit(cs, va >> 8);			/* BUFFER_BASE */
 
 		r600_emit_reloc(rctx, &rctx->gfx, r600_resource(t[i]->b.buffer),
-				RADEON_USAGE_WRITE, RADEON_PRIO_SHADER_RW_BUFFER);
+				RADEON_USAGE_WRITE | RADEON_PRIO_SHADER_RW_BUFFER);
 
 		/* R7xx requires this packet after updating BUFFER_BASE.
 		 * Without this, R7xx locks up. */
@@ -214,7 +195,7 @@ static void r600_emit_streamout_begin(struct r600_common_context *rctx, struct r
 			radeon_emit(cs, va >> 8);
 
 			r600_emit_reloc(rctx, &rctx->gfx, r600_resource(t[i]->b.buffer),
-					RADEON_USAGE_WRITE, RADEON_PRIO_SHADER_RW_BUFFER);
+					RADEON_USAGE_WRITE | RADEON_PRIO_SHADER_RW_BUFFER);
 		}
 
 		if (rctx->streamout.append_bitmask & (1 << i) && t[i]->buf_filled_size_valid) {
@@ -231,7 +212,7 @@ static void r600_emit_streamout_begin(struct r600_common_context *rctx, struct r
 			radeon_emit(cs, va >> 32); /* src address hi */
 
 			r600_emit_reloc(rctx,  &rctx->gfx, t[i]->buf_filled_size,
-					RADEON_USAGE_READ, RADEON_PRIO_SO_FILLED_SIZE);
+					RADEON_USAGE_READ | RADEON_PRIO_SO_FILLED_SIZE);
 		} else {
 			/* Start from the beginning. */
 			radeon_emit(cs, PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0));
@@ -253,7 +234,7 @@ static void r600_emit_streamout_begin(struct r600_common_context *rctx, struct r
 
 void r600_emit_streamout_end(struct r600_common_context *rctx)
 {
-	struct radeon_cmdbuf *cs = rctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &rctx->gfx.cs;
 	struct r600_so_target **t = rctx->streamout.targets;
 	unsigned i;
 	uint64_t va;
@@ -275,7 +256,7 @@ void r600_emit_streamout_end(struct r600_common_context *rctx)
 		radeon_emit(cs, 0); /* unused */
 
 		r600_emit_reloc(rctx,  &rctx->gfx, t[i]->buf_filled_size,
-				RADEON_USAGE_WRITE, RADEON_PRIO_SO_FILLED_SIZE);
+				RADEON_USAGE_WRITE | RADEON_PRIO_SO_FILLED_SIZE);
 
 		/* Zero the buffer size. The counters (primitives generated,
 		 * primitives emitted) may be enabled even if there is not
@@ -306,7 +287,7 @@ static void r600_emit_streamout_enable(struct r600_common_context *rctx,
 	unsigned strmout_buffer_val = rctx->streamout.hw_enabled_mask &
 				      rctx->streamout.enabled_stream_buffers_mask;
 
-	if (rctx->chip_class >= EVERGREEN) {
+	if (rctx->gfx_level >= EVERGREEN) {
 		strmout_buffer_reg = R_028B98_VGT_STRMOUT_BUFFER_CONFIG;
 
 		strmout_config_reg = R_028B94_VGT_STRMOUT_CONFIG;
@@ -315,8 +296,8 @@ static void r600_emit_streamout_enable(struct r600_common_context *rctx,
 			S_028B94_STREAMOUT_2_EN(r600_get_strmout_en(rctx)) |
 			S_028B94_STREAMOUT_3_EN(r600_get_strmout_en(rctx));
 	}
-	radeon_set_context_reg(rctx->gfx.cs, strmout_buffer_reg, strmout_buffer_val);
-	radeon_set_context_reg(rctx->gfx.cs, strmout_config_reg, strmout_config_val);
+	radeon_set_context_reg(&rctx->gfx.cs, strmout_buffer_reg, strmout_buffer_val);
+	radeon_set_context_reg(&rctx->gfx.cs, strmout_config_reg, strmout_config_val);
 }
 
 static void r600_set_streamout_enable(struct r600_common_context *rctx, bool enable)

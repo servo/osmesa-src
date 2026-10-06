@@ -7,12 +7,12 @@ specific ideas and areas where help would be appreciated:
 #. **Driver patching and testing.** Patches are often posted to the
    `mesa-dev mailing
    list <https://lists.freedesktop.org/mailman/listinfo/mesa-dev>`__,
-   but aren't immediately checked into git because not enough people are
+   but aren't immediately checked into Git because not enough people are
    testing them. Just applying patches, testing and reporting back is
    helpful.
 #. **Driver debugging.** There are plenty of open bugs in the `bug
    database <https://gitlab.freedesktop.org/mesa/mesa/-/issues>`__.
-#. **Remove aliasing warnings.** Enable gcc's
+#. **Remove aliasing warnings.** Enable GCC's
    ``-Wstrict-aliasing=2 -fstrict-aliasing`` arguments, and track down
    aliasing issues in the code.
 #. **Contribute more tests to**
@@ -22,7 +22,7 @@ You can find some further To-do lists here:
 
 **Common To-Do lists:**
 
--  `features.txt <https://gitlab.freedesktop.org/mesa/mesa/-/blob/master/docs/features.txt>`__
+-  `features.txt <https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/features.txt>`__
    - Status of OpenGL 3.x / 4.x features in Mesa.
 
 **Legacy Driver specific To-Do lists:**

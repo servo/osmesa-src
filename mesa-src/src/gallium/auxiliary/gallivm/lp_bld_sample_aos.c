@@ -82,7 +82,7 @@ lp_build_sample_wrap_nearest_int(struct lp_build_sample_context *bld,
                                  LLVMValueRef length,
                                  LLVMValueRef stride,
                                  LLVMValueRef offset,
-                                 boolean is_pot,
+                                 bool is_pot,
                                  unsigned wrap_mode,
                                  LLVMValueRef *out_offset,
                                  LLVMValueRef *out_i)
@@ -219,7 +219,7 @@ lp_build_sample_wrap_linear_int(struct lp_build_sample_context *bld,
                                 LLVMValueRef length,
                                 LLVMValueRef stride,
                                 LLVMValueRef offset,
-                                boolean is_pot,
+                                bool is_pot,
                                 unsigned wrap_mode,
                                 LLVMValueRef *offset0,
                                 LLVMValueRef *offset1,
@@ -409,8 +409,8 @@ lp_build_sample_fetch_image_nearest(struct lp_build_sample_context *bld,
                               bld->texel_type.length,
                               bld->format_desc->block.bits,
                               fetch_type,
-                              TRUE,
-                              data_ptr, offset, TRUE);
+                              true,
+                              data_ptr, offset, true);
 
       rgba8 = LLVMBuildBitCast(builder, rgba8, u8n_vec_type, "");
    }
@@ -418,7 +418,7 @@ lp_build_sample_fetch_image_nearest(struct lp_build_sample_context *bld,
       rgba8 = lp_build_fetch_rgba_aos(bld->gallivm,
                                       bld->format_desc,
                                       u8n.type,
-                                      TRUE,
+                                      true,
                                       data_ptr, offset,
                                       x_subcoord,
                                       y_subcoord,
@@ -454,7 +454,7 @@ lp_build_sample_image_nearest(struct lp_build_sample_context *bld,
    LLVMValueRef s_float, t_float = NULL, r_float = NULL;
    LLVMValueRef x_stride;
    LLVMValueRef x_offset, offset;
-   LLVMValueRef x_subcoord, y_subcoord, z_subcoord;
+   LLVMValueRef x_subcoord, y_subcoord = NULL, z_subcoord;
 
    lp_build_context_init(&i32, bld->gallivm, lp_type_int_vec(32, bld->vector_width));
 
@@ -662,8 +662,8 @@ lp_build_sample_fetch_image_linear(struct lp_build_sample_context *bld,
                                        bld->texel_type.length,
                                        bld->format_desc->block.bits,
                                        fetch_type,
-                                       TRUE,
-                                       data_ptr, offset[k][j][i], TRUE);
+                                       true,
+                                       data_ptr, offset[k][j][i], true);
 
                rgba8 = LLVMBuildBitCast(builder, rgba8, u8n_vec_type, "");
             }
@@ -671,7 +671,7 @@ lp_build_sample_fetch_image_linear(struct lp_build_sample_context *bld,
                rgba8 = lp_build_fetch_rgba_aos(bld->gallivm,
                                                bld->format_desc,
                                                u8n.type,
-                                               TRUE,
+                                               true,
                                                data_ptr, offset[k][j][i],
                                                x_subcoord[i],
                                                y_subcoord[j],
@@ -686,54 +686,46 @@ lp_build_sample_fetch_image_linear(struct lp_build_sample_context *bld,
    /*
     * Linear interpolation with 8.8 fixed point.
     */
-   if (bld->static_sampler_state->force_nearest_s) {
-      /* special case 1-D lerp */
-      packed = lp_build_lerp(&u8n,
-                             t_fpart,
-                             neighbors[0][0][0],
-                             neighbors[0][0][1],
-                             LP_BLD_LERP_PRESCALED_WEIGHTS);
-   }
-   else if (bld->static_sampler_state->force_nearest_t) {
-      /* special case 1-D lerp */
-      packed = lp_build_lerp(&u8n,
-                             s_fpart,
-                             neighbors[0][0][0],
-                             neighbors[0][0][1],
-                             LP_BLD_LERP_PRESCALED_WEIGHTS);
-   }
-   else {
-      /* general 1/2/3-D lerping */
-      if (dims == 1) {
-         packed = lp_build_lerp(&u8n,
-                                s_fpart,
-                                neighbors[0][0][0],
-                                neighbors[0][0][1],
-                                LP_BLD_LERP_PRESCALED_WEIGHTS);
-      } else if (dims == 2) {
-         /* 2-D lerp */
-         packed = lp_build_lerp_2d(&u8n,
-                                   s_fpart, t_fpart,
-                                   neighbors[0][0][0],
-                                   neighbors[0][0][1],
-                                   neighbors[0][1][0],
-                                   neighbors[0][1][1],
-                                   LP_BLD_LERP_PRESCALED_WEIGHTS);
-      } else {
-         /* 3-D lerp */
-         assert(dims == 3);
-         packed = lp_build_lerp_3d(&u8n,
-                                   s_fpart, t_fpart, r_fpart,
-                                   neighbors[0][0][0],
-                                   neighbors[0][0][1],
-                                   neighbors[0][1][0],
-                                   neighbors[0][1][1],
-                                   neighbors[1][0][0],
-                                   neighbors[1][0][1],
-                                   neighbors[1][1][0],
-                                   neighbors[1][1][1],
-                                   LP_BLD_LERP_PRESCALED_WEIGHTS);
-      }
+
+   /* general 1/2/3-D lerping */
+   if (dims == 1) {
+      lp_build_reduce_filter(&u8n,
+                              bld->static_sampler_state->reduction_mode,
+                              LP_BLD_LERP_PRESCALED_WEIGHTS,
+                              1,
+                              s_fpart,
+                              &neighbors[0][0][0],
+                              &neighbors[0][0][1],
+                              &packed);
+   } else if (dims == 2) {
+      /* 2-D lerp */
+      lp_build_reduce_filter_2d(&u8n,
+                                 bld->static_sampler_state->reduction_mode,
+                                 LP_BLD_LERP_PRESCALED_WEIGHTS,
+                                 1,
+                                 s_fpart, t_fpart,
+                                 &neighbors[0][0][0],
+                                 &neighbors[0][0][1],
+                                 &neighbors[0][1][0],
+                                 &neighbors[0][1][1],
+                                 &packed);
+   } else {
+      /* 3-D lerp */
+      assert(dims == 3);
+      lp_build_reduce_filter_3d(&u8n,
+                                 bld->static_sampler_state->reduction_mode,
+                                 LP_BLD_LERP_PRESCALED_WEIGHTS,
+                                 1,
+                                 s_fpart, t_fpart, r_fpart,
+                                 &neighbors[0][0][0],
+                                 &neighbors[0][0][1],
+                                 &neighbors[0][1][0],
+                                 &neighbors[0][1][1],
+                                 &neighbors[1][0][0],
+                                 &neighbors[1][0][1],
+                                 &neighbors[1][1][0],
+                                 &neighbors[1][1][1],
+                                 &packed);
    }
 
    *colors = packed;
@@ -769,7 +761,7 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
    LLVMValueRef y_offset0, y_offset1;
    LLVMValueRef z_offset0, z_offset1;
    LLVMValueRef offset[2][2][2]; /* [z][y][x] */
-   LLVMValueRef x_subcoord[2], y_subcoord[2], z_subcoord[2];
+   LLVMValueRef x_subcoord[2], y_subcoord[2] = {NULL, NULL}, z_subcoord[2];
    unsigned x, y, z;
 
    lp_build_context_init(&i32, bld->gallivm, lp_type_int_vec(32, bld->vector_width));
@@ -818,10 +810,9 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
 
    /* subtract 0.5 (add -128) */
    i32_c128 = lp_build_const_int_vec(bld->gallivm, i32.type, -128);
-   if (!bld->static_sampler_state->force_nearest_s) {
-      s = LLVMBuildAdd(builder, s, i32_c128, "");
-   }
-   if (dims >= 2 && !bld->static_sampler_state->force_nearest_t) {
+
+   s = LLVMBuildAdd(builder, s, i32_c128, "");
+   if (dims >= 2) {
       t = LLVMBuildAdd(builder, t, i32_c128, "");
    }
    if (dims >= 3) {
@@ -1092,9 +1083,14 @@ lp_build_sample_mipmap(struct lp_build_sample_context *bld,
                                                LLVMConstVector(shuffle, u8n_bld.type.length), "");
          }
 
-         colors0 = lp_build_lerp(&u8n_bld, lod_fpart,
-                                 colors0, colors1,
-                                 LP_BLD_LERP_PRESCALED_WEIGHTS);
+         lp_build_reduce_filter(&u8n_bld,
+                                bld->static_sampler_state->reduction_mode,
+                                LP_BLD_LERP_PRESCALED_WEIGHTS,
+                                1,
+                                lod_fpart,
+                                &colors0,
+                                &colors1,
+                                &colors0);
 
          LLVMBuildStore(builder, colors0, colors_var);
       }
@@ -1111,7 +1107,6 @@ lp_build_sample_mipmap(struct lp_build_sample_context *bld,
  */
 void
 lp_build_sample_aos(struct lp_build_sample_context *bld,
-                    unsigned sampler_unit,
                     LLVMValueRef s,
                     LLVMValueRef t,
                     LLVMValueRef r,
@@ -1195,7 +1190,7 @@ lp_build_sample_aos(struct lp_build_sample_context *bld,
       lp_build_endif(&if_ctx);
    }
 
-   packed = LLVMBuildLoad(builder, packed_var, "");
+   packed = LLVMBuildLoad2(builder, u8n_bld.vec_type, packed_var, "");
 
    /*
     * Convert to SoA and swizzle.

@@ -1,24 +1,7 @@
 /*
  * Copyright 2009 Marek Olšák <maraeo@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "r300_context.h"
 #include "r300_emit.h"
@@ -26,7 +9,7 @@
 #include "r300_reg.h"
 
 #include "util/format/u_format.h"
-#include "util/u_half.h"
+#include "util/half_float.h"
 #include "util/u_pack_color.h"
 #include "util/u_surface.h"
 
@@ -68,9 +51,19 @@ static void r300_blitter_begin(struct r300_context* r300, enum r300_blitter_op o
     util_blitter_save_vertex_shader(r300->blitter, r300->vs_state.state);
     util_blitter_save_viewport(r300->blitter, &r300->viewport);
     util_blitter_save_scissor(r300->blitter, r300->scissor_state.state);
-    util_blitter_save_sample_mask(r300->blitter, *(unsigned*)r300->sample_mask.state);
-    util_blitter_save_vertex_buffer_slot(r300->blitter, r300->vertex_buffer);
+    util_blitter_save_sample_mask(r300->blitter, *(unsigned*)r300->sample_mask.state, 0);
+    util_blitter_save_vertex_buffers(r300->blitter, r300->vertex_buffer,
+                                     r300->nr_vertex_buffers);
     util_blitter_save_vertex_elements(r300->blitter, r300->velems);
+
+    struct pipe_constant_buffer cb = {
+       /* r300 doesn't use the size for FS at all. The shader determines it.
+        * Set something for blitter.
+        */
+       .buffer_size = 4,
+       .user_buffer = ((struct r300_constant_buffer*)r300->fs_constants.state)->ptr,
+    };
+    util_blitter_save_fragment_constant_buffer_slot(r300->blitter, &cb);
 
     if (op & R300_SAVE_FRAMEBUFFER) {
         util_blitter_save_framebuffer(r300->blitter, r300->fb_state.state);
@@ -92,7 +85,7 @@ static void r300_blitter_begin(struct r300_context* r300, enum r300_blitter_op o
     if (op & R300_IGNORE_RENDER_COND) {
         /* Save the flag. */
         r300->blitter_saved_skip_rendering = r300->skip_rendering+1;
-        r300->skip_rendering = FALSE;
+        r300->skip_rendering = false;
     } else {
         r300->blitter_saved_skip_rendering = 0;
     }
@@ -123,21 +116,21 @@ static uint32_t r300_depth_clear_cb_value(enum pipe_format format,
         return uc.us | (uc.us << 16);
 }
 
-static boolean r300_cbzb_clear_allowed(struct r300_context *r300,
-                                       unsigned clear_buffers)
+static bool r300_cbzb_clear_allowed(struct r300_context *r300,
+                                    unsigned clear_buffers)
 {
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
 
     /* Only color clear allowed, and only one colorbuffer. */
     if ((clear_buffers & ~PIPE_CLEAR_COLOR) != 0 || fb->nr_cbufs != 1 || !fb->cbufs[0])
-        return FALSE;
+        return false;
 
     return r300_surface(fb->cbufs[0])->cbzb_allowed;
 }
 
-static boolean r300_fast_zclear_allowed(struct r300_context *r300,
-                                        unsigned clear_buffers)
+static bool r300_fast_zclear_allowed(struct r300_context *r300,
+                                     unsigned clear_buffers)
 {
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
@@ -145,7 +138,7 @@ static boolean r300_fast_zclear_allowed(struct r300_context *r300,
     return r300_resource(fb->zsbuf->texture)->tex.zmask_dwords[fb->zsbuf->u.tex.level] != 0;
 }
 
-static boolean r300_hiz_clear_allowed(struct r300_context *r300)
+static bool r300_hiz_clear_allowed(struct r300_context *r300)
 {
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
@@ -197,7 +190,7 @@ static void r300_set_clear_color(struct r300_context *r300,
     }
 }
 
-DEBUG_GET_ONCE_BOOL_OPTION(hyperz, "RADEON_HYPERZ", FALSE)
+DEBUG_GET_ONCE_BOOL_OPTION(hyperz, "RADEON_HYPERZ", false)
 
 /* Clear currently bound buffers. */
 static void r300_clear(struct pipe_context* pipe,
@@ -263,13 +256,13 @@ static void r300_clear(struct pipe_context* pipe,
     /* Use fast Z clear.
      * The zbuffer must be in micro-tiled mode, otherwise it locks up. */
     if (buffers & PIPE_CLEAR_DEPTHSTENCIL) {
-        boolean zmask_clear, hiz_clear;
+        bool zmask_clear, hiz_clear;
 
         /* If both depth and stencil are present, they must be cleared together. */
         if (fb->zsbuf->texture->format == PIPE_FORMAT_S8_UINT_Z24_UNORM &&
             (buffers & PIPE_CLEAR_DEPTHSTENCIL) != PIPE_CLEAR_DEPTHSTENCIL) {
-            zmask_clear = FALSE;
-            hiz_clear = FALSE;
+            zmask_clear = false;
+            hiz_clear = false;
         } else {
             zmask_clear = r300_fast_zclear_allowed(r300, buffers);
             hiz_clear = r300_hiz_clear_allowed(r300);
@@ -281,9 +274,9 @@ static void r300_clear(struct pipe_context* pipe,
             if (!r300->hyperz_enabled &&
                 (r300->screen->caps.is_r500 || debug_get_option_hyperz())) {
                 r300->hyperz_enabled =
-                    r300->rws->cs_request_feature(r300->cs,
+                    r300->rws->cs_request_feature(&r300->cs,
                                                 RADEON_FID_R300_HYPERZ_ACCESS,
-                                                TRUE);
+                                                true);
                 if (r300->hyperz_enabled) {
                    /* Need to emit HyperZ buffer regs for the first time. */
                    r300_mark_fb_state_dirty(r300, R300_CHANGED_HYPERZ_FLAG);
@@ -319,9 +312,9 @@ static void r300_clear(struct pipe_context* pipe,
         /* Try to obtain the access to the CMASK if we don't have one. */
         if (!r300->cmask_access) {
             r300->cmask_access =
-                r300->rws->cs_request_feature(r300->cs,
+                r300->rws->cs_request_feature(&r300->cs,
                                               RADEON_FID_R300_CMASK_ACCESS,
-                                              TRUE);
+                                              true);
         }
 
         /* Setup the clear. */
@@ -358,7 +351,7 @@ static void r300_clear(struct pipe_context* pipe,
         width = surf->cbzb_width;
         height = surf->cbzb_height;
 
-        r300->cbzb_clear = TRUE;
+        r300->cbzb_clear = true;
         r300_mark_fb_state_dirty(r300, R300_CHANGED_HYPERZ_FLAG);
     }
 
@@ -384,28 +377,28 @@ static void r300_clear(struct pipe_context* pipe,
             r300_get_num_cs_end_dwords(r300);
 
         /* Reserve CS space. */
-        if (!r300->rws->cs_check_space(r300->cs, dwords, false)) {
+        if (!r300->rws->cs_check_space(&r300->cs, dwords)) {
             r300_flush(&r300->context, PIPE_FLUSH_ASYNC, NULL);
         }
 
         /* Emit clear packets. */
         r300_emit_gpu_flush(r300, r300->gpu_flush.size, r300->gpu_flush.state);
-        r300->gpu_flush.dirty = FALSE;
+        r300->gpu_flush.dirty = false;
 
         if (r300->zmask_clear.dirty) {
             r300_emit_zmask_clear(r300, r300->zmask_clear.size,
                                   r300->zmask_clear.state);
-            r300->zmask_clear.dirty = FALSE;
+            r300->zmask_clear.dirty = false;
         }
         if (r300->hiz_clear.dirty) {
             r300_emit_hiz_clear(r300, r300->hiz_clear.size,
                                 r300->hiz_clear.state);
-            r300->hiz_clear.dirty = FALSE;
+            r300->hiz_clear.dirty = false;
         }
         if (r300->cmask_clear.dirty) {
             r300_emit_cmask_clear(r300, r300->cmask_clear.size,
                                   r300->cmask_clear.state);
-            r300->cmask_clear.dirty = FALSE;
+            r300->cmask_clear.dirty = false;
         }
     } else {
         assert(0);
@@ -413,7 +406,7 @@ static void r300_clear(struct pipe_context* pipe,
 
     /* Disable CBZB clear. */
     if (r300->cbzb_clear) {
-        r300->cbzb_clear = FALSE;
+        r300->cbzb_clear = false;
         hyperz->zb_depthclearvalue = hyperz_dcv;
         r300_mark_fb_state_dirty(r300, R300_CHANGED_HYPERZ_FLAG);
     }
@@ -480,7 +473,7 @@ void r300_decompress_zmask(struct r300_context *r300)
     if (!r300->zmask_in_use || r300->locked_zbuffer)
         return;
 
-    r300->zmask_decompress = TRUE;
+    r300->zmask_decompress = true;
     r300_mark_atom_dirty(r300, &r300->hyperz_state);
 
     r300_blitter_begin(r300, R300_DECOMPRESS);
@@ -488,8 +481,8 @@ void r300_decompress_zmask(struct r300_context *r300)
                                     r300->dsa_decompress_zmask);
     r300_blitter_end(r300);
 
-    r300->zmask_decompress = FALSE;
-    r300->zmask_in_use = FALSE;
+    r300->zmask_decompress = false;
+    r300->zmask_in_use = false;
     r300_mark_atom_dirty(r300, &r300->hyperz_state);
 }
 
@@ -620,7 +613,7 @@ static void r300_resource_copy_region(struct pipe_context *pipe,
         switch (util_format_get_blocksize(dst_templ.format)) {
         case 8:
             /* one 4x4 pixel block has 8 bytes.
-             * we set 1 pixel = 4 bytes ===> 1 block corrensponds to 2 pixels. */
+             * we set 1 pixel = 4 bytes ===> 1 block corresponds to 2 pixels. */
             dst_templ.format = PIPE_FORMAT_R8G8B8A8_UNORM;
             dst_width0 = dst_width0 / 2;
             src_width0 = src_width0 / 2;
@@ -676,14 +669,14 @@ static void r300_resource_copy_region(struct pipe_context *pipe,
     util_blitter_blit_generic(r300->blitter, dst_view, &dstbox,
                               src_view, src_box, src_width0, src_height0,
                               PIPE_MASK_RGBAZS, PIPE_TEX_FILTER_NEAREST, NULL,
-                              FALSE);
+                              false, false, 0, NULL);
     r300_blitter_end(r300);
 
     pipe_surface_reference(&dst_view, NULL);
     pipe_sampler_view_reference(&src_view, NULL);
 }
 
-static boolean r300_is_simple_msaa_resolve(const struct pipe_blit_info *info)
+static bool r300_is_simple_msaa_resolve(const struct pipe_blit_info *info)
 {
     unsigned dst_width = u_minify(info->dst.resource->width0, info->dst.level);
     unsigned dst_height = u_minify(info->dst.resource->height0, info->dst.level);
@@ -694,6 +687,7 @@ static boolean r300_is_simple_msaa_resolve(const struct pipe_blit_info *info)
            info->dst.resource->format == info->dst.format &&
            info->src.resource->format == info->src.format &&
            !info->scissor_enable &&
+           !info->swizzle_enable &&
            info->mask == PIPE_MASK_RGBA &&
            dst_width == info->src.resource->width0 &&
            dst_height == info->src.resource->height0 &&
@@ -798,7 +792,7 @@ static void r300_msaa_resolve(struct pipe_context *pipe,
     blit.src.box.z = 0;
 
     r300_blitter_begin(r300, R300_BLIT | R300_IGNORE_RENDER_COND);
-    util_blitter_blit(r300->blitter, &blit);
+    util_blitter_blit(r300->blitter, &blit, NULL);
     r300_blitter_end(r300);
 
     pipe_resource_reference(&tmp, NULL);
@@ -866,7 +860,7 @@ static void r300_blit(struct pipe_context *pipe,
 
     r300_blitter_begin(r300, R300_BLIT |
 		       (info.render_condition_enable ? 0 : R300_IGNORE_RENDER_COND));
-    util_blitter_blit(r300->blitter, &info);
+    util_blitter_blit(r300->blitter, &info, NULL);
     r300_blitter_end(r300);
 }
 

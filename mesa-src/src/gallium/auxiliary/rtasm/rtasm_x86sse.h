@@ -25,10 +25,10 @@
 #ifndef _RTASM_X86SSE_H_
 #define _RTASM_X86SSE_H_
 
-#include "pipe/p_compiler.h"
-#include "pipe/p_config.h"
+#include "util/compiler.h"
+#include "util/detect.h"
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
 
 /* It is up to the caller to ensure that instructions issued are
  * suitable for the host cpu.  There are no checks made in this module
@@ -138,11 +138,11 @@ enum x86_target
 /* make this read a member of x86_function if target != host is desired */
 static inline enum x86_target x86_target( struct x86_function* p )
 {
-#ifdef PIPE_ARCH_X86
+#if DETECT_ARCH_X86
    return X86_32;
-#elif (defined(PIPE_OS_CYGWIN) || defined(PIPE_OS_WINDOWS)) && defined(PIPE_ARCH_X86_64)
+#elif (DETECT_OS_CYGWIN || DETECT_OS_WINDOWS) && DETECT_ARCH_X86_64
    return X86_64_WIN64_ABI;
-#elif defined(PIPE_ARCH_X86_64)
+#elif DETECT_ARCH_X86_64
    return X86_64_STD_ABI;
 #endif
 }
@@ -269,6 +269,8 @@ void sse2_por( struct x86_function *p, struct x86_reg dst, struct x86_reg src );
 void sse2_pshuflw( struct x86_function *p, struct x86_reg dst, struct x86_reg src, uint8_t imm );
 void sse2_pshufhw( struct x86_function *p, struct x86_reg dst, struct x86_reg src, uint8_t imm );
 void sse2_pshufd( struct x86_function *p, struct x86_reg dst, struct x86_reg src, uint8_t imm );
+
+void sse2_pcmpgtd( struct x86_function *p, struct x86_reg dst, struct x86_reg src );
 
 void sse_prefetchnta( struct x86_function *p, struct x86_reg ptr);
 void sse_prefetch0( struct x86_function *p, struct x86_reg ptr);

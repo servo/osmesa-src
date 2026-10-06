@@ -27,16 +27,15 @@
 
 
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "util/u_pointer.h"
 #include "util/u_memory.h"
 #include "util/u_math.h"
 #include "util/u_cpu_detect.h"
 
 #include "gallivm/lp_bld.h"
-#include "gallivm/lp_bld_debug.h"
 #include "gallivm/lp_bld_init.h"
 #include "gallivm/lp_bld_arit.h"
 
@@ -143,9 +142,9 @@ const float exp2_values[] = {
    0.1,
    0.9,
    0.99,
-   1, 
-   2, 
-   4, 
+   1,
+   2,
+   4,
    60,
    INFINITY,
    NAN
@@ -154,7 +153,7 @@ const float exp2_values[] = {
 
 const float log2_values[] = {
 #if 0
-   /* 
+   /*
     * Smallest denormalized number; meant just for experimentation, but not
     * validation.
     */
@@ -194,9 +193,7 @@ const float rcp_values[] = {
    -1e+035, -100000,
    100000, 1e+035,
    5.88e-39f, // denormal
-#if (__STDC_VERSION__ >= 199901L)
    INFINITY, -INFINITY,
-#endif
 };
 
 
@@ -213,9 +210,7 @@ const float rsqrt_values[] = {
    1e-007, 4.0,
    100000, 1e+035,
    5.88e-39f, // denormal
-#if (__STDC_VERSION__ >= 199901L)
    INFINITY,
-#endif
 };
 
 
@@ -293,6 +288,31 @@ const float fract_values[] = {
  * Unary test cases.
  */
 
+#ifdef _MSC_VER
+#define WRAP(func) \
+static float \
+wrap_ ## func(float x) \
+{ \
+   return func(x); \
+}
+WRAP(log2f)
+WRAP(expf)
+WRAP(logf)
+WRAP(sinf)
+WRAP(cosf)
+WRAP(nearbyintf)
+WRAP(floorf)
+WRAP(ceilf)
+#define log2f wrap_log2f
+#define expf wrap_expf
+#define logf wrap_logf
+#define sinf wrap_sinf
+#define cosf wrap_cosf
+#define nearbyintf wrap_nearbyintf
+#define floorf wrap_floorf
+#define ceilf wrap_ceilf
+#endif
+
 static const struct unary_test_t
 unary_tests[] = {
    {"abs", &lp_build_abs, &fabsf, sgn_values, ARRAY_SIZE(sgn_values), 20.0 },
@@ -345,11 +365,11 @@ build_unary_test_func(struct gallivm_state *gallivm,
    LLVMSetFunctionCallConv(func, LLVMCCallConv);
 
    LLVMPositionBuilderAtEnd(builder, block);
-   
-   arg1 = LLVMBuildLoad(builder, arg1, "");
+
+   arg1 = LLVMBuildLoad2(builder, vf32t, arg1, "");
 
    ret = test->builder(&bld, arg1);
-   
+
    LLVMBuildStore(builder, ret, arg0);
 
    LLVMBuildRetVoid(builder);
@@ -381,8 +401,8 @@ flush_denorm_to_zero(float val)
 
    fi_val.f = val;
 
-#if defined(PIPE_ARCH_SSE)
-   if (util_cpu_caps.has_sse) {
+#if DETECT_ARCH_SSE
+   if (util_get_cpu_caps()->has_sse) {
       if ((fi_val.ui & 0x7f800000) == 0) {
          fi_val.ui &= 0xff800000;
       }
@@ -395,16 +415,16 @@ flush_denorm_to_zero(float val)
 /*
  * Test one LLVM unary arithmetic builder function.
  */
-static boolean
+static bool
 test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned length)
 {
    char test_name[128];
    snprintf(test_name, sizeof test_name, "%s.v%u", test->name, length);
-   LLVMContextRef context;
+   lp_context_ref context;
    struct gallivm_state *gallivm;
    LLVMValueRef test_func;
    unary_func_t test_func_jit;
-   boolean success = TRUE;
+   bool success = true;
    int i, j;
    float *in, *out;
 
@@ -416,14 +436,14 @@ test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned
       in[i] = 1.0;
    }
 
-   context = LLVMContextCreate();
-   gallivm = gallivm_create("test_module", context, NULL);
+   lp_context_create(&context);
+   gallivm = gallivm_create("test_module", &context, NULL);
 
    test_func = build_unary_test_func(gallivm, test, length, test_name);
 
    gallivm_compile_module(gallivm);
 
-   test_func_jit = (unary_func_t) gallivm_jit_function(gallivm, test_func);
+   test_func_jit = (unary_func_t) gallivm_jit_function(gallivm, test_func, test_name);
 
    gallivm_free_ir(gallivm);
 
@@ -439,7 +459,7 @@ test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned
       for (i = 0; i < num_vals; ++i) {
          float testval, ref;
          double error, precision;
-         boolean expected_pass = TRUE;
+         bool expected_pass = true;
          bool pass;
 
          testval = flush_denorm_to_zero(in[i]);
@@ -458,19 +478,21 @@ test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned
             continue;
          }
 
-         if (!util_cpu_caps.has_neon &&
-             test->ref == &nearbyintf && length == 2 &&
+         if (test->ref == &nearbyintf && length == 2 &&
+             !util_get_cpu_caps()->has_neon &&
+             util_get_cpu_caps()->family != CPU_S390X &&
+             !(util_get_cpu_caps()->has_sse4_1 && LLVM_VERSION_MAJOR >= 8) &&
              ref != roundf(testval)) {
             /* FIXME: The generic (non SSE) path in lp_build_iround, which is
              * always taken for length==2 regardless of native round support,
              * does not round to even. */
-            expected_pass = FALSE;
+            expected_pass = false;
          }
 
          if (test->ref == &expf && util_inf_sign(testval) == -1) {
             /* Some older 64-bit MSVCRT versions return -inf instead of 0
-	     * for expf(-inf). As detecting the VC runtime version is
-	     * non-trivial, just ignore the test result. */
+            * for expf(-inf). As detecting the VC runtime version is
+            * non-trivial, just ignore the test result. */
 #if defined(_MSC_VER) && defined(_WIN64)
             expected_pass = pass;
 #endif
@@ -485,13 +507,13 @@ test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned
          }
 
          if (pass != expected_pass) {
-            success = FALSE;
+            success = false;
          }
       }
    }
 
    gallivm_destroy(gallivm);
-   LLVMContextDispose(context);
+   lp_context_destroy(&context);
 
    align_free(in);
    align_free(out);
@@ -500,10 +522,10 @@ test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned
 }
 
 
-boolean
+bool
 test_all(unsigned verbose, FILE *fp)
 {
-   boolean success = TRUE;
+   bool success = true;
    int i;
 
    for (i = 0; i < ARRAY_SIZE(unary_tests); ++i) {
@@ -511,7 +533,7 @@ test_all(unsigned verbose, FILE *fp)
       unsigned length;
       for (length = 1; length <= max_length; length *= 2) {
          if (!test_unary(verbose, fp, &unary_tests[i], length)) {
-            success = FALSE;
+            success = false;
          }
       }
    }
@@ -520,7 +542,7 @@ test_all(unsigned verbose, FILE *fp)
 }
 
 
-boolean
+bool
 test_some(unsigned verbose, FILE *fp,
           unsigned long n)
 {
@@ -532,8 +554,8 @@ test_some(unsigned verbose, FILE *fp,
 }
 
 
-boolean
+bool
 test_single(unsigned verbose, FILE *fp)
 {
-   return TRUE;
+   return true;
 }

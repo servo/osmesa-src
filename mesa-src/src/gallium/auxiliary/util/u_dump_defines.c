@@ -65,7 +65,7 @@ util_dump_enum_continuous(unsigned value,
 
 #define DEFINE_UTIL_STR_CONTINUOUS(_name) \
    const char * \
-   util_str_##_name(unsigned value, boolean shortened) \
+   util_str_##_name(unsigned value, bool shortened) \
    { \
       if(shortened) \
          return util_dump_enum_continuous(value, ARRAY_SIZE(util_##_name##_short_names), util_##_name##_short_names); \
@@ -80,7 +80,7 @@ util_dump_enum_continuous(unsigned value,
  */
 #define DEFINE_UTIL_STR_CONTINUOUS_COUNT(_name, _count) \
    const char * \
-   util_str_##_name(unsigned value, boolean shortened) \
+   util_str_##_name(unsigned value, bool shortened) \
    { \
       STATIC_ASSERT(ARRAY_SIZE(util_##_name##_names) == _count); \
       STATIC_ASSERT(ARRAY_SIZE(util_##_name##_short_names) == _count); \
@@ -455,21 +455,21 @@ DEFINE_UTIL_STR_CONTINUOUS(query_value_type)
 
 static const char *
 util_prim_mode_names[] = {
-   "PIPE_PRIM_POINTS",
-   "PIPE_PRIM_LINES",
-   "PIPE_PRIM_LINE_LOOP",
-   "PIPE_PRIM_LINE_STRIP",
-   "PIPE_PRIM_TRIANGLES",
-   "PIPE_PRIM_TRIANGLE_STRIP",
-   "PIPE_PRIM_TRIANGLE_FAN",
-   "PIPE_PRIM_QUADS",
-   "PIPE_PRIM_QUAD_STRIP",
-   "PIPE_PRIM_POLYGON",
-   "PIPE_PRIM_LINES_ADJACENCY",
-   "PIPE_PRIM_LINE_STRIP_ADJACENCY",
-   "PIPE_PRIM_TRIANGLES_ADJACENCY",
-   "PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY",
-   "PIPE_PRIM_PATCHES",
+   "MESA_PRIM_POINTS",
+   "MESA_PRIM_LINES",
+   "MESA_PRIM_LINE_LOOP",
+   "MESA_PRIM_LINE_STRIP",
+   "MESA_PRIM_TRIANGLES",
+   "MESA_PRIM_TRIANGLE_STRIP",
+   "MESA_PRIM_TRIANGLE_FAN",
+   "MESA_PRIM_QUADS",
+   "MESA_PRIM_QUAD_STRIP",
+   "MESA_PRIM_POLYGON",
+   "MESA_PRIM_LINES_ADJACENCY",
+   "MESA_PRIM_LINE_STRIP_ADJACENCY",
+   "MESA_PRIM_TRIANGLES_ADJACENCY",
+   "MESA_PRIM_TRIANGLE_STRIP_ADJACENCY",
+   "MESA_PRIM_PATCHES",
 };
 
 static const char *
@@ -509,19 +509,25 @@ util_dump_query_value_type(FILE *stream, unsigned value)
    fprintf(stream, "%s", util_str_query_value_type(value, false));
 }
 
+void
+util_dump_query_flags(FILE *stream, unsigned value)
+{
+   fprintf(stream, "%s", util_str_query_value_type(value, false));
+}
+
 
 static const char * const
 util_transfer_usage_names[] = {
-      "PIPE_TRANSFER_READ",
-      "PIPE_TRANSFER_WRITE",
-      "PIPE_TRANSFER_MAP_DIRECTLY",
-      "PIPE_TRANSFER_DISCARD_RANGE",
-      "PIPE_TRANSFER_DONTBLOCK",
-      "PIPE_TRANSFER_UNSYNCHRONIZED",
-      "PIPE_TRANSFER_FLUSH_EXPLICIT",
-      "PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE",
-      "PIPE_TRANSFER_PERSISTENT",
-      "PIPE_TRANSFER_COHERENT",
+      "PIPE_MAP_READ",
+      "PIPE_MAP_WRITE",
+      "PIPE_MAP_DIRECTLY",
+      "PIPE_MAP_DISCARD_RANGE",
+      "PIPE_MAP_DONTBLOCK",
+      "PIPE_MAP_UNSYNCHRONIZED",
+      "PIPE_MAP_FLUSH_EXPLICIT",
+      "PIPE_MAP_DISCARD_WHOLE_RESOURCE",
+      "PIPE_MAP_PERSISTENT",
+      "PIPE_MAP_COHERENT",
 };
 
 DEFINE_UTIL_DUMP_FLAGS_CONTINUOUS(transfer_usage)

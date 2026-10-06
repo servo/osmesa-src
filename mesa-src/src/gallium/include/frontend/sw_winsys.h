@@ -35,7 +35,7 @@
 #define SW_WINSYS_H
 
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "frontend/winsys_handle.h"
 
 #ifdef __cplusplus
@@ -65,6 +65,9 @@ struct sw_winsys
 {
    void 
    (*destroy)( struct sw_winsys *ws );
+
+   int
+   (*get_fd)( struct sw_winsys *ws );
 
    bool
    (*is_displaytarget_format_supported)( struct sw_winsys *ws,
@@ -109,7 +112,7 @@ struct sw_winsys
                                 struct winsys_handle *whandle );
 
    /**
-    * \param flags  bitmask of PIPE_TRANSFER_x flags
+    * \param flags  bitmask of PIPE_MAP_x flags
     */
    void *
    (*displaytarget_map)( struct sw_winsys *ws, 
@@ -129,11 +132,20 @@ struct sw_winsys
    (*displaytarget_display)( struct sw_winsys *ws, 
                              struct sw_displaytarget *dt,
                              void *context_private,
+                             unsigned nboxes,
                              struct pipe_box *box );
 
    void 
    (*displaytarget_destroy)( struct sw_winsys *ws, 
                              struct sw_displaytarget *dt );
+
+   struct sw_displaytarget *
+   (*displaytarget_create_mapped)( struct sw_winsys *ws,
+                                   unsigned tex_usage,
+                                   enum pipe_format format,
+                                   unsigned width, unsigned height,
+                                   unsigned stride,
+                                   void *data );
 };
 
 

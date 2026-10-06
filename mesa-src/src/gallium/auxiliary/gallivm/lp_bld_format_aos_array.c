@@ -61,7 +61,7 @@ lp_build_fetch_rgba_aos_array(struct gallivm_state *gallivm,
    LLVMTypeRef src_vec_type;
    LLVMValueRef ptr, res = NULL;
    struct lp_type src_type;
-   boolean pure_integer = format_desc->channel[0].pure_integer;
+   bool pure_integer = format_desc->channel[0].pure_integer;
    struct lp_type tmp_type;
 
    lp_type_from_format_desc(&src_type, format_desc);
@@ -78,9 +78,10 @@ lp_build_fetch_rgba_aos_array(struct gallivm_state *gallivm,
     * (If all callers can guarantee element type alignment, we should
     * relax alignment restrictions elsewhere.)
     */
-   ptr = LLVMBuildGEP(builder, base_ptr, &offset, 1, "");
+   LLVMTypeRef byte_type = LLVMInt8TypeInContext(gallivm->context);
+   ptr = LLVMBuildGEP2(builder, byte_type, base_ptr, &offset, 1, "");
    ptr = LLVMBuildPointerCast(builder, ptr, LLVMPointerType(src_vec_type, 0), "");
-   res = LLVMBuildLoad(builder, ptr, "");
+   res = LLVMBuildLoad2(builder, src_vec_type, ptr, "");
    LLVMSetAlignment(res, src_type.width / 8);
 
    /* Truncate doubles to float */

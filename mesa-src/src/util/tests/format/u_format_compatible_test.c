@@ -32,7 +32,7 @@
 #include "util/format/u_format.h"
 
 
-static boolean
+static bool
 test_all(void)
 {
    enum pipe_format src_format;
@@ -41,16 +41,10 @@ test_all(void)
    for (src_format = 1; src_format < PIPE_FORMAT_COUNT; ++src_format) {
       const struct util_format_description *src_format_desc;
       src_format_desc = util_format_description(src_format);
-      if (!src_format_desc) {
-         continue;
-      }
 
       for (dst_format = 1; dst_format < PIPE_FORMAT_COUNT; ++dst_format) {
 	 const struct util_format_description *dst_format_desc;
 	 dst_format_desc = util_format_description(dst_format);
-	 if (!dst_format_desc) {
-	    continue;
-	 }
 
          if (dst_format == src_format) {
             continue;
@@ -62,13 +56,13 @@ test_all(void)
       }
    }
 
-   return TRUE;
+   return true;
 }
 
 
 int main(int argc, char **argv)
 {
-   boolean success;
+   bool success;
 
    success = test_all();
 

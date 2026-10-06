@@ -26,10 +26,13 @@
 
 struct pipe_screen;
 struct sw_winsys;
+struct pipe_screen_config;
 
 struct pipe_screen *
-zink_create_screen(struct sw_winsys *winsys);
+zink_create_screen(struct sw_winsys *winsys, const struct pipe_screen_config *config);
 
 struct pipe_screen *
-zink_drm_create_screen(int fd);
+zink_drm_create_screen(int fd, const struct pipe_screen_config *config);
+struct pipe_screen *
+zink_win32_create_screen(uint64_t adapter_luid);
 #endif

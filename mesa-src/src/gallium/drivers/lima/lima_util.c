@@ -29,6 +29,8 @@
 
 #include "util/u_debug.h"
 #include "util/u_memory.h"
+#include "util/box.h"
+#include "pipe/p_state.h"
 
 #include "lima_util.h"
 #include "lima_parser.h"
@@ -38,24 +40,6 @@ struct lima_dump {
    FILE *fp;
    int id;
 };
-
-bool lima_get_absolute_timeout(uint64_t *timeout)
-{
-   struct timespec current;
-   uint64_t current_ns;
-
-   if (*timeout == PIPE_TIMEOUT_INFINITE)
-      return true;
-
-   if (clock_gettime(CLOCK_MONOTONIC, &current))
-      return false;
-
-   current_ns = ((uint64_t)current.tv_sec) * 1000000000ull;
-   current_ns += current.tv_nsec;
-   *timeout += current_ns;
-
-   return true;
-}
 
 static void
 lima_dump_blob(FILE *fp, void *data, int size, bool is_float)
@@ -76,6 +60,13 @@ lima_dump_blob(FILE *fp, void *data, int size, bool is_float)
       }
    }
    fprintf(fp, "}\n");
+}
+
+void
+lima_dump_shader(struct lima_dump *dump, void *data, int size, bool is_frag)
+{
+   if (dump)
+      lima_parse_shader(dump->fp, (uint32_t *)data, size, is_frag);
 }
 
 void
@@ -174,4 +165,15 @@ _lima_dump_command_stream_print(struct lima_dump *dump, void *data,
    va_end(ap);
 
    lima_dump_blob(dump->fp, data, size, is_float);
+}
+
+void
+lima_damage_rect_union(struct pipe_scissor_state *rect,
+                       unsigned minx, unsigned maxx,
+                       unsigned miny, unsigned maxy)
+{
+   rect->minx = MIN2(rect->minx, minx);
+   rect->miny = MIN2(rect->miny, miny);
+   rect->maxx = MAX2(rect->maxx, maxx);
+   rect->maxy = MAX2(rect->maxy, maxy);
 }

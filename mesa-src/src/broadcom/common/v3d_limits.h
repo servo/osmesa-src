@@ -36,16 +36,37 @@
                                       V3D_MAX_GS_INPUTS, \
                                       V3D_MAX_FS_INPUTS)
 
-/* Not specifically a hardware limit, just coordination between compiler and
- * driver.
- */
-#define V3D_MAX_TEXTURE_SAMPLERS 16
-
-/* The HW can do 16384 (15), but we run into hangs when we expose that. */
-#define V3D_MAX_MIP_LEVELS 13
+#define V3D_MAX_TEXTURE_SAMPLERS 24
 
 #define V3D_MAX_SAMPLES 4
 
-#define V3D_MAX_DRAW_BUFFERS 4
+#define V3D_MAX_DRAW_BUFFERS 8
+#define V3D_MAX_RENDER_TARGETS(ver) (ver < 71 ? 4 : 8)
+
+#define V3D_MAX_POINT_SIZE 512.0f
+#define V3D_MAX_LINE_WIDTH 32
+
+#define V3D_MAX_BUFFER_RANGE (1 << 30)
+
+/* Sub-pixel precision bits in the rasterizer */
+#define V3D_COORD_SHIFT 6
+
+/* Size of a cache line */
+#define V3D_NON_COHERENT_ATOM_SIZE 256
+
+/* Minimum alignment for texel buffers */
+#define V3D_TMU_TEXEL_ALIGN 64
+
+#define V3D_MAX_IMAGE_DIMENSION 4096
+
+/* The HW can do 16384 (15), but we run into hangs when we expose that. Also,
+ * since we are only exposing images up to 4096 pixels per dimension 13 is
+ * all we need.
+ */
+#define V3D_MAX_MIP_LEVELS 13
+
+#define V3D_MAX_ARRAY_LAYERS 2048
+
+#define V3D_MAX_VERTEX_ATTRIB_DIVISOR 0xffff
 
 #endif /* V3D_LIMITS_H */

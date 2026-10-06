@@ -32,6 +32,7 @@
 #include "ir/lima_ir.h"
 
 typedef enum {
+   ppir_op_unsupported = 0,
    ppir_op_mov,
    ppir_op_abs,
    ppir_op_neg,
@@ -83,6 +84,7 @@ typedef enum {
    ppir_op_min,
    ppir_op_max,
    ppir_op_trunc,
+   ppir_op_clamp_pos,
 
    ppir_op_and,
    ppir_op_or,
@@ -161,7 +163,7 @@ typedef struct ppir_node {
    struct ppir_instr *instr;
    int instr_pos;
    struct ppir_block *block;
-   bool is_end;
+   bool is_out;
    bool succ_different_block;
 
    /* for scheduler */
@@ -179,9 +181,45 @@ typedef enum {
    ppir_pipeline_reg_discard, /* varying load */
 } ppir_pipeline;
 
+typedef enum {
+   ppir_output_color0,
+   ppir_output_color1,
+   ppir_output_depth,
+   ppir_output_num,
+   ppir_output_invalid = -1,
+} ppir_output_type;
+
+static inline const char *ppir_output_type_to_str(ppir_output_type type)
+{
+   switch (type) {
+   case ppir_output_color0:
+      return "OUTPUT_COLOR0";
+   case ppir_output_color1:
+      return "OUTPUT_COLOR1";
+   case ppir_output_depth:
+      return "OUTPUT_DEPTH";
+   default:
+      return "INVALID";
+   }
+}
+
+static inline ppir_output_type ppir_nir_output_to_ppir(gl_frag_result res, int dual_src_index)
+{
+   switch (res) {
+   case FRAG_RESULT_COLOR:
+   case FRAG_RESULT_DATA0:
+      return ppir_output_color0 + dual_src_index;
+   case FRAG_RESULT_DEPTH:
+      return ppir_output_depth;
+   default:
+      return ppir_output_invalid;
+   }
+}
+
 typedef struct ppir_reg {
    struct list_head list;
    int index;
+   ppir_output_type out_type;
    int regalloc_index;
    int num_components;
 
@@ -191,6 +229,7 @@ typedef struct ppir_reg {
    bool is_head;
    bool spilled;
    bool undef;
+   bool out_reg;
 } ppir_reg;
 
 typedef enum {
@@ -252,6 +291,12 @@ typedef struct {
    ppir_dest dest;
 } ppir_const_node;
 
+typedef enum {
+   ppir_perspective_none = 0,
+   ppir_perspective_z,
+   ppir_perspective_w,
+} ppir_perspective;
+
 typedef struct {
    ppir_node node;
    int index;
@@ -259,6 +304,8 @@ typedef struct {
    ppir_dest dest;
    ppir_src src;
    int num_src;
+   ppir_perspective perspective;
+   int sampler_dim;
 } ppir_load_node;
 
 typedef struct {
@@ -300,11 +347,6 @@ enum ppir_instr_slot {
    PPIR_INSTR_SLOT_ALU_END = PPIR_INSTR_SLOT_ALU_COMBINE,
 };
 
-struct ppir_liveness {
-   ppir_reg *reg;
-   unsigned mask : 4;
-};
-
 typedef struct ppir_instr {
    struct list_head list;
    int index;
@@ -313,7 +355,7 @@ typedef struct ppir_instr {
 
    ppir_node *slots[PPIR_INSTR_SLOT_NUM];
    ppir_const constant[2];
-   bool is_end;
+   bool stop;
 
    /* for scheduler */
    struct list_head succ_list;
@@ -326,20 +368,18 @@ typedef struct ppir_instr {
    int encode_size;
 
    /* for liveness analysis */
-   struct ppir_liveness *live_in;
-   struct ppir_liveness *live_out;
+   BITSET_WORD *live_set;
+   uint8_t *live_mask; /* mask for non-ssa registers */
    /* live_internal is to mark registers only live within an
     * instruction, without propagation */
-   struct ppir_liveness *live_internal;
-   struct set *live_in_set;
-   struct set *live_out_set;
-   struct set *live_internal_set;
+   BITSET_WORD *live_internal;
 } ppir_instr;
 
 typedef struct ppir_block {
    struct list_head list;
    struct list_head node_list;
    struct list_head instr_list;
+   bool stop;
 
    struct ppir_block *successors[2];
 
@@ -349,12 +389,6 @@ typedef struct ppir_block {
    int sched_instr_index;
    int sched_instr_base;
    int index;
-
-   /* for liveness analysis */
-   struct ppir_liveness *live_in;
-   struct ppir_liveness *live_out;
-   struct set *live_in_set;
-   struct set *live_out_set;
 } ppir_block;
 
 typedef struct {
@@ -369,23 +403,25 @@ typedef struct {
 } ppir_branch_node;
 
 struct ra_regs;
-struct lima_fs_shader_state;
+struct lima_fs_compiled_shader;
 
 typedef struct ppir_compiler {
    struct list_head block_list;
    struct hash_table_u64 *blocks;
    int cur_index;
    int cur_instr_index;
+   int *out_type_to_reg;
 
    struct list_head reg_list;
+   int reg_num;
 
    /* array for searching ssa/reg node */
    ppir_node **var_nodes;
-   unsigned reg_base;
 
    struct ra_regs *ra;
-   struct lima_fs_shader_state *prog;
+   struct lima_fs_compiled_shader *prog;
    bool uses_discard;
+   bool dual_source_blend;
 
    /* for scheduler */
    int sched_instr_base;
@@ -468,6 +504,7 @@ static inline ppir_node *ppir_node_first_pred(ppir_node *node)
 
 static inline ppir_dest *ppir_node_get_dest(ppir_node *node)
 {
+   assert(node);
    switch (node->type) {
    case ppir_node_type_alu:
       return &ppir_node_to_alu(node)->dest;
@@ -484,6 +521,7 @@ static inline ppir_dest *ppir_node_get_dest(ppir_node *node)
 
 static inline int ppir_node_get_src_num(ppir_node *node)
 {
+   assert(node);
    switch (node->type) {
    case ppir_node_type_alu:
       return ppir_node_to_alu(node)->num_src;
@@ -699,5 +737,27 @@ bool ppir_schedule_prog(ppir_compiler *comp);
 bool ppir_regalloc_prog(ppir_compiler *comp);
 bool ppir_codegen_prog(ppir_compiler *comp);
 void ppir_liveness_analysis(ppir_compiler *comp);
+
+static inline unsigned int reg_mask_size(unsigned int num_reg)
+{
+   return (num_reg + 1) / 2;
+}
+
+static inline uint8_t get_reg_mask(uint8_t *set, unsigned index)
+{
+   unsigned int i = index / 2;
+   unsigned int shift = index % 2 ? 4 : 0;
+   uint8_t mask = 0x0f << shift;
+   return (set[i] & mask) >> shift;
+}
+
+static inline void set_reg_mask(uint8_t *set, unsigned int index, uint8_t bits)
+{
+   unsigned int i = index / 2;
+   unsigned int shift = index % 2 ? 4 : 0;
+   uint8_t mask = 0x0f << shift;
+   set[i] &= ~mask;
+   set[i] |= (bits << shift);
+}
 
 #endif

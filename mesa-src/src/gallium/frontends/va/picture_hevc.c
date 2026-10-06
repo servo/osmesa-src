@@ -25,6 +25,7 @@
  *
  **************************************************************************/
 
+#include "util/macros.h"
 #include "vl/vl_zscan.h"
 #include "va_private.h"
 
@@ -37,6 +38,10 @@ void vlVaHandlePictureParameterBufferHEVC(vlVaDriver *drv, vlVaContext *context,
    context->desc.h265.pps->sps->chroma_format_idc = hevc->pic_fields.bits.chroma_format_idc;
    context->desc.h265.pps->sps->separate_colour_plane_flag =
       hevc->pic_fields.bits.separate_colour_plane_flag;
+   context->desc.h265.pps->sps->no_pic_reordering_flag =
+      hevc->pic_fields.bits.NoPicReorderingFlag;
+   context->desc.h265.pps->sps->no_bi_pred_flag =
+      hevc->pic_fields.bits.NoBiPredFlag;
    context->desc.h265.pps->sps->pic_width_in_luma_samples = hevc->pic_width_in_luma_samples;
    context->desc.h265.pps->sps->pic_height_in_luma_samples = hevc->pic_height_in_luma_samples;
    context->desc.h265.pps->sps->bit_depth_luma_minus8 = hevc->bit_depth_luma_minus8;
@@ -143,6 +148,7 @@ void vlVaHandlePictureParameterBufferHEVC(vlVaDriver *drv, vlVaContext *context,
 
    context->desc.h265.IDRPicFlag = hevc->slice_parsing_fields.bits.IdrPicFlag;
    context->desc.h265.RAPPicFlag = hevc->slice_parsing_fields.bits.RapPicFlag;
+   context->desc.h265.IntraPicFlag = hevc->slice_parsing_fields.bits.IntraPicFlag;
 
    context->desc.h265.CurrPicOrderCntVal = hevc->CurrPic.pic_order_cnt;
 
@@ -174,7 +180,16 @@ void vlVaHandlePictureParameterBufferHEVC(vlVaDriver *drv, vlVaContext *context,
          context->desc.h265.RefPicSetLtCurr[iCurr++] = i;
          context->desc.h265.NumPocLtCurr++;
       }
+      context->desc.h265.IsLongTerm[i] = ((hevc->ReferenceFrames[i].flags & VA_PICTURE_HEVC_LONG_TERM_REFERENCE) != 0) ? 1 : 0;
    }
+   context->desc.h265.pps->st_rps_bits = hevc->st_rps_bits;
+   context->desc.h265.UseStRpsBits = true;
+
+   context->desc.h265.slice_parameter.slice_count = 0;
+   context->desc.h265.slice_parameter.slice_info_present = false;
+   memset(context->desc.h265.slice_parameter.slice_data_flag, 0, sizeof(context->desc.h265.slice_parameter.slice_data_flag));
+   memset(context->desc.h265.slice_parameter.slice_data_offset, 0, sizeof(context->desc.h265.slice_parameter.slice_data_offset));
+   memset(context->desc.h265.slice_parameter.slice_data_size, 0, sizeof(context->desc.h265.slice_parameter.slice_data_size));
 }
 
 void vlVaHandleIQMatrixBufferHEVC(vlVaContext *context, vlVaBuffer *buf)
@@ -212,10 +227,56 @@ void vlVaHandleSliceParameterBufferHEVC(vlVaContext *context, vlVaBuffer *buf)
 {
    VASliceParameterBufferHEVC *h265 = buf->data;
 
-   assert(buf->size >= sizeof(VASliceParameterBufferHEVC) && buf->num_elements == 1);
-   for (int i = 0 ; i < 2 ; i++) {
-      for (int j = 0 ; j < 15 ; j++)
-         context->desc.h265.RefPicList[i][j] = h265->RefPicList[i][j];
+   for (uint32_t buffer_idx = 0; buffer_idx < buf->num_elements; buffer_idx++, h265++) {
+      uint32_t slice_index = context->desc.h265.slice_parameter.slice_count + buffer_idx;
+
+      const size_t max_pipe_hevc_slices = ARRAY_SIZE(context->desc.h265.slice_parameter.slice_data_offset);
+      assert(slice_index < max_pipe_hevc_slices);
+      if (slice_index >= max_pipe_hevc_slices) {
+         static bool warn_once = true;
+         if (warn_once) {
+            fprintf(stderr, "Warning: Number of slices (%d) provided exceed driver's max supported (%d), stop handling remaining slices.\n",
+               slice_index + 1, (int)max_pipe_hevc_slices);
+            warn_once = false;
+         }
+         return;
+      }
+
+      switch(h265->LongSliceFlags.fields.slice_type) {
+      /* Depending on slice_type, only update relevant reference */
+      case 0: /* HEVC_SLICE_B */
+         for (int j = 0 ; j < 15 ; j++)
+            context->desc.h265.RefPicList[slice_index][1][j] = h265->RefPicList[1][j];
+         FALLTHROUGH;
+      case 1: /* HEVC_SLICE_P */
+         for (int j = 0 ; j < 15 ; j++)
+            context->desc.h265.RefPicList[slice_index][0][j] = h265->RefPicList[0][j];
+         FALLTHROUGH;
+      default:
+         break;
+      }
+      context->desc.h265.UseRefPicList = true;
+
+      context->desc.h265.slice_parameter.slice_info_present = true;
+      context->desc.h265.slice_parameter.slice_data_size[slice_index] = h265->slice_data_size;
+      context->desc.h265.slice_parameter.slice_data_offset[slice_index] = h265->slice_data_offset;
+
+      switch (h265->slice_data_flag) {
+      case VA_SLICE_DATA_FLAG_ALL:
+         context->desc.h265.slice_parameter.slice_data_flag[slice_index] = PIPE_SLICE_BUFFER_PLACEMENT_TYPE_WHOLE;
+         break;
+      case VA_SLICE_DATA_FLAG_BEGIN:
+         context->desc.h265.slice_parameter.slice_data_flag[slice_index] = PIPE_SLICE_BUFFER_PLACEMENT_TYPE_BEGIN;
+         break;
+      case VA_SLICE_DATA_FLAG_MIDDLE:
+         context->desc.h265.slice_parameter.slice_data_flag[slice_index] = PIPE_SLICE_BUFFER_PLACEMENT_TYPE_MIDDLE;
+         break;
+      case VA_SLICE_DATA_FLAG_END:
+         context->desc.h265.slice_parameter.slice_data_flag[slice_index] = PIPE_SLICE_BUFFER_PLACEMENT_TYPE_END;
+         break;
+      default:
+         break;
+      }
    }
-   context->desc.h265.UseRefPicList = true;
+   context->desc.h265.slice_parameter.slice_count += buf->num_elements;
 }

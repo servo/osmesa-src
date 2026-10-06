@@ -37,7 +37,10 @@
 #include "pixelstore.h"
 #include "readpix.h"
 #include "texobj.h"
+#include "api_exec_decl.h"
 
+#include "state_tracker/st_cb_texture.h"
+#include "state_tracker/st_cb_readpixels.h"
 
 static const char *
 tex_target_name(GLenum tgt)
@@ -73,30 +76,43 @@ void
 _mesa_print_state( const char *msg, GLuint state )
 {
    _mesa_debug(NULL,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
-	   msg,
-	   state,
-	   (state & _NEW_MODELVIEW)       ? "ctx->ModelView, " : "",
-	   (state & _NEW_PROJECTION)      ? "ctx->Projection, " : "",
-	   (state & _NEW_TEXTURE_MATRIX)  ? "ctx->TextureMatrix, " : "",
-	   (state & _NEW_COLOR)           ? "ctx->Color, " : "",
-	   (state & _NEW_DEPTH)           ? "ctx->Depth, " : "",
-	   (state & _NEW_FOG)             ? "ctx->Fog, " : "",
-	   (state & _NEW_HINT)            ? "ctx->Hint, " : "",
-	   (state & _NEW_LIGHT)           ? "ctx->Light, " : "",
-	   (state & _NEW_LINE)            ? "ctx->Line, " : "",
-	   (state & _NEW_PIXEL)           ? "ctx->Pixel, " : "",
-	   (state & _NEW_POINT)           ? "ctx->Point, " : "",
-	   (state & _NEW_POLYGON)         ? "ctx->Polygon, " : "",
-	   (state & _NEW_POLYGONSTIPPLE)  ? "ctx->PolygonStipple, " : "",
-	   (state & _NEW_SCISSOR)         ? "ctx->Scissor, " : "",
-	   (state & _NEW_STENCIL)         ? "ctx->Stencil, " : "",
-	   (state & _NEW_TEXTURE_OBJECT)  ? "ctx->Texture(Object), " : "",
-	   (state & _NEW_TRANSFORM)       ? "ctx->Transform, " : "",
-	   (state & _NEW_VIEWPORT)        ? "ctx->Viewport, " : "",
-           (state & _NEW_TEXTURE_STATE)   ? "ctx->Texture(State), " : "",
-	   (state & _NEW_RENDERMODE)      ? "ctx->RenderMode, " : "",
-	   (state & _NEW_BUFFERS)         ? "ctx->Visual, ctx->DrawBuffer,, " : "");
+           "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+           msg,
+           state,
+#define S(def) (state & def) ? (#def ", ") + 5 : ""
+           S(_NEW_MODELVIEW),
+           S(_NEW_PROJECTION),
+           S(_NEW_TEXTURE_MATRIX),
+           S(_NEW_COLOR),
+           S(_NEW_DEPTH),
+           S(_NEW_TNL_SPACES),
+           S(_NEW_FOG),
+           S(_NEW_HINT),
+           S(_NEW_LIGHT_CONSTANTS),
+           S(_NEW_LINE),
+           S(_NEW_PIXEL),
+           S(_NEW_POINT),
+           S(_NEW_POLYGON),
+           S(_NEW_POLYGONSTIPPLE),
+           S(_NEW_SCISSOR),
+           S(_NEW_STENCIL),
+           S(_NEW_TEXTURE_OBJECT),
+           S(_NEW_TRANSFORM),
+           S(_NEW_VIEWPORT),
+           S(_NEW_TEXTURE_STATE),
+           S(_NEW_LIGHT_STATE),
+           S(_NEW_RENDERMODE),
+           S(_NEW_BUFFERS),
+           S(_NEW_CURRENT_ATTRIB),
+           S(_NEW_MULTISAMPLE),
+           S(_NEW_TRACK_MATRIX),
+           S(_NEW_PROGRAM),
+           S(_NEW_PROGRAM_CONSTANTS),
+           S(_NEW_FF_VERT_PROGRAM),
+           S(_NEW_FRAG_CLAMP),
+           S(_NEW_MATERIAL),
+           S(_NEW_FF_FRAG_PROGRAM));
+#undef S
 }
 
 
@@ -155,7 +171,6 @@ set_verbose_flags(const char *str)
       { "list",      VERBOSE_DISPLAY_LIST },
       { "lighting",  VERBOSE_LIGHTING },
       { "disassem",  VERBOSE_DISASSEM },
-      { "draw",      VERBOSE_DRAW },
       { "swap",      VERBOSE_SWAPBUFFERS }
    };
    GLuint i;
@@ -278,9 +293,9 @@ write_texture_image(struct gl_texture_object *texObj,
       store = ctx->Pack; /* save */
       ctx->Pack = ctx->DefaultPacking;
 
-      ctx->Driver.GetTexSubImage(ctx,
-                                 0, 0, 0, img->Width, img->Height, img->Depth,
-                                 GL_RGBA, GL_UNSIGNED_BYTE, buffer, img);
+      st_GetTexSubImage(ctx,
+                        0, 0, 0, img->Width, img->Height, img->Depth,
+                        GL_RGBA, GL_UNSIGNED_BYTE, buffer, img);
 
       /* make filename */
       snprintf(s, sizeof(s), "/tmp/tex%u.l%u.f%u.ppm", texObj->Name, level, face);
@@ -325,8 +340,8 @@ _mesa_write_renderbuffer_image(const struct gl_renderbuffer *rb)
 
    buffer = malloc(rb->Width * rb->Height * 4);
 
-   ctx->Driver.ReadPixels(ctx, 0, 0, rb->Width, rb->Height,
-                          format, type, &ctx->DefaultPacking, buffer);
+   st_ReadPixels(ctx, 0, 0, rb->Width, rb->Height,
+                 format, type, &ctx->DefaultPacking, buffer);
 
    /* make filename */
    snprintf(s, sizeof(s), "/tmp/renderbuffer%u.ppm", rb->Name);
@@ -393,10 +408,9 @@ _mesa_dump_texture(GLuint texture, GLuint writeImages)
 
 
 static void
-dump_texture_cb(GLuint id, void *data, void *userData)
+dump_texture_cb(void *data, UNUSED void *userData)
 {
    struct gl_texture_object *texObj = (struct gl_texture_object *) data;
-   (void) userData;
    dump_texture(texObj, WriteImages);
 }
 
@@ -410,7 +424,7 @@ _mesa_dump_textures(GLuint writeImages)
 {
    GET_CURRENT_CONTEXT(ctx);
    WriteImages = writeImages;
-   _mesa_HashWalk(ctx->Shared->TexObjects, dump_texture_cb, ctx);
+   _mesa_HashWalk(&ctx->Shared->TexObjects, dump_texture_cb, ctx);
 }
 
 
@@ -427,10 +441,9 @@ dump_renderbuffer(const struct gl_renderbuffer *rb, GLboolean writeImage)
 
 
 static void
-dump_renderbuffer_cb(GLuint id, void *data, void *userData)
+dump_renderbuffer_cb(void *data, UNUSED void *userData)
 {
    const struct gl_renderbuffer *rb = (const struct gl_renderbuffer *) data;
-   (void) userData;
    dump_renderbuffer(rb, WriteImages);
 }
 
@@ -444,7 +457,7 @@ _mesa_dump_renderbuffers(GLboolean writeImages)
 {
    GET_CURRENT_CONTEXT(ctx);
    WriteImages = writeImages;
-   _mesa_HashWalk(ctx->Shared->RenderBuffers, dump_renderbuffer_cb, ctx);
+   _mesa_HashWalk(&ctx->Shared->RenderBuffers, dump_renderbuffer_cb, ctx);
 }
 
 
@@ -609,9 +622,9 @@ _mesa_print_texture(struct gl_context *ctx, struct gl_texture_image *img)
    GLuint i, j, c;
    GLubyte *data;
 
-   ctx->Driver.MapTextureImage(ctx, img, slice,
-                               0, 0, img->Width, img->Height, GL_MAP_READ_BIT,
-                               &data, &srcRowStride);
+   st_MapTextureImage(ctx, img, slice,
+                      0, 0, img->Width, img->Height, GL_MAP_READ_BIT,
+                      &data, &srcRowStride);
 
    if (!data) {
       printf("No texture data\n");
@@ -658,5 +671,5 @@ _mesa_print_texture(struct gl_context *ctx, struct gl_texture_image *img)
       }
    }
 
-   ctx->Driver.UnmapTextureImage(ctx, img, slice);
+   st_UnmapTextureImage(ctx, img, slice);
 }

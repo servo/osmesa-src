@@ -33,7 +33,7 @@
 #ifndef LP_PERF_H
 #define LP_PERF_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 /**
  * Various counters
@@ -42,9 +42,13 @@ struct lp_counters
 {
    unsigned nr_tris;
    unsigned nr_culled_tris;
+   unsigned nr_rects;
+   unsigned nr_culled_rects;
    unsigned nr_empty_64;
    unsigned nr_fully_covered_64;
    unsigned nr_partially_covered_64;
+   unsigned nr_blit_64;
+   unsigned nr_pure_blit_64;
    unsigned nr_pure_shade_opaque_64;
    unsigned nr_pure_shade_64;
    unsigned nr_shade_64;
@@ -55,6 +59,8 @@ struct lp_counters
    unsigned nr_empty_4;
    unsigned nr_fully_covered_4;
    unsigned nr_partially_covered_4;
+   unsigned nr_rect_fully_covered_4;
+   unsigned nr_rect_partially_covered_4;
    unsigned nr_non_empty_4;
    unsigned nr_llvm_compiles;
    int64_t llvm_compile_time;  /**< total, in microseconds */
@@ -69,7 +75,7 @@ extern struct lp_counters lp_count;
 
 
 /** Increment the named counter (only for debug builds) */
-#ifdef DEBUG
+#if MESA_DEBUG && !THREAD_SANITIZER
 #define LP_COUNT(counter) lp_count.counter++
 #define LP_COUNT_ADD(counter, incr)  lp_count.counter += (incr)
 #define LP_COUNT_GET(counter) (lp_count.counter)

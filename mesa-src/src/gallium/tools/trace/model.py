@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 ##########################################################################
 # 
 # Copyright 2008 VMware, Inc.
@@ -33,13 +33,35 @@
 import sys
 import string
 import binascii
-
-try:
-    from cStringIO import StringIO
-except ImportError:
-    from StringIO import StringIO
-
+from io import StringIO
 import format
+
+
+class ModelOptions:
+
+    def __init__(self, args=None):
+        # Initialize the options we need to exist,
+        # with some reasonable defaults
+        self.plain = False
+        self.suppress_variants = False
+        self.named_ptrs = False
+        self.method_only = False
+
+        # If args is specified, we assume it is the result object
+        # from ArgumentParser.parse_args(). Copy the attribute values
+        # we have from it, if they exist.
+        if args is not None:
+            for var in self.__dict__:
+                if var in args.__dict__:
+                    self.__dict__[var] = args.__dict__[var]
+
+
+class TraceStateData:
+
+    def __init__(self):
+        self.ptr_list = {}
+        self.ptr_type_list = {}
+        self.ptr_types_list = {}
 
 
 class Node:
@@ -49,10 +71,13 @@ class Node:
 
     def __str__(self):
         stream = StringIO()
-        formatter = format.DefaultFormatter(stream)
-        pretty_printer = PrettyPrinter(formatter)
+        formatter = format.Formatter(stream)
+        pretty_printer = PrettyPrinter(formatter, {})
         self.visit(pretty_printer)
         return stream.getvalue()
+
+    def __hash__(self):
+        raise NotImplementedError
 
 
 class Literal(Node):
@@ -63,21 +88,23 @@ class Literal(Node):
     def visit(self, visitor):
         visitor.visit_literal(self)
 
+    def __hash__(self):
+        return hash(self.value)
+
 
 class Blob(Node):
     
     def __init__(self, value):
-        self._rawValue = None
-        self._hexValue = value
+        self.value = binascii.a2b_hex(value)
 
     def getValue(self):
-        if self._rawValue is None:
-            self._rawValue = binascii.a2b_hex(self._hexValue)
-            self._hexValue = None
-        return self._rawValue
+        return self.value
 
     def visit(self, visitor):
         visitor.visit_blob(self)
+
+    def __hash__(self):
+        return hash(self.value)
 
 
 class NamedConstant(Node):
@@ -87,6 +114,9 @@ class NamedConstant(Node):
 
     def visit(self, visitor):
         visitor.visit_named_constant(self)
+
+    def __hash__(self):
+        return hash(self.name)
     
 
 class Array(Node):
@@ -96,6 +126,12 @@ class Array(Node):
 
     def visit(self, visitor):
         visitor.visit_array(self)
+
+    def __hash__(self):
+        tmp = 0
+        for mobj in self.elements:
+            tmp = tmp ^ hash(mobj)
+        return tmp
 
 
 class Struct(Node):
@@ -107,14 +143,56 @@ class Struct(Node):
     def visit(self, visitor):
         visitor.visit_struct(self)
 
-        
+    def __hash__(self):
+        tmp = hash(self.name)
+        for mname, mobj in self.members:
+            tmp = tmp ^ hash(mname) ^ hash(mobj)
+        return tmp
+
+
 class Pointer(Node):
-    
-    def __init__(self, address):
+
+    ptr_ignore_list = ["ret", "elem"]
+
+    def __init__(self, state, address, pname):
         self.address = address
+        self.state = state
+
+        # Check if address exists in list and if it is a return value address
+        t1 = address in state.ptr_list
+        if t1:
+            rname = state.ptr_type_list[address]
+            t2 = rname in self.ptr_ignore_list and pname not in self.ptr_ignore_list
+        else:
+            rname = pname
+            t2 = False
+
+        # If address does NOT exist (add it), OR IS a ret value (update with new type)
+        if not t1 or t2:
+            # If previously set to ret value, remove one from count
+            if t1 and t2:
+                self.adjust_ptr_type_count(rname, -1)
+
+            # Add / update
+            self.adjust_ptr_type_count(pname, 1)
+            tmp = "{}_{}".format(pname, state.ptr_types_list[pname])
+            state.ptr_list[address] = tmp
+            state.ptr_type_list[address] = pname
+
+    def adjust_ptr_type_count(self, pname, delta):
+        if pname not in self.state.ptr_types_list:
+            self.state.ptr_types_list[pname] = 0
+
+        self.state.ptr_types_list[pname] += delta
+
+    def named_address(self):
+        return self.state.ptr_list[self.address]
 
     def visit(self, visitor):
         visitor.visit_pointer(self)
+
+    def __hash__(self):
+        return hash(self.named_address())
 
 
 class Call:
@@ -126,9 +204,20 @@ class Call:
         self.args = args
         self.ret = ret
         self.time = time
+
+        # Calculate hashvalue "cached" into a variable
+        self.hashvalue = hash(self.klass) ^ hash(self.method)
+        for mname, mobj in self.args:
+            self.hashvalue = self.hashvalue ^ hash(mname) ^ hash(mobj)
         
     def visit(self, visitor):
         visitor.visit_call(self)
+
+    def __hash__(self):
+        return self.hashvalue
+
+    def __eq__(self, other):
+        return self.hashvalue == other.hashvalue
 
 
 class Trace:
@@ -169,15 +258,16 @@ class Visitor:
 
 class PrettyPrinter:
 
-    def __init__(self, formatter):
+    def __init__(self, formatter, options):
         self.formatter = formatter
-    
+        self.options = options
+
     def visit_literal(self, node):
         if node.value is None:
             self.formatter.literal('NULL')
             return
 
-        if isinstance(node.value, basestring):
+        if isinstance(node.value, str):
             self.formatter.literal('"' + node.value + '"')
             return
 
@@ -210,32 +300,41 @@ class PrettyPrinter:
         self.formatter.text('}')
     
     def visit_pointer(self, node):
-        self.formatter.address(node.address)
-    
+        if self.options.named_ptrs:
+            self.formatter.address(node.named_address())
+        else:
+            self.formatter.address(node.address)
+
     def visit_call(self, node):
-        self.formatter.text('%s ' % node.no)
+        if not self.options.suppress_variants:
+            self.formatter.text(f'{node.no} ')
+
         if node.klass is not None:
             self.formatter.function(node.klass + '::' + node.method)
         else:
             self.formatter.function(node.method)
-        self.formatter.text('(')
-        sep = ''
-        for name, value in node.args:
-            self.formatter.text(sep)
-            self.formatter.variable(name)
-            self.formatter.text(' = ')
-            value.visit(self) 
-            sep = ', '
-        self.formatter.text(')')
-        if node.ret is not None:
-            self.formatter.text(' = ')
-            node.ret.visit(self)
-        if node.time is not None:
+
+        if not self.options.method_only:
+            self.formatter.text('(')
+            sep = ''
+            for name, value in node.args:
+                self.formatter.text(sep)
+                self.formatter.variable(name)
+                self.formatter.text(' = ')
+                value.visit(self)
+                sep = ', '
+            self.formatter.text(')')
+            if node.ret is not None:
+                self.formatter.text(' = ')
+                node.ret.visit(self)
+
+        if not self.options.suppress_variants and node.time is not None:
             self.formatter.text(' // time ')
             node.time.visit(self)
+
+        self.formatter.newline()
 
     def visit_trace(self, node):
         for call in node.calls:
             call.visit(self)
-            self.formatter.newline()
 

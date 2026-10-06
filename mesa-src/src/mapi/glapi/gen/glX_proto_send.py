@@ -26,8 +26,6 @@
 #    Ian Romanick <idr@us.ibm.com>
 #    Jeremy Kolb <jkolb@brandeis.edu>
 
-from __future__ import division, print_function
-
 import argparse
 
 import gl_XML, glX_XML, glX_proto_common, license
@@ -166,7 +164,7 @@ class PrintGlxProtoStubs(glX_proto_common.glx_print_proto):
 
     def printRealHeader(self):
         print('')
-        print('#include <GL/gl.h>')
+        print('#include "util/glheader.h"')
         print('#include "indirect.h"')
         print('#include "glxclient.h"')
         print('#include "indirect_size.h"')
@@ -373,56 +371,7 @@ const GLuint __glXDefaultPixelStore[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 1 };
             if func.glx_sop and func.glx_vendorpriv:
                 self.printFunction(func, func.glx_vendorpriv_names[0])
 
-        self.printGetProcAddress(api)
         return
-
-    def printGetProcAddress(self, api):
-        procs = {}
-        for func in api.functionIterateGlx():
-            for n in func.entry_points:
-                if func.has_different_protocol(n):
-                    procs[n] = func.static_glx_name(n)
-
-        print("""
-#ifdef GLX_INDIRECT_RENDERING
-
-static const struct proc_pair
-{
-   const char *name;
-   _glapi_proc proc;
-} proc_pairs[%d] = {""" % len(procs))
-        names = sorted(procs.keys())
-        for i in range(len(names)):
-            comma = ',' if i < len(names) - 1 else ''
-            print('   { "%s", (_glapi_proc) gl%s }%s' % (names[i], procs[names[i]], comma))
-        print("""};
-
-static int
-__indirect_get_proc_compare(const void *key, const void *memb)
-{
-   const struct proc_pair *pair = (const struct proc_pair *) memb;
-   return strcmp((const char *) key, pair->name);
-}
-
-_glapi_proc
-__indirect_get_proc_address(const char *name)
-{
-   const struct proc_pair *pair;
-   
-   /* skip "gl" */
-   name += 2;
-
-   pair = (const struct proc_pair *) bsearch((const void *) name,
-      (const void *) proc_pairs, ARRAY_SIZE(proc_pairs), sizeof(proc_pairs[0]),
-      __indirect_get_proc_compare);
-
-   return (pair) ? pair->proc : NULL;
-}
-
-#endif /* GLX_INDIRECT_RENDERING */
-""")
-        return
-
 
     def printFunction(self, func, name):
         footer = '}\n'
@@ -979,7 +928,7 @@ class PrintGlxProtoInit_c(gl_XML.gl_print_base):
 #include "glapi.h"
 #include <assert.h>
 
-#ifndef GLX_USE_APPLEGL
+#if !defined(GLX_USE_APPLEGL) || defined(GLX_USE_APPLE)
 
 /**
  * No-op function used to initialize functions that have no GLX protocol
@@ -999,9 +948,8 @@ struct _glapi_table * __glXNewIndirectAPI( void )
     _glapi_proc *table;
     unsigned entries;
     unsigned i;
-    int o;
 
-    entries = _glapi_get_dispatch_table_size();
+    entries = _mesa_glapi_get_dispatch_table_size();
     table = malloc(entries * sizeof(_glapi_proc));
     if (table == NULL)
         return NULL;
@@ -1036,13 +984,7 @@ struct _glapi_table * __glXNewIndirectAPI( void )
                         print(preamble)
                         preamble = None
 
-                    if func.is_abi():
-                        print('    table[{offset}] = (_glapi_proc) __indirect_gl{name};'.format(name = func.name, offset = func.offset))
-                    else:
-                        print('    o = _glapi_get_proc_offset("gl{0}");'.format(func.name))
-                        print('    assert(o > 0);')
-                        print('    table[o] = (_glapi_proc) __indirect_gl{0};'.format(func.name))
-
+                    print('    table[{offset}] = (_glapi_proc) __indirect_gl{name};'.format(name = func.name, offset = func.offset))
         return
 
 

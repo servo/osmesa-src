@@ -56,13 +56,14 @@ pad_to(struct disasm_state *disasm, int n)
 
 
 static void
-v3d_qpu_disasm_raddr(struct disasm_state *disasm,
-                     const struct v3d_qpu_instr *instr, uint8_t mux)
+v3d42_qpu_disasm_raddr(struct disasm_state *disasm,
+                       const struct v3d_qpu_instr *instr,
+                       enum v3d_qpu_mux mux)
 {
         if (mux == V3D_QPU_MUX_A) {
                 append(disasm, "rf%d", instr->raddr_a);
         } else if (mux == V3D_QPU_MUX_B) {
-                if (instr->sig.small_imm) {
+                if (instr->sig.small_imm_b) {
                         uint32_t val;
                         ASSERTED bool ok =
                                 v3d_qpu_small_imm_unpack(disasm->devinfo,
@@ -82,6 +83,64 @@ v3d_qpu_disasm_raddr(struct disasm_state *disasm,
         }
 }
 
+enum v3d_qpu_input_class {
+        V3D_QPU_ADD_A,
+        V3D_QPU_ADD_B,
+        V3D_QPU_MUL_A,
+        V3D_QPU_MUL_B
+};
+
+static void
+v3d71_qpu_disasm_raddr(struct disasm_state *disasm,
+                       const struct v3d_qpu_instr *instr,
+                       uint8_t raddr,
+                       enum v3d_qpu_input_class input_class)
+{
+        bool is_small_imm = false;
+        switch(input_class) {
+        case V3D_QPU_ADD_A:
+                is_small_imm = instr->sig.small_imm_a;
+                break;
+        case V3D_QPU_ADD_B:
+                is_small_imm = instr->sig.small_imm_b;
+                break;
+        case V3D_QPU_MUL_A:
+                is_small_imm = instr->sig.small_imm_c;
+                break;
+        case V3D_QPU_MUL_B:
+                is_small_imm = instr->sig.small_imm_d;
+                break;
+        }
+
+        if (is_small_imm) {
+                uint32_t val;
+                ASSERTED bool ok =
+                        v3d_qpu_small_imm_unpack(disasm->devinfo,
+                                                 raddr,
+                                                 &val);
+
+                if ((int)val >= -16 && (int)val <= 15)
+                        append(disasm, "%d", val);
+                else
+                        append(disasm, "0x%08x", val);
+                assert(ok);
+        } else {
+                append(disasm, "rf%d", raddr);
+        }
+}
+
+static void
+v3d_qpu_disasm_raddr(struct disasm_state *disasm,
+                     const struct v3d_qpu_instr *instr,
+                     const struct v3d_qpu_input *input,
+                     enum v3d_qpu_input_class input_class)
+{
+        if (disasm->devinfo->ver >= 71)
+                v3d71_qpu_disasm_raddr(disasm, instr, input->raddr, input_class);
+        else
+                v3d42_qpu_disasm_raddr(disasm, instr, input->mux);
+}
+
 static void
 v3d_qpu_disasm_waddr(struct disasm_state *disasm, uint32_t waddr, bool magic)
 {
@@ -90,7 +149,7 @@ v3d_qpu_disasm_waddr(struct disasm_state *disasm, uint32_t waddr, bool magic)
                 return;
         }
 
-        const char *name = v3d_qpu_magic_waddr_name(waddr);
+        const char *name = v3d_qpu_magic_waddr_name(disasm->devinfo, waddr);
         if (name)
                 append(disasm, "%s", name);
         else
@@ -110,7 +169,7 @@ v3d_qpu_disasm_add(struct disasm_state *disasm,
         append(disasm, "%s", v3d_qpu_pf_name(instr->flags.apf));
         append(disasm, "%s", v3d_qpu_uf_name(instr->flags.auf));
 
-        append(disasm, "  ");
+        append(disasm, " ");
 
         if (has_dst) {
                 v3d_qpu_disasm_waddr(disasm, instr->alu.add.waddr,
@@ -121,16 +180,16 @@ v3d_qpu_disasm_add(struct disasm_state *disasm,
         if (num_src >= 1) {
                 if (has_dst)
                         append(disasm, ", ");
-                v3d_qpu_disasm_raddr(disasm, instr, instr->alu.add.a);
+                v3d_qpu_disasm_raddr(disasm, instr, &instr->alu.add.a, V3D_QPU_ADD_A);
                 append(disasm, "%s",
-                       v3d_qpu_unpack_name(instr->alu.add.a_unpack));
+                       v3d_qpu_unpack_name(instr->alu.add.a.unpack));
         }
 
         if (num_src >= 2) {
                 append(disasm, ", ");
-                v3d_qpu_disasm_raddr(disasm, instr, instr->alu.add.b);
+                v3d_qpu_disasm_raddr(disasm, instr, &instr->alu.add.b, V3D_QPU_ADD_B);
                 append(disasm, "%s",
-                       v3d_qpu_unpack_name(instr->alu.add.b_unpack));
+                       v3d_qpu_unpack_name(instr->alu.add.b.unpack));
         }
 }
 
@@ -141,7 +200,7 @@ v3d_qpu_disasm_mul(struct disasm_state *disasm,
         bool has_dst = v3d_qpu_mul_op_has_dst(instr->alu.mul.op);
         int num_src = v3d_qpu_mul_op_num_src(instr->alu.mul.op);
 
-        pad_to(disasm, 21);
+        pad_to(disasm, 30);
         append(disasm, "; ");
 
         append(disasm, "%s", v3d_qpu_mul_op_name(instr->alu.mul.op));
@@ -153,7 +212,7 @@ v3d_qpu_disasm_mul(struct disasm_state *disasm,
         if (instr->alu.mul.op == V3D_QPU_M_NOP)
                 return;
 
-        append(disasm, "  ");
+        append(disasm, " ");
 
         if (has_dst) {
                 v3d_qpu_disasm_waddr(disasm, instr->alu.mul.waddr,
@@ -164,16 +223,16 @@ v3d_qpu_disasm_mul(struct disasm_state *disasm,
         if (num_src >= 1) {
                 if (has_dst)
                         append(disasm, ", ");
-                v3d_qpu_disasm_raddr(disasm, instr, instr->alu.mul.a);
+                v3d_qpu_disasm_raddr(disasm, instr, &instr->alu.mul.a, V3D_QPU_MUL_A);
                 append(disasm, "%s",
-                       v3d_qpu_unpack_name(instr->alu.mul.a_unpack));
+                       v3d_qpu_unpack_name(instr->alu.mul.a.unpack));
         }
 
         if (num_src >= 2) {
                 append(disasm, ", ");
-                v3d_qpu_disasm_raddr(disasm, instr, instr->alu.mul.b);
+                v3d_qpu_disasm_raddr(disasm, instr, &instr->alu.mul.b, V3D_QPU_MUL_B);
                 append(disasm, "%s",
-                       v3d_qpu_unpack_name(instr->alu.mul.b_unpack));
+                       v3d_qpu_unpack_name(instr->alu.mul.b.unpack));
         }
 }
 
@@ -187,7 +246,9 @@ v3d_qpu_disasm_sig_addr(struct disasm_state *disasm,
         if (!instr->sig_magic)
                 append(disasm, ".rf%d", instr->sig_addr);
         else {
-                const char *name = v3d_qpu_magic_waddr_name(instr->sig_addr);
+                const char *name =
+                        v3d_qpu_magic_waddr_name(disasm->devinfo,
+                                                 instr->sig_addr);
                 if (name)
                         append(disasm, ".%s", name);
                 else
@@ -215,7 +276,7 @@ v3d_qpu_disasm_sig(struct disasm_state *disasm,
                 return;
         }
 
-        pad_to(disasm, 41);
+        pad_to(disasm, 60);
 
         if (sig->thrsw)
                 append(disasm, "; thrsw");

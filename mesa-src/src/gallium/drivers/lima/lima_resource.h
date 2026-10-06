@@ -29,12 +29,12 @@
 
 /* max texture size is 4096x4096 */
 #define LIMA_MAX_MIP_LEVELS 13
+#define LAYOUT_CONVERT_THRESHOLD 8
 
 struct lima_screen;
 struct panfrost_minmax_cache;
 
 struct lima_resource_level {
-   uint32_t width;
    uint32_t stride;
    uint32_t offset;
    uint32_t layer_stride;
@@ -54,7 +54,10 @@ struct lima_resource {
    struct renderonly_scanout *scanout;
    struct lima_bo *bo;
    struct panfrost_minmax_cache *index_cache;
+   uint32_t mrt_pitch;
    bool tiled;
+   bool modifier_constant;
+   unsigned full_updates;
 
    struct lima_resource_level levels[LIMA_MAX_MIP_LEVELS];
 };
@@ -90,6 +93,9 @@ lima_transfer(struct pipe_transfer *trans)
 
 void
 lima_resource_screen_init(struct lima_screen *screen);
+
+void
+lima_resource_screen_destroy(struct lima_screen *screen);
 
 void
 lima_resource_context_init(struct lima_context *ctx);

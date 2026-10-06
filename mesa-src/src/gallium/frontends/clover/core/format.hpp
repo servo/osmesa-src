@@ -27,7 +27,7 @@
 
 #include "core/object.hpp"
 #include "pipe/p_defines.h"
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 
 namespace clover {
    pipe_texture_target translate_target(cl_mem_object_type type);
@@ -38,7 +38,8 @@ namespace clover {
    /// the given memory object type.
    ///
    std::set<cl_image_format> supported_formats(const context &ctx,
-                                               cl_mem_object_type type);
+                                               cl_mem_object_type type,
+                                               cl_mem_flags flags);
 }
 
 static inline bool

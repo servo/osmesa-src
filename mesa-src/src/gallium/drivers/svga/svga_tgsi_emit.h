@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef SVGA_TGSI_EMIT_H
 #define SVGA_TGSI_EMIT_H
@@ -30,6 +12,7 @@
 #include "svga_hw_reg.h"
 #include "svga_shader.h"
 #include "svga_tgsi.h"
+#include "vm_basic_types.h"
 #include "svga3d_shaderdefs.h"
 
 struct src_register
@@ -75,8 +58,8 @@ struct svga_shader_emitter
    int internal_color_idx[2]; /* diffuse, specular */
    int internal_color_count;
 
-   boolean emitted_vface;
-   boolean emit_frontface;
+   bool emitted_vface;
+   bool emit_frontface;
    int internal_frontface_idx;
 
    int ps30_input_count;
@@ -85,14 +68,14 @@ struct svga_shader_emitter
    int dynamic_branching_level;
 
    unsigned num_output_writes;
-   boolean constant_color_output;
+   bool constant_color_output;
 
-   boolean in_main_func;
+   bool in_main_func;
 
-   boolean created_common_immediate;
+   bool created_common_immediate;
    int common_immediate_idx[2];
 
-   boolean created_loop_const;
+   bool created_loop_const;
    int loop_const_idx;
 
    unsigned inverted_texcoords;  /**< bitmask of which texcoords are flipped */
@@ -107,8 +90,8 @@ struct svga_shader_emitter
    struct src_register input_map[PIPE_MAX_ATTRIBS];
    SVGA3dShaderDestToken output_map[PIPE_MAX_ATTRIBS];
 
-   boolean ps_reads_pos;
-   boolean emitted_depth_fog;
+   bool ps_reads_pos;
+   bool emitted_depth_fog;
    struct src_register ps_true_pos;
    struct src_register ps_depth_pos;
    SVGA3dShaderDestToken ps_temp_pos;
@@ -142,25 +125,25 @@ struct svga_shader_emitter
 };
 
 
-boolean
+bool
 svga_shader_emit_dword(struct svga_shader_emitter *emit, unsigned dword);
 
-boolean
+bool
 svga_shader_emit_dwords(struct svga_shader_emitter *emit,
                         const unsigned *dwords, unsigned nr);
 
-boolean
+bool
 svga_shader_emit_opcode(struct svga_shader_emitter *emit,
                         unsigned opcode);
 
-boolean
+bool
 svga_shader_emit_instructions(struct svga_shader_emitter *emit,
                               const struct tgsi_token *tokens);
 
-boolean
+bool
 svga_shader_emit_samplers_decl(struct svga_shader_emitter *emit);
 
-boolean
+bool
 svga_translate_decl_sm30(struct svga_shader_emitter *emit,
                          const struct tgsi_full_declaration *decl);
 
@@ -179,7 +162,7 @@ svga_translate_decl_sm30(struct svga_shader_emitter *emit,
 
 
 /** Emit the given SVGA3dShaderInstToken opcode */
-static inline boolean
+static inline bool
 emit_instruction(struct svga_shader_emitter *emit,
                  SVGA3dShaderInstToken opcode)
 {

@@ -38,19 +38,26 @@
  * @author Jose Fonseca <jfonseca@vmware.com>
  */
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "pipe/p_compiler.h"
-#include "os/os_thread.h"
+/* for access() */
+#ifdef _WIN32
+# include <io.h>
+#endif
+
+#include "util/compiler.h"
+#include "util/u_thread.h"
 #include "util/os_time.h"
+#include "util/simple_mtx.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
 #include "util/u_string.h"
 #include "util/u_math.h"
 #include "util/format/u_format.h"
+#include "compiler/nir/nir.h"
 
 #include "tr_dump.h"
 #include "tr_screen.h"
@@ -59,15 +66,52 @@
 
 static bool close_stream = false;
 static FILE *stream = NULL;
-static mtx_t call_mutex = _MTX_INITIALIZER_NP;
+static simple_mtx_t call_mutex = SIMPLE_MTX_INITIALIZER;
 static long unsigned call_no = 0;
 static bool dumping = false;
+static long nir_count = 0;
 
+static bool trigger_active = true;
+static char *trigger_filename = NULL;
+
+void
+trace_dump_trigger_active(bool active)
+{
+   trigger_active = active;
+}
+
+void
+trace_dump_check_trigger(void)
+{
+   if (!trigger_filename)
+      return;
+
+   simple_mtx_lock(&call_mutex);
+   if (trigger_active) {
+      trigger_active = false;
+   } else {
+      if (!access(trigger_filename, 2 /* W_OK but compiles on Windows */)) {
+         if (!unlink(trigger_filename)) {
+            trigger_active = true;
+         } else {
+            fprintf(stderr, "error removing trigger file\n");
+            trigger_active = false;
+         }
+      }
+   }
+   simple_mtx_unlock(&call_mutex);
+}
+
+bool
+trace_dump_is_triggered(void)
+{
+   return trigger_active && !!trigger_filename;
+}
 
 static inline void
 trace_dump_write(const char *buf, size_t size)
 {
-   if (stream) {
+   if (stream && trigger_active) {
       fwrite(buf, size, 1, stream);
    }
 }
@@ -175,6 +219,7 @@ static void
 trace_dump_trace_close(void)
 {
    if (stream) {
+      trigger_active = true;
       trace_dump_writes("</trace>\n");
       if (close_stream) {
          fclose(stream);
@@ -182,6 +227,7 @@ trace_dump_trace_close(void)
          stream = NULL;
       }
       call_no = 0;
+      free(trigger_filename);
    }
 }
 
@@ -207,6 +253,8 @@ trace_dump_trace_begin(void)
    filename = debug_get_option("GALLIUM_TRACE", NULL);
    if (!filename)
       return false;
+
+   nir_count = debug_get_num_option("GALLIUM_TRACE_NIR", 32);
 
    if (!stream) {
 
@@ -234,6 +282,13 @@ trace_dump_trace_begin(void)
        * time.
        */
       atexit(trace_dump_trace_close);
+
+      const char *trigger = debug_get_option("GALLIUM_TRACE_TRIGGER", NULL);
+      if (trigger && __normal_user()) {
+         trigger_filename = strdup(trigger);
+         trigger_active = false;
+      } else
+         trigger_active = true;
    }
 
    return true;
@@ -250,12 +305,12 @@ bool trace_dump_trace_enabled(void)
 
 void trace_dump_call_lock(void)
 {
-   mtx_lock(&call_mutex);
+   simple_mtx_lock(&call_mutex);
 }
 
 void trace_dump_call_unlock(void)
 {
-   mtx_unlock(&call_mutex);
+   simple_mtx_unlock(&call_mutex);
 }
 
 /*
@@ -279,24 +334,24 @@ bool trace_dumping_enabled_locked(void)
 
 void trace_dumping_start(void)
 {
-   mtx_lock(&call_mutex);
+   simple_mtx_lock(&call_mutex);
    trace_dumping_start_locked();
-   mtx_unlock(&call_mutex);
+   simple_mtx_unlock(&call_mutex);
 }
 
 void trace_dumping_stop(void)
 {
-   mtx_lock(&call_mutex);
+   simple_mtx_lock(&call_mutex);
    trace_dumping_stop_locked();
-   mtx_unlock(&call_mutex);
+   simple_mtx_unlock(&call_mutex);
 }
 
 bool trace_dumping_enabled(void)
 {
    bool ret;
-   mtx_lock(&call_mutex);
+   simple_mtx_lock(&call_mutex);
    ret = trace_dumping_enabled_locked();
-   mtx_unlock(&call_mutex);
+   simple_mtx_unlock(&call_mutex);
    return ret;
 }
 
@@ -343,14 +398,14 @@ void trace_dump_call_end_locked(void)
 
 void trace_dump_call_begin(const char *klass, const char *method)
 {
-   mtx_lock(&call_mutex);
+   simple_mtx_lock(&call_mutex);
    trace_dump_call_begin_locked(klass, method);
 }
 
 void trace_dump_call_end(void)
 {
    trace_dump_call_end_locked();
-   mtx_unlock(&call_mutex);
+   simple_mtx_unlock(&call_mutex);
 }
 
 void trace_dump_arg_begin(const char *name)
@@ -389,7 +444,7 @@ void trace_dump_ret_end(void)
    trace_dump_newline();
 }
 
-void trace_dump_bool(int value)
+void trace_dump_bool(bool value)
 {
    if (!dumping)
       return;
@@ -397,20 +452,20 @@ void trace_dump_bool(int value)
    trace_dump_writef("<bool>%c</bool>", value ? '1' : '0');
 }
 
-void trace_dump_int(long long int value)
+void trace_dump_int(int64_t value)
 {
    if (!dumping)
       return;
 
-   trace_dump_writef("<int>%lli</int>", value);
+   trace_dump_writef("<int>%" PRIi64 "</int>", value);
 }
 
-void trace_dump_uint(long long unsigned value)
+void trace_dump_uint(uint64_t value)
 {
    if (!dumping)
       return;
 
-   trace_dump_writef("<uint>%llu</uint>", value);
+   trace_dump_writef("<uint>%" PRIu64 "</uint>", value);
 }
 
 void trace_dump_float(double value)
@@ -446,17 +501,18 @@ void trace_dump_box_bytes(const void *data,
                           struct pipe_resource *resource,
 			  const struct pipe_box *box,
 			  unsigned stride,
-			  unsigned slice_stride)
+			  uint64_t slice_stride)
 {
    enum pipe_format format = resource->format;
-   size_t size;
+   uint64_t size;
 
    assert(box->height > 0);
    assert(box->depth > 0);
 
-   size =  util_format_get_nblocksx(format, box->width )      * util_format_get_blocksize(format)
-        + (util_format_get_nblocksy(format, box->height) - 1) * stride
-        +                                  (box->depth   - 1) * slice_stride;
+   size = util_format_get_nblocksx(format, box->width ) *
+          (uint64_t)util_format_get_blocksize(format) +
+          (util_format_get_nblocksy(format, box->height) - 1) *
+          (uint64_t)stride + (box->depth - 1) * slice_stride;
 
    /*
     * Only dump buffer transfers to avoid huge files.
@@ -466,6 +522,7 @@ void trace_dump_box_bytes(const void *data,
       size = 0;
    }
 
+   assert(size <= SIZE_MAX);
    trace_dump_bytes(data, size);
 }
 
@@ -595,5 +652,24 @@ void trace_dump_transfer_ptr(struct pipe_transfer *_transfer)
       trace_dump_ptr(tr_tran->transfer);
    } else {
       trace_dump_null();
+   }
+}
+
+void trace_dump_nir(struct nir_shader *nir)
+{
+   if (!dumping)
+      return;
+
+   if (--nir_count < 0) {
+      fputs("<string>...</string>", stream);
+      return;
+   }
+
+   // NIR doesn't have a print to string function.  Use CDATA and hope for the
+   // best.
+   if (stream) {
+      fputs("<string><![CDATA[", stream);
+      nir_print_shader(nir, stream);
+      fputs("]]></string>", stream);
    }
 }

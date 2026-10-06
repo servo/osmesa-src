@@ -36,13 +36,12 @@
 #define LP_BLD_DEPTH_H
 
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_state.h"
 
 #include "gallivm/lp_bld.h"
 
- 
-struct pipe_depth_state;
+struct lp_depth_state;
 struct gallivm_state;
 struct util_format_description;
 struct lp_type;
@@ -56,7 +55,7 @@ lp_depth_type(const struct util_format_description *format_desc,
 
 void
 lp_build_depth_stencil_test(struct gallivm_state *gallivm,
-                            const struct pipe_depth_state *depth,
+                            const struct lp_depth_state *depth,
                             const struct pipe_stencil_state stencil[2],
                             struct lp_type z_src_type,
                             const struct util_format_description *format_desc,
@@ -69,13 +68,14 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
                             LLVMValueRef face,
                             LLVMValueRef *z_value,
                             LLVMValueRef *s_value,
-                            boolean do_branch);
+                            bool do_branch,
+                            bool restrict_depth);
 
 void
 lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
                                      struct lp_type z_src_type,
                                      const struct util_format_description *format_desc,
-                                     boolean is_1d,
+                                     bool is_1d,
                                      LLVMValueRef depth_ptr,
                                      LLVMValueRef depth_stride,
                                      LLVMValueRef *z_fb,
@@ -86,7 +86,7 @@ void
 lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
                                       struct lp_type z_src_type,
                                       const struct util_format_description *format_desc,
-                                      boolean is_1d,
+                                      bool is_1d,
                                       LLVMValueRef mask_value,
                                       LLVMValueRef z_fb,
                                       LLVMValueRef s_fb,

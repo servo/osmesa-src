@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2008 VMware, Inc.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,16 +22,16 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 /**
  * @file
  * Cross-platform debugging helpers.
- * 
- * For now it just has assert and printf replacements, but it might be extended 
- * with stack trace reports and more advanced logging in the near future. 
- * 
+ *
+ * For now it just has assert and printf replacements, but it might be extended
+ * with stack trace reports and more advanced logging in the near future.
+ *
  * @author Jose Fonseca <jfonseca@vmware.com>
  */
 
@@ -39,8 +39,15 @@
 #define U_DEBUG_H_
 
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <sys/types.h>
+#include <unistd.h>
+#endif
+
 #include "util/os_misc.h"
+#include "util/u_atomic.h"
 #include "util/detect_os.h"
 #include "util/macros.h"
 
@@ -49,19 +56,56 @@
 #include <OS.h>
 #endif
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 extern "C" {
 #endif
 
+enum util_debug_type
+{
+   UTIL_DEBUG_TYPE_OUT_OF_MEMORY = 1,
+   UTIL_DEBUG_TYPE_ERROR,
+   UTIL_DEBUG_TYPE_SHADER_INFO,
+   UTIL_DEBUG_TYPE_PERF_INFO,
+   UTIL_DEBUG_TYPE_INFO,
+   UTIL_DEBUG_TYPE_FALLBACK,
+   UTIL_DEBUG_TYPE_CONFORMANCE,
+};
 
-#if defined(__GNUC__)
-#define _util_printf_format(fmt, list) __attribute__ ((format (printf, fmt, list)))
-#else
-#define _util_printf_format(fmt, list)
-#endif
+/**
+ * Structure that contains a callback for debug messages from the driver back
+ * to the gallium frontend.
+ */
+struct util_debug_callback
+{
+   /**
+    * When set to \c true, the callback may be called asynchronously from a
+    * driver-created thread.
+    */
+   bool async;
+
+   /**
+    * Callback for the driver to report debug/performance/etc information back
+    * to the gallium frontend.
+    *
+    * \param data       user-supplied data pointer
+    * \param id         message type identifier, if pointed value is 0, then a
+    *                   new id is assigned
+    * \param type       UTIL_DEBUG_TYPE_*
+    * \param format     printf-style format string
+    * \param args       args for format string
+    */
+   void (*debug_message)(void *data,
+                         unsigned *id,
+                         enum util_debug_type type,
+                         const char *fmt,
+                         va_list args);
+   void *data;
+};
+
+#define _util_printf_format(fmt, list) PRINTFLIKE(fmt, list)
 
 void _debug_vprintf(const char *format, va_list ap);
-   
+
 
 static inline void
 _debug_printf(const char *format, ...)
@@ -89,7 +133,7 @@ debug_printf(const char *format, ...) _util_printf_format(1,2);
 static inline void
 debug_printf(const char *format, ...)
 {
-#ifdef DEBUG
+#if MESA_DEBUG
    va_list ap;
    va_start(ap, format);
    _debug_vprintf(format, ap);
@@ -117,143 +161,98 @@ debug_printf(const char *format, ...)
    } while (0)
 
 
-#ifdef DEBUG
+#if MESA_DEBUG
 #define debug_vprintf(_format, _ap) _debug_vprintf(_format, _ap)
 #else
 #define debug_vprintf(_format, _ap) ((void)0)
 #endif
 
-
-#ifdef DEBUG
+#ifdef _WIN32
 /**
- * Dump a blob in hex to the same place that debug_printf sends its
- * messages.
- */
-void debug_print_blob( const char *name, const void *blob, unsigned size );
-#else
-#define debug_print_blob(_name, _blob, _size) ((void)0)
-#endif
-
-
-/**
- * Disable interactive error message boxes.
+ * Disable Win32 interactive error message boxes.
  *
  * Should be called as soon as possible for effectiveness.
  */
 void
-debug_disable_error_message_boxes(void);
+debug_disable_win32_error_dialogs(void);
+#endif
 
 
 /**
  * Hard-coded breakpoint.
  */
-#ifdef DEBUG
+#if MESA_DEBUG
 #define debug_break() os_break()
-#else /* !DEBUG */
+#else /* !MESA_DEBUG */
 #define debug_break() ((void)0)
-#endif /* !DEBUG */
+#endif /* MESA_DEBUG */
 
 
-long
-debug_get_num_option(const char *name, long dfault);
-
-#ifdef _MSC_VER
-__declspec(noreturn)
-#endif
-void _debug_assert_fail(const char *expr, 
-                        const char *file, 
-                        unsigned line, 
-                        const char *function)
-#if defined(__GNUC__) && !defined(DEBUG)
-   __attribute__((noreturn))
-#endif
-;
-
-
-/** 
- * Assert macro
- * 
- * Do not expect that the assert call terminates -- errors must be handled 
- * regardless of assert behavior.
- *
- * For non debug builds the assert macro will expand to a no-op, so do not
- * call functions with side effects in the assert expression.
- */
-#ifndef NDEBUG
-#define debug_assert(expr) ((expr) ? (void)0 : _debug_assert_fail(#expr, __FILE__, __LINE__, __FUNCTION__))
-#else
-#define debug_assert(expr) (void)(0 && (expr))
-#endif
-
-
-/** Override standard assert macro */
-#ifdef assert
-#undef assert
-#endif
-#define assert(expr) debug_assert(expr)
+void
+debug_get_version_option(const char *name, unsigned *major, unsigned *minor);
 
 
 /**
  * Output the current function name.
  */
-#ifdef DEBUG
+#if MESA_DEBUG
 #define debug_checkpoint() \
-   _debug_printf("%s\n", __FUNCTION__)
+   _debug_printf("%s\n", __func__)
 #else
 #define debug_checkpoint() \
-   ((void)0) 
+   ((void)0)
 #endif
 
 
 /**
  * Output the full source code position.
  */
-#ifdef DEBUG
+#if MESA_DEBUG
 #define debug_checkpoint_full() \
-   _debug_printf("%s:%u:%s\n", __FILE__, __LINE__, __FUNCTION__)
+   _debug_printf("%s:%u:%s\n", __FILE__, __LINE__, __func__)
 #else
 #define debug_checkpoint_full() \
-   ((void)0) 
+   ((void)0)
 #endif
 
 
 /**
  * Output a warning message. Muted on release version.
  */
-#ifdef DEBUG
+#if MESA_DEBUG
 #define debug_warning(__msg) \
-   _debug_printf("%s:%u:%s: warning: %s\n", __FILE__, __LINE__, __FUNCTION__, __msg)
+   _debug_printf("%s:%u:%s: warning: %s\n", __FILE__, __LINE__, __func__, __msg)
 #else
 #define debug_warning(__msg) \
-   ((void)0) 
+   ((void)0)
 #endif
 
 
 /**
  * Emit a warning message, but only once.
  */
-#ifdef DEBUG
+#if MESA_DEBUG
 #define debug_warn_once(__msg) \
    do { \
       static bool warned = false; \
       if (!warned) { \
          _debug_printf("%s:%u:%s: one time warning: %s\n", \
-                       __FILE__, __LINE__, __FUNCTION__, __msg); \
+                       __FILE__, __LINE__, __func__, __msg); \
          warned = true; \
       } \
    } while (0)
 #else
 #define debug_warn_once(__msg) \
-   ((void)0) 
+   ((void)0)
 #endif
 
 
 /**
  * Output an error message. Not muted on release version.
  */
-#ifdef DEBUG
+#if MESA_DEBUG
 #define debug_error(__msg) \
-   _debug_printf("%s:%u:%s: error: %s\n", __FILE__, __LINE__, __FUNCTION__, __msg) 
+   _debug_printf("%s:%u:%s: error: %s\n", __FILE__, __LINE__, __func__, __msg)
 #else
 #define debug_error(__msg) \
    _debug_printf("error: %s\n", __msg)
@@ -262,22 +261,18 @@ void _debug_assert_fail(const char *expr,
 /**
  * Output a debug log message to the debug info callback.
  */
-#define pipe_debug_message(cb, type, fmt, ...) do { \
+#define util_debug_message(cb, type, fmt, ...) do { \
    static unsigned id = 0; \
-   if ((cb) && (cb)->debug_message) { \
-      _pipe_debug_message(cb, &id, \
-                          PIPE_DEBUG_TYPE_ ## type, \
-                          fmt, ##__VA_ARGS__); \
-   } \
+   _util_debug_message(cb, &id, \
+                        UTIL_DEBUG_TYPE_ ## type, \
+                        fmt, ##__VA_ARGS__); \
 } while (0)
 
-struct pipe_debug_callback;
-
 void
-_pipe_debug_message(
-   struct pipe_debug_callback *cb,
+_util_debug_message(
+   struct util_debug_callback *cb,
    unsigned *id,
-   enum pipe_debug_type type,
+   enum util_debug_type type,
    const char *fmt, ...) _util_printf_format(4, 5);
 
 
@@ -294,7 +289,7 @@ struct debug_named_value
 
 /**
  * Some C pre-processor magic to simplify creating named values.
- * 
+ *
  * Example:
  * @code
  * static const debug_named_value my_names[] = {
@@ -303,16 +298,16 @@ struct debug_named_value
  *    DEBUG_NAMED_VALUE(MY_ENUM_VALUE_Z),
  *    DEBUG_NAMED_VALUE_END
  * };
- * 
+ *
  *    ...
- *    debug_printf("%s = %s\n", 
+ *    debug_printf("%s = %s\n",
  *                 name,
  *                 debug_dump_enum(my_names, my_value));
  *    ...
  * @endcode
  */
-#define DEBUG_NAMED_VALUE(__symbol) {#__symbol, (unsigned long)__symbol, NULL}
-#define DEBUG_NAMED_VALUE_WITH_DESCRIPTION(__symbol, __desc) {#__symbol, (unsigned long)__symbol, __desc}
+#define DEBUG_NAMED_VALUE(__symbol) {#__symbol, (uint64_t)__symbol, NULL}
+#define DEBUG_NAMED_VALUE_WITH_DESCRIPTION(__symbol, __desc) {#__symbol, (uint64_t)__symbol, __desc}
 #define DEBUG_NAMED_VALUE_END {NULL, 0, NULL}
 
 
@@ -320,83 +315,68 @@ struct debug_named_value
  * Convert a enum value to a string.
  */
 const char *
-debug_dump_enum(const struct debug_named_value *names, 
-                unsigned long value);
-
-const char *
-debug_dump_enum_noprefix(const struct debug_named_value *names, 
-                         const char *prefix,
-                         unsigned long value);
-
+debug_dump_enum(const struct debug_named_value *names,
+                uint64_t value);
 
 /**
  * Convert binary flags value to a string.
  */
 const char *
-debug_dump_flags(const struct debug_named_value *names, 
-                 unsigned long value);
+debug_dump_flags(const struct debug_named_value *names,
+                 uint64_t value);
 
 
-/**
- * Function enter exit loggers
- */
-#ifdef DEBUG
-int debug_funclog_enter(const char* f, const int line, const char* file);
-void debug_funclog_exit(const char* f, const int line, const char* file);
-void debug_funclog_enter_exit(const char* f, const int line, const char* file);
+struct debug_control {
+    const char * string;
+    uint64_t     flag;
+};
 
-#define DEBUG_FUNCLOG_ENTER() \
-   int __debug_decleration_work_around = \
-      debug_funclog_enter(__FUNCTION__, __LINE__, __FILE__)
-#define DEBUG_FUNCLOG_EXIT() \
-   do { \
-      (void)__debug_decleration_work_around; \
-      debug_funclog_exit(__FUNCTION__, __LINE__, __FILE__); \
-      return; \
-   } while(0)
-#define DEBUG_FUNCLOG_EXIT_RET(ret) \
-   do { \
-      (void)__debug_decleration_work_around; \
-      debug_funclog_exit(__FUNCTION__, __LINE__, __FILE__); \
-      return ret; \
-   } while(0)
-#define DEBUG_FUNCLOG_ENTER_EXIT() \
-   debug_funclog_enter_exit(__FUNCTION__, __LINE__, __FILE__)
+uint64_t
+parse_debug_string(const char *debug,
+                   const struct debug_control *control);
 
-#else
-#define DEBUG_FUNCLOG_ENTER() \
-   int __debug_decleration_work_around
-#define DEBUG_FUNCLOG_EXIT() \
-   do { (void)__debug_decleration_work_around; return; } while(0)
-#define DEBUG_FUNCLOG_EXIT_RET(ret) \
-   do { (void)__debug_decleration_work_around; return ret; } while(0)
-#define DEBUG_FUNCLOG_ENTER_EXIT()
-#endif
 
+uint64_t
+parse_enable_string(const char *debug,
+                    uint64_t default_value,
+                    const struct debug_control *control);
+
+
+bool
+comma_separated_list_contains(const char *list, const char *s);
 
 /**
  * Get option.
- * 
- * It is an alias for getenv on Linux. 
- * 
- * On Windows it reads C:\gallium.cfg, which is a text file with CR+LF line 
- * endings with one option per line as
- *  
- *   NAME=value
- * 
- * This file must be terminated with an extra empty line.
+ *
+ * It is an alias for getenv on Unix and Windows.
+ *
  */
 const char *
 debug_get_option(const char *name, const char *dfault);
 
+const char *
+debug_get_option_cached(const char *name, const char *dfault);
+
+bool
+debug_parse_bool_option(const char *str, bool dfault);
+
 bool
 debug_get_bool_option(const char *name, bool dfault);
 
-long
-debug_get_num_option(const char *name, long dfault);
+int64_t
+debug_parse_num_option(const char *str, int64_t dfault);
+
+int64_t
+debug_get_num_option(const char *name, int64_t dfault);
 
 uint64_t
-debug_get_flags_option(const char *name, 
+debug_parse_flags_option(const char *name,
+                         const char *str,
+                         const struct debug_named_value *flags,
+                         uint64_t dfault);
+
+uint64_t
+debug_get_flags_option(const char *name,
                        const struct debug_named_value *flags,
                        uint64_t dfault);
 
@@ -404,56 +384,80 @@ debug_get_flags_option(const char *name,
 static const char * \
 debug_get_option_ ## suffix (void) \
 { \
-   static bool first = true; \
+   static bool initialized = false; \
    static const char * value; \
-   if (first) { \
-      first = false; \
-      value = debug_get_option(name, dfault); \
+   if (unlikely(!p_atomic_read_relaxed(&initialized))) { \
+      const char *str = debug_get_option_cached(name, dfault); \
+      p_atomic_set(&value, str); \
+      p_atomic_set(&initialized, true); \
    } \
    return value; \
 }
+
+static inline bool
+__normal_user(void)
+{
+#if defined(_WIN32)
+   return true;
+#else
+   return geteuid() == getuid() && getegid() == getgid();
+#endif
+}
+
+#ifndef HAVE_SECURE_GETENV
+static inline char *secure_getenv(const char *name)
+{
+   return getenv(name);
+}
+#endif
 
 #define DEBUG_GET_ONCE_BOOL_OPTION(sufix, name, dfault) \
 static bool \
 debug_get_option_ ## sufix (void) \
 { \
-   static bool first = true; \
+   static bool initialized = false; \
    static bool value; \
-   if (first) { \
-      first = false; \
-      value = debug_get_bool_option(name, dfault); \
+   if (unlikely(!p_atomic_read_relaxed(&initialized))) { \
+      const char *str = debug_get_option_cached(name, NULL); \
+      bool parsed_value = debug_parse_bool_option(str, dfault); \
+      p_atomic_set(&value, parsed_value); \
+      p_atomic_set(&initialized, true); \
    } \
    return value; \
 }
 
 #define DEBUG_GET_ONCE_NUM_OPTION(sufix, name, dfault) \
-static long \
+static int64_t \
 debug_get_option_ ## sufix (void) \
 { \
-   static bool first = true; \
-   static long value; \
-   if (first) { \
-      first = false; \
-      value = debug_get_num_option(name, dfault); \
+   static bool initialized = false; \
+   static int64_t value; \
+   if (unlikely(!p_atomic_read_relaxed(&initialized))) { \
+      const char *str = debug_get_option_cached(name, NULL); \
+      int64_t parsed_value = debug_parse_num_option(str, dfault); \
+      p_atomic_set(&value, parsed_value); \
+      p_atomic_set(&initialized, true); \
    } \
    return value; \
 }
 
 #define DEBUG_GET_ONCE_FLAGS_OPTION(sufix, name, flags, dfault) \
-static unsigned long \
+static uint64_t \
 debug_get_option_ ## sufix (void) \
 { \
-   static bool first = true; \
-   static unsigned long value; \
-   if (first) { \
-      first = false; \
-      value = debug_get_flags_option(name, flags, dfault); \
+   static bool initialized = false; \
+   static uint64_t value; \
+   if (unlikely(!p_atomic_read_relaxed(&initialized))) { \
+      const char *str = debug_get_option_cached(name, NULL); \
+      uint64_t parsed_value = debug_parse_flags_option(name, str, flags, dfault); \
+      p_atomic_set(&value, parsed_value); \
+      p_atomic_set(&initialized, true); \
    } \
    return value; \
 }
 
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 }
 #endif
 

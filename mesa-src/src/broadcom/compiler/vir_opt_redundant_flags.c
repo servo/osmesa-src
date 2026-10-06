@@ -81,11 +81,11 @@ vir_instr_flags_op_equal(struct qinst *a, struct qinst *b)
             a->qpu.flags.mpf != b->qpu.flags.mpf ||
             a->qpu.alu.add.op != b->qpu.alu.add.op ||
             a->qpu.alu.mul.op != b->qpu.alu.mul.op ||
-            a->qpu.alu.add.a_unpack != b->qpu.alu.add.a_unpack ||
-            a->qpu.alu.add.b_unpack != b->qpu.alu.add.b_unpack ||
+            a->qpu.alu.add.a.unpack != b->qpu.alu.add.a.unpack ||
+            a->qpu.alu.add.b.unpack != b->qpu.alu.add.b.unpack ||
             a->qpu.alu.add.output_pack != b->qpu.alu.add.output_pack ||
-            a->qpu.alu.mul.a_unpack != b->qpu.alu.mul.a_unpack ||
-            a->qpu.alu.mul.b_unpack != b->qpu.alu.mul.b_unpack ||
+            a->qpu.alu.mul.a.unpack != b->qpu.alu.mul.a.unpack ||
+            a->qpu.alu.mul.b.unpack != b->qpu.alu.mul.b.unpack ||
             a->qpu.alu.mul.output_pack != b->qpu.alu.mul.output_pack) {
                 return false;
         }
@@ -99,6 +99,7 @@ vir_opt_redundant_flags_block(struct v3d_compile *c, struct qblock *block)
         struct qinst *last_flags = NULL;
         bool progress = false;
 
+        c->cur_block = block;
         vir_for_each_inst(inst, block) {
                 if (inst->qpu.type != V3D_QPU_INSTR_TYPE_ALU ||
                     inst->qpu.flags.auf != V3D_QPU_UF_NONE ||
@@ -107,9 +108,14 @@ vir_opt_redundant_flags_block(struct v3d_compile *c, struct qblock *block)
                         continue;
                 }
 
-                /* Flags aren't preserved across a thrsw. */
-                if (inst->qpu.sig.thrsw)
-                        last_flags = NULL;
+                /* Flags aren't preserved across a thrsw.
+                 *
+                 * In V3D 4.2+ flags are preserved across thread switches.
+                 */
+                if (c->devinfo->ver < 42) {
+                        if (inst->qpu.sig.thrsw)
+                                last_flags = NULL;
+                }
 
                 if (inst->qpu.flags.apf != V3D_QPU_PF_NONE ||
                     inst->qpu.flags.mpf != V3D_QPU_PF_NONE) {

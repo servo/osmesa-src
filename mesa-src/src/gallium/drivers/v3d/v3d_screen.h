@@ -21,30 +21,32 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef VC5_SCREEN_H
-#define VC5_SCREEN_H
+#ifndef V3D_SCREEN_H
+#define V3D_SCREEN_H
 
 #include "pipe/p_screen.h"
 #include "renderonly/renderonly.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "frontend/drm_driver.h"
+#include "util/disk_cache.h"
 #include "util/list.h"
 #include "util/slab.h"
 #include "broadcom/common/v3d_debug.h"
 #include "broadcom/common/v3d_device_info.h"
+#include "broadcom/perfcntrs/v3d_perfcntrs.h"
 
 struct v3d_bo;
 
 /* These are tunable parameters in the HW design, but all the V3D
  * implementations agree.
  */
-#define VC5_UIFCFG_BANKS 8
-#define VC5_UIFCFG_PAGE_SIZE 4096
-#define VC5_UIFCFG_XOR_VALUE (1 << 4)
-#define VC5_PAGE_CACHE_SIZE (VC5_UIFCFG_PAGE_SIZE * VC5_UIFCFG_BANKS)
-#define VC5_UBLOCK_SIZE 64
-#define VC5_UIFBLOCK_SIZE (4 * VC5_UBLOCK_SIZE)
-#define VC5_UIFBLOCK_ROW_SIZE (4 * VC5_UIFBLOCK_SIZE)
+#define V3D_UIFCFG_BANKS 8
+#define V3D_UIFCFG_PAGE_SIZE 4096
+#define V3D_UIFCFG_XOR_VALUE (1 << 4)
+#define V3D_PAGE_CACHE_SIZE (V3D_UIFCFG_PAGE_SIZE * V3D_UIFCFG_BANKS)
+#define V3D_UBLOCK_SIZE 64
+#define V3D_UIFBLOCK_SIZE (4 * V3D_UBLOCK_SIZE)
+#define V3D_UIFBLOCK_ROW_SIZE (4 * V3D_UIFBLOCK_SIZE)
 
 struct v3d_simulator_file;
 
@@ -56,6 +58,8 @@ struct v3d_screen {
         struct v3d_device_info devinfo;
 
         const char *name;
+
+        struct v3d_perfcntrs *perfcnt;
 
         struct slab_parent_pool transfer_pool;
 
@@ -76,12 +80,22 @@ struct v3d_screen {
 
         uint32_t bo_size;
         uint32_t bo_count;
+        uint32_t prim_types;
 
         bool has_csd;
         bool has_cache_flush;
+        bool has_perfmon;
         bool nonmsaa_texture_size_limit;
+        bool has_cpu_queue;
+        bool has_multisync;
 
+#if USE_V3D_SIMULATOR
         struct v3d_simulator_file *sim_file;
+#endif
+
+#ifdef ENABLE_SHADER_CACHE
+        struct disk_cache *disk_cache;
+#endif
 };
 
 static inline struct v3d_screen *
@@ -94,7 +108,14 @@ struct pipe_screen *v3d_screen_create(int fd,
                                       const struct pipe_screen_config *config,
                                       struct renderonly *ro);
 
-void
-v3d_fence_init(struct v3d_screen *screen);
+const char *v3d_screen_get_name(struct pipe_screen *pscreen);
 
-#endif /* VC5_SCREEN_H */
+void
+v3d_fence_screen_init(struct v3d_screen *screen);
+
+#ifdef ENABLE_SHADER_CACHE
+void
+v3d_disk_cache_init(struct v3d_screen *screen);
+#endif
+
+#endif /* V3D_SCREEN_H */

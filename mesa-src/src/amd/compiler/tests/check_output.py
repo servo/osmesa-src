@@ -1,24 +1,7 @@
-#
 # Copyright (c) 2020 Valve Corporation
 #
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice (including the next
-# paragraph) shall be included in all copies or substantial portions of the
-# Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-# IN THE SOFTWARE.
+# SPDX-License-Identifier: MIT
+
 import re
 import sys
 import os.path
@@ -37,11 +20,13 @@ else:
     set_normal = ''
 
 initial_code = '''
+import re
+
 def insert_code(code):
-    insert_queue.append(CodeCheck(code))
+    insert_queue.append(CodeCheck(code, current_position))
 
 def insert_pattern(pattern):
-    insert_queue.append(PatternCheck(pattern))
+    insert_queue.append(PatternCheck(pattern, False, current_position))
 
 def vector_gpr(prefix, name, size, align):
     insert_code(f'{name} = {name}0')
@@ -63,11 +48,24 @@ funcs.update({
 })
 for i in range(2, 14):
     funcs['v%d' % (i * 32)] = lambda name: vector_gpr('v', name, i, 1)
+
+def _match_func(names):
+    for name in names.split(' '):
+        insert_code(f'funcs["{name}"] = lambda _: {name}')
+    return ' '.join(f'${name}' for name in names.split(' '))
+
+funcs['match_func'] = _match_func
+
+def search_re(pattern):
+    global success
+    success = re.search(pattern, output.read_line()) != None and success
+
 '''
 
 class Check:
-    def __init__(self, data):
+    def __init__(self, data, position):
         self.data = data.rstrip()
+        self.position = position
 
     def run(self, state):
         pass
@@ -95,12 +93,12 @@ class CodeCheck(Check):
             state.result.log += state.g['log']
             state.g['log'] = ''
         except BaseException as e:
-            state.result.log += 'code check raised exception:\n'
+            state.result.log += 'code check at %s raised exception:\n' % self.position
             state.result.log += code + '\n'
             state.result.log += str(e)
             return False
         if not state.g['success']:
-            state.result.log += 'code check failed:\n'
+            state.result.log += 'code check at %s failed:\n' % self.position
             state.result.log += code + '\n'
             return False
         return True
@@ -142,10 +140,12 @@ class StringStream:
     def get_line(self, num):
         return self.data.split('\n')[num - 1].rstrip()
 
-    def skip_line(self):
+    def read_line(self):
+        line = ''
         while self.peek(1) not in ['\n', '']:
-            self.read(1)
+            line += self.read(1)
         self.read(1)
+        return line
 
     def skip_whitespace(self, inc_line):
         chars = [' ', '\t'] + (['\n'] if inc_line else [])
@@ -221,7 +221,14 @@ def do_match(g, pattern, output, skip_lines, in_func=False):
         c = pattern.read(1)
         fail = False
         if c == '':
-            break
+            if not in_func:
+                while output.peek() in [' ', '\t']:
+                    output.read(1)
+                if output.read(1) not in ['', '\n']:
+                    res.fail('expected end of output')
+
+            if res.success:
+               break
         elif output.peek() == '':
             res.fail('unexpected end of output')
         elif c == '\\':
@@ -301,7 +308,7 @@ def do_match(g, pattern, output, skip_lines, in_func=False):
                 g.clear()
                 g.update(old_g)
                 res.success = True
-                output.skip_line()
+                output.read_line()
                 pattern.reset()
                 output.skip_whitespace(False)
                 pattern.skip_whitespace(False)
@@ -310,21 +317,12 @@ def do_match(g, pattern, output, skip_lines, in_func=False):
 
         escape = False
 
-    if not in_func:
-        while output.peek() in [' ', '\t']:
-            output.read(1)
-
-        if output.read(1) not in ['', '\n']:
-            res.fail('expected end of output')
-            return res
-
     return res
 
 class PatternCheck(Check):
     def __init__(self, data, search, position):
-        Check.__init__(self, data)
+        Check.__init__(self, data, position)
         self.search = search
-        self.position = position
 
     def run(self, state):
         pattern_stream = StringStream(self.data.rstrip(), 'pattern')
@@ -347,12 +345,13 @@ class CheckState:
         self.variant = variant
         self.checks = checks
 
-        self.checks.insert(0, CodeCheck(initial_code))
+        self.checks.insert(0, CodeCheck(initial_code, None))
         self.insert_queue = []
 
         self.g = {'success': True, 'funcs': {}, 'insert_queue': self.insert_queue,
                   'variant': variant, 'log': '', 'output': StringStream(output, 'output'),
-                  'CodeCheck': CodeCheck, 'PatternCheck': PatternCheck}
+                  'CodeCheck': CodeCheck, 'PatternCheck': PatternCheck,
+                  'current_position': ''}
 
 class TestResult:
     def __init__(self, expected):
@@ -365,6 +364,7 @@ def check_output(result, variant, checks, output):
 
     while len(state.checks):
         check = state.checks.pop(0)
+        state.current_position = check.position
         if not check.run(state):
             result.result = 'failed'
             return
@@ -382,7 +382,7 @@ def parse_check(variant, line, checks, pos):
         if len(checks) and isinstance(checks[-1], CodeCheck):
             checks[-1].data += '\n' + line
         else:
-            checks.append(CodeCheck(line))
+            checks.append(CodeCheck(line, pos))
     elif line.startswith('!'):
         checks.append(PatternCheck(line[1:], False, pos))
     elif line.startswith('>>'):

@@ -33,9 +33,6 @@ struct gl_context;
 struct gl_renderbuffer;
 
 extern struct gl_framebuffer *
-_mesa_create_framebuffer(const struct gl_config *visual);
-
-extern struct gl_framebuffer *
 _mesa_new_framebuffer(struct gl_context *ctx, GLuint name);
 
 extern void
@@ -104,6 +101,33 @@ _mesa_geometric_layers(const struct gl_framebuffer *buffer)
       buffer->MaxNumLayers : buffer->DefaultGeometry.Layers;
 }
 
+#define Y_0_TOP 1
+#define Y_0_BOTTOM 2
+
+static inline GLuint
+_mesa_fb_orientation(const struct gl_framebuffer *fb)
+{
+   if (fb && fb->FlipY) {
+      /* Drawing into a window (on-screen buffer).
+       *
+       * Negate Y scale to flip image vertically.
+       * The NDC Y coords prior to viewport transformation are in the range
+       * [y=-1=bottom, y=1=top]
+       * Hardware window coords are in the range [y=0=top, y=H-1=bottom] where
+       * H is the window height.
+       * Use the viewport transformation to invert Y.
+       */
+      return Y_0_TOP;
+   }
+   else {
+      /* Drawing into user-created FBO (very likely a texture).
+       *
+       * For textures, T=0=Bottom, so by extension Y=0=Bottom for rendering.
+       */
+      return Y_0_BOTTOM;
+   }
+}
+
 extern void 
 _mesa_update_draw_buffer_bounds(struct gl_context *ctx,
                                 struct gl_framebuffer *drawFb);
@@ -137,14 +161,11 @@ extern struct gl_renderbuffer *
 _mesa_get_read_renderbuffer_for_format(const struct gl_context *ctx,
                                        GLenum format);
 
+extern bool
+_mesa_has_rtt_samples(const struct gl_framebuffer *fb);
+
 extern void
 _mesa_print_framebuffer(const struct gl_framebuffer *fb);
-
-extern bool
-_mesa_is_front_buffer_reading(const struct gl_framebuffer *fb);
-
-extern bool
-_mesa_is_front_buffer_drawing(const struct gl_framebuffer *fb);
 
 extern bool
 _mesa_is_multisample_enabled(const struct gl_context *ctx);
@@ -152,7 +173,7 @@ _mesa_is_multisample_enabled(const struct gl_context *ctx);
 extern bool
 _mesa_is_alpha_test_enabled(const struct gl_context *ctx);
 
-extern bool
-_mesa_is_alpha_to_coverage_enabled(const struct gl_context *ctx);
+void
+_mesa_draw_buffer_allocate(struct gl_context *ctx);
 
 #endif /* FRAMEBUFFER_H */

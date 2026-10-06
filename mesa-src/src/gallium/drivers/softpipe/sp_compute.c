@@ -23,7 +23,6 @@
 #include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-#include "util/u_pstipple.h"
 #include "pipe/p_shader_tokens.h"
 #include "draw/draw_context.h"
 #include "draw/draw_vertex.h"
@@ -33,12 +32,11 @@
 #include "sp_texture.h"
 #include "sp_tex_sample.h"
 #include "sp_tex_tile_cache.h"
-#include "tgsi/tgsi_parse.h"
 
 static void
 cs_prepare(const struct sp_compute_shader *cs,
            struct tgsi_exec_machine *machine,
-           int w, int h, int d,
+           int local_x, int local_y, int local_z,
            int g_w, int g_h, int g_d,
            int b_w, int b_h, int b_d,
            struct tgsi_sampler *sampler,
@@ -56,9 +54,9 @@ cs_prepare(const struct sp_compute_shader *cs,
    if (machine->SysSemanticToIndex[TGSI_SEMANTIC_THREAD_ID] != -1) {
       unsigned i = machine->SysSemanticToIndex[TGSI_SEMANTIC_THREAD_ID];
       for (j = 0; j < TGSI_QUAD_SIZE; j++) {
-         machine->SystemValue[i].xyzw[0].i[j] = w;
-         machine->SystemValue[i].xyzw[1].i[j] = h;
-         machine->SystemValue[i].xyzw[2].i[j] = d;
+         machine->SystemValue[i].xyzw[0].i[j] = local_x + j;
+         machine->SystemValue[i].xyzw[1].i[j] = local_y;
+         machine->SystemValue[i].xyzw[2].i[j] = local_z;
       }
    }
 
@@ -96,7 +94,6 @@ cs_run(const struct sp_compute_shader *cs,
             machine->SystemValue[i].xyzw[2].i[j] = g_d;
          }
       }
-      machine->NonHelperMask = (1 << 1) - 1;
    }
 
    tgsi_exec_machine_run(machine, restart ? machine->pc : 0);
@@ -152,7 +149,7 @@ fill_grid_size(struct pipe_context *context,
    params = pipe_buffer_map_range(context, info->indirect,
                                   info->indirect_offset,
                                   3 * sizeof(uint32_t),
-                                  PIPE_TRANSFER_READ,
+                                  PIPE_MAP_READ,
                                   &transfer);
 
    if (!transfer)
@@ -173,7 +170,7 @@ softpipe_launch_grid(struct pipe_context *context,
    int num_threads_in_group;
    struct tgsi_exec_machine **machines;
    int bwidth, bheight, bdepth;
-   int w, h, d, i;
+   int local_x, local_y, local_z, i;
    int g_w, g_h, g_d;
    uint32_t grid_size[3] = {0};
    void *local_mem = NULL;
@@ -182,12 +179,13 @@ softpipe_launch_grid(struct pipe_context *context,
    bwidth = cs->info.properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH];
    bheight = cs->info.properties[TGSI_PROPERTY_CS_FIXED_BLOCK_HEIGHT];
    bdepth = cs->info.properties[TGSI_PROPERTY_CS_FIXED_BLOCK_DEPTH];
-   num_threads_in_group = bwidth * bheight * bdepth;
+   num_threads_in_group = DIV_ROUND_UP(bwidth, TGSI_QUAD_SIZE) * bheight * bdepth;
 
    fill_grid_size(context, info, grid_size);
 
-   if (cs->shader.req_local_mem) {
-      local_mem = CALLOC(1, cs->shader.req_local_mem);
+   uint32_t shared_mem_size = cs->shader.static_shared_mem + info->variable_shared_mem;
+   if (shared_mem_size) {
+      local_mem = CALLOC(1, shared_mem_size);
    }
 
    machines = CALLOC(sizeof(struct tgsi_exec_machine *), num_threads_in_group);
@@ -197,24 +195,25 @@ softpipe_launch_grid(struct pipe_context *context,
    }
 
    /* initialise machines + GRID_SIZE + THREAD_ID  + BLOCK_SIZE */
-   for (d = 0; d < bdepth; d++) {
-      for (h = 0; h < bheight; h++) {
-         for (w = 0; w < bwidth; w++) {
-            int idx = w + (h * bwidth) + (d * bheight * bwidth);
+   int idx = 0;
+   for (local_z = 0; local_z < bdepth; local_z++) {
+      for (local_y = 0; local_y < bheight; local_y++) {
+         for (local_x = 0; local_x < bwidth; local_x += TGSI_QUAD_SIZE) {
             machines[idx] = tgsi_exec_machine_create(PIPE_SHADER_COMPUTE);
 
             machines[idx]->LocalMem = local_mem;
-            machines[idx]->LocalMemSize = cs->shader.req_local_mem;
+            machines[idx]->LocalMemSize = shared_mem_size;
+            machines[idx]->NonHelperMask = (1 << (MIN2(TGSI_QUAD_SIZE, bwidth - local_x))) - 1;
             cs_prepare(cs, machines[idx],
-                       w, h, d,
+                       local_x, local_y, local_z,
                        grid_size[0], grid_size[1], grid_size[2],
                        bwidth, bheight, bdepth,
                        (struct tgsi_sampler *)softpipe->tgsi.sampler[PIPE_SHADER_COMPUTE],
                        (struct tgsi_image *)softpipe->tgsi.image[PIPE_SHADER_COMPUTE],
                        (struct tgsi_buffer *)softpipe->tgsi.buffer[PIPE_SHADER_COMPUTE]);
             tgsi_exec_set_constant_buffers(machines[idx], PIPE_MAX_CONSTANT_BUFFERS,
-                                           softpipe->mapped_constants[PIPE_SHADER_COMPUTE],
-                                           softpipe->const_buffer_size[PIPE_SHADER_COMPUTE]);
+                                           softpipe->mapped_constants[PIPE_SHADER_COMPUTE]);
+            idx++;
          }
       }
    }
@@ -225,6 +224,11 @@ softpipe_launch_grid(struct pipe_context *context,
             run_workgroup(cs, g_w, g_h, g_d, num_threads_in_group, machines);
          }
       }
+   }
+
+   if (softpipe->active_statistics_queries) {
+      softpipe->pipeline_statistics.cs_invocations +=
+          grid_size[0] * grid_size[1] * grid_size[2];
    }
 
    for (i = 0; i < num_threads_in_group; i++) {

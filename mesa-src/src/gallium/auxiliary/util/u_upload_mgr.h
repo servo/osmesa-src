@@ -32,7 +32,7 @@
 #ifndef U_UPLOAD_MGR_H
 #define U_UPLOAD_MGR_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_defines.h"
 
 struct pipe_context;
@@ -68,10 +68,6 @@ u_upload_create_default(struct pipe_context *pipe);
  */
 struct u_upload_mgr *
 u_upload_clone(struct pipe_context *pipe, struct u_upload_mgr *upload);
-
-/** Whether to use FLUSH_EXPLICIT with persistent mappings. */
-void
-u_upload_enable_flush_explicit(struct u_upload_mgr *upload);
 
 /** Whether to avoid persistent mappings where available */
 void

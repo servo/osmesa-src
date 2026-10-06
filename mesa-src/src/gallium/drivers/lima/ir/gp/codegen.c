@@ -114,7 +114,7 @@ static void gpir_codegen_mul0_slot(gpir_codegen_instr *code, gpir_instr *instr)
 
    case gpir_op_neg:
       code->mul0_neg = true;
-      /* fallthrough */
+      FALLTHROUGH;
    case gpir_op_mov:
       code->mul0_src0 = gpir_get_alu_input(node, alu->children[0]);
       code->mul0_src1 = gpir_codegen_src_ident;
@@ -174,7 +174,7 @@ static void gpir_codegen_mul1_slot(gpir_codegen_instr *code, gpir_instr *instr)
 
    case gpir_op_neg:
       code->mul1_neg = true;
-      /* fallthrough */
+      FALLTHROUGH;
    case gpir_op_mov:
       code->mul1_src0 = gpir_get_alu_input(node, alu->children[0]);
       code->mul1_src1 = gpir_codegen_src_ident;
@@ -267,7 +267,7 @@ static void gpir_codegen_add0_slot(gpir_codegen_instr *code, gpir_instr *instr)
 
    case gpir_op_neg:
       code->acc0_src0_neg = true;
-      /* fallthrough */
+      FALLTHROUGH;
    case gpir_op_mov:
       code->acc_op = gpir_codegen_acc_op_add;
       code->acc0_src0 = gpir_get_alu_input(node, alu->children[0]);
@@ -352,7 +352,7 @@ static void gpir_codegen_add1_slot(gpir_codegen_instr *code, gpir_instr *instr)
 
    case gpir_op_neg:
       code->acc1_src0_neg = true;
-      /* fallthrough */
+      FALLTHROUGH;
    case gpir_op_mov:
       code->acc_op = gpir_codegen_acc_op_add;
       code->acc1_src0 = gpir_get_alu_input(node, alu->children[0]);
@@ -600,15 +600,15 @@ bool gpir_codegen_prog(gpir_compiler *comp)
 
    for (int i = 0; i < num_instr; i++) {
       if (code[i].register0_attribute)
-         comp->prog->prefetch = i;
+         comp->prog->state.prefetch = i;
    }
 
    comp->prog->shader = code;
-   comp->prog->shader_size = num_instr * sizeof(gpir_codegen_instr);
+   comp->prog->state.shader_size = num_instr * sizeof(gpir_codegen_instr);
 
    if (lima_debug & LIMA_DEBUG_GP) {
       gpir_codegen_print_prog(comp);
-      gpir_disassemble_program(code, num_instr);
+      gpir_disassemble_program(code, num_instr, stdout);
    }
 
    return true;

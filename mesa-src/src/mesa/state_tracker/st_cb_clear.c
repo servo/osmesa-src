@@ -34,7 +34,7 @@
   */
 
 #include "main/errors.h"
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/accum.h"
 #include "main/formats.h"
 #include "main/framebuffer.h"
@@ -45,7 +45,6 @@
 #include "st_atom.h"
 #include "st_cb_bitmap.h"
 #include "st_cb_clear.h"
-#include "st_cb_fbo.h"
 #include "st_draw.h"
 #include "st_format.h"
 #include "st_nir.h"
@@ -104,37 +103,24 @@ st_destroy_clear(struct st_context *st)
 
 
 /**
- * Helper function to set the fragment shaders.
+ * Helper function to set the clear color fragment shader.
  */
-static inline void
-set_fragment_shader(struct st_context *st)
+static void
+set_clearcolor_fs(struct st_context *st, union pipe_color_union *color)
 {
-   struct pipe_screen *pscreen = st->pipe->screen;
-   bool use_nir = PIPE_SHADER_IR_NIR ==
-      pscreen->get_shader_param(pscreen, PIPE_SHADER_VERTEX,
-                                PIPE_SHADER_CAP_PREFERRED_IR);
+   struct pipe_constant_buffer cb = {
+      .user_buffer = color->f,
+      .buffer_size = 4 * sizeof(float),
+   };
+   st->pipe->set_constant_buffer(st->pipe, PIPE_SHADER_FRAGMENT, 0,
+                                false, &cb);
 
    if (!st->clear.fs) {
-      if (use_nir) {
-         unsigned inputs[] = { VARYING_SLOT_VAR0 };
-         unsigned outputs[] = { FRAG_RESULT_COLOR };
-         unsigned interpolation[] = { INTERP_MODE_FLAT };
-         st->clear.fs = st_nir_make_passthrough_shader(st, "clear FS",
-                                                       MESA_SHADER_FRAGMENT,
-                                                       1, inputs, outputs,
-                                                       interpolation, 0);
-      } else {
-         st->clear.fs =
-            util_make_fragment_passthrough_shader(st->pipe,
-                                                  TGSI_SEMANTIC_GENERIC,
-                                                  TGSI_INTERPOLATE_CONSTANT,
-                                                  TRUE);
-      }
+      st->clear.fs = st_nir_make_clearcolor_shader(st);
    }
 
    cso_set_fragment_shader_handle(st->cso_context, st->clear.fs);
 }
-
 
 static void *
 make_nir_clear_vertex_shader(struct st_context *st, bool layered)
@@ -142,18 +128,15 @@ make_nir_clear_vertex_shader(struct st_context *st, bool layered)
    const char *shader_name = layered ? "layered clear VS" : "clear VS";
    unsigned inputs[] = {
       VERT_ATTRIB_POS,
-      VERT_ATTRIB_GENERIC0,
       SYSTEM_VALUE_INSTANCE_ID,
    };
-   unsigned outputs[] = {
+   gl_varying_slot outputs[] = {
       VARYING_SLOT_POS,
-      VARYING_SLOT_VAR0,
       VARYING_SLOT_LAYER
    };
 
-   return st_nir_make_passthrough_shader(st, shader_name, MESA_SHADER_VERTEX,
-                                         layered ? 3 : 2, inputs, outputs,
-                                         NULL, (1 << 2));
+   return st_nir_make_passthrough_vs(st, shader_name, layered ? 2 : 1, inputs,
+                                     outputs, (1 << 1));
 }
 
 
@@ -163,30 +146,11 @@ make_nir_clear_vertex_shader(struct st_context *st, bool layered)
 static inline void
 set_vertex_shader(struct st_context *st)
 {
-   struct pipe_screen *pscreen = st->pipe->screen;
-   bool use_nir = PIPE_SHADER_IR_NIR ==
-      pscreen->get_shader_param(pscreen, PIPE_SHADER_VERTEX,
-                                PIPE_SHADER_CAP_PREFERRED_IR);
-
    /* vertex shader - still required to provide the linkage between
     * fragment shader input semantics and vertex_element/buffers.
     */
    if (!st->clear.vs)
-   {
-      if (use_nir) {
-         st->clear.vs = make_nir_clear_vertex_shader(st, false);
-      } else {
-         const enum tgsi_semantic semantic_names[] = {
-            TGSI_SEMANTIC_POSITION,
-            TGSI_SEMANTIC_GENERIC
-         };
-         const uint semantic_indexes[] = { 0, 0 };
-         st->clear.vs = util_make_vertex_passthrough_shader(st->pipe, 2,
-                                                            semantic_names,
-                                                            semantic_indexes,
-                                                            FALSE);
-      }
-   }
+      st->clear.vs = make_nir_clear_vertex_shader(st, false);
 
    cso_set_vertex_shader_handle(st->cso_context, st->clear.vs);
    cso_set_geometry_shader_handle(st->cso_context, NULL);
@@ -197,12 +161,8 @@ static void
 set_vertex_shader_layered(struct st_context *st)
 {
    struct pipe_context *pipe = st->pipe;
-   struct pipe_screen *pscreen = pipe->screen;
-   bool use_nir = PIPE_SHADER_IR_NIR ==
-      pscreen->get_shader_param(pscreen, PIPE_SHADER_VERTEX,
-                                PIPE_SHADER_CAP_PREFERRED_IR);
 
-   if (!pipe->screen->get_param(pipe->screen, PIPE_CAP_TGSI_INSTANCEID)) {
+   if (!st->screen->caps.vs_instanceid) {
       assert(!"Got layered clear, but VS instancing is unsupported");
       set_vertex_shader(st);
       return;
@@ -210,11 +170,9 @@ set_vertex_shader_layered(struct st_context *st)
 
    if (!st->clear.vs_layered) {
       bool vs_layer =
-         pipe->screen->get_param(pipe->screen, PIPE_CAP_TGSI_VS_LAYER_VIEWPORT);
+         st->screen->caps.vs_layer_viewport;
       if (vs_layer) {
-         st->clear.vs_layered =
-            use_nir ? make_nir_clear_vertex_shader(st, true)
-                    : util_make_layered_clear_vertex_shader(pipe);
+         st->clear.vs_layered = make_nir_clear_vertex_shader(st, true);
       } else {
          st->clear.vs_layered = util_make_layered_clear_helper_vertex_shader(pipe);
          st->clear.gs_layered = util_make_layered_clear_geometry_shader(pipe);
@@ -266,7 +224,6 @@ clear_with_quad(struct gl_context *ctx, unsigned clear_buffers)
                         CSO_BIT_VIEWPORT |
                         CSO_BIT_STREAM_OUTPUTS |
                         CSO_BIT_VERTEX_ELEMENTS |
-                        CSO_BIT_AUX_VERTEX_BUFFER_SLOT |
                         (st->active_queries ? CSO_BIT_PAUSE_QUERIES : 0) |
                         CSO_BITS_ALL_SHADERS));
 
@@ -300,9 +257,9 @@ clear_with_quad(struct gl_context *ctx, unsigned clear_buffers)
       struct pipe_depth_stencil_alpha_state depth_stencil;
       memset(&depth_stencil, 0, sizeof(depth_stencil));
       if (clear_buffers & PIPE_CLEAR_DEPTH) {
-         depth_stencil.depth.enabled = 1;
-         depth_stencil.depth.writemask = 1;
-         depth_stencil.depth.func = PIPE_FUNC_ALWAYS;
+         depth_stencil.depth_enabled = 1;
+         depth_stencil.depth_writemask = 1;
+         depth_stencil.depth_func = PIPE_FUNC_ALWAYS;
       }
 
       if (clear_buffers & PIPE_CLEAR_STENCIL) {
@@ -316,16 +273,16 @@ clear_with_quad(struct gl_context *ctx, unsigned clear_buffers)
          depth_stencil.stencil[0].valuemask = 0xff;
          depth_stencil.stencil[0].writemask = ctx->Stencil.WriteMask[0] & 0xff;
          stencil_ref.ref_value[0] = ctx->Stencil.Clear;
-         cso_set_stencil_ref(cso, &stencil_ref);
+         cso_set_stencil_ref(cso, stencil_ref);
       }
 
       cso_set_depth_stencil_alpha(cso, &depth_stencil);
    }
 
-   st->util_velems.count = 2;
+   st->util_velems.count = 1;
    cso_set_vertex_elements(cso, &st->util_velems);
 
-   cso_set_stream_outputs(cso, 0, NULL, NULL);
+   cso_set_stream_outputs(cso, 0, NULL, NULL, 0);
    cso_set_sample_mask(cso, ~0);
    cso_set_min_samples(cso, 1);
    st->clear.raster.multisample = st->state.fb_num_samples > 1;
@@ -333,9 +290,10 @@ clear_with_quad(struct gl_context *ctx, unsigned clear_buffers)
 
    /* viewport state: viewport matching window dims */
    cso_set_viewport_dims(st->cso_context, fb_width, fb_height,
-                         st_fb_orientation(fb) == Y_0_TOP);
+                         _mesa_fb_orientation(fb) == Y_0_TOP);
 
-   set_fragment_shader(st);
+   /* Set constant buffer */
+   set_clearcolor_fs(st, (union pipe_color_union*)&ctx->Color.ClearColor);
    cso_set_tessctrl_shader_handle(cso, NULL);
    cso_set_tesseval_shader_handle(cso, NULL);
 
@@ -361,7 +319,10 @@ clear_with_quad(struct gl_context *ctx, unsigned clear_buffers)
    }
 
    /* Restore pipe state */
-   cso_restore_state(cso);
+   cso_restore_state(cso, 0);
+   ctx->Array.NewVertexElements = true;
+   ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS |
+                          ST_NEW_FS_CONSTANTS;
 }
 
 
@@ -418,11 +379,7 @@ is_stencil_masked(struct gl_context *ctx, struct gl_renderbuffer *rb)
    return (ctx->Stencil.WriteMask[0] & stencilMax) != stencilMax;
 }
 
-
-/**
- * Called via ctx->Driver.Clear()
- */
-static void
+void
 st_Clear(struct gl_context *ctx, GLbitfield mask)
 {
    struct st_context *st = st_context(ctx);
@@ -439,7 +396,7 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
    st_invalidate_readpix_cache(st);
 
    /* This makes sure the pipe has the latest scissor, etc values */
-   st_validate_state(st, ST_PIPELINE_CLEAR);
+   st_validate_state(st, ST_PIPELINE_CLEAR_STATE_MASK);
 
    if (mask & BUFFER_BITS_COLOR) {
       for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; i++) {
@@ -448,10 +405,9 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
          if (b != BUFFER_NONE && mask & (1 << b)) {
             struct gl_renderbuffer *rb
                = ctx->DrawBuffer->Attachment[b].Renderbuffer;
-            struct st_renderbuffer *strb = st_renderbuffer(rb);
             int colormask_index = ctx->Extensions.EXT_draw_buffers2 ? i : 0;
 
-            if (!strb || !strb->surface)
+            if (!rb || !rb->surface)
                continue;
 
             unsigned colormask =
@@ -461,7 +417,7 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
                continue;
 
             unsigned surf_colormask =
-               util_format_colormask(util_format_description(strb->surface->format));
+               util_format_colormask(util_format_description(rb->surface->format));
 
             bool scissor = is_scissor_enabled(ctx, rb);
             if ((scissor && !st->can_scissor_clear) ||
@@ -476,26 +432,26 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
    }
 
    if (mask & BUFFER_BIT_DEPTH) {
-      struct st_renderbuffer *strb = st_renderbuffer(depthRb);
-
-      if (strb->surface && ctx->Depth.Mask) {
-         if (is_scissor_enabled(ctx, depthRb) ||
+      if (depthRb->surface && ctx->Depth.Mask) {
+         bool scissor = is_scissor_enabled(ctx, depthRb);
+         if ((scissor && !st->can_scissor_clear) ||
              is_window_rectangle_enabled(ctx))
             quad_buffers |= PIPE_CLEAR_DEPTH;
          else
             clear_buffers |= PIPE_CLEAR_DEPTH;
+         have_scissor_buffers |= scissor && st->can_scissor_clear;
       }
    }
    if (mask & BUFFER_BIT_STENCIL) {
-      struct st_renderbuffer *strb = st_renderbuffer(stencilRb);
-
-      if (strb->surface && !is_stencil_disabled(ctx, stencilRb)) {
-         if (is_scissor_enabled(ctx, stencilRb) ||
+      if (stencilRb->surface && !is_stencil_disabled(ctx, stencilRb)) {
+         bool scissor = is_scissor_enabled(ctx, stencilRb);
+         if ((scissor && !st->can_scissor_clear) ||
              is_window_rectangle_enabled(ctx) ||
              is_stencil_masked(ctx, stencilRb))
             quad_buffers |= PIPE_CLEAR_STENCIL;
          else
             clear_buffers |= PIPE_CLEAR_STENCIL;
+         have_scissor_buffers |= scissor && st->can_scissor_clear;
       }
    }
 
@@ -534,6 +490,14 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
          scissor_state.miny = MAX2(miny, 0);
          scissor_state.maxy = MAX2(maxy, 0);
       }
+      if (have_scissor_buffers) {
+         const struct gl_framebuffer *fb = ctx->DrawBuffer;
+         scissor_state.maxx = MIN2(scissor_state.maxx, fb->Width);
+         scissor_state.maxy = MIN2(scissor_state.maxy, fb->Height);
+         if (scissor_state.minx >= scissor_state.maxx ||
+             scissor_state.miny >= scissor_state.maxy)
+            return;
+      }
       /* We can't translate the clear color to the colorbuffer format,
        * because different colorbuffers may have different formats.
        */
@@ -548,9 +512,3 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
       _mesa_clear_accum_buffer(ctx);
 }
 
-
-void
-st_init_clear_functions(struct dd_function_table *functions)
-{
-   functions->Clear = st_Clear;
-}

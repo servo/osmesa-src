@@ -39,7 +39,7 @@ struct nv50_graph_state {
    uint32_t semantic_psize;
    int32_t index_bias;
    uint32_t clip_mode;
-   bool uniform_buffer_bound[3];
+   bool uniform_buffer_bound[4];
    bool prim_restart;
    bool point_sprite;
    bool rt_serialize;
@@ -49,8 +49,8 @@ struct nv50_graph_state {
    bool new_tls_space;
    uint8_t num_vtxbufs;
    uint8_t num_vtxelts;
-   uint8_t num_textures[3];
-   uint8_t num_samplers[3];
+   uint8_t num_textures[4];
+   uint8_t num_samplers[4];
    uint8_t prim_size;
    uint16_t scissor;
    bool seamless_cube_map;
@@ -62,6 +62,7 @@ struct nv50_screen {
 
    struct nv50_context *cur_ctx;
    struct nv50_graph_state save_state;
+   simple_mtx_t state_lock;
 
    int num_occlusion_queries_active;
 
@@ -132,32 +133,6 @@ int nv50_screen_tic_alloc(struct nv50_screen *, void *);
 int nv50_screen_tsc_alloc(struct nv50_screen *, void *);
 
 int nv50_screen_compute_setup(struct nv50_screen *, struct nouveau_pushbuf *);
-
-static inline void
-nv50_resource_fence(struct nv04_resource *res, uint32_t flags)
-{
-   struct nv50_screen *screen = nv50_screen(res->base.screen);
-
-   if (res->mm) {
-      nouveau_fence_ref(screen->base.fence.current, &res->fence);
-      if (flags & NOUVEAU_BO_WR)
-         nouveau_fence_ref(screen->base.fence.current, &res->fence_wr);
-   }
-}
-
-static inline void
-nv50_resource_validate(struct nv04_resource *res, uint32_t flags)
-{
-   if (likely(res->bo)) {
-      if (flags & NOUVEAU_BO_WR)
-         res->status |= NOUVEAU_BUFFER_STATUS_GPU_WRITING |
-            NOUVEAU_BUFFER_STATUS_DIRTY;
-      if (flags & NOUVEAU_BO_RD)
-         res->status |= NOUVEAU_BUFFER_STATUS_GPU_READING;
-
-      nv50_resource_fence(res, flags);
-   }
-}
 
 struct nv50_format {
    uint32_t rt;

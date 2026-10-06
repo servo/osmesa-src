@@ -27,7 +27,7 @@
 #define READPIXELS_H
 
 
-#include "glheader.h"
+#include "util/glheader.h"
 
 struct gl_context;
 struct gl_pixelstore_attrib;
@@ -57,23 +57,5 @@ _mesa_readpixels(struct gl_context *ctx,
                  GLenum format, GLenum type,
                  const struct gl_pixelstore_attrib *packing,
                  GLvoid *pixels);
-
-void GLAPIENTRY
-_mesa_ReadPixels_no_error(GLint x, GLint y, GLsizei width, GLsizei height,
-                          GLenum format, GLenum type, GLvoid *pixels);
-
-extern void GLAPIENTRY
-_mesa_ReadPixels( GLint x, GLint y, GLsizei width, GLsizei height,
-                  GLenum format, GLenum type, GLvoid *pixels );
-
-void GLAPIENTRY
-_mesa_ReadnPixelsARB_no_error(GLint x, GLint y, GLsizei width, GLsizei height,
-		                        GLenum format, GLenum type, GLsizei bufSize,
-                              GLvoid *pixels);
-
-extern void GLAPIENTRY
-_mesa_ReadnPixelsARB( GLint x, GLint y, GLsizei width, GLsizei height,
-		      GLenum format, GLenum type, GLsizei bufSize,
-                      GLvoid *pixels );
 
 #endif

@@ -1,28 +1,10 @@
 /*
- * Copyright © 2007-2019 Advanced Micro Devices, Inc.
- * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS
- * AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- */
+************************************************************************************************************************
+*
+*  Copyright (C) 2007-2024 Advanced Micro Devices, Inc. All rights reserved.
+*  SPDX-License-Identifier: MIT
+*
+***********************************************************************************************************************/
 
 /**
 ****************************************************************************************************
@@ -35,18 +17,11 @@
 #define __ADDR_LIB_H__
 
 #include "addrinterface.h"
+#include "addrtypes.h"
 #include "addrobject.h"
 #include "addrelemlib.h"
 
 #include "amdgpu_asic_addr.h"
-
-#ifndef CIASICIDGFXENGINE_R600
-#define CIASICIDGFXENGINE_R600 0x00000006
-#endif
-
-#ifndef CIASICIDGFXENGINE_R800
-#define CIASICIDGFXENGINE_R800 0x00000008
-#endif
 
 #ifndef CIASICIDGFXENGINE_SOUTHERNISLAND
 #define CIASICIDGFXENGINE_SOUTHERNISLAND 0x0000000A
@@ -240,6 +215,73 @@ enum ShaderEngineTileSizeConfig
 };
 
 /**
+************************************************************************************************************************
+* @brief Bit setting for swizzle pattern
+************************************************************************************************************************
+*/
+union ADDR_BIT_SETTING
+{
+    struct
+    {
+        UINT_16 x;
+        UINT_16 y;
+        UINT_16 z;
+        UINT_16 s;
+    };
+    UINT_64 value;
+};
+
+/**
+************************************************************************************************************************
+*   InitBit
+*
+*   @brief
+*       Initialize bit setting value via a return value
+************************************************************************************************************************
+*/
+#define InitBit(c, index) (1ull << ((c << 4) + index))
+
+const UINT_64 X0  = InitBit(0,  0);
+const UINT_64 X1  = InitBit(0,  1);
+const UINT_64 X2  = InitBit(0,  2);
+const UINT_64 X3  = InitBit(0,  3);
+const UINT_64 X4  = InitBit(0,  4);
+const UINT_64 X5  = InitBit(0,  5);
+const UINT_64 X6  = InitBit(0,  6);
+const UINT_64 X7  = InitBit(0,  7);
+const UINT_64 X8  = InitBit(0,  8);
+const UINT_64 X9  = InitBit(0,  9);
+const UINT_64 X10 = InitBit(0, 10);
+const UINT_64 X11 = InitBit(0, 11);
+
+const UINT_64 Y0  = InitBit(1,  0);
+const UINT_64 Y1  = InitBit(1,  1);
+const UINT_64 Y2  = InitBit(1,  2);
+const UINT_64 Y3  = InitBit(1,  3);
+const UINT_64 Y4  = InitBit(1,  4);
+const UINT_64 Y5  = InitBit(1,  5);
+const UINT_64 Y6  = InitBit(1,  6);
+const UINT_64 Y7  = InitBit(1,  7);
+const UINT_64 Y8  = InitBit(1,  8);
+const UINT_64 Y9  = InitBit(1,  9);
+const UINT_64 Y10 = InitBit(1, 10);
+const UINT_64 Y11 = InitBit(1, 11);
+
+const UINT_64 Z0  = InitBit(2,  0);
+const UINT_64 Z1  = InitBit(2,  1);
+const UINT_64 Z2  = InitBit(2,  2);
+const UINT_64 Z3  = InitBit(2,  3);
+const UINT_64 Z4  = InitBit(2,  4);
+const UINT_64 Z5  = InitBit(2,  5);
+const UINT_64 Z6  = InitBit(2,  6);
+const UINT_64 Z7  = InitBit(2,  7);
+const UINT_64 Z8  = InitBit(2,  8);
+
+const UINT_64 S0  = InitBit(3,  0);
+const UINT_64 S1  = InitBit(3,  1);
+const UINT_64 S2  = InitBit(3,  2);
+
+/**
 ****************************************************************************************************
 * @brief This class contains asic independent address lib functionalities
 ****************************************************************************************************
@@ -259,6 +301,9 @@ public:
     }
 
     static Lib* GetLib(ADDR_HANDLE hLib);
+    
+    /// Returns which version of addrlib functions should be used.
+    virtual UINT_32 GetInterfaceVersion() const = 0;
 
     /// Returns AddrLib version (from compiled binary instead include file)
     UINT_32 GetVersion()
@@ -267,7 +312,7 @@ public:
     }
 
     /// Returns asic chip family name defined by AddrLib
-    ChipFamily GetChipFamily()
+    ChipFamily GetChipFamily() const
     {
         return m_chipFamily;
     }
@@ -287,6 +332,15 @@ public:
     ADDR_E_RETURNCODE GetMaxMetaAlignments(ADDR_GET_MAX_ALIGNMENTS_OUTPUT* pOut) const;
 
     UINT_32 GetBpe(AddrFormat format) const;
+
+
+    static UINT_32 ComputeOffsetFromSwizzlePattern(
+        const UINT_64* pPattern,
+        UINT_32        numBits,
+        UINT_32        x,
+        UINT_32        y,
+        UINT_32        z,
+        UINT_32        s);
 
 protected:
     Lib();  // Constructor is protected
@@ -315,6 +369,21 @@ protected:
 #if DEBUG
         ADDR_ASSERT(metaAlignment <= m_maxMetaBaseAlign);
 #endif
+    }
+
+    static BOOL_32 IsTex1d(AddrResourceType resourceType)
+    {
+        return (resourceType == ADDR_RSRC_TEX_1D);
+    }
+
+    static BOOL_32 IsTex2d(AddrResourceType resourceType)
+    {
+        return (resourceType == ADDR_RSRC_TEX_2D);
+    }
+
+    static BOOL_32 IsTex3d(AddrResourceType resourceType)
+    {
+        return (resourceType == ADDR_RSRC_TEX_3D);
     }
 
     //
@@ -370,8 +439,6 @@ private:
     VOID SetMaxAlignments();
 
 protected:
-    LibClass    m_class;        ///< Store class type (HWL type)
-
     ChipFamily  m_chipFamily;   ///< Chip family translated from the one in atiid.h
 
     UINT_32     m_chipRevision; ///< Revision id from xxx_id.h
@@ -410,6 +477,8 @@ Lib* SiHwlInit   (const Client* pClient);
 Lib* CiHwlInit   (const Client* pClient);
 Lib* Gfx9HwlInit (const Client* pClient);
 Lib* Gfx10HwlInit(const Client* pClient);
+Lib* Gfx11HwlInit(const Client* pClient);
+Lib* Gfx12HwlInit(const Client* pClient);
 } // Addr
 
 #endif

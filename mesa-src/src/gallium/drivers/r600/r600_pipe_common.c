@@ -1,47 +1,29 @@
 /*
  * Copyright 2013 Advanced Micro Devices, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
  * Authors: Marek Olšák <maraeo@gmail.com>
- *
+ * SPDX-License-Identifier: MIT
  */
 
 #include "r600_pipe_common.h"
 #include "r600_cs.h"
-#include "tgsi/tgsi_parse.h"
-#include "compiler/nir/nir.h"
+#include "evergreen_compute.h"
 #include "util/list.h"
 #include "util/u_draw_quad.h"
 #include "util/u_memory.h"
 #include "util/format/u_format_s3tc.h"
 #include "util/u_upload_mgr.h"
 #include "util/os_time.h"
+#include "util/hex.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
 #include "radeon_video.h"
+#include "git_sha1.h"
+
 #include <inttypes.h>
 #include <sys/utsname.h>
 #include <stdlib.h>
 
-#ifdef LLVM_AVAILABLE
+#if AMD_LLVM_AVAILABLE
 #include <llvm-c/TargetMachine.h>
 #endif
 
@@ -78,7 +60,7 @@ void r600_gfx_write_event_eop(struct r600_common_context *ctx,
 			      struct r600_resource *buf, uint64_t va,
 			      uint32_t new_fence, unsigned query_type)
 {
-	struct radeon_cmdbuf *cs = ctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &ctx->gfx.cs;
 	unsigned op = EVENT_TYPE(event) |
 		      EVENT_INDEX(5) |
 		      event_flags;
@@ -92,7 +74,7 @@ void r600_gfx_write_event_eop(struct r600_common_context *ctx,
 	radeon_emit(cs, 0); /* unused */
 
 	if (buf)
-		r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_WRITE,
+		r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_WRITE |
 				RADEON_PRIO_QUERY);
 }
 
@@ -110,7 +92,7 @@ void r600_gfx_wait_fence(struct r600_common_context *ctx,
 			 struct r600_resource *buf,
 			 uint64_t va, uint32_t ref, uint32_t mask)
 {
-	struct radeon_cmdbuf *cs = ctx->gfx.cs;
+	struct radeon_cmdbuf *cs = &ctx->gfx.cs;
 
 	radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, 0));
 	radeon_emit(cs, WAIT_REG_MEM_EQUAL | WAIT_REG_MEM_MEM_SPACE(1));
@@ -121,7 +103,7 @@ void r600_gfx_wait_fence(struct r600_common_context *ctx,
 	radeon_emit(cs, 4); /* poll interval */
 
 	if (buf)
-		r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_READ,
+		r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_READ |
 				RADEON_PRIO_QUERY);
 }
 
@@ -133,12 +115,25 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 			 enum blitter_attrib_type type,
 			 const union blitter_attrib *attrib)
 {
-	struct r600_common_context *rctx =
-		(struct r600_common_context*)util_blitter_get_pipe(blitter);
+	struct r600_context *cctx =
+		(struct r600_context*)util_blitter_get_pipe(blitter);
+	struct r600_common_context *rctx = &cctx->b;
 	struct pipe_viewport_state viewport;
 	struct pipe_resource *buf = NULL;
 	unsigned offset = 0;
 	float *vb;
+
+	if (unlikely(MAX2(abs(x1), abs(x2)) > INT16_MAX ||
+		     MAX2(abs(y1), abs(y2)) > INT16_MAX)) {
+		/* Fallback when coordinates can't fit in int16. */
+		util_blitter_save_vertex_elements(cctx->blitter,
+						  cctx->vertex_fetch_shader.cso);
+		util_blitter_draw_rectangle(blitter, vertex_elements_cso, get_vs,
+					    x1, y1, x2, y2,
+					    depth, num_instances,
+					    type, attrib);
+		return;
+	}
 
 	rctx->b.bind_vertex_elements_state(&rctx->b, vertex_elements_cso);
 	rctx->b.bind_vs_state(&rctx->b, get_vs(blitter));
@@ -204,10 +199,9 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	/* draw */
 	struct pipe_vertex_buffer vbuffer = {};
 	vbuffer.buffer.resource = buf;
-	vbuffer.stride = 2 * 4 * sizeof(float); /* vertex size */
 	vbuffer.buffer_offset = offset;
 
-	rctx->b.set_vertex_buffers(&rctx->b, blitter->vb_slot, 1, &vbuffer);
+	util_set_vertex_buffers(&rctx->b, 1, false, &vbuffer);
 	util_draw_arrays_instanced(&rctx->b, R600_PRIM_RECTANGLE_LIST, 0, 3,
 				   0, num_instances);
 	pipe_resource_reference(&buf, NULL);
@@ -215,9 +209,9 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 
 static void r600_dma_emit_wait_idle(struct r600_common_context *rctx)
 {
-	struct radeon_cmdbuf *cs = rctx->dma.cs;
+	struct radeon_cmdbuf *cs = &rctx->dma.cs;
 
-	if (rctx->chip_class >= EVERGREEN)
+	if (rctx->gfx_level >= EVERGREEN)
 		radeon_emit(cs, 0xf0000000); /* NOP */
 	else {
 		/* TODO: R600-R700 should use the FENCE packet.
@@ -228,8 +222,8 @@ static void r600_dma_emit_wait_idle(struct r600_common_context *rctx)
 void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
                          struct r600_resource *dst, struct r600_resource *src)
 {
-	uint64_t vram = ctx->dma.cs->used_vram;
-	uint64_t gtt = ctx->dma.cs->used_gart;
+	uint64_t vram = (uint64_t)ctx->dma.cs.used_vram_kb * 1024;
+	uint64_t gtt = (uint64_t)ctx->dma.cs.used_gart_kb * 1024;
 
 	if (dst) {
 		vram += dst->vram_usage;
@@ -241,12 +235,12 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 	}
 
 	/* Flush the GFX IB if DMA depends on it. */
-	if (radeon_emitted(ctx->gfx.cs, ctx->initial_gfx_cs_size) &&
+	if (radeon_emitted(&ctx->gfx.cs, ctx->initial_gfx_cs_size) &&
 	    ((dst &&
-	      ctx->ws->cs_is_buffer_referenced(ctx->gfx.cs, dst->buf,
+	      ctx->ws->cs_is_buffer_referenced(&ctx->gfx.cs, dst->buf,
 					       RADEON_USAGE_READWRITE)) ||
 	     (src &&
-	      ctx->ws->cs_is_buffer_referenced(ctx->gfx.cs, src->buf,
+	      ctx->ws->cs_is_buffer_referenced(&ctx->gfx.cs, src->buf,
 					       RADEON_USAGE_WRITE))))
 		ctx->gfx.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 
@@ -263,21 +257,21 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 	 * engine busy while uploads are being submitted.
 	 */
 	num_dw++; /* for emit_wait_idle below */
-	if (!ctx->ws->cs_check_space(ctx->dma.cs, num_dw, false) ||
-	    ctx->dma.cs->used_vram + ctx->dma.cs->used_gart > 64 * 1024 * 1024 ||
-	    !radeon_cs_memory_below_limit(ctx->screen, ctx->dma.cs, vram, gtt)) {
+	if (!ctx->ws->cs_check_space(&ctx->dma.cs, num_dw) ||
+	    ctx->dma.cs.used_vram_kb + ctx->dma.cs.used_gart_kb > 64 * 1024 ||
+	    !radeon_cs_memory_below_limit(ctx->screen, &ctx->dma.cs, vram, gtt)) {
 		ctx->dma.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
-		assert((num_dw + ctx->dma.cs->current.cdw) <= ctx->dma.cs->current.max_dw);
+		assert((num_dw + ctx->dma.cs.current.cdw) <= ctx->dma.cs.current.max_dw);
 	}
 
 	/* Wait for idle if either buffer has been used in the IB before to
 	 * prevent read-after-write hazards.
 	 */
 	if ((dst &&
-	     ctx->ws->cs_is_buffer_referenced(ctx->dma.cs, dst->buf,
+	     ctx->ws->cs_is_buffer_referenced(&ctx->dma.cs, dst->buf,
 					      RADEON_USAGE_READWRITE)) ||
 	    (src &&
-	     ctx->ws->cs_is_buffer_referenced(ctx->dma.cs, src->buf,
+	     ctx->ws->cs_is_buffer_referenced(&ctx->dma.cs, src->buf,
 					      RADEON_USAGE_WRITE)))
 		r600_dma_emit_wait_idle(ctx);
 
@@ -287,10 +281,10 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 	if (ctx->screen->info.r600_has_virtual_memory) {
 		if (dst)
 			radeon_add_to_buffer_list(ctx, &ctx->dma, dst,
-						  RADEON_USAGE_WRITE, 0);
+						  RADEON_USAGE_WRITE);
 		if (src)
 			radeon_add_to_buffer_list(ctx, &ctx->dma, src,
-						  RADEON_USAGE_READ, 0);
+						  RADEON_USAGE_READ);
 	}
 
 	/* this function is called before all DMA calls, so increment this. */
@@ -346,14 +340,14 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 		rflags |= PIPE_FLUSH_END_OF_FRAME;
 
 	/* DMA IBs are preambles to gfx IBs, therefore must be flushed first. */
-	if (rctx->dma.cs)
+	if (rctx->dma.cs.priv)
 		rctx->dma.flush(rctx, rflags, fence ? &sdma_fence : NULL);
 
-	if (!radeon_emitted(rctx->gfx.cs, rctx->initial_gfx_cs_size)) {
+	if (!radeon_emitted(&rctx->gfx.cs, rctx->initial_gfx_cs_size)) {
 		if (fence)
-			ws->fence_reference(&gfx_fence, rctx->last_gfx_fence);
+			ws->fence_reference(ws, &gfx_fence, rctx->last_gfx_fence);
 		if (!(flags & PIPE_FLUSH_DEFERRED))
-			ws->cs_sync_flush(rctx->gfx.cs);
+			ws->cs_sync_flush(&rctx->gfx.cs);
 	} else {
 		/* Instead of flushing, create a deferred fence. Constraints:
 		 * - the gallium frontend must allow a deferred flush.
@@ -361,7 +355,7 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 		 * Thread safety in fence_finish must be ensured by the gallium frontend.
 		 */
 		if (flags & PIPE_FLUSH_DEFERRED && fence) {
-			gfx_fence = rctx->ws->cs_get_next_fence(rctx->gfx.cs);
+			gfx_fence = rctx->ws->cs_get_next_fence(&rctx->gfx.cs);
 			deferred_fence = true;
 		} else {
 			rctx->gfx.flush(rctx, rflags, fence ? &gfx_fence : NULL);
@@ -373,8 +367,8 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 		struct r600_multi_fence *multi_fence =
 			CALLOC_STRUCT(r600_multi_fence);
 		if (!multi_fence) {
-			ws->fence_reference(&sdma_fence, NULL);
-			ws->fence_reference(&gfx_fence, NULL);
+			ws->fence_reference(ws, &sdma_fence, NULL);
+			ws->fence_reference(ws, &gfx_fence, NULL);
 			goto finish;
 		}
 
@@ -393,9 +387,9 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 	}
 finish:
 	if (!(flags & PIPE_FLUSH_DEFERRED)) {
-		if (rctx->dma.cs)
-			ws->cs_sync_flush(rctx->dma.cs);
-		ws->cs_sync_flush(rctx->gfx.cs);
+		if (rctx->dma.cs.priv)
+			ws->cs_sync_flush(&rctx->dma.cs);
+		ws->cs_sync_flush(&rctx->gfx.cs);
 	}
 }
 
@@ -403,7 +397,7 @@ static void r600_flush_dma_ring(void *ctx, unsigned flags,
 				struct pipe_fence_handle **fence)
 {
 	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
-	struct radeon_cmdbuf *cs = rctx->dma.cs;
+	struct radeon_cmdbuf *cs = &rctx->dma.cs;
 	struct radeon_saved_cs saved;
 	bool check_vm =
 		(rctx->screen->debug_flags & DBG_CHECK_VM) &&
@@ -411,7 +405,7 @@ static void r600_flush_dma_ring(void *ctx, unsigned flags,
 
 	if (!radeon_emitted(cs, 0)) {
 		if (fence)
-			rctx->ws->fence_reference(fence, rctx->last_sdma_fence);
+			rctx->ws->fence_reference(rctx->ws, fence, rctx->last_sdma_fence);
 		return;
 	}
 
@@ -420,7 +414,7 @@ static void r600_flush_dma_ring(void *ctx, unsigned flags,
 
 	rctx->ws->cs_flush(cs, flags, &rctx->last_sdma_fence);
 	if (fence)
-		rctx->ws->fence_reference(fence, rctx->last_sdma_fence);
+		rctx->ws->fence_reference(rctx->ws, fence, rctx->last_sdma_fence);
 
 	if (check_vm) {
 		/* Use conservative timeout 800ms, after which we won't wait any
@@ -428,7 +422,7 @@ static void r600_flush_dma_ring(void *ctx, unsigned flags,
 		 */
 		rctx->ws->fence_wait(rctx->ws, rctx->last_sdma_fence, 800*1000*1000);
 
-		rctx->check_vm_faults(rctx, &saved, RING_DMA);
+		rctx->check_vm_faults(rctx, &saved, AMD_IP_SDMA);
 		radeon_clear_saved_cs(&saved);
 	}
 }
@@ -488,11 +482,11 @@ static enum pipe_reset_status r600_get_reset_status(struct pipe_context *ctx)
 {
 	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
 
-	return rctx->ws->ctx_query_reset_status(rctx->ctx);
+	return rctx->ws->ctx_query_reset_status(rctx->ctx, false, NULL, NULL);
 }
 
 static void r600_set_debug_callback(struct pipe_context *ctx,
-				    const struct pipe_debug_callback *cb)
+				    const struct util_debug_callback *cb)
 {
 	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
 
@@ -557,23 +551,23 @@ static bool r600_resource_commit(struct pipe_context *pctx,
 	 * (b) wait for threaded submit to finish, including those that were
 	 *     triggered by some other, earlier operation.
 	 */
-	if (radeon_emitted(ctx->gfx.cs, ctx->initial_gfx_cs_size) &&
-	    ctx->ws->cs_is_buffer_referenced(ctx->gfx.cs,
+	if (radeon_emitted(&ctx->gfx.cs, ctx->initial_gfx_cs_size) &&
+	    ctx->ws->cs_is_buffer_referenced(&ctx->gfx.cs,
 					     res->buf, RADEON_USAGE_READWRITE)) {
 		ctx->gfx.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 	}
-	if (radeon_emitted(ctx->dma.cs, 0) &&
-	    ctx->ws->cs_is_buffer_referenced(ctx->dma.cs,
+	if (radeon_emitted(&ctx->dma.cs, 0) &&
+	    ctx->ws->cs_is_buffer_referenced(&ctx->dma.cs,
 					     res->buf, RADEON_USAGE_READWRITE)) {
 		ctx->dma.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 	}
 
-	ctx->ws->cs_sync_flush(ctx->dma.cs);
-	ctx->ws->cs_sync_flush(ctx->gfx.cs);
+	ctx->ws->cs_sync_flush(&ctx->dma.cs);
+	ctx->ws->cs_sync_flush(&ctx->gfx.cs);
 
 	assert(resource->target == PIPE_BUFFER);
 
-	return ctx->ws->buffer_commit(res->buf, box->x, box->width, commit);
+	return ctx->ws->buffer_commit(ctx->ws, res->buf, box->x, box->width, commit);
 }
 
 bool r600_common_context_init(struct r600_common_context *rctx,
@@ -586,13 +580,16 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	rctx->screen = rscreen;
 	rctx->ws = rscreen->ws;
 	rctx->family = rscreen->family;
-	rctx->chip_class = rscreen->chip_class;
+	rctx->gfx_level = rscreen->gfx_level;
 
+	rctx->b.clear_buffer = u_default_clear_buffer;
 	rctx->b.invalidate_resource = r600_invalidate_resource;
 	rctx->b.resource_commit = r600_resource_commit;
-	rctx->b.transfer_map = u_transfer_map_vtbl;
-	rctx->b.transfer_flush_region = u_transfer_flush_region_vtbl;
-	rctx->b.transfer_unmap = u_transfer_unmap_vtbl;
+	rctx->b.buffer_map = r600_buffer_transfer_map;
+        rctx->b.texture_map = r600_texture_transfer_map;
+	rctx->b.transfer_flush_region = r600_buffer_flush_region;
+	rctx->b.buffer_unmap = r600_buffer_transfer_unmap;
+        rctx->b.texture_unmap = r600_texture_transfer_unmap;
 	rctx->b.texture_subdata = u_default_texture_subdata;
 	rctx->b.flush = r600_flush_from_st;
 	rctx->b.set_debug_callback = r600_set_debug_callback;
@@ -602,7 +599,7 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	/* evergreen_compute.c has a special codepath for global buffers.
 	 * Everything else can use the direct path.
 	 */
-	if ((rscreen->chip_class == EVERGREEN || rscreen->chip_class == CAYMAN) &&
+	if ((rscreen->gfx_level == EVERGREEN || rscreen->gfx_level == CAYMAN) &&
 	    (context_flags & PIPE_CONTEXT_COMPUTE_ONLY))
 		rctx->b.buffer_subdata = u_default_buffer_subdata;
 	else
@@ -617,11 +614,8 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	r600_query_init(rctx);
 	cayman_init_msaa(&rctx->b);
 
-	rctx->allocator_zeroed_memory =
-		u_suballocator_create(&rctx->b, rscreen->info.gart_page_size,
-				      0, PIPE_USAGE_DEFAULT, 0, true);
-	if (!rctx->allocator_zeroed_memory)
-		return false;
+	u_suballocator_init(&rctx->allocator_zeroed_memory, &rctx->b, rscreen->info.gart_page_size,
+			    0, PIPE_USAGE_DEFAULT, 0, true);
 
 	rctx->b.stream_uploader = u_upload_create(&rctx->b, 1024 * 1024,
 						  0, PIPE_USAGE_STREAM, 0);
@@ -633,14 +627,13 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	if (!rctx->b.const_uploader)
 		return false;
 
-	rctx->ctx = rctx->ws->ctx_create(rctx->ws);
+	rctx->ctx = rctx->ws->ctx_create(rctx->ws, RADEON_CTX_PRIORITY_MEDIUM, false);
 	if (!rctx->ctx)
 		return false;
 
-	if (rscreen->info.num_rings[RING_DMA] && !(rscreen->debug_flags & DBG_NO_ASYNC_DMA)) {
-		rctx->dma.cs = rctx->ws->cs_create(rctx->ctx, RING_DMA,
-						   r600_flush_dma_ring,
-						   rctx, false);
+	if (rscreen->info.ip[AMD_IP_SDMA].num_queues && !(rscreen->debug_flags & DBG_NO_ASYNC_DMA)) {
+		rctx->ws->cs_create(&rctx->dma.cs, rctx->ctx, AMD_IP_SDMA,
+                                    r600_flush_dma_ring, rctx);
 		rctx->dma.flush = r600_flush_dma_ring;
 	}
 
@@ -652,10 +645,8 @@ void r600_common_context_cleanup(struct r600_common_context *rctx)
 	if (rctx->query_result_shader)
 		rctx->b.delete_compute_state(&rctx->b, rctx->query_result_shader);
 
-	if (rctx->gfx.cs)
-		rctx->ws->cs_destroy(rctx->gfx.cs);
-	if (rctx->dma.cs)
-		rctx->ws->cs_destroy(rctx->dma.cs);
+	rctx->ws->cs_destroy(&rctx->gfx.cs);
+	rctx->ws->cs_destroy(&rctx->dma.cs);
 	if (rctx->ctx)
 		rctx->ws->ctx_destroy(rctx->ctx);
 
@@ -667,11 +658,9 @@ void r600_common_context_cleanup(struct r600_common_context *rctx)
 	slab_destroy_child(&rctx->pool_transfers);
 	slab_destroy_child(&rctx->pool_transfers_unsync);
 
-	if (rctx->allocator_zeroed_memory) {
-		u_suballocator_destroy(rctx->allocator_zeroed_memory);
-	}
-	rctx->ws->fence_reference(&rctx->last_gfx_fence, NULL);
-	rctx->ws->fence_reference(&rctx->last_sdma_fence, NULL);
+	u_suballocator_destroy(&rctx->allocator_zeroed_memory);
+	rctx->ws->fence_reference(rctx->ws, &rctx->last_gfx_fence, NULL);
+	rctx->ws->fence_reference(rctx->ws, &rctx->last_sdma_fence, NULL);
 	r600_resource_reference(&rctx->eop_bug_scratch, NULL);
 }
 
@@ -695,12 +684,8 @@ static const struct debug_named_value common_debug_options[] = {
 	{ "cs", DBG_CS, "Print compute shaders" },
 	{ "tcs", DBG_TCS, "Print tessellation control shaders" },
 	{ "tes", DBG_TES, "Print tessellation evaluation shaders" },
-	{ "noir", DBG_NO_IR, "Don't print the LLVM IR"},
-	{ "notgsi", DBG_NO_TGSI, "Don't print the TGSI"},
-	{ "noasm", DBG_NO_ASM, "Don't print disassembled shaders"},
 	{ "preoptir", DBG_PREOPT_IR, "Print the LLVM IR before initial optimizations" },
 	{ "checkir", DBG_CHECK_IR, "Enable additional sanity checks on shader IR" },
-	{ "nooptvariant", DBG_NO_OPT_VARIANT, "Disable compiling optimized shader variants." },
 
 	{ "testdma", DBG_TEST_DMA, "Invoke SDMA tests and exit." },
 	{ "testvmfaultcp", DBG_TEST_VMFAULT_CP, "Invoke a CP VM fault test and exit." },
@@ -716,17 +701,15 @@ static const struct debug_named_value common_debug_options[] = {
 	{ "notiling", DBG_NO_TILING, "Disable tiling" },
 	{ "switch_on_eop", DBG_SWITCH_ON_EOP, "Program WD/IA to switch on end-of-packet." },
 	{ "forcedma", DBG_FORCE_DMA, "Use asynchronous DMA for all operations when possible." },
-	{ "precompile", DBG_PRECOMPILE, "Compile one shader variant at shader creation." },
 	{ "nowc", DBG_NO_WC, "Disable GTT write combining" },
 	{ "check_vm", DBG_CHECK_VM, "Check VM faults and dump debug info." },
-	{ "unsafemath", DBG_UNSAFE_MATH, "Enable unsafe math shader optimizations" },
 
 	DEBUG_NAMED_VALUE_END /* must be last */
 };
 
 static const char* r600_get_vendor(struct pipe_screen* pscreen)
 {
-	return "X.Org";
+	return "Mesa";
 }
 
 static const char* r600_get_device_vendor(struct pipe_screen* pscreen)
@@ -782,18 +765,12 @@ static void r600_disk_cache_create(struct r600_common_screen *rscreen)
 		return;
 
 	_mesa_sha1_final(&ctx, sha1);
-	disk_cache_format_hex_id(cache_id, sha1, 20 * 2);
+	mesa_bytes_to_hex(cache_id, sha1, 20);
 
 	/* These flags affect shader compilation. */
-	uint64_t shader_debug_flags =
-		rscreen->debug_flags &
-		(DBG_FS_CORRECT_DERIVS_AFTER_KILL |
-		 DBG_UNSAFE_MATH);
-
 	rscreen->disk_shader_cache =
 		disk_cache_create(r600_get_family_name(rscreen),
-				  cache_id,
-				  shader_debug_flags);
+				  cache_id, 0);
 }
 
 static struct disk_cache *r600_get_disk_shader_cache(struct pipe_screen *pscreen)
@@ -807,27 +784,6 @@ static const char* r600_get_name(struct pipe_screen* pscreen)
 	struct r600_common_screen *rscreen = (struct r600_common_screen*)pscreen;
 
 	return rscreen->renderer_string;
-}
-
-static float r600_get_paramf(struct pipe_screen* pscreen,
-			     enum pipe_capf param)
-{
-	switch (param) {
-	case PIPE_CAPF_MAX_LINE_WIDTH:
-	case PIPE_CAPF_MAX_LINE_WIDTH_AA:
-	case PIPE_CAPF_MAX_POINT_WIDTH:
-	case PIPE_CAPF_MAX_POINT_WIDTH_AA:
-         return 8191.0f;
-	case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
-		return 16.0f;
-	case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
-		return 16.0f;
-    case PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE:
-    case PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE:
-    case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
-        return 0.0f;
-	}
-	return 0.0f;
 }
 
 static int r600_get_video_param(struct pipe_screen *screen,
@@ -912,7 +868,7 @@ static unsigned get_max_threads_per_block(struct r600_common_screen *screen,
 	if (ir_type != PIPE_SHADER_IR_TGSI &&
 	    ir_type != PIPE_SHADER_IR_NIR)
 		return 256;
-	if (screen->chip_class >= EVERGREEN)
+	if (screen->gfx_level >= EVERGREEN)
 		return 1024;
 	return 256;
 }
@@ -991,8 +947,7 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 			 * 4 * MAX_MEM_ALLOC_SIZE.
 			 */
 			*max_global_size = MIN2(4 * max_mem_alloc_size,
-						MAX2(rscreen->info.gart_size,
-						     rscreen->info.vram_size));
+						rscreen->info.max_heap_size_kb * 1024ull);
 		}
 		return sizeof(uint64_t);
 
@@ -1016,21 +971,21 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 		if (ret) {
 			uint64_t *max_mem_alloc_size = ret;
 
-			*max_mem_alloc_size = rscreen->info.max_alloc_size;
+			*max_mem_alloc_size = (rscreen->info.max_heap_size_kb / 4) * 1024ull;
 		}
 		return sizeof(uint64_t);
 
 	case PIPE_COMPUTE_CAP_MAX_CLOCK_FREQUENCY:
 		if (ret) {
 			uint32_t *max_clock_frequency = ret;
-			*max_clock_frequency = rscreen->info.max_shader_clock;
+			*max_clock_frequency = rscreen->info.max_gpu_freq_mhz;
 		}
 		return sizeof(uint32_t);
 
 	case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:
 		if (ret) {
 			uint32_t *max_compute_units = ret;
-			*max_compute_units = rscreen->info.num_good_compute_units;
+			*max_compute_units = rscreen->info.num_cu;
 		}
 		return sizeof(uint32_t);
 
@@ -1042,7 +997,7 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 		return sizeof(uint32_t);
 	case PIPE_COMPUTE_CAP_MAX_PRIVATE_SIZE:
 		break; /* unused */
-	case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
+	case PIPE_COMPUTE_CAP_SUBGROUP_SIZES:
 		if (ret) {
 			uint32_t *subgroup_size = ret;
 			*subgroup_size = r600_wavefront_size(rscreen->family);
@@ -1054,6 +1009,8 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 			*max_variable_threads_per_block = 0;
 		}
 		return sizeof(uint64_t);
+        case PIPE_COMPUTE_CAP_MAX_SUBGROUPS:
+           return 0;
 	}
 
         fprintf(stderr, "unknown PIPE_COMPUTE_CAP %d\n", param);
@@ -1077,8 +1034,8 @@ static void r600_fence_reference(struct pipe_screen *screen,
 	struct r600_multi_fence *rsrc = (struct r600_multi_fence *)src;
 
 	if (pipe_reference(&(*rdst)->reference, &rsrc->reference)) {
-		ws->fence_reference(&(*rdst)->gfx, NULL);
-		ws->fence_reference(&(*rdst)->sdma, NULL);
+		ws->fence_reference(ws, &(*rdst)->gfx, NULL);
+		ws->fence_reference(ws, &(*rdst)->sdma, NULL);
 		FREE(*rdst);
 	}
         *rdst = rsrc;
@@ -1102,7 +1059,7 @@ static bool r600_fence_finish(struct pipe_screen *screen,
 			return false;
 
 		/* Recompute the timeout after waiting. */
-		if (timeout && timeout != PIPE_TIMEOUT_INFINITE) {
+		if (timeout && timeout != OS_TIMEOUT_INFINITE) {
 			int64_t time = os_time_get_nano();
 			timeout = abs_timeout > time ? abs_timeout - time : 0;
 		}
@@ -1122,7 +1079,7 @@ static bool r600_fence_finish(struct pipe_screen *screen,
 			return false;
 
 		/* Recompute the timeout after all that. */
-		if (timeout && timeout != PIPE_TIMEOUT_INFINITE) {
+		if (timeout && timeout != OS_TIMEOUT_INFINITE) {
 			int64_t time = os_time_get_nano();
 			timeout = abs_timeout > time ? abs_timeout - time : 0;
 		}
@@ -1138,8 +1095,8 @@ static void r600_query_memory_info(struct pipe_screen *screen,
 	struct radeon_winsys *ws = rscreen->ws;
 	unsigned vram_usage, gtt_usage;
 
-	info->total_device_memory = rscreen->info.vram_size / 1024;
-	info->total_staging_memory = rscreen->info.gart_size / 1024;
+	info->total_device_memory = rscreen->info.vram_size_kb;
+	info->total_staging_memory = rscreen->info.gart_size_kb;
 
 	/* The real TTM memory usage is somewhat random, because:
 	 *
@@ -1178,58 +1135,85 @@ struct pipe_resource *r600_resource_create_common(struct pipe_screen *screen,
 	}
 }
 
-const struct nir_shader_compiler_options r600_nir_fs_options = {
-	.fuse_ffma = true,
-	.lower_scmp = true,
-	.lower_flrp32 = true,
-	.lower_flrp64 = true,
-	.lower_fpow = true,
-	.lower_fdiv = true,
-	.lower_idiv = true,
-	.lower_fmod = true,
-	.lower_doubles_options = nir_lower_fp64_full_software,
-	.lower_int64_options = 0,
-	.lower_extract_byte = true,
-	.lower_extract_word = true,
-        .lower_rotate = true,
-	.max_unroll_iterations = 32,
-	.lower_all_io_to_temps = true,
-	.vectorize_io = true,
-	.has_umad24 = true,
-	.has_umul24 = true,
-};
-
-const struct nir_shader_compiler_options r600_nir_options = {
-	.fuse_ffma = true,
-	.lower_scmp = true,
-	.lower_flrp32 = true,
-	.lower_flrp64 = true,
-	.lower_fpow = true,
-	.lower_fdiv = true,
-	.lower_idiv = true,
-	.lower_fmod = true,
-	.lower_doubles_options = nir_lower_fp64_full_software,
-	.lower_int64_options = 0,
-	.lower_extract_byte = true,
-	.lower_extract_word = true,
-        .lower_rotate = true,
-	.max_unroll_iterations = 32,
-	.vectorize_io = true,
-	.has_umad24 = true,
-	.has_umul24 = true,
-};
-
-
 static const void *
 r600_get_compiler_options(struct pipe_screen *screen,
 			  enum pipe_shader_ir ir,
 			  enum pipe_shader_type shader)
 {
-	assert(ir == PIPE_SHADER_IR_NIR);
-	if (shader == PIPE_SHADER_FRAGMENT)
-	   return &r600_nir_fs_options;
-	else
-	   return &r600_nir_options;
+       assert(ir == PIPE_SHADER_IR_NIR);
+
+       struct r600_common_screen *rscreen = (struct r600_common_screen *)screen;
+
+       if (shader != PIPE_SHADER_FRAGMENT)
+          return &rscreen->nir_options;
+       else
+          return &rscreen->nir_options_fs;
+}
+
+extern bool r600_lower_to_scalar_instr_filter(const nir_instr *instr, const void *);
+
+static void r600_resource_destroy(struct pipe_screen *screen,
+				  struct pipe_resource *res)
+{
+	if (res->target == PIPE_BUFFER) {
+		if (r600_resource(res)->compute_global_bo)
+			r600_compute_global_buffer_destroy(screen, res);
+		else
+			r600_buffer_destroy(screen, res);
+	} else {
+		r600_texture_destroy(screen, res);
+	}
+}
+
+static int r600_get_screen_fd(struct pipe_screen *screen)
+{
+	struct radeon_winsys *ws = ((struct r600_common_screen*)screen)->ws;
+
+	return ws->get_fd(ws);
+}
+
+static void r600_get_driver_uuid(UNUSED struct pipe_screen *screen, char *uuid)
+{
+	const char *driver_id = PACKAGE_VERSION MESA_GIT_SHA1 "r600";
+
+	/* The driver UUID is used for determining sharability of images and
+	 * memory between two Vulkan instances in separate processes, but also
+	 * to determining memory objects and sharability between Vulkan and
+	 * OpenGL driver. People who want to share memory need to also check
+	 * the device UUID.
+	 */
+	struct mesa_sha1 sha1_ctx;
+	_mesa_sha1_init(&sha1_ctx);
+
+	_mesa_sha1_update(&sha1_ctx, driver_id, strlen(driver_id));
+
+	uint8_t sha1[SHA1_DIGEST_LENGTH];
+	_mesa_sha1_final(&sha1_ctx, sha1);
+
+	assert(SHA1_DIGEST_LENGTH >= PIPE_UUID_SIZE);
+	memcpy(uuid, sha1, PIPE_UUID_SIZE);
+}
+
+static void r600_get_device_uuid(struct pipe_screen *screen, char *uuid)
+{
+	uint32_t *uint_uuid = (uint32_t *)uuid;
+	struct r600_common_screen* rs = (struct r600_common_screen*)screen;
+
+	assert(PIPE_UUID_SIZE >= sizeof(uint32_t) * 4);
+
+	/* Copied from ac_device_info
+	 * Use the device info directly instead of using a sha1. GL/VK UUIDs
+	 * are 16 byte vs 20 byte for sha1, and the truncation that would be
+	 * required would get rid of part of the little entropy we have.
+	 */
+	memset(uuid, 0, PIPE_UUID_SIZE);
+	if (!rs->info.pci.valid)
+		fprintf(stderr,
+		"r600 device_uuid output is based on invalid pci bus info.\n");
+	uint_uuid[0] = rs->info.pci.domain;
+	uint_uuid[1] = rs->info.pci.bus;
+	uint_uuid[2] = rs->info.pci.dev;
+	uint_uuid[3] = rs->info.pci.func;
 }
 
 bool r600_common_screen_init(struct r600_common_screen *rscreen,
@@ -1250,7 +1234,7 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 
 	snprintf(rscreen->renderer_string, sizeof(rscreen->renderer_string),
 		 "%s (%sDRM %i.%i.%i%s"
-#ifdef LLVM_AVAILABLE
+#if AMD_LLVM_AVAILABLE
 		 ", LLVM " MESA_LLVM_VERSION_STRING
 #endif
 		 ")",
@@ -1263,16 +1247,18 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	rscreen->b.get_device_vendor = r600_get_device_vendor;
 	rscreen->b.get_disk_shader_cache = r600_get_disk_shader_cache;
 	rscreen->b.get_compute_param = r600_get_compute_param;
-	rscreen->b.get_paramf = r600_get_paramf;
+	rscreen->b.get_screen_fd = r600_get_screen_fd;
 	rscreen->b.get_timestamp = r600_get_timestamp;
 	rscreen->b.get_compiler_options = r600_get_compiler_options;
 	rscreen->b.fence_finish = r600_fence_finish;
 	rscreen->b.fence_reference = r600_fence_reference;
-	rscreen->b.resource_destroy = u_resource_destroy_vtbl;
+	rscreen->b.resource_destroy = r600_resource_destroy;
 	rscreen->b.resource_from_user_memory = r600_buffer_from_user_memory;
 	rscreen->b.query_memory_info = r600_query_memory_info;
+	rscreen->b.get_device_uuid = r600_get_device_uuid;
+	rscreen->b.get_driver_uuid = r600_get_driver_uuid;
 
-	if (rscreen->info.has_hw_decode) {
+	if (rscreen->info.ip[AMD_IP_UVD].num_queues) {
 		rscreen->b.get_video_param = rvid_get_video_param;
 		rscreen->b.is_video_format_supported = rvid_is_format_supported;
 	} else {
@@ -1284,12 +1270,8 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	r600_init_screen_query_functions(rscreen);
 
 	rscreen->family = rscreen->info.family;
-	rscreen->chip_class = rscreen->info.chip_class;
+	rscreen->gfx_level = rscreen->info.gfx_level;
 	rscreen->debug_flags |= debug_get_flags_option("R600_DEBUG", common_debug_options, 0);
-	int has_draw_use_llvm = debug_get_bool_option("DRAW_USE_LLVM", FALSE);
-	if (!has_draw_use_llvm)
-	   setenv("DRAW_USE_LLVM", "no", 0);
-
 
 	r600_disk_cache_create(rscreen);
 
@@ -1307,31 +1289,30 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 
 	if (rscreen->debug_flags & DBG_INFO) {
 		printf("pci (domain:bus:dev.func): %04x:%02x:%02x.%x\n",
-		       rscreen->info.pci_domain, rscreen->info.pci_bus,
-		       rscreen->info.pci_dev, rscreen->info.pci_func);
+		       rscreen->info.pci.domain, rscreen->info.pci.bus,
+		       rscreen->info.pci.dev, rscreen->info.pci.func);
 		printf("pci_id = 0x%x\n", rscreen->info.pci_id);
 		printf("family = %i (%s)\n", rscreen->info.family,
 		       r600_get_family_name(rscreen));
-		printf("chip_class = %i\n", rscreen->info.chip_class);
+		printf("gfx_level = %i\n", rscreen->info.gfx_level);
 		printf("pte_fragment_size = %u\n", rscreen->info.pte_fragment_size);
 		printf("gart_page_size = %u\n", rscreen->info.gart_page_size);
-		printf("gart_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.gart_size, 1024*1024));
-		printf("vram_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.vram_size, 1024*1024));
-		printf("vram_vis_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.vram_vis_size, 1024*1024));
-		printf("max_alloc_size = %i MB\n",
-		       (int)DIV_ROUND_UP(rscreen->info.max_alloc_size, 1024*1024));
+		printf("gart_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.gart_size_kb, 1024));
+		printf("vram_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.vram_size_kb, 1024));
+		printf("vram_vis_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.vram_vis_size_kb, 1024));
+		printf("max_heap_size = %i MB\n",
+		       (int)DIV_ROUND_UP(rscreen->info.max_heap_size_kb, 1024));
 		printf("min_alloc_size = %u\n", rscreen->info.min_alloc_size);
 		printf("has_dedicated_vram = %u\n", rscreen->info.has_dedicated_vram);
 		printf("r600_has_virtual_memory = %i\n", rscreen->info.r600_has_virtual_memory);
 		printf("gfx_ib_pad_with_type2 = %i\n", rscreen->info.gfx_ib_pad_with_type2);
-		printf("has_hw_decode = %u\n", rscreen->info.has_hw_decode);
-		printf("num_rings[RING_DMA] = %i\n", rscreen->info.num_rings[RING_DMA]);
-		printf("num_rings[RING_COMPUTE] = %u\n", rscreen->info.num_rings[RING_COMPUTE]);
+		printf("ip[AMD_IP_UVD] = %u\n", rscreen->info.ip[AMD_IP_UVD].num_queues);
+		printf("ip[AMD_IP_SDMA] = %i\n", rscreen->info.ip[AMD_IP_SDMA].num_queues);
+		printf("ip[AMD_IP_COMPUTE] = %u\n", rscreen->info.ip[AMD_IP_COMPUTE].num_queues);
 		printf("uvd_fw_version = %u\n", rscreen->info.uvd_fw_version);
 		printf("vce_fw_version = %u\n", rscreen->info.vce_fw_version);
 		printf("me_fw_version = %i\n", rscreen->info.me_fw_version);
 		printf("pfp_fw_version = %i\n", rscreen->info.pfp_fw_version);
-		printf("ce_fw_version = %i\n", rscreen->info.ce_fw_version);
 		printf("vce_harvest_config = %i\n", rscreen->info.vce_harvest_config);
 		printf("clock_crystal_freq = %i\n", rscreen->info.clock_crystal_freq);
 		printf("tcc_cache_line_size = %u\n", rscreen->info.tcc_cache_line_size);
@@ -1341,20 +1322,111 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 		printf("has_syncobj = %u\n", rscreen->info.has_syncobj);
 
 		printf("r600_max_quad_pipes = %i\n", rscreen->info.r600_max_quad_pipes);
-		printf("max_shader_clock = %i\n", rscreen->info.max_shader_clock);
-		printf("num_good_compute_units = %i\n", rscreen->info.num_good_compute_units);
+		printf("max_gpu_freq_mhz = %i\n", rscreen->info.max_gpu_freq_mhz);
+		printf("num_cu = %i\n", rscreen->info.num_cu);
 		printf("max_se = %i\n", rscreen->info.max_se);
-		printf("max_sh_per_se = %i\n", rscreen->info.max_sh_per_se);
+		printf("max_sh_per_se = %i\n", rscreen->info.max_sa_per_se);
 
 		printf("r600_gb_backend_map = %i\n", rscreen->info.r600_gb_backend_map);
 		printf("r600_gb_backend_map_valid = %i\n", rscreen->info.r600_gb_backend_map_valid);
 		printf("r600_num_banks = %i\n", rscreen->info.r600_num_banks);
-		printf("num_render_backends = %i\n", rscreen->info.num_render_backends);
+		printf("num_render_backends = %i\n", rscreen->info.max_render_backends);
 		printf("num_tile_pipes = %i\n", rscreen->info.num_tile_pipes);
 		printf("pipe_interleave_bytes = %i\n", rscreen->info.pipe_interleave_bytes);
-		printf("enabled_rb_mask = 0x%x\n", rscreen->info.enabled_rb_mask);
+		printf("enabled_rb_mask = 0x%" PRIx64 "\n", rscreen->info.enabled_rb_mask);
 		printf("max_alignment = %u\n", (unsigned)rscreen->info.max_alignment);
 	}
+
+	const struct nir_shader_compiler_options nir_options = {
+		.fuse_ffma16 = true,
+		.fuse_ffma32 = true,
+		.fuse_ffma64 = true,
+		.lower_flrp32 = true,
+		.lower_flrp64 = true,
+		.lower_fdiv = true,
+		.lower_isign = true,
+		.lower_fsign = true,
+		.lower_fmod = true,
+		.lower_uadd_carry = true,
+		.lower_usub_borrow = true,
+		.lower_bitfield_extract = true,
+		.lower_bitfield_insert = true,
+		.lower_extract_byte = true,
+		.lower_extract_word = true,
+		.lower_insert_byte = true,
+		.lower_insert_word = true,
+		.lower_ldexp = true,
+		/* due to a bug in the shader compiler, some loops hang
+		 * if they are not unrolled, see:
+		 *    https://bugs.freedesktop.org/show_bug.cgi?id=86720
+		 */
+		.max_unroll_iterations = 255,
+		.lower_interpolate_at = true,
+		.has_umad24 = true,
+		.has_umul24 = true,
+		.has_fmulz = true,
+		.has_fsub = true,
+		.has_isub = true,
+		.has_find_msb_rev = true,
+		.lower_iabs = true,
+		.lower_uadd_sat = true,
+		.lower_usub_sat = true,
+		.has_fused_comp_and_csel = true,
+		.lower_ifind_msb = true,
+		.lower_ufind_msb = true,
+		.lower_to_scalar = true,
+		.lower_to_scalar_filter = r600_lower_to_scalar_instr_filter,
+		.lower_fpow = true,
+		.lower_int64_options = ~0,
+		.lower_cs_local_index_to_id = true,
+		.lower_uniforms_to_ubo = true,
+		.lower_image_offset_to_range_base = 1,
+		.vectorize_tess_levels = 1,
+		.io_options = nir_io_mediump_is_32bit,
+	};
+
+	rscreen->nir_options = nir_options;
+
+	if (rscreen->info.family < CHIP_CEDAR)
+		rscreen->nir_options.force_indirect_unrolling_sampler = true;
+
+	if (rscreen->info.gfx_level >= EVERGREEN) {
+		rscreen->nir_options.has_bfe = true;
+		rscreen->nir_options.has_bfm = true;
+		rscreen->nir_options.has_bitfield_select = true;
+	}
+
+	if (rscreen->info.gfx_level < EVERGREEN) {
+		/* Pre-EG doesn't have these ALU ops */
+		rscreen->nir_options.lower_bit_count = true;
+		rscreen->nir_options.lower_bitfield_reverse = true;
+	}
+
+	if (rscreen->info.gfx_level < CAYMAN) {
+		rscreen->nir_options.lower_atomic_offset_to_range_base = true;
+
+		rscreen->nir_options.lower_doubles_options =
+			nir_lower_fp64_full_software |
+			nir_lower_dceil |
+			nir_lower_dsqrt |
+			nir_lower_drcp |
+			nir_lower_drsq;
+	} else {
+		rscreen->nir_options.lower_doubles_options =
+			nir_lower_ddiv |
+			nir_lower_dfloor |
+			nir_lower_dceil |
+			nir_lower_dmod |
+			nir_lower_dsub |
+			nir_lower_dtrunc |
+			nir_lower_dround_even;
+	}
+
+        rscreen->nir_options_fs = rscreen->nir_options;
+	rscreen->nir_options_fs.lower_all_io_to_temps = true;
+	rscreen->nir_options.support_indirect_inputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES);
+	rscreen->nir_options.support_indirect_outputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES);
+
 	return true;
 }
 

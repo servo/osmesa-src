@@ -1,7 +1,7 @@
 EGL
 ===
 
-The current version of EGL in Mesa implements EGL 1.4. More information
+The current version of EGL in Mesa implements EGL 1.5. More information
 about EGL can be found at https://www.khronos.org/egl/.
 
 The Mesa's implementation of EGL uses a driver architecture. The main
@@ -18,19 +18,17 @@ Build EGL
 #. Configure your build with the desired client APIs and enable the
    driver for your hardware. For example:
 
-   .. code-block:: console
+   .. code-block:: sh
 
       $ meson configure \
-              -D egl=true \
-              -D gles1=true \
-              -D gles2=true \
-              -D dri-drivers=... \
+              -D egl=enabled \
+              -D gles1=enabled \
+              -D gles2=enabled \
               -D gallium-drivers=...
 
-   The main library and OpenGL is enabled by default. The first two
-   options above enables :doc:`OpenGL ES 1.x and 2.x <opengles>`. The
-   last two options enables the listed classic and Gallium drivers
-   respectively.
+   The main EGL library and OpenGL are enabled by default. The two
+   ``gles*`` options after enable :doc:`OpenGL ES 1.x and 2.x+
+   <opengles>`. The last option enables the listed Gallium drivers.
 
 #. Build and install Mesa as usual.
 
@@ -43,7 +41,7 @@ Configure Options
 There are several options that control the build of EGL at configuration
 time
 
-``-D egl=true``
+``-D egl=enabled``
    By default, EGL is enabled. When disabled, the main library and the
    drivers will not be built.
 
@@ -60,11 +58,11 @@ time
    Unless for special needs, the build system should select the right
    platforms automatically.
 
-``-D gles1=true`` and ``-D gles2=true``
+``-D gles1=enabled`` and ``-D gles2=enabled``
    These options enable OpenGL ES support in OpenGL. The result is one
    big internal library that supports multiple APIs.
 
-``-D shared-glapi=true``
+``-D shared-glapi=enabled``
    By default, ``libGL`` has its own copy of ``libglapi``. This options
    makes ``libGL`` use the shared ``libglapi``. This is required if
    applications mix OpenGL and OpenGL ES.
@@ -90,25 +88,9 @@ at runtime
    the main library uses the first platform listed in
    ``-D platforms=...`` as the native platform.
 
-   Extensions like ``EGL_MESA_drm_display`` define new functions to
-   create displays for non-native platforms. These extensions are
-   usually used by applications that support non-native platforms.
-   Setting this variable is probably required only for some of the demos
-   found in mesa/demo repository.
-
 ``EGL_LOG_LEVEL``
    This changes the log level of the main library and the drivers. The
    valid values are: ``debug``, ``info``, ``warning``, and ``fatal``.
-
-EGL Drivers
------------
-
-``egl_dri2``
-   This driver supports both ``x11`` and ``drm`` platforms. It functions
-   as a DRI driver loader. For ``x11`` support, it talks to the X server
-   directly using (XCB-)DRI2 protocol.
-
-   This driver can share DRI drivers with ``libGL``.
 
 Packaging
 ---------
@@ -121,6 +103,65 @@ Developers
 
 The sources of the main library and drivers can be found at
 ``src/egl/``.
+
+The code basically consists of two things:
+
+1. An EGL API dispatcher. This directly routes all the ``eglFooBar()``
+   API calls into driver-specific functions.
+
+2. Two EGL drivers (``dri2`` and ``haiku``), implementing the API
+   functions handling the platforms' specifics.
+
+Two of API functions are optional (``eglQuerySurface()`` and
+``eglSwapInterval()``); the former provides fallback for all the
+platform-agnostic attributes (i.e. everything except ``EGL_WIDTH``
+& ``EGL_HEIGHT``), and the latter just silently pretends the API call
+succeeded (as per EGL spec).
+
+A driver _could_ implement all the other EGL API functions, but several of
+them are only needed for extensions, like ``eglSwapBuffersWithDamageEXT()``.
+See ``src/egl/main/egldriver.h`` to see which driver hooks are only
+required by extensions.
+
+Bootstrapping
+~~~~~~~~~~~~~
+
+When the apps calls ``eglInitialize()``, the driver's ``Initialize()``
+function is called. If the first driver initialization attempt fails,
+a second one is tried using only software components (this can be forced
+using the ``LIBGL_ALWAYS_SOFTWARE`` environment variable). Typically,
+this function takes care of setting up visual configs, creating EGL
+devices, etc.
+
+Teardown
+~~~~~~~~
+
+When ``eglTerminate()`` is called, the ``driver->Terminate()`` function
+is called. The driver should clean up after itself.
+
+Subclassing
+~~~~~~~~~~~
+
+The internal libEGL data structures such as ``_EGLDisplay``,
+``_EGLContext``, ``_EGLSurface``, etc. should be considered base classes
+from which drivers will derive subclasses.
+
+EGL Drivers
+-----------
+
+``egl_dri2``
+   This driver supports several platforms: ``android``, ``device``,
+   ``drm``, ``surfaceless``, ``wayland`` and ``x11``. It functions as
+   a DRI driver loader. For ``x11`` support, it talks to the X server
+   directly using (XCB-)DRI3 protocol when available, and falls back to
+   DRI2 if necessary (can be forced with ``LIBGL_DRI3_DISABLE``).
+
+   This driver can share DRI drivers with ``libGL``.
+
+``haiku``
+   This driver supports only the `Haiku <https://www.haiku-os.org/>`__
+   platform. It is also much less feature-complete than ``egl_dri2``,
+   supporting only part of EGL 1.4 and none of the extensions beyond it.
 
 Lifetime of Display Resources
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -192,6 +233,6 @@ renders to the specified render buffer for pixmap and pbuffer surfaces.
 The ``EGLDisplay`` will be locked before calling any of the dispatch
 functions (well, except for GetProcAddress which does not take an
 ``EGLDisplay``). This guarantees that the same dispatch function will
-not be called with the sample display at the same time. If a driver has
+not be called with the same display at the same time. If a driver has
 access to an ``EGLDisplay`` without going through the EGL APIs, the
 driver should as well lock the display before using it.

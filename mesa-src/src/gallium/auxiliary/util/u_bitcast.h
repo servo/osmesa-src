@@ -29,14 +29,13 @@
 #define U_BITCAST_H_
 
 #include <string.h>
-
-#include "c99_compat.h"
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-static inline unsigned
+static inline uint32_t
 u_bitcast_f2u(float f)
 {
    unsigned u;
@@ -44,12 +43,28 @@ u_bitcast_f2u(float f)
    return u;
 }
 
+static inline uint64_t
+u_bitcast_d2u(double d)
+{
+   uint64_t u;
+   memcpy(&u, &d, sizeof(u));
+   return u;
+}
+
 static inline float
-u_bitcast_u2f(unsigned u)
+u_bitcast_u2f(uint32_t u)
 {
    float f;
    memcpy(&f, &u, sizeof(f));
    return f;
+}
+
+static inline double
+u_bitcast_u2d(uint64_t u)
+{
+   double d;
+   memcpy(&d, &u, sizeof(d));
+   return d;
 }
 
 #ifdef __cplusplus

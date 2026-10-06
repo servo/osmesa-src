@@ -33,6 +33,8 @@
 #include "pipe/p_defines.h"
 #include "util/u_debug.h"
 
+#include "vl/vl_codec.h"
+
 /**
  * Retrieve the VDPAU version implemented by the backend.
  */
@@ -86,7 +88,7 @@ vlVdpVideoSurfaceQueryCapabilities(VdpDevice device, VdpChromaType surface_chrom
 
    /* XXX: Current limits */
    *is_supported = true;
-   max_2d_texture_size = pscreen->get_param(pscreen, PIPE_CAP_MAX_TEXTURE_2D_SIZE);
+   max_2d_texture_size = pscreen->caps.max_texture_2d_size;
    mtx_unlock(&dev->mutex);
    if (!max_2d_texture_size)
       return VDP_STATUS_RESOURCES;
@@ -106,6 +108,8 @@ vlVdpVideoSurfaceQueryGetPutBitsYCbCrCapabilities(VdpDevice device, VdpChromaTyp
 {
    vlVdpDevice *dev;
    struct pipe_screen *pscreen;
+   VdpYCbCrFormat ycbcrFormat;
+   bool supported;
 
    if (!is_supported)
       return VDP_STATUS_INVALID_POINTER;
@@ -120,47 +124,50 @@ vlVdpVideoSurfaceQueryGetPutBitsYCbCrCapabilities(VdpDevice device, VdpChromaTyp
 
    mtx_lock(&dev->mutex);
 
+   ycbcrFormat = bits_ycbcr_format;
    switch(bits_ycbcr_format) {
    case VDP_YCBCR_FORMAT_NV12:
-      *is_supported = surface_chroma_type == VDP_CHROMA_TYPE_420;
+      supported = surface_chroma_type == VDP_CHROMA_TYPE_420;
       break;
 
    case VDP_YCBCR_FORMAT_YV12:
-      *is_supported = surface_chroma_type == VDP_CHROMA_TYPE_420;
+      supported = surface_chroma_type == VDP_CHROMA_TYPE_420;
 
       /* We can convert YV12 to NV12 on the fly! */
-      if (*is_supported &&
-          pscreen->is_video_format_supported(pscreen,
-                                             PIPE_FORMAT_NV12,
-                                             PIPE_VIDEO_PROFILE_UNKNOWN,
-                                             PIPE_VIDEO_ENTRYPOINT_BITSTREAM)) {
-         mtx_unlock(&dev->mutex);
-         return VDP_STATUS_OK;
-      }
+      ycbcrFormat = VDP_YCBCR_FORMAT_NV12;
       break;
 
    case VDP_YCBCR_FORMAT_UYVY:
    case VDP_YCBCR_FORMAT_YUYV:
-      *is_supported = surface_chroma_type == VDP_CHROMA_TYPE_422;
+      supported = surface_chroma_type == VDP_CHROMA_TYPE_422;
       break;
 
    case VDP_YCBCR_FORMAT_Y8U8V8A8:
    case VDP_YCBCR_FORMAT_V8U8Y8A8:
-      *is_supported = surface_chroma_type == VDP_CHROMA_TYPE_444;
+      supported = surface_chroma_type == VDP_CHROMA_TYPE_444;
+      break;
+
+   case VDP_YCBCR_FORMAT_P010:
+   case VDP_YCBCR_FORMAT_P016:
+      /* Do any other profiles imply support for this chroma type? */
+      supported = (surface_chroma_type == VDP_CHROMA_TYPE_420_16)
+                  && vl_codec_supported(pscreen, PIPE_VIDEO_PROFILE_HEVC_MAIN_10, false);
       break;
 
    default:
-      *is_supported = false;
+      supported = false;
       break;
    }
 
-   if (*is_supported &&
+   if (supported &&
        !pscreen->is_video_format_supported(pscreen,
-                                           FormatYCBCRToPipe(bits_ycbcr_format),
+                                           FormatYCBCRToPipe(ycbcrFormat),
                                            PIPE_VIDEO_PROFILE_UNKNOWN,
                                            PIPE_VIDEO_ENTRYPOINT_BITSTREAM)) {
-      *is_supported = false;
+      supported = false;
    }
+   *is_supported = supported;
+
    mtx_unlock(&dev->mutex);
 
    return VDP_STATUS_OK;
@@ -196,8 +203,7 @@ vlVdpDecoderQueryCapabilities(VdpDevice device, VdpDecoderProfile profile,
    }
 
    mtx_lock(&dev->mutex);
-   *is_supported = pscreen->get_video_param(pscreen, p_profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
-                                            PIPE_VIDEO_CAP_SUPPORTED);
+   *is_supported = vl_codec_supported(pscreen, p_profile, false);
    if (*is_supported) {
       *max_width = pscreen->get_video_param(pscreen, p_profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
                                             PIPE_VIDEO_CAP_MAX_WIDTH);
@@ -205,7 +211,11 @@ vlVdpDecoderQueryCapabilities(VdpDevice device, VdpDecoderProfile profile,
                                              PIPE_VIDEO_CAP_MAX_HEIGHT);
       *max_level = pscreen->get_video_param(pscreen, p_profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
                                             PIPE_VIDEO_CAP_MAX_LEVEL);
-      *max_macroblocks = (*max_width/16)*(*max_height/16);
+      *max_macroblocks = pscreen->get_video_param(pscreen, p_profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+                                            PIPE_VIDEO_CAP_MAX_MACROBLOCKS);
+      if (*max_macroblocks == 0) {
+         *max_macroblocks = (*max_width/16)*(*max_height/16);
+      }
    } else {
       *max_width = 0;
       *max_height = 0;
@@ -250,8 +260,7 @@ vlVdpOutputSurfaceQueryCapabilities(VdpDevice device, VdpRGBAFormat surface_rgba
       PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET
    );
    if (*is_supported) {
-      uint32_t max_2d_texture_size = pscreen->get_param(
-         pscreen, PIPE_CAP_MAX_TEXTURE_2D_SIZE);
+      uint32_t max_2d_texture_size = pscreen->caps.max_texture_2d_size;
 
       if (!max_2d_texture_size) {
          mtx_unlock(&dev->mutex);
@@ -450,8 +459,7 @@ vlVdpBitmapSurfaceQueryCapabilities(VdpDevice device, VdpRGBAFormat surface_rgba
       PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET
    );
    if (*is_supported) {
-      uint32_t max_2d_texture_size = pscreen->get_param(
-         pscreen, PIPE_CAP_MAX_TEXTURE_2D_SIZE);
+      uint32_t max_2d_texture_size = pscreen->caps.max_texture_2d_size;
 
       if (!max_2d_texture_size) {
          mtx_unlock(&dev->mutex);

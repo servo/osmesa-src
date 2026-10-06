@@ -28,7 +28,6 @@
 #include "util/u_inlines.h"
 #include "util/u_hash_table.h"
 #include "util/u_memory.h"
-#include "util/simple_list.h"
 
 #include "tr_screen.h"
 #include "tr_context.h"
@@ -70,7 +69,6 @@ error:
 void
 trace_surf_destroy(struct trace_surface *tr_surf)
 {
-   trace_context_check(tr_surf->base.context);
    pipe_resource_reference(&tr_surf->base.texture, NULL);
    pipe_surface_reference(&tr_surf->surface, NULL);
    FREE(tr_surf);
@@ -87,24 +85,25 @@ trace_transfer_create(struct trace_context *tr_ctx,
    if (!transfer)
       goto error;
 
-   assert(transfer->resource == res);
-
    tr_trans = CALLOC_STRUCT(trace_transfer);
    if (!tr_trans)
       goto error;
 
-   memcpy(&tr_trans->base, transfer, sizeof(struct pipe_transfer));
+   memcpy(&tr_trans->base, transfer, tr_ctx->threaded ? sizeof(struct threaded_transfer) : sizeof(struct pipe_transfer));
 
-   tr_trans->base.resource = NULL;
+   tr_trans->base.b.resource = NULL;
    tr_trans->transfer = transfer;
 
-   pipe_resource_reference(&tr_trans->base.resource, res);
-   assert(tr_trans->base.resource == res);
+   pipe_resource_reference(&tr_trans->base.b.resource, res);
+   assert(tr_trans->base.b.resource == res);
 
-   return &tr_trans->base;
+   return &tr_trans->base.b;
 
 error:
-   tr_ctx->pipe->transfer_unmap(tr_ctx->pipe, transfer);
+   if (res->target == PIPE_BUFFER)
+      tr_ctx->pipe->buffer_unmap(tr_ctx->pipe, transfer);
+   else
+      tr_ctx->pipe->texture_unmap(tr_ctx->pipe, transfer);
    return NULL;
 }
 
@@ -113,7 +112,52 @@ void
 trace_transfer_destroy(struct trace_context *tr_context,
                        struct trace_transfer *tr_trans)
 {
-   pipe_resource_reference(&tr_trans->base.resource, NULL);
+   pipe_resource_reference(&tr_trans->base.b.resource, NULL);
    FREE(tr_trans);
 }
 
+/* Arbitrarily large refcount to "avoid having the driver bypass the samplerview wrapper and destroying
+the samplerview prematurely" see 7f5a3530125 ("aux/trace: use private refcounts for samplerviews") */
+#define SAMPLER_VIEW_PRIVATE_REFCOUNT 100000000
+
+struct pipe_sampler_view *
+trace_sampler_view_create(struct trace_context *tr_ctx,
+                  struct pipe_resource *tr_res,
+                  struct pipe_sampler_view *view)
+{
+   assert(tr_res == view->texture);
+   struct trace_sampler_view *tr_view = CALLOC_STRUCT(trace_sampler_view);
+   memcpy(&tr_view->base, view, sizeof(struct pipe_sampler_view));
+   tr_view->base.reference.count = 1;
+   tr_view->base.texture = NULL;
+   pipe_resource_reference(&tr_view->base.texture, tr_res);
+   tr_view->base.context = &tr_ctx->base;
+   tr_view->sampler_view = view;
+   view->reference.count += SAMPLER_VIEW_PRIVATE_REFCOUNT;
+   tr_view->refcount = SAMPLER_VIEW_PRIVATE_REFCOUNT;
+   return &tr_view->base;
+}
+
+void
+trace_sampler_view_destroy(struct trace_sampler_view *tr_view)
+{
+   p_atomic_add(&tr_view->sampler_view->reference.count, -tr_view->refcount);
+   pipe_sampler_view_reference(&tr_view->sampler_view, NULL);
+   pipe_resource_reference(&tr_view->base.texture, NULL);
+   FREE(tr_view);
+}
+
+struct pipe_sampler_view *
+trace_sampler_view_unwrap(struct trace_sampler_view *tr_view)
+{
+   if (!tr_view)
+      return NULL;
+   tr_view->refcount--;
+   if (!tr_view->refcount) {
+      tr_view->refcount = SAMPLER_VIEW_PRIVATE_REFCOUNT;
+      p_atomic_add(&tr_view->sampler_view->reference.count, tr_view->refcount);
+   }
+   return tr_view->sampler_view;
+}
+
+#undef SAMPLER_VIEW_PRIVATE_REFCOUNT

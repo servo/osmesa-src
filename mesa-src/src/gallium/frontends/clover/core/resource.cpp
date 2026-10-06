@@ -26,16 +26,16 @@
 #include "util/u_sampler.h"
 #include "util/format/u_format.h"
 #include "util/u_inlines.h"
+#include "util/u_resource.h"
+#include "util/u_surface.h"
 
 using namespace clover;
 
 namespace {
    class box {
    public:
-      box(const resource::vector &origin, const resource::vector &size) :
-        pipe({ (int)origin[0], (int16_t)origin[1],
-               (int16_t)origin[2], (int)size[0],
-               (int16_t)size[1], (int16_t)size[2] }) {
+      box(const resource::vector &origin, const resource::vector &size) {
+         u_box_3d(origin[0], origin[1], origin[2], size[0], size[1], size[2], &pipe);
       }
 
       operator const pipe_box *() {
@@ -65,24 +65,35 @@ resource::copy(command_queue &q, const vector &origin, const vector &region,
 }
 
 void
-resource::clear(command_queue &q, const size_t origin, const size_t size,
-                const void *pattern, const size_t pattern_size) {
-   auto p = offset[0] + origin;
+resource::clear(command_queue &q, const vector &origin, const vector &region,
+                const std::string &data) {
+   auto from = offset + origin;
 
-   q.pipe->clear_buffer(q.pipe, pipe, p, size, pattern, pattern_size);
+   if (pipe->target == PIPE_BUFFER) {
+      q.pipe->clear_buffer(q.pipe, pipe, from[0], region[0], data.data(), data.size());
+   } else {
+      std::string texture_data;
+      texture_data.reserve(util_format_get_blocksize(pipe->format));
+      util_format_pack_rgba(pipe->format, &texture_data[0], data.data(), 1);
+      if (q.pipe->clear_texture) {
+         q.pipe->clear_texture(q.pipe, pipe, 0, box(from, region), texture_data.data());
+      } else {
+         u_default_clear_texture(q.pipe, pipe, 0, box(from, region), texture_data.data());
+      }
+   }
 }
 
-void *
+mapping *
 resource::add_map(command_queue &q, cl_map_flags flags, bool blocking,
                   const vector &origin, const vector &region) {
    maps.emplace_back(q, *this, flags, blocking, origin, region);
-   return maps.back();
+   return &maps.back();
 }
 
 void
 resource::del_map(void *p) {
-   erase_if([&](const mapping &m) {
-         return static_cast<void *>(m) == p;
+   erase_if([&](const mapping &b) {
+         return static_cast<void *>(b) == p;
       }, maps);
 }
 
@@ -105,6 +116,29 @@ resource::unbind_sampler_view(command_queue &q,
    q.pipe->sampler_view_destroy(q.pipe, st);
 }
 
+pipe_image_view
+resource::create_image_view(command_queue &q) {
+   pipe_image_view view;
+   view.resource = pipe;
+   view.format = pipe->format;
+   view.access = 0;
+   view.shader_access = PIPE_IMAGE_ACCESS_WRITE;
+
+   if (pipe->target == PIPE_BUFFER) {
+      view.u.buf.offset = 0;
+      view.u.buf.size = obj.size();
+   } else {
+      view.u.tex.first_layer = 0;
+      if (util_texture_is_array(pipe->target))
+         view.u.tex.last_layer = pipe->array_size - 1;
+      else
+         view.u.tex.last_layer = 0;
+      view.u.tex.level = 0;
+   }
+
+   return view;
+}
+
 pipe_surface *
 resource::bind_surface(command_queue &q, bool rw) {
    pipe_surface info {};
@@ -124,7 +158,7 @@ resource::unbind_surface(command_queue &q, pipe_surface *st) {
 }
 
 root_resource::root_resource(clover::device &dev, memory_obj &obj,
-                             command_queue &q, const std::string &data) :
+                             command_queue &q, const void *data_ptr) :
    resource(dev, obj) {
    pipe_resource info {};
 
@@ -133,13 +167,14 @@ root_resource::root_resource(clover::device &dev, memory_obj &obj,
       info.width0 = img->width();
       info.height0 = img->height();
       info.depth0 = img->depth();
+      info.array_size = MAX2(1, img->array_size());
    } else {
       info.width0 = obj.size();
       info.height0 = 1;
       info.depth0 = 1;
+      info.array_size = 1;
    }
 
-   info.array_size = 1;
    info.target = translate_target(obj.type());
    info.bind = (PIPE_BIND_SAMPLER_VIEW |
                 PIPE_BIND_COMPUTE_RESOURCE |
@@ -161,16 +196,15 @@ root_resource::root_resource(clover::device &dev, memory_obj &obj,
    if (!pipe)
       throw error(CL_OUT_OF_RESOURCES);
 
-   if (obj.flags() & (CL_MEM_USE_HOST_PTR | CL_MEM_COPY_HOST_PTR)) {
-      const void *data_ptr = !data.empty() ? data.data() : obj.host_ptr();
+   if (data_ptr) {
       box rect { {{ 0, 0, 0 }}, {{ info.width0, info.height0, info.depth0 }} };
       unsigned cpp = util_format_get_blocksize(info.format);
 
       if (pipe->target == PIPE_BUFFER)
-         q.pipe->buffer_subdata(q.pipe, pipe, PIPE_TRANSFER_WRITE,
+         q.pipe->buffer_subdata(q.pipe, pipe, PIPE_MAP_WRITE,
                                 0, info.width0, data_ptr);
       else
-         q.pipe->texture_subdata(q.pipe, pipe, 0, PIPE_TRANSFER_WRITE,
+         q.pipe->texture_subdata(q.pipe, pipe, 0, PIPE_MAP_WRITE,
                                  rect, data_ptr, cpp * info.width0,
                                  cpp * info.width0 * info.height0);
    }
@@ -197,13 +231,13 @@ mapping::mapping(command_queue &q, resource &r,
                  const resource::vector &origin,
                  const resource::vector &region) :
    pctx(q.pipe), pres(NULL) {
-   unsigned usage = ((flags & CL_MAP_WRITE ? PIPE_TRANSFER_WRITE : 0 ) |
-                     (flags & CL_MAP_READ ? PIPE_TRANSFER_READ : 0 ) |
+   unsigned usage = ((flags & CL_MAP_WRITE ? PIPE_MAP_WRITE : 0 ) |
+                     (flags & CL_MAP_READ ? PIPE_MAP_READ : 0 ) |
                      (flags & CL_MAP_WRITE_INVALIDATE_REGION ?
-                      PIPE_TRANSFER_DISCARD_RANGE : 0) |
-                     (!blocking ? PIPE_TRANSFER_UNSYNCHRONIZED : 0));
+                      PIPE_MAP_DISCARD_RANGE : 0) |
+                     (!blocking ? PIPE_MAP_UNSYNCHRONIZED : 0));
 
-   p = pctx->transfer_map(pctx, r.pipe, 0, usage,
+   p = pctx->buffer_map(pctx, r.pipe, 0, usage,
                           box(origin + r.offset, region), &pxfer);
    if (!p) {
       pxfer = NULL;
@@ -222,7 +256,7 @@ mapping::mapping(mapping &&m) :
 
 mapping::~mapping() {
    if (pxfer) {
-      pctx->transfer_unmap(pctx, pxfer);
+      pctx->buffer_unmap(pctx, pxfer);
    }
    pipe_resource_reference(&pres, NULL);
 }
@@ -234,4 +268,14 @@ mapping::operator=(mapping m) {
    std::swap(pres, m.pres);
    std::swap(p, m.p);
    return *this;
+}
+
+resource::vector
+mapping::pitch() const
+{
+   return {
+      util_format_get_blocksize(pres->format),
+      pxfer->stride,
+      pxfer->layer_stride,
+   };
 }

@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "pipe/p_defines.h"
 #include "util/u_bitmask.h"
@@ -165,14 +147,14 @@ svga_create_depth_stencil_state(struct pipe_context *pipe,
       ds->stencil_writemask = templ->stencil[1].writemask & 0xff;
 
       if (templ->stencil[1].valuemask != templ->stencil[0].valuemask) {
-         pipe_debug_message(&svga->debug.callback, CONFORMANCE,
+         util_debug_message(&svga->debug.callback, CONFORMANCE,
                             "two-sided stencil mask not supported "
                             "(front=0x%x, back=0x%x)",
                             templ->stencil[0].valuemask,
                             templ->stencil[1].valuemask);
       }
       if (templ->stencil[1].writemask != templ->stencil[0].writemask) {
-         pipe_debug_message(&svga->debug.callback, CONFORMANCE,
+         util_debug_message(&svga->debug.callback, CONFORMANCE,
                             "two-sided stencil writemask not supported "
                             "(front=0x%x, back=0x%x)",
                             templ->stencil[0].writemask,
@@ -188,19 +170,19 @@ svga_create_depth_stencil_state(struct pipe_context *pipe,
    }
 
 
-   ds->zenable = templ->depth.enabled;
+   ds->zenable = templ->depth_enabled;
    if (ds->zenable) {
-      ds->zfunc = svga_translate_compare_func(templ->depth.func);
-      ds->zwriteenable = templ->depth.writemask;
+      ds->zfunc = svga_translate_compare_func(templ->depth_func);
+      ds->zwriteenable = templ->depth_writemask;
    }
    else {
       ds->zfunc = SVGA3D_CMP_ALWAYS;
    }
 
-   ds->alphatestenable = templ->alpha.enabled;
+   ds->alphatestenable = templ->alpha_enabled;
    if (ds->alphatestenable) {
-      ds->alphafunc = svga_translate_compare_func(templ->alpha.func);
-      ds->alpharef = templ->alpha.ref_value;
+      ds->alphafunc = svga_translate_compare_func(templ->alpha_func);
+      ds->alpharef = templ->alpha_ref_value;
    }
    else {
       ds->alphafunc = SVGA3D_CMP_ALWAYS;
@@ -263,7 +245,7 @@ svga_delete_depth_stencil_state(struct pipe_context *pipe, void *depth_stencil)
 
 static void
 svga_set_stencil_ref(struct pipe_context *pipe,
-                     const struct pipe_stencil_ref *stencil_ref)
+                     const struct pipe_stencil_ref stencil_ref)
 {
    struct svga_context *svga = svga_context(pipe);
 
@@ -272,7 +254,7 @@ svga_set_stencil_ref(struct pipe_context *pipe,
       svga_hwtnl_flush_retry(svga);
    }
 
-   svga->curr.stencil_ref = *stencil_ref;
+   svga->curr.stencil_ref = stencil_ref;
 
    svga->dirty |= SVGA_NEW_STENCIL_REF;
 }

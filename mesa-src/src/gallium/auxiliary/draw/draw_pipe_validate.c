@@ -1,5 +1,5 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  *
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,7 +22,7 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 /* Authors:  Keith Whitwell <keithw@vmware.com>
@@ -46,98 +46,92 @@
  *
  * This can be overridden by the driver.
  */
-boolean
+bool
 draw_need_pipeline(const struct draw_context *draw,
                    const struct pipe_rasterizer_state *rasterizer,
-                   unsigned int prim )
+                   enum mesa_prim prim)
 {
    unsigned reduced_prim = u_reduced_prim(prim);
 
-   /* If the driver has overridden this, use that version: 
+   /* If the driver has overridden this, use that version:
     */
-   if (draw->render &&
-       draw->render->need_pipeline) 
-   {
-      return draw->render->need_pipeline( draw->render,
-                                          rasterizer,
-                                          prim );
+   if (draw->render && draw->render->need_pipeline) {
+      return draw->render->need_pipeline(draw->render, rasterizer, prim);
    }
 
    /* Don't have to worry about triangles turning into lines/points
     * and triggering the pipeline, because we have to trigger the
     * pipeline *anyway* if unfilled mode is active.
     */
-   if (reduced_prim == PIPE_PRIM_LINES) {
+   if (reduced_prim == MESA_PRIM_LINES) {
       /* line stipple */
       if (rasterizer->line_stipple_enable && draw->pipeline.line_stipple)
-         return TRUE;
+         return true;
 
       /* wide lines */
       if (roundf(rasterizer->line_width) > draw->pipeline.wide_line_threshold)
-         return TRUE;
+         return true;
 
       /* AA lines */
       if ((!rasterizer->multisample && rasterizer->line_smooth) && draw->pipeline.aaline)
-         return TRUE;
+         return true;
 
       if (draw_current_shader_num_written_culldistances(draw))
-         return TRUE;
-   }
-   else if (reduced_prim == PIPE_PRIM_POINTS) {
+         return true;
+   } else if (reduced_prim == MESA_PRIM_POINTS) {
       /* large points */
       if (rasterizer->point_size > draw->pipeline.wide_point_threshold)
-         return TRUE;
+         return true;
 
       /* sprite points */
       if (rasterizer->point_quad_rasterization
           && draw->pipeline.wide_point_sprites)
-         return TRUE;
+         return true;
 
       /* AA points */
       if ((!rasterizer->multisample && rasterizer->point_smooth) && draw->pipeline.aapoint)
-         return TRUE;
+         return true;
 
       /* point sprites */
       if (rasterizer->sprite_coord_enable && draw->pipeline.point_sprite)
-         return TRUE;
+         return true;
 
       if (draw_current_shader_num_written_culldistances(draw))
-         return TRUE;
-   }
-   else if (reduced_prim == PIPE_PRIM_TRIANGLES) {
+         return true;
+   } else if (reduced_prim == MESA_PRIM_TRIANGLES) {
       /* polygon stipple */
       if (rasterizer->poly_stipple_enable && draw->pipeline.pstipple)
-         return TRUE;
+         return true;
 
       /* unfilled polygons */
       if (rasterizer->fill_front != PIPE_POLYGON_MODE_FILL ||
           rasterizer->fill_back != PIPE_POLYGON_MODE_FILL)
-         return TRUE;
-      
+         return true;
+
       /* polygon offset */
       if (rasterizer->offset_point ||
           rasterizer->offset_line ||
           rasterizer->offset_tri)
-         return TRUE;
+         return true;
 
       /* two-side lighting */
       if (rasterizer->light_twoside)
-         return TRUE;
+         return true;
 
       if (draw_current_shader_num_written_culldistances(draw))
-         return TRUE;
+         return true;
    }
 
    /* polygon cull - this is difficult - hardware can cull just fine
     * most of the time (though sometimes CULL_NEITHER is unsupported.
-    * 
+    *
     * Generally this isn't a reason to require the pipeline, though.
     *
    if (rasterizer->cull_mode)
       return TRUE;
    */
 
-   return FALSE;
+   return false;
 }
 
 
@@ -145,13 +139,14 @@ draw_need_pipeline(const struct draw_context *draw,
 /**
  * Rebuild the rendering pipeline.
  */
-static struct draw_stage *validate_pipeline( struct draw_stage *stage )
+static struct draw_stage *
+validate_pipeline(struct draw_stage *stage)
 {
    struct draw_context *draw = stage->draw;
    struct draw_stage *next = draw->pipeline.rasterize;
-   boolean need_det = FALSE;
-   boolean precalc_flat = FALSE;
-   boolean wide_lines, wide_points;
+   bool need_det = false;
+   bool precalc_flat = false;
+   bool wide_lines, wide_points;
    const struct pipe_rasterizer_state *rast = draw->rasterizer;
 
    /* Set the validate's next stage to the rasterize stage, so that it
@@ -166,15 +161,15 @@ static struct draw_stage *validate_pipeline( struct draw_stage *stage )
 
    /* drawing large/sprite points (but not AA points)? */
    if (rast->sprite_coord_enable && draw->pipeline.point_sprite)
-      wide_points = TRUE;
+      wide_points = true;
    else if ((!rast->multisample && rast->point_smooth) && draw->pipeline.aapoint)
-      wide_points = FALSE;
+      wide_points = false;
    else if (rast->point_size > draw->pipeline.wide_point_threshold)
-      wide_points = TRUE;
+      wide_points = true;
    else if (rast->point_quad_rasterization && draw->pipeline.wide_point_sprites)
-      wide_points = TRUE;
+      wide_points = true;
    else
-      wide_points = FALSE;
+      wide_points = false;
 
    /*
     * NOTE: we build up the pipeline in end-to-start order.
@@ -186,7 +181,7 @@ static struct draw_stage *validate_pipeline( struct draw_stage *stage )
    if ((!rast->multisample && rast->line_smooth) && draw->pipeline.aaline) {
       draw->pipeline.aaline->next = next;
       next = draw->pipeline.aaline;
-      precalc_flat = TRUE;
+      precalc_flat = true;
    }
 
    if ((!rast->multisample && rast->point_smooth) && draw->pipeline.aapoint) {
@@ -197,7 +192,7 @@ static struct draw_stage *validate_pipeline( struct draw_stage *stage )
    if (wide_lines) {
       draw->pipeline.wide_line->next = next;
       next = draw->pipeline.wide_line;
-      precalc_flat = TRUE;
+      precalc_flat = true;
    }
 
    if (wide_points) {
@@ -208,7 +203,7 @@ static struct draw_stage *validate_pipeline( struct draw_stage *stage )
    if (rast->line_stipple_enable && draw->pipeline.line_stipple) {
       draw->pipeline.stipple->next = next;
       next = draw->pipeline.stipple;
-      precalc_flat = TRUE;		/* only needed for lines really */
+      precalc_flat = true;		/* only needed for lines really */
    }
 
    if (rast->poly_stipple_enable
@@ -221,8 +216,8 @@ static struct draw_stage *validate_pipeline( struct draw_stage *stage )
        rast->fill_back != PIPE_POLYGON_MODE_FILL) {
       draw->pipeline.unfilled->next = next;
       next = draw->pipeline.unfilled;
-      precalc_flat = TRUE;		/* only needed for triangles really */
-      need_det = TRUE;
+      precalc_flat = true;		/* only needed for triangles really */
+      need_det = true;
    }
 
    if (precalc_flat) {
@@ -233,23 +228,23 @@ static struct draw_stage *validate_pipeline( struct draw_stage *stage )
       draw->pipeline.flatshade->next = next;
       next = draw->pipeline.flatshade;
    }
-	 
+
    if (rast->offset_point ||
        rast->offset_line ||
        rast->offset_tri) {
       draw->pipeline.offset->next = next;
       next = draw->pipeline.offset;
-      need_det = TRUE;
+      need_det = true;
    }
 
    if (rast->light_twoside) {
       draw->pipeline.twoside->next = next;
       next = draw->pipeline.twoside;
-      need_det = TRUE;
+      need_det = true;
    }
 
    /* Always run the cull stage as we calculate determinant there
-    * also.  
+    * also.
     *
     * This can actually be a win as culling out the triangles can lead
     * to less work emitting vertices, smaller vertex buffers, etc.
@@ -262,8 +257,7 @@ static struct draw_stage *validate_pipeline( struct draw_stage *stage )
 
    /* Clip stage
     */
-   if (draw->clip_xy || draw->clip_z || draw->clip_user)
-   {
+   if (draw->clip_xy || draw->clip_z || draw->clip_user) {
       draw->pipeline.clip->next = next;
       next = draw->pipeline.clip;
    }
@@ -277,61 +271,73 @@ static struct draw_stage *validate_pipeline( struct draw_stage *stage )
 
    if (0) {
       debug_printf("draw pipeline:\n");
-      for (next = draw->pipeline.first; next ; next = next->next ) 
+      for (next = draw->pipeline.first; next ; next = next->next)
          debug_printf("   %s\n", next->name);
       debug_printf("\n");
    }
-   
+
    return draw->pipeline.first;
 }
 
-static void validate_tri( struct draw_stage *stage, 
-			  struct prim_header *header )
+
+static void
+validate_tri(struct draw_stage *stage,
+             struct prim_header *header)
 {
-   struct draw_stage *pipeline = validate_pipeline( stage );
-   pipeline->tri( pipeline, header );
+   struct draw_stage *pipeline = validate_pipeline(stage);
+   pipeline->tri(pipeline, header);
 }
 
-static void validate_line( struct draw_stage *stage, 
-			   struct prim_header *header )
+
+static void
+validate_line(struct draw_stage *stage,
+              struct prim_header *header)
 {
-   struct draw_stage *pipeline = validate_pipeline( stage );
-   pipeline->line( pipeline, header );
+   struct draw_stage *pipeline = validate_pipeline(stage);
+   pipeline->line(pipeline, header);
 }
 
-static void validate_point( struct draw_stage *stage, 
-			    struct prim_header *header )
+
+static void
+validate_point(struct draw_stage *stage,
+               struct prim_header *header)
 {
-   struct draw_stage *pipeline = validate_pipeline( stage );
-   pipeline->point( pipeline, header );
+   struct draw_stage *pipeline = validate_pipeline(stage);
+   pipeline->point(pipeline, header);
 }
 
-static void validate_reset_stipple_counter( struct draw_stage *stage )
+
+static void
+validate_reset_stipple_counter(struct draw_stage *stage)
 {
-   struct draw_stage *pipeline = validate_pipeline( stage );
-   pipeline->reset_stipple_counter( pipeline );
+   struct draw_stage *pipeline = validate_pipeline(stage);
+   pipeline->reset_stipple_counter(pipeline);
 }
 
-static void validate_flush( struct draw_stage *stage, 
-			    unsigned flags )
+
+static void
+validate_flush(struct draw_stage *stage,
+               unsigned flags)
 {
    /* May need to pass a backend flush on to the rasterize stage.
     */
    if (stage->next)
-      stage->next->flush( stage->next, flags );
+      stage->next->flush(stage->next, flags);
 }
 
 
-static void validate_destroy( struct draw_stage *stage )
+static void
+validate_destroy(struct draw_stage *stage)
 {
-   FREE( stage );
+   FREE(stage);
 }
 
 
 /**
  * Create validate pipeline stage.
  */
-struct draw_stage *draw_validate_stage( struct draw_context *draw )
+struct draw_stage *
+draw_validate_stage(struct draw_context *draw)
 {
    struct draw_stage *stage = CALLOC_STRUCT(draw_stage);
    if (!stage)

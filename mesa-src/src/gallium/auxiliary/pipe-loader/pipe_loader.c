@@ -51,19 +51,22 @@ static int (*backends[])(struct pipe_loader_device **, int) = {
    &pipe_loader_sw_probe
 };
 
-const char gallium_driinfo_xml[] =
-   DRI_CONF_BEGIN
+const driOptionDescription gallium_driconf[] = {
 #include "driinfo_gallium.h"
-   DRI_CONF_END
-;
+};
 
 int
-pipe_loader_probe(struct pipe_loader_device **devs, int ndev)
+pipe_loader_probe(struct pipe_loader_device **devs, int ndev, bool with_zink)
 {
    int i, n = 0;
 
    for (i = 0; i < ARRAY_SIZE(backends); i++)
       n += backends[i](&devs[n], MAX2(0, ndev - n));
+
+#if defined(HAVE_ZINK) && defined(HAVE_LIBDRM)
+   if (with_zink)
+      n += pipe_loader_drm_zink_probe(&devs[n], MAX2(0, ndev - n));
+#endif
 
    return n;
 }
@@ -87,45 +90,101 @@ pipe_loader_base_release(struct pipe_loader_device **dev)
    *dev = NULL;
 }
 
-void
+static driOptionDescription *
+merge_driconf(const driOptionDescription *driver_driconf, unsigned driver_count,
+              unsigned *merged_count)
+{
+   unsigned gallium_count = ARRAY_SIZE(gallium_driconf);
+   driOptionDescription *merged = malloc((driver_count + gallium_count) *
+                                         sizeof(*merged));
+   if (!merged) {
+      *merged_count = 0;
+      return NULL;
+   }
+
+   if (gallium_count)
+      memcpy(merged, gallium_driconf, sizeof(*merged) * gallium_count);
+   if (driver_count) {
+      memcpy(&merged[gallium_count], driver_driconf,
+             sizeof(*merged) * driver_count);
+   }
+
+   *merged_count = driver_count + gallium_count;
+   return merged;
+}
+
+/**
+ * Ensure that dev->option_cache is initialized appropriately for the driver.
+ *
+ * This function can be called multiple times.
+ *
+ * \param dev Device for which options should be loaded.
+ */
+static void
 pipe_loader_load_options(struct pipe_loader_device *dev)
 {
    if (dev->option_info.info)
       return;
 
-   const char *xml_options = dev->ops->get_driconf_xml(dev);
-   if (!xml_options)
-      xml_options = gallium_driinfo_xml;
+   unsigned driver_count, merged_count;
+   const driOptionDescription *driver_driconf =
+      dev->ops->get_driconf(dev, &driver_count);
 
-   driParseOptionInfo(&dev->option_info, xml_options);
-   driParseConfigFiles(&dev->option_cache, &dev->option_info, 0,
-                       dev->driver_name, NULL, NULL, 0, NULL, 0);
+   const driOptionDescription *merged_driconf =
+      merge_driconf(driver_driconf, driver_count, &merged_count);
+   driParseOptionInfo(&dev->option_info, merged_driconf, merged_count);
+   free((void *)merged_driconf);
+}
+
+void
+pipe_loader_config_options(struct pipe_loader_device *dev)
+{
+   if (!dev->option_cache.info) {
+      driParseConfigFiles(&dev->option_cache, &dev->option_info, 0,
+                          dev->driver_name, NULL, NULL, NULL, 0, NULL, 0);
+   }
 }
 
 char *
 pipe_loader_get_driinfo_xml(const char *driver_name)
 {
+   unsigned driver_count = 0;
+   const driOptionDescription *driver_driconf = NULL;
+
 #ifdef HAVE_LIBDRM
-   char *xml = pipe_loader_drm_get_driinfo_xml(driver_name);
-#else
-   char *xml = NULL;
+   driver_driconf = pipe_loader_drm_get_driconf_by_name(driver_name,
+                                                        &driver_count);
 #endif
 
-   if (!xml)
-      xml = strdup(gallium_driinfo_xml);
+   unsigned merged_count;
+   const driOptionDescription *merged_driconf =
+      merge_driconf(driver_driconf, driver_count, &merged_count);
+
+   char *xml = driGetOptionsXml(merged_driconf, merged_count);
+
+   free((void *)driver_driconf);
+   free((void *)merged_driconf);
 
    return xml;
 }
 
 struct pipe_screen *
-pipe_loader_create_screen(struct pipe_loader_device *dev)
+pipe_loader_create_screen_vk(struct pipe_loader_device *dev, bool sw_vk, bool driver_name_is_inferred)
 {
    struct pipe_screen_config config;
 
    pipe_loader_load_options(dev);
+   config.driver_name_is_inferred = driver_name_is_inferred;
+   config.options_info = &dev->option_info;
    config.options = &dev->option_cache;
 
-   return dev->ops->create_screen(dev, &config);
+   return dev->ops->create_screen(dev, &config, sw_vk);
+}
+
+struct pipe_screen *
+pipe_loader_create_screen(struct pipe_loader_device *dev, bool driver_name_is_inferred)
+{
+   return pipe_loader_create_screen_vk(dev, false, driver_name_is_inferred);
 }
 
 struct util_dl_library *

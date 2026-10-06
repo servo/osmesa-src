@@ -28,7 +28,7 @@
 #ifndef U_TESTS_H
 #define U_TESTS_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,7 +40,7 @@ struct pipe_resource;
 
 void util_test_constant_buffer(struct pipe_context *ctx,
                                struct pipe_resource *constbuf);
-void util_run_tests(struct pipe_screen *screen);
+PUBLIC void util_run_tests(struct pipe_screen *screen);
 
 #ifdef __cplusplus
 }

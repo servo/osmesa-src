@@ -66,13 +66,8 @@
 
 #define LP_MAX_SAMPLES 4
 
-#define LP_MAX_THREADS 16
+#define LP_MAX_THREADS 32
 
-
-/**
- * Max bytes per scene.  This may be replaced by a runtime parameter.
- */
-#define LP_MAX_SCENE_SIZE (512 * 1024 * 1024)
 
 /**
  * Max number of shader variants (for all shaders combined,
@@ -99,5 +94,5 @@
 /*
  * Max point size reported. Cap vertex shader point sizes to this.
  */
-#define LP_MAX_POINT_WIDTH 255.0f
+#define LP_MAX_POINT_WIDTH 256.0f
 #endif /* LP_LIMITS_H */

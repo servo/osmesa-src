@@ -23,14 +23,16 @@
  */
 
 
-#include "glheader.h"
+#include "util/glheader.h"
 #include "clip.h"
 #include "context.h"
 #include "macros.h"
 #include "mtypes.h"
 
 #include "math/m_matrix.h"
+#include "api_exec_decl.h"
 
+#include "state_tracker/st_context.h"
 
 /**
  * Update derived clip plane state.
@@ -38,6 +40,7 @@
 void
 _mesa_update_clip_plane(struct gl_context *ctx, GLuint plane)
 {
+   /* make sure the inverse is up to date */
    if (_math_matrix_is_dirty(ctx->ProjectionMatrixStack.Top))
       _math_matrix_analyse( ctx->ProjectionMatrixStack.Top );
 
@@ -84,16 +87,13 @@ _mesa_ClipPlane( GLenum plane, const GLdouble *eq )
       return;
 
    /* EyeUserPlane is used by program state constants. */
-   FLUSH_VERTICES(ctx, _NEW_TRANSFORM);
-   ctx->NewDriverState |= ctx->DriverFlags.NewClipPlane;
+   FLUSH_VERTICES(ctx, _NEW_TRANSFORM, GL_TRANSFORM_BIT);
+   ctx->NewDriverState |= ST_NEW_CLIP_STATE;
    COPY_4FV(ctx->Transform.EyeUserPlane[p], equation);
 
    if (ctx->Transform.ClipPlanesEnabled & (1 << p)) {
       _mesa_update_clip_plane(ctx, p);
    }
-
-   if (ctx->Driver.ClipPlane)
-      ctx->Driver.ClipPlane( ctx, plane, equation );
 }
 
 

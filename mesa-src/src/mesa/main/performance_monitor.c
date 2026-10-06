@@ -35,7 +35,7 @@
  */
 
 #include <stdbool.h>
-#include "glheader.h"
+#include "util/glheader.h"
 #include "context.h"
 #include "enums.h"
 #include "hash.h"
@@ -44,27 +44,409 @@
 #include "performance_monitor.h"
 #include "util/bitset.h"
 #include "util/ralloc.h"
+#include "util/u_memory.h"
+#include "api_exec_decl.h"
+
+#include "state_tracker/st_cb_bitmap.h"
+#include "state_tracker/st_context.h"
+#include "state_tracker/st_debug.h"
+
+#include "pipe/p_context.h"
+#include "pipe/p_screen.h"
 
 void
 _mesa_init_performance_monitors(struct gl_context *ctx)
 {
-   ctx->PerfMonitor.Monitors = _mesa_NewHashTable();
+   _mesa_InitHashTable(&ctx->PerfMonitor.Monitors, ctx->Shared->ReuseGLNames);
    ctx->PerfMonitor.NumGroups = 0;
    ctx->PerfMonitor.Groups = NULL;
+}
+
+
+static bool
+init_perf_monitor(struct gl_context *ctx, struct gl_perf_monitor_object *m)
+{
+   struct pipe_context *pipe = ctx->pipe;
+   unsigned *batch = NULL;
+   unsigned num_active_counters = 0;
+   unsigned max_batch_counters = 0;
+   unsigned num_batch_counters = 0;
+   int gid, cid;
+
+   st_flush_bitmap_cache(st_context(ctx));
+
+   /* Determine the number of active counters. */
+   for (gid = 0; gid < ctx->PerfMonitor.NumGroups; gid++) {
+      const struct gl_perf_monitor_group *g = &ctx->PerfMonitor.Groups[gid];
+
+      if (m->ActiveGroups[gid] > g->MaxActiveCounters) {
+         /* Maximum number of counters reached. Cannot start the session. */
+         if (ST_DEBUG & DEBUG_MESA) {
+            debug_printf("Maximum number of counters reached. "
+                         "Cannot start the session!\n");
+         }
+         return false;
+      }
+
+      num_active_counters += m->ActiveGroups[gid];
+      if (g->has_batch)
+         max_batch_counters += m->ActiveGroups[gid];
+   }
+
+   if (!num_active_counters)
+      return true;
+
+   m->active_counters = CALLOC(num_active_counters,
+                                 sizeof(*m->active_counters));
+   if (!m->active_counters)
+      return false;
+
+   if (max_batch_counters) {
+      batch = CALLOC(max_batch_counters, sizeof(*batch));
+      if (!batch)
+         return false;
+   }
+
+   /* Create a query for each active counter. */
+   for (gid = 0; gid < ctx->PerfMonitor.NumGroups; gid++) {
+      const struct gl_perf_monitor_group *g = &ctx->PerfMonitor.Groups[gid];
+
+      BITSET_FOREACH_SET(cid, m->ActiveCounters[gid], g->NumCounters) {
+         const struct gl_perf_monitor_counter *c = &g->Counters[cid];
+         struct gl_perf_counter_object *cntr =
+            &m->active_counters[m->num_active_counters];
+
+         cntr->id       = cid;
+         cntr->group_id = gid;
+         if (c->flags & PIPE_DRIVER_QUERY_FLAG_BATCH) {
+            cntr->batch_index = num_batch_counters;
+            batch[num_batch_counters++] = c->query_type;
+         } else {
+            cntr->query = pipe->create_query(pipe, c->query_type, 0);
+            if (!cntr->query)
+               goto fail;
+         }
+         ++m->num_active_counters;
+      }
+   }
+
+   /* Create the batch query. */
+   if (num_batch_counters) {
+      m->batch_query = pipe->create_batch_query(pipe, num_batch_counters,
+                                                  batch);
+      m->batch_result = CALLOC(num_batch_counters, sizeof(m->batch_result->batch[0]));
+      if (!m->batch_query || !m->batch_result)
+         goto fail;
+   }
+
+   FREE(batch);
+   return true;
+
+fail:
+   FREE(batch);
+   return false;
+}
+
+static void
+do_reset_perf_monitor(struct gl_perf_monitor_object *m,
+                   struct pipe_context *pipe)
+{
+   unsigned i;
+
+   for (i = 0; i < m->num_active_counters; ++i) {
+      struct pipe_query *query = m->active_counters[i].query;
+      if (query)
+         pipe->destroy_query(pipe, query);
+   }
+   FREE(m->active_counters);
+   m->active_counters = NULL;
+   m->num_active_counters = 0;
+
+   if (m->batch_query) {
+      pipe->destroy_query(pipe, m->batch_query);
+      m->batch_query = NULL;
+   }
+   FREE(m->batch_result);
+   m->batch_result = NULL;
+}
+
+static void
+delete_perf_monitor(struct gl_context *ctx, struct gl_perf_monitor_object *m)
+{
+   struct pipe_context *pipe = st_context(ctx)->pipe;
+
+   do_reset_perf_monitor(m, pipe);
+   FREE(m);
+}
+
+static GLboolean
+begin_perf_monitor(struct gl_context *ctx, struct gl_perf_monitor_object *m)
+{
+   struct pipe_context *pipe = st_context(ctx)->pipe;
+   unsigned i;
+
+   if (!m->num_active_counters) {
+      /* Create a query for each active counter before starting
+       * a new monitoring session. */
+      if (!init_perf_monitor(ctx, m))
+         goto fail;
+   }
+
+   /* Start the query for each active counter. */
+   for (i = 0; i < m->num_active_counters; ++i) {
+      struct pipe_query *query = m->active_counters[i].query;
+      if (query && !pipe->begin_query(pipe, query))
+          goto fail;
+   }
+
+   if (m->batch_query && !pipe->begin_query(pipe, m->batch_query))
+      goto fail;
+
+   return true;
+
+fail:
+   /* Failed to start the monitoring session. */
+   do_reset_perf_monitor(m, pipe);
+   return false;
+}
+
+static void
+end_perf_monitor(struct gl_context *ctx, struct gl_perf_monitor_object *m)
+{
+   struct pipe_context *pipe = st_context(ctx)->pipe;
+   unsigned i;
+
+   /* Stop the query for each active counter. */
+   for (i = 0; i < m->num_active_counters; ++i) {
+      struct pipe_query *query = m->active_counters[i].query;
+      if (query)
+         pipe->end_query(pipe, query);
+   }
+
+   if (m->batch_query)
+      pipe->end_query(pipe, m->batch_query);
+}
+
+static void
+reset_perf_monitor(struct gl_context *ctx, struct gl_perf_monitor_object *m)
+{
+   struct pipe_context *pipe = st_context(ctx)->pipe;
+
+   if (!m->Ended)
+      end_perf_monitor(ctx, m);
+
+   do_reset_perf_monitor(m, pipe);
+
+   if (m->Active)
+      begin_perf_monitor(ctx, m);
+}
+
+static GLboolean
+is_perf_monitor_result_available(struct gl_context *ctx,
+                                 struct gl_perf_monitor_object *m)
+{
+   struct pipe_context *pipe = st_context(ctx)->pipe;
+   unsigned i;
+
+   if (!m->num_active_counters)
+      return false;
+
+   /* The result of a monitoring session is only available if the query of
+    * each active counter is idle. */
+   for (i = 0; i < m->num_active_counters; ++i) {
+      struct pipe_query *query = m->active_counters[i].query;
+      union pipe_query_result result;
+      if (query && !pipe->get_query_result(pipe, query, false, &result)) {
+         /* The query is busy. */
+         return false;
+      }
+   }
+
+   if (m->batch_query &&
+       !pipe->get_query_result(pipe, m->batch_query, false, m->batch_result))
+      return false;
+
+   return true;
+}
+
+static void
+get_perf_monitor_result(struct gl_context *ctx,
+                        struct gl_perf_monitor_object *m,
+                        GLsizei dataSize,
+                        GLuint *data,
+                        GLint *bytesWritten)
+{
+   struct pipe_context *pipe = st_context(ctx)->pipe;
+   unsigned i;
+
+   /* Copy data to the supplied array (data).
+    *
+    * The output data format is: <group ID, counter ID, value> for each
+    * active counter. The API allows counters to appear in any order.
+    */
+   GLsizei offset = 0;
+   bool have_batch_query = false;
+
+   if (m->batch_query)
+      have_batch_query = pipe->get_query_result(pipe, m->batch_query, true,
+                                                m->batch_result);
+
+   /* Read query results for each active counter. */
+   for (i = 0; i < m->num_active_counters; ++i) {
+      struct gl_perf_counter_object *cntr = &m->active_counters[i];
+      union pipe_query_result result = { 0 };
+      int gid, cid;
+      GLenum type;
+
+      cid  = cntr->id;
+      gid  = cntr->group_id;
+      type = ctx->PerfMonitor.Groups[gid].Counters[cid].Type;
+
+      if (cntr->query) {
+         if (!pipe->get_query_result(pipe, cntr->query, true, &result))
+            continue;
+      } else {
+         if (!have_batch_query)
+            continue;
+         result.batch[0] = m->batch_result->batch[cntr->batch_index];
+      }
+
+      data[offset++] = gid;
+      data[offset++] = cid;
+      switch (type) {
+      case GL_UNSIGNED_INT64_AMD:
+         memcpy(&data[offset], &result.u64, sizeof(uint64_t));
+         offset += sizeof(uint64_t) / sizeof(GLuint);
+         break;
+      case GL_UNSIGNED_INT:
+         memcpy(&data[offset], &result.u32, sizeof(uint32_t));
+         offset += sizeof(uint32_t) / sizeof(GLuint);
+         break;
+      case GL_FLOAT:
+      case GL_PERCENTAGE_AMD:
+         memcpy(&data[offset], &result.f, sizeof(GLfloat));
+         offset += sizeof(GLfloat) / sizeof(GLuint);
+         break;
+      }
+   }
+
+   if (bytesWritten)
+      *bytesWritten = offset * sizeof(GLuint);
+}
+
+void
+_mesa_free_perfomance_monitor_groups(struct gl_context *ctx)
+{
+   struct gl_perf_monitor_state *perfmon = &ctx->PerfMonitor;
+   int gid;
+
+   for (gid = 0; gid < perfmon->NumGroups; gid++) {
+      FREE((void *)perfmon->Groups[gid].Counters);
+   }
+   FREE((void *)perfmon->Groups);
 }
 
 static inline void
 init_groups(struct gl_context *ctx)
 {
-   if (unlikely(!ctx->PerfMonitor.Groups))
-      ctx->Driver.InitPerfMonitorGroups(ctx);
+   if (likely(ctx->PerfMonitor.Groups))
+      return;
+
+   struct gl_perf_monitor_state *perfmon = &ctx->PerfMonitor;
+   struct pipe_screen *screen = ctx->pipe->screen;
+   struct gl_perf_monitor_group *groups = NULL;
+   int num_counters, num_groups;
+   int gid, cid;
+
+   /* Get the number of available queries. */
+   num_counters = screen->get_driver_query_info(screen, 0, NULL);
+
+   /* Get the number of available groups. */
+   num_groups = screen->get_driver_query_group_info(screen, 0, NULL);
+   groups = CALLOC(num_groups, sizeof(*groups));
+   if (!groups)
+      return;
+
+   for (gid = 0; gid < num_groups; gid++) {
+      struct gl_perf_monitor_group *g = &groups[perfmon->NumGroups];
+      struct pipe_driver_query_group_info group_info;
+      struct gl_perf_monitor_counter *counters = NULL;
+
+      if (!screen->get_driver_query_group_info(screen, gid, &group_info))
+         continue;
+
+      g->Name = group_info.name;
+      g->MaxActiveCounters = group_info.max_active_queries;
+
+      if (group_info.num_queries)
+         counters = CALLOC(group_info.num_queries, sizeof(*counters));
+      if (!counters)
+         goto fail;
+      g->Counters = counters;
+
+      for (cid = 0; cid < num_counters; cid++) {
+         struct gl_perf_monitor_counter *c = &counters[g->NumCounters];
+         struct pipe_driver_query_info info;
+
+         if (!screen->get_driver_query_info(screen, cid, &info))
+            continue;
+         if (info.group_id != gid)
+            continue;
+
+         c->Name = info.name;
+         switch (info.type) {
+            case PIPE_DRIVER_QUERY_TYPE_UINT64:
+            case PIPE_DRIVER_QUERY_TYPE_BYTES:
+            case PIPE_DRIVER_QUERY_TYPE_MICROSECONDS:
+            case PIPE_DRIVER_QUERY_TYPE_HZ:
+               c->Minimum.u64 = 0;
+               c->Maximum.u64 = info.max_value.u64 ? info.max_value.u64 : UINT64_MAX;
+               c->Type = GL_UNSIGNED_INT64_AMD;
+               break;
+            case PIPE_DRIVER_QUERY_TYPE_UINT:
+               c->Minimum.u32 = 0;
+               c->Maximum.u32 = info.max_value.u32 ? info.max_value.u32 : UINT32_MAX;
+               c->Type = GL_UNSIGNED_INT;
+               break;
+            case PIPE_DRIVER_QUERY_TYPE_FLOAT:
+               c->Minimum.f = 0.0;
+               c->Maximum.f = info.max_value.f ? info.max_value.f : FLT_MAX;
+               c->Type = GL_FLOAT;
+               break;
+            case PIPE_DRIVER_QUERY_TYPE_PERCENTAGE:
+               c->Minimum.f = 0.0f;
+               c->Maximum.f = 100.0f;
+               c->Type = GL_PERCENTAGE_AMD;
+               break;
+            default:
+               unreachable("Invalid driver query type!");
+         }
+
+         c->query_type = info.query_type;
+         c->flags = info.flags;
+         if (c->flags & PIPE_DRIVER_QUERY_FLAG_BATCH)
+            g->has_batch = true;
+
+         g->NumCounters++;
+      }
+      perfmon->NumGroups++;
+   }
+   perfmon->Groups = groups;
+
+   return;
+
+fail:
+   for (gid = 0; gid < num_groups; gid++) {
+      FREE((void *)groups[gid].Counters);
+   }
+   FREE(groups);
 }
 
 static struct gl_perf_monitor_object *
 new_performance_monitor(struct gl_context *ctx, GLuint index)
 {
    unsigned i;
-   struct gl_perf_monitor_object *m = ctx->Driver.NewPerfMonitor(ctx);
+   struct gl_perf_monitor_object *m = CALLOC_STRUCT(gl_perf_monitor_object);
 
    if (m == NULL)
       return NULL;
@@ -96,34 +478,33 @@ new_performance_monitor(struct gl_context *ctx, GLuint index)
 fail:
    ralloc_free(m->ActiveGroups);
    ralloc_free(m->ActiveCounters);
-   ctx->Driver.DeletePerfMonitor(ctx, m);
+   delete_perf_monitor(ctx, m);
    return NULL;
 }
 
 static void
-free_performance_monitor(GLuint key, void *data, void *user)
+free_performance_monitor(void *data, void *user)
 {
    struct gl_perf_monitor_object *m = data;
    struct gl_context *ctx = user;
 
    ralloc_free(m->ActiveGroups);
    ralloc_free(m->ActiveCounters);
-   ctx->Driver.DeletePerfMonitor(ctx, m);
+   delete_perf_monitor(ctx, m);
 }
 
 void
 _mesa_free_performance_monitors(struct gl_context *ctx)
 {
-   _mesa_HashDeleteAll(ctx->PerfMonitor.Monitors,
-                       free_performance_monitor, ctx);
-   _mesa_DeleteHashTable(ctx->PerfMonitor.Monitors);
+   _mesa_DeinitHashTable(&ctx->PerfMonitor.Monitors, free_performance_monitor,
+                         ctx);
 }
 
 static inline struct gl_perf_monitor_object *
 lookup_monitor(struct gl_context *ctx, GLuint id)
 {
    return (struct gl_perf_monitor_object *)
-      _mesa_HashLookup(ctx->PerfMonitor.Monitors, id);
+      _mesa_HashLookup(&ctx->PerfMonitor.Monitors, id);
 }
 
 static inline const struct gl_perf_monitor_group *
@@ -338,7 +719,6 @@ _mesa_GetPerfMonitorCounterInfoAMD(GLuint group, GLuint counter, GLenum pname,
 void GLAPIENTRY
 _mesa_GenPerfMonitorsAMD(GLsizei n, GLuint *monitors)
 {
-   GLuint first;
    GET_CURRENT_CONTEXT(ctx);
 
    if (MESA_VERBOSE & VERBOSE_API)
@@ -354,21 +734,16 @@ _mesa_GenPerfMonitorsAMD(GLsizei n, GLuint *monitors)
    if (monitors == NULL)
       return;
 
-   /* We don't actually need them to be contiguous, but this is what
-    * the rest of Mesa does, so we may as well.
-    */
-   first = _mesa_HashFindFreeKeyBlock(ctx->PerfMonitor.Monitors, n);
-   if (first) {
+   if (_mesa_HashFindFreeKeys(&ctx->PerfMonitor.Monitors, monitors, n)) {
       GLsizei i;
       for (i = 0; i < n; i++) {
          struct gl_perf_monitor_object *m =
-            new_performance_monitor(ctx, first + i);
+            new_performance_monitor(ctx, monitors[i]);
          if (!m) {
             _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGenPerfMonitorsAMD");
             return;
          }
-         monitors[i] = first + i;
-         _mesa_HashInsert(ctx->PerfMonitor.Monitors, first + i, m);
+         _mesa_HashInsert(&ctx->PerfMonitor.Monitors, monitors[i], m);
       }
    } else {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGenPerfMonitorsAMD");
@@ -399,14 +774,14 @@ _mesa_DeletePerfMonitorsAMD(GLsizei n, GLuint *monitors)
       if (m) {
          /* Give the driver a chance to stop the monitor if it's active. */
          if (m->Active) {
-            ctx->Driver.ResetPerfMonitor(ctx, m);
+            reset_perf_monitor(ctx, m);
             m->Ended = false;
          }
 
-         _mesa_HashRemove(ctx->PerfMonitor.Monitors, monitors[i]);
+         _mesa_HashRemove(&ctx->PerfMonitor.Monitors, monitors[i]);
          ralloc_free(m->ActiveGroups);
          ralloc_free(m->ActiveCounters);
-         ctx->Driver.DeletePerfMonitor(ctx, m);
+         delete_perf_monitor(ctx, m);
       } else {
          /* "INVALID_VALUE error will be generated if any of the monitor IDs
           *  in the <monitors> parameter to DeletePerfMonitorsAMD do not
@@ -466,7 +841,7 @@ _mesa_SelectPerfMonitorCountersAMD(GLuint monitor, GLboolean enable,
     *  results for that monitor become invalidated and the result queries
     *  PERFMON_RESULT_SIZE_AMD and PERFMON_RESULT_AVAILABLE_AMD are reset to 0."
     */
-   ctx->Driver.ResetPerfMonitor(ctx, m);
+   reset_perf_monitor(ctx, m);
 
    /* Sanity check the counter ID list. */
    for (i = 0; i < numCounters; i++) {
@@ -521,7 +896,7 @@ _mesa_BeginPerfMonitorAMD(GLuint monitor)
    /* The driver is free to return false if it can't begin monitoring for
     * any reason.  This translates into an INVALID_OPERATION error.
     */
-   if (ctx->Driver.BeginPerfMonitor(ctx, m)) {
+   if (begin_perf_monitor(ctx, m)) {
       m->Active = true;
       m->Ended = false;
    } else {
@@ -550,7 +925,7 @@ _mesa_EndPerfMonitorAMD(GLuint monitor)
       return;
    }
 
-   ctx->Driver.EndPerfMonitor(ctx, m);
+   end_perf_monitor(ctx, m);
 
    m->Active = false;
    m->Ended = true;
@@ -565,6 +940,15 @@ perf_monitor_result_size(const struct gl_context *ctx,
 {
    unsigned group, counter;
    unsigned size = 0;
+
+   /**
+    * If no BeginPerfMonitorAMD has been issued for a monitor,
+    * or if SelectPerfMonitorCountersAMD is called on a monitor, then the result
+    * of querying for PERFMON_RESULT_SIZE will be 0.
+    * Using the same logic in is_perf_monitor_result_available().
+    */
+   if (!m->num_active_counters)
+      return 0;
 
    for (group = 0; group < ctx->PerfMonitor.NumGroups; group++) {
       const struct gl_perf_monitor_group *g = &ctx->PerfMonitor.Groups[group];
@@ -588,7 +972,6 @@ _mesa_GetPerfMonitorCounterDataAMD(GLuint monitor, GLenum pname,
    GET_CURRENT_CONTEXT(ctx);
 
    struct gl_perf_monitor_object *m = lookup_monitor(ctx, monitor);
-   bool result_available;
 
    if (m == NULL) {
       _mesa_error(ctx, GL_INVALID_VALUE,
@@ -610,12 +993,12 @@ _mesa_GetPerfMonitorCounterDataAMD(GLuint monitor, GLenum pname,
       return;
    }
 
-   /* If the monitor has never ended, there is no result. */
-   result_available = m->Ended &&
-      ctx->Driver.IsPerfMonitorResultAvailable(ctx, m);
-
-   /* AMD appears to return 0 for all queries unless a result is available. */
-   if (!result_available) {
+   /**
+    * If no EndPerfMonitorAMD has been issued for a monitor
+    * then the result of querying for PERFMON_RESULT_AVAILABLE and
+    * PERFMON_RESULT_SIZE will be 0
+    */
+   if (!m->Ended) {
       *data = 0;
       if (bytesWritten != NULL)
          *bytesWritten = sizeof(GLuint);
@@ -624,7 +1007,10 @@ _mesa_GetPerfMonitorCounterDataAMD(GLuint monitor, GLenum pname,
 
    switch (pname) {
    case GL_PERFMON_RESULT_AVAILABLE_AMD:
-      *data = 1;
+      if (is_perf_monitor_result_available(ctx, m))
+         *data = 1;
+      else
+         *data = 0;
       if (bytesWritten != NULL)
          *bytesWritten = sizeof(GLuint);
       break;
@@ -634,7 +1020,7 @@ _mesa_GetPerfMonitorCounterDataAMD(GLuint monitor, GLenum pname,
          *bytesWritten = sizeof(GLuint);
       break;
    case GL_PERFMON_RESULT_AMD:
-      ctx->Driver.GetPerfMonitorResult(ctx, m, dataSize, data, bytesWritten);
+      get_perf_monitor_result(ctx, m, dataSize, data, bytesWritten);
       break;
    default:
       _mesa_error(ctx, GL_INVALID_ENUM,

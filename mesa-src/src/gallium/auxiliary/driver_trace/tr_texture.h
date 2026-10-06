@@ -29,10 +29,11 @@
 #define TR_TEXTURE_H_
 
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_state.h"
 
 #include "tr_screen.h"
+#include "util/u_threaded_context.h"
 
 struct trace_context;
 
@@ -56,6 +57,7 @@ struct trace_surface
 struct trace_sampler_view
 {
    struct pipe_sampler_view base;
+   unsigned refcount;
 
    struct pipe_sampler_view *sampler_view;
 };
@@ -63,7 +65,7 @@ struct trace_sampler_view
 
 struct trace_transfer
 {
-   struct pipe_transfer base;
+   struct threaded_transfer base;
 
    struct pipe_transfer *transfer;
    struct pipe_context *pipe;
@@ -118,5 +120,15 @@ void
 trace_transfer_destroy(struct trace_context *tr_ctx,
                        struct trace_transfer *tr_trans);
 
+struct pipe_sampler_view *
+trace_sampler_view_create(struct trace_context *tr_ctx,
+                  struct pipe_resource *tr_res,
+                  struct pipe_sampler_view *sampler_view);
+
+void
+trace_sampler_view_destroy(struct trace_sampler_view *tr_view);
+
+struct pipe_sampler_view *
+trace_sampler_view_unwrap(struct trace_sampler_view *tr_view);
 
 #endif /* TR_TEXTURE_H_ */

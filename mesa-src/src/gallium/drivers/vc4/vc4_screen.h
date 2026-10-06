@@ -26,7 +26,7 @@
 
 #include "pipe/p_screen.h"
 #include "renderonly/renderonly.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "frontend/drm_driver.h"
 #include "util/list.h"
 #include "util/slab.h"
@@ -36,6 +36,10 @@
 #endif
 
 struct vc4_bo;
+
+extern uint32_t vc4_mesa_debug;
+
+#define VC4_DBG(flag) unlikely(vc4_mesa_debug & VC4_DEBUG_ ## flag)
 
 #define VC4_DEBUG_CL        0x0001
 #define VC4_DEBUG_QPU       0x0002
@@ -92,6 +96,7 @@ struct vc4_screen {
 
         uint32_t bo_size;
         uint32_t bo_count;
+        uint32_t prim_types;
         bool has_control_flow;
         bool has_etc1;
         bool has_threaded_fs;
@@ -100,7 +105,9 @@ struct vc4_screen {
         bool has_perfmon_ioctl;
         bool has_syncobj;
 
+#ifdef USE_VC4_SIMULATOR
         struct vc4_simulator_file *sim_file;
+#endif
 };
 
 static inline struct vc4_screen *
@@ -109,14 +116,14 @@ vc4_screen(struct pipe_screen *screen)
         return (struct vc4_screen *)screen;
 }
 
-struct pipe_screen *vc4_screen_create(int fd, struct renderonly *ro);
+struct pipe_screen *vc4_screen_create(int fd,
+                                      const struct pipe_screen_config *config,
+                                      struct renderonly *ro);
 
 const void *
 vc4_screen_get_compiler_options(struct pipe_screen *pscreen,
                                 enum pipe_shader_ir ir,
                                 enum pipe_shader_type shader);
-
-extern uint32_t vc4_debug;
 
 void
 vc4_fence_screen_init(struct vc4_screen *screen);

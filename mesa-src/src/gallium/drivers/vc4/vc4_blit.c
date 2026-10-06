@@ -21,7 +21,9 @@
  * IN THE SOFTWARE.
  */
 
+#include "nir/pipe_nir.h"
 #include "util/format/u_format.h"
+#include "util/perf/cpu_trace.h"
 #include "util/u_surface.h"
 #include "util/u_blitter.h"
 #include "compiler/nir/nir_builder.h"
@@ -29,15 +31,15 @@
 
 static struct pipe_surface *
 vc4_get_blit_surface(struct pipe_context *pctx,
-                     struct pipe_resource *prsc, unsigned level)
+                     struct pipe_resource *prsc, unsigned level,
+                     unsigned layer)
 {
         struct pipe_surface tmpl;
 
         memset(&tmpl, 0, sizeof(tmpl));
         tmpl.format = prsc->format;
         tmpl.u.tex.level = level;
-        tmpl.u.tex.first_layer = 0;
-        tmpl.u.tex.last_layer = 0;
+        tmpl.u.tex.first_layer = tmpl.u.tex.last_layer = layer;
 
         return pctx->create_surface(pctx, prsc, &tmpl);
 }
@@ -48,8 +50,8 @@ is_tile_unaligned(unsigned size, unsigned tile_size)
         return size & (tile_size - 1);
 }
 
-static bool
-vc4_tile_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
+static void
+vc4_tile_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
         bool msaa = (info->src.resource->nr_samples > 1 ||
@@ -57,21 +59,37 @@ vc4_tile_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
         int tile_width = msaa ? 32 : 64;
         int tile_height = msaa ? 32 : 64;
 
-        if (util_format_is_depth_or_stencil(info->dst.resource->format))
-                return false;
+        if (!info->mask)
+                return;
 
-        if (info->scissor_enable)
-                return false;
+        bool is_color_blit = info->mask & PIPE_MASK_RGBA;
+        bool is_depth_blit = info->mask & PIPE_MASK_Z;
+        bool is_stencil_blit = info->mask & PIPE_MASK_S;
 
-        if ((info->mask & PIPE_MASK_RGBA) == 0)
-                return false;
+        /* Either we receive a depth/stencil blit, or color blit, but not both.
+         */
+        assert ((is_color_blit && !(is_depth_blit || is_stencil_blit)) ||
+                (!is_color_blit && (is_depth_blit || is_stencil_blit)));
+
+        if (info->scissor_enable || info->swizzle_enable)
+                return;
 
         if (info->dst.box.x != info->src.box.x ||
             info->dst.box.y != info->src.box.y ||
             info->dst.box.width != info->src.box.width ||
-            info->dst.box.height != info->src.box.height) {
-                return false;
+            info->dst.box.height != info->src.box.height ||
+            info->dst.box.depth != info->src.box.depth ||
+            info->dst.box.depth != 1) {
+                return;
         }
+
+        if (is_color_blit &&
+            util_format_is_depth_or_stencil(info->dst.format))
+                return;
+
+        if ((is_depth_blit || is_stencil_blit) &&
+            !util_format_is_depth_or_stencil(info->dst.format))
+                return;
 
         int dst_surface_width = u_minify(info->dst.resource->width0,
                                          info->dst.level);
@@ -83,7 +101,7 @@ vc4_tile_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
              info->dst.box.x + info->dst.box.width != dst_surface_width) ||
             (is_tile_unaligned(info->dst.box.height, tile_height) &&
              info->dst.box.y + info->dst.box.height != dst_surface_height)) {
-                return false;
+                return;
         }
 
         /* VC4_PACKET_LOAD_TILE_BUFFER_GENERAL uses the
@@ -107,10 +125,10 @@ vc4_tile_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
                 stride = align(dst_surface_width * rsc->cpp, 16);
 
         if (stride != rsc->slices[info->src.level].stride)
-                return false;
+                return;
 
         if (info->dst.resource->format != info->src.resource->format)
-                return false;
+                return;
 
         if (false) {
                 fprintf(stderr, "RCL blit from %d,%d to %d,%d (%d,%d)\n",
@@ -123,22 +141,21 @@ vc4_tile_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
         }
 
         struct pipe_surface *dst_surf =
-                vc4_get_blit_surface(pctx, info->dst.resource, info->dst.level);
+                vc4_get_blit_surface(pctx, info->dst.resource, info->dst.level,
+                                           info->dst.box.z);
         struct pipe_surface *src_surf =
-                vc4_get_blit_surface(pctx, info->src.resource, info->src.level);
+                vc4_get_blit_surface(pctx, info->src.resource, info->src.level,
+                                           info->src.box.z);
 
         vc4_flush_jobs_reading_resource(vc4, info->src.resource);
 
-        struct vc4_job *job = vc4_get_job(vc4, dst_surf, NULL);
-        pipe_surface_reference(&job->color_read, src_surf);
-
-        /* If we're resolving from MSAA to single sample, we still need to run
-         * the engine in MSAA mode for the load.
-         */
-        if (!job->msaa && info->src.resource->nr_samples > 1) {
-                job->msaa = true;
-                job->tile_width = 32;
-                job->tile_height = 32;
+        struct vc4_job *job;
+        if (is_color_blit) {
+                job = vc4_get_job(vc4, dst_surf, NULL);
+                pipe_surface_reference(&job->color_read, src_surf);
+        } else {
+                job = vc4_get_job(vc4, NULL, dst_surf);
+                pipe_surface_reference(&job->zs_read, src_surf);
         }
 
         job->draw_min_x = info->dst.box.x;
@@ -152,14 +169,26 @@ vc4_tile_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
         job->tile_height = tile_height;
         job->msaa = msaa;
         job->needs_flush = true;
-        job->resolve |= PIPE_CLEAR_COLOR;
+
+        if (is_color_blit) {
+                job->resolve |= PIPE_CLEAR_COLOR;
+                info->mask &= ~PIPE_MASK_RGBA;
+        }
+
+        if (is_depth_blit) {
+                job->resolve |= PIPE_CLEAR_DEPTH;
+                info->mask &= ~PIPE_MASK_Z;
+        }
+
+        if (is_stencil_blit) {
+                job->resolve |= PIPE_CLEAR_STENCIL;
+                info->mask &= ~PIPE_MASK_S;
+        }
 
         vc4_job_submit(vc4, job);
 
         pipe_surface_reference(&dst_surf, NULL);
         pipe_surface_reference(&src_surf, NULL);
-
-        return true;
 }
 
 void
@@ -167,7 +196,8 @@ vc4_blitter_save(struct vc4_context *vc4)
 {
         util_blitter_save_fragment_constant_buffer_slot(vc4->blitter,
                                                         vc4->constbuf[PIPE_SHADER_FRAGMENT].cb);
-        util_blitter_save_vertex_buffer_slot(vc4->blitter, vc4->vertexbuf.vb);
+        util_blitter_save_vertex_buffers(vc4->blitter, vc4->vertexbuf.vb,
+                                         vc4->vertexbuf.count);
         util_blitter_save_vertex_elements(vc4->blitter, vc4->vtx);
         util_blitter_save_vertex_shader(vc4->blitter, vc4->prog.bind_vs);
         util_blitter_save_rasterizer(vc4->blitter, vc4->rasterizer);
@@ -177,7 +207,7 @@ vc4_blitter_save(struct vc4_context *vc4)
         util_blitter_save_blend(vc4->blitter, vc4->blend);
         util_blitter_save_depth_stencil_alpha(vc4->blitter, vc4->zsa);
         util_blitter_save_stencil_ref(vc4->blitter, &vc4->stencil_ref);
-        util_blitter_save_sample_mask(vc4->blitter, vc4->sample_mask);
+        util_blitter_save_sample_mask(vc4->blitter, vc4->sample_mask, 0);
         util_blitter_save_framebuffer(vc4->blitter, &vc4->framebuffer);
         util_blitter_save_fragment_sampler_states(vc4->blitter,
                         vc4->fragtex.num_samplers,
@@ -199,9 +229,8 @@ static void *vc4_get_yuv_vs(struct pipe_context *pctx)
                                          PIPE_SHADER_IR_NIR,
                                          PIPE_SHADER_VERTEX);
 
-   nir_builder b;
-   nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_VERTEX, options);
-   b.shader->info.name = ralloc_strdup(b.shader, "linear_blit_vs");
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_VERTEX, options,
+                                                  "linear_blit_vs");
 
    const struct glsl_type *vec4 = glsl_vec4_type();
    nir_variable *pos_in = nir_variable_create(b.shader, nir_var_shader_in,
@@ -213,12 +242,7 @@ static void *vc4_get_yuv_vs(struct pipe_context *pctx)
 
    nir_store_var(&b, pos_out, nir_load_var(&b, pos_in), 0xf);
 
-   struct pipe_shader_state shader_tmpl = {
-           .type = PIPE_SHADER_IR_NIR,
-           .ir.nir = b.shader,
-   };
-
-   vc4->yuv_linear_blit_vs = pctx->create_vs_state(pctx, &shader_tmpl);
+   vc4->yuv_linear_blit_vs = pipe_shader_from_nir(pctx, b.shader);
 
    return vc4->yuv_linear_blit_vs;
 }
@@ -246,9 +270,8 @@ static void *vc4_get_yuv_fs(struct pipe_context *pctx, int cpp)
                                          PIPE_SHADER_IR_NIR,
                                          PIPE_SHADER_FRAGMENT);
 
-   nir_builder b;
-   nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_FRAGMENT, options);
-   b.shader->info.name = ralloc_strdup(b.shader, name);
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT,
+                                                  options, "%s", name);
 
    const struct glsl_type *vec4 = glsl_vec4_type();
    const struct glsl_type *glsl_int = glsl_int_type();
@@ -260,24 +283,24 @@ static void *vc4_get_yuv_fs(struct pipe_context *pctx, int cpp)
    nir_variable *pos_in = nir_variable_create(b.shader, nir_var_shader_in,
                                               vec4, "pos");
    pos_in->data.location = VARYING_SLOT_POS;
-   nir_ssa_def *pos = nir_load_var(&b, pos_in);
+   nir_def *pos = nir_load_var(&b, pos_in);
 
-   nir_ssa_def *one = nir_imm_int(&b, 1);
-   nir_ssa_def *two = nir_imm_int(&b, 2);
+   nir_def *one = nir_imm_int(&b, 1);
+   nir_def *two = nir_imm_int(&b, 2);
 
-   nir_ssa_def *x = nir_f2i32(&b, nir_channel(&b, pos, 0));
-   nir_ssa_def *y = nir_f2i32(&b, nir_channel(&b, pos, 1));
+   nir_def *x = nir_f2i32(&b, nir_channel(&b, pos, 0));
+   nir_def *y = nir_f2i32(&b, nir_channel(&b, pos, 1));
 
    nir_variable *stride_in = nir_variable_create(b.shader, nir_var_uniform,
                                                  glsl_int, "stride");
-   nir_ssa_def *stride = nir_load_var(&b, stride_in);
+   nir_def *stride = nir_load_var(&b, stride_in);
 
-   nir_ssa_def *x_offset;
-   nir_ssa_def *y_offset;
+   nir_def *x_offset;
+   nir_def *y_offset;
    if (cpp == 1) {
-           nir_ssa_def *intra_utile_x_offset =
+           nir_def *intra_utile_x_offset =
                    nir_ishl(&b, nir_iand(&b, x, one), two);
-           nir_ssa_def *inter_utile_x_offset =
+           nir_def *inter_utile_x_offset =
                    nir_ishl(&b, nir_iand(&b, x, nir_imm_int(&b, ~3)), one);
 
            x_offset = nir_iadd(&b,
@@ -293,41 +316,41 @@ static void *vc4_get_yuv_fs(struct pipe_context *pctx, int cpp)
            y_offset = nir_imul(&b, y, stride);
    }
 
-   nir_intrinsic_instr *load =
-           nir_intrinsic_instr_create(b.shader, nir_intrinsic_load_ubo);
-   load->num_components = 1;
-   nir_ssa_dest_init(&load->instr, &load->dest, load->num_components, 32, NULL);
-   load->src[0] = nir_src_for_ssa(one);
-   load->src[1] = nir_src_for_ssa(nir_iadd(&b, x_offset, y_offset));
-   nir_builder_instr_insert(&b, &load->instr);
+   nir_def *load =
+      nir_load_ubo(&b, 1, 32, one, nir_iadd(&b, x_offset, y_offset),
+                   .align_mul = 4,
+                   .align_offset = 0,
+                   .range_base = 0,
+                   .range = ~0);
 
    nir_store_var(&b, color_out,
-                 nir_unpack_unorm_4x8(&b, &load->dest.ssa),
+                 nir_unpack_unorm_4x8(&b, load),
                  0xf);
 
-   struct pipe_shader_state shader_tmpl = {
-           .type = PIPE_SHADER_IR_NIR,
-           .ir.nir = b.shader,
-   };
-
-   *cached_shader = pctx->create_fs_state(pctx, &shader_tmpl);
+   *cached_shader = pipe_shader_from_nir(pctx, b.shader);
 
    return *cached_shader;
 }
 
-static bool
-vc4_yuv_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
+static void
+vc4_yuv_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
         struct vc4_resource *src = vc4_resource(info->src.resource);
         struct vc4_resource *dst = vc4_resource(info->dst.resource);
         bool ok;
 
+        if (!(info->mask & PIPE_MASK_RGBA))
+                return;
+
+        if (info->swizzle_enable)
+                return;
         if (src->tiled)
-                return false;
+                return;
+
         if (src->base.format != PIPE_FORMAT_R8_UNORM &&
             src->base.format != PIPE_FORMAT_R8G8_UNORM)
-                return false;
+                return;
 
         /* YUV blits always turn raster-order to tiled */
         assert(dst->base.format == src->base.format);
@@ -360,7 +383,7 @@ vc4_yuv_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
         if (!dst_surf) {
                 fprintf(stderr, "Failed to create YUV dst surface\n");
                 util_blitter_unset_running_flag(vc4->blitter);
-                return false;
+                return;
         }
         dst_surf->width = align(dst_surf->width, 8) / 2;
         if (dst->cpp == 1)
@@ -372,19 +395,19 @@ vc4_yuv_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
                 .user_buffer = &stride,
                 .buffer_size = sizeof(stride),
         };
-        pctx->set_constant_buffer(pctx, PIPE_SHADER_FRAGMENT, 0, &cb_uniforms);
+        pctx->set_constant_buffer(pctx, PIPE_SHADER_FRAGMENT, 0, false, &cb_uniforms);
         struct pipe_constant_buffer cb_src = {
                 .buffer = info->src.resource,
                 .buffer_offset = src->slices[info->src.level].offset,
                 .buffer_size = (src->bo->size -
                                 src->slices[info->src.level].offset),
         };
-        pctx->set_constant_buffer(pctx, PIPE_SHADER_FRAGMENT, 1, &cb_src);
+        pctx->set_constant_buffer(pctx, PIPE_SHADER_FRAGMENT, 1, false, &cb_src);
 
         /* Unbind the textures, to make sure we don't try to recurse into the
          * shadow blit.
          */
-        pctx->set_sampler_views(pctx, PIPE_SHADER_FRAGMENT, 0, 0, NULL);
+        pctx->set_sampler_views(pctx, PIPE_SHADER_FRAGMENT, 0, 0, 0, false, NULL);
         pctx->bind_sampler_states(pctx, PIPE_SHADER_FRAGMENT, 0, 0, NULL);
 
         util_blitter_custom_shader(vc4->blitter, dst_surf,
@@ -395,32 +418,37 @@ vc4_yuv_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
         util_blitter_restore_constant_buffer_state(vc4->blitter);
         /* Restore cb1 (util_blitter doesn't handle this one). */
         struct pipe_constant_buffer cb_disabled = { 0 };
-        pctx->set_constant_buffer(pctx, PIPE_SHADER_FRAGMENT, 1, &cb_disabled);
+        pctx->set_constant_buffer(pctx, PIPE_SHADER_FRAGMENT, 1, false, &cb_disabled);
 
         pipe_surface_reference(&dst_surf, NULL);
 
-        return true;
+        info->mask &= ~PIPE_MASK_RGBA;
+
+        return;
 
 fallback:
         /* Do an immediate SW fallback, since the render blit path
          * would just recurse.
          */
-        ok = util_try_blit_via_copy_region(pctx, info);
+        ok = util_try_blit_via_copy_region(pctx, info, false);
         assert(ok); (void)ok;
 
-        return true;
+        info->mask &= ~PIPE_MASK_RGBA;
 }
 
-static bool
+static void
 vc4_render_blit(struct pipe_context *ctx, struct pipe_blit_info *info)
 {
         struct vc4_context *vc4 = vc4_context(ctx);
+
+        if (!info->mask)
+                return;
 
         if (!util_blitter_is_blit_supported(vc4->blitter, info)) {
                 fprintf(stderr, "blit unsupported %s -> %s\n",
                     util_format_short_name(info->src.resource->format),
                     util_format_short_name(info->dst.resource->format));
-                return false;
+                return;
         }
 
         /* Enable the scissor, so we get a minimal set of tiles rendered. */
@@ -433,9 +461,82 @@ vc4_render_blit(struct pipe_context *ctx, struct pipe_blit_info *info)
         }
 
         vc4_blitter_save(vc4);
-        util_blitter_blit(vc4->blitter, info);
+        util_blitter_blit(vc4->blitter, info, NULL);
 
-        return true;
+        info->mask = 0;
+}
+
+/* Implement stencil and stencil/depth blit by reinterpreting stencil data as
+ * an RGBA8888 texture.
+ */
+static void
+vc4_stencil_blit(struct pipe_context *ctx, struct pipe_blit_info *info)
+{
+        struct vc4_context *vc4 = vc4_context(ctx);
+        struct vc4_resource *src = vc4_resource(info->src.resource);
+        struct vc4_resource *dst = vc4_resource(info->dst.resource);
+        enum pipe_format src_format, dst_format;
+
+        if ((info->mask & PIPE_MASK_S) == 0)
+                return;
+
+        src_format = (info->mask & PIPE_MASK_ZS) ?
+                     PIPE_FORMAT_RGBA8888_UINT :
+                     PIPE_FORMAT_R8_UINT;
+
+        dst_format = (info->mask & PIPE_MASK_ZS) ?
+                     PIPE_FORMAT_RGBA8888_UINT :
+                     PIPE_FORMAT_R8_UINT;
+
+        /* Initialize the surface */
+        struct pipe_surface dst_tmpl = {
+                .u.tex = {
+                        .level = info->dst.level,
+                        .first_layer = info->dst.box.z,
+                        .last_layer = info->dst.box.z,
+                },
+                .format = dst_format,
+        };
+        struct pipe_surface *dst_surf =
+                ctx->create_surface(ctx, &dst->base, &dst_tmpl);
+
+        /* Initialize the sampler view */
+        struct pipe_sampler_view src_tmpl = {
+                .target = (src->base.target == PIPE_TEXTURE_CUBE_ARRAY) ?
+                          PIPE_TEXTURE_2D_ARRAY :
+                          src->base.target,
+                .format = src_format,
+                .u.tex =  {
+                        .first_level = info->src.level,
+                        .last_level = info->src.level,
+                        .first_layer = 0,
+                        .last_layer = (PIPE_TEXTURE_2D ?
+                                       u_minify(src->base.depth0,
+                                                info->src.level) - 1 :
+                                       src->base.array_size - 1),
+                },
+                .swizzle_r = PIPE_SWIZZLE_X,
+                .swizzle_g = PIPE_SWIZZLE_Y,
+                .swizzle_b = PIPE_SWIZZLE_Z,
+                .swizzle_a = PIPE_SWIZZLE_W,
+        };
+        struct pipe_sampler_view *src_view =
+                ctx->create_sampler_view(ctx, &src->base, &src_tmpl);
+
+        vc4_blitter_save(vc4);
+        util_blitter_blit_generic(vc4->blitter, dst_surf, &info->dst.box,
+                                  src_view, &info->src.box,
+                                  src->base.width0, src->base.height0,
+                                  (info->mask & PIPE_MASK_ZS) ?
+                                  PIPE_MASK_RGBA : PIPE_MASK_R,
+                                  PIPE_TEX_FILTER_NEAREST,
+                                  info->scissor_enable ? &info->scissor :  NULL,
+                                  info->alpha_blend, false, 0, NULL);
+
+        pipe_surface_reference(&dst_surf, NULL);
+        pipe_sampler_view_reference(&src_view, NULL);
+
+        info->mask &= ~PIPE_MASK_ZS;
 }
 
 /* Optimal hardware path for blitting pixels.
@@ -446,22 +547,20 @@ vc4_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info)
 {
         struct pipe_blit_info info = *blit_info;
 
-        if (vc4_yuv_blit(pctx, blit_info))
+        MESA_TRACE_FUNC();
+
+        vc4_yuv_blit(pctx, &info);
+
+        vc4_tile_blit(pctx, &info);
+
+        if (info.mask &&
+            util_try_blit_via_copy_region(pctx, &info, false))
                 return;
 
-        if (vc4_tile_blit(pctx, blit_info))
-                return;
+        vc4_stencil_blit(pctx, &info);
 
-        if (info.mask & PIPE_MASK_S) {
-                if (util_try_blit_via_copy_region(pctx, &info))
-                        return;
+        vc4_render_blit(pctx, &info);
 
-                info.mask &= ~PIPE_MASK_S;
-                fprintf(stderr, "cannot blit stencil, skipping\n");
-        }
-
-        if (vc4_render_blit(pctx, &info))
-                return;
-
-        fprintf(stderr, "Unsupported blit\n");
+        if (info.mask)
+                fprintf(stderr, "Unsupported blit\n");
 }

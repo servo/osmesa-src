@@ -27,6 +27,8 @@
 #include <assert.h>
 #include <string.h>
 
+#include "util/compiler.h"
+
 #include "glxclient.h"
 #include "indirect.h"
 #include <GL/glxproto.h>
@@ -58,7 +60,7 @@
  * This is the GL 1.1 DrawArrays protocol.  The only difference between GL
  * 1.1 and EXT_vertex_arrays is the opcode used for the DrawArrays command.
  * This protocol is called "old" because the ARB is in the process of
- * defining a new protocol, which will probably be called wither "new" or
+ * defining a new protocol, which will probably be called either "new" or
  * "vbo", to support multiple texture coordinate arrays, generic attributes,
  * and vertex buffer objects.
  *
@@ -516,7 +518,7 @@ fill_array_info_cache(struct array_state_vector *arrays)
 
 /**
  * Emit a \c glDrawArrays command using the "none" protocol.  That is,
- * emit immediate-mode commands that are equivalent to the requiested
+ * emit immediate-mode commands that are equivalent to the requested
  * \c glDrawArrays command.  This is used with servers that don't support
  * the OpenGL 1.1 / EXT_vertex_arrays DrawArrays protocol or in cases where
  * vertex state is enabled that is not compatible with that protocol.
@@ -630,13 +632,13 @@ emit_DrawArrays_header_old(struct glx_context * gc,
 
 
       /* Calculate the number of data packets that will be required to send
-       * the whole command.  To do this, the number of verticies that
+       * the whole command.  To do this, the number of vertices that
        * will fit in a single buffer must be calculated.
        *
        * The important value here is elements_per_request.  This is the
        * number of complete array elements that will fit in a single
        * buffer.  There may be some wasted space at the end of the buffer,
-       * but splitting elements across buffer boundries would be painful.
+       * but splitting elements across buffer boundaries would be painful.
        */
 
       elements_per_request[0] = maxSize / single_vertex_size;
@@ -704,7 +706,6 @@ emit_DrawArrays_old(GLenum mode, GLint first, GLsizei count)
    size_t elements_per_request;
    unsigned total_requests = 0;
    unsigned i;
-   size_t total_sent = 0;
 
 
    pc = emit_DrawArrays_header_old(gc, arrays, &elements_per_request,
@@ -744,7 +745,6 @@ emit_DrawArrays_old(GLenum mode, GLint first, GLsizei count)
 
          first += elements_per_request;
 
-         total_sent += (size_t) (pc - gc->pc);
          __glXSendLargeChunk(gc, req, total_requests, gc->pc, pc - gc->pc);
 
          count -= elements_per_request;
@@ -1096,9 +1096,9 @@ __indirect_glMultiDrawArrays(GLenum mode, const GLint *first,
 
 
 void
-__indirect_glMultiDrawElementsEXT(GLenum mode, const GLsizei * count,
-                                  GLenum type, const GLvoid * const * indices,
-                                  GLsizei primcount)
+__indirect_glMultiDrawElements(GLenum mode, const GLsizei * count,
+                               GLenum type, const GLvoid * const * indices,
+                               GLsizei primcount)
 {
    struct glx_context *gc = __glXGetCurrentContext();
    const __GLXattribute *state =
@@ -1749,7 +1749,7 @@ __indirect_glVertexAttribPointerNV(GLuint index, GLint size,
          return;
       }
       normalized = GL_TRUE;
-      /* fallthrough */
+      FALLTHROUGH;
    case GL_SHORT:
    case GL_FLOAT:
    case GL_DOUBLE:
@@ -1793,7 +1793,7 @@ __glXSetArrayEnable(__GLXattribute * state, GLenum key, unsigned index,
    struct array_state *a;
 
 
-   /* Texture coordinate arrays have an implict index set when the
+   /* Texture coordinate arrays have an implicit index set when the
     * application calls glClientActiveTexture.
     */
    if (key == GL_TEXTURE_COORD_ARRAY) {

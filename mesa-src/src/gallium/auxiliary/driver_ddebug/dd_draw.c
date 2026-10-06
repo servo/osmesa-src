@@ -38,17 +38,18 @@
 #include "tgsi/tgsi_scan.h"
 #include "util/os_time.h"
 #include <inttypes.h>
-#include "pipe/p_config.h"
+#include "util/detect.h"
 
 void
 dd_get_debug_filename_and_mkdir(char *buf, size_t buflen, bool verbose)
 {
    static unsigned index;
-   char proc_name[128], dir[256];
+   char dir[256];
+   const char *proc_name = util_get_process_name();
 
-   if (!os_get_process_name(proc_name, sizeof(proc_name))) {
+   if (!proc_name) {
       fprintf(stderr, "dd: can't get the process name\n");
-      strcpy(proc_name, "unknown");
+      proc_name = "unknown";
    }
 
    snprintf(dir, sizeof(dir), "%s/"DD_DIR, debug_get_option("HOME", "."));
@@ -56,7 +57,7 @@ dd_get_debug_filename_and_mkdir(char *buf, size_t buflen, bool verbose)
    if (mkdir(dir, 0774) && errno != EEXIST)
       fprintf(stderr, "dd: can't create a directory (%i)\n", errno);
 
-   snprintf(buf, buflen, "%s/%s_%u_%08u", dir, proc_name, getpid(),
+   snprintf(buf, buflen, "%s/%s_%u_%08u", dir, proc_name, (unsigned int)getpid(),
             (unsigned int)p_atomic_inc_return(&index) - 1);
 
    if (verbose)
@@ -106,7 +107,7 @@ void
 dd_write_header(FILE *f, struct pipe_screen *screen, unsigned apitrace_call_number)
 {
    char cmd_line[4096];
-   if (os_get_command_line(cmd_line, sizeof(cmd_line)))
+   if (util_get_command_line(cmd_line, sizeof(cmd_line)))
       fprintf(f, "Command: %s\n", cmd_line);
    fprintf(f, "Driver vendor: %s\n", screen->get_vendor(screen));
    fprintf(f, "Device vendor: %s\n", screen->get_device_vendor(screen));
@@ -132,7 +133,7 @@ dd_get_file_stream(struct dd_screen *dscreen, unsigned apitrace_call_number)
 static void
 dd_dump_dmesg(FILE *f)
 {
-#ifdef PIPE_OS_LINUX
+#if DETECT_OS_LINUX
    char line[2000];
    FILE *p = popen("dmesg | tail -n60", "r");
 
@@ -351,18 +352,23 @@ dd_dump_flush(struct dd_draw_state *dstate, struct call_flush *info, FILE *f)
 }
 
 static void
-dd_dump_draw_vbo(struct dd_draw_state *dstate, struct pipe_draw_info *info, FILE *f)
+dd_dump_draw_vbo(struct dd_draw_state *dstate, struct pipe_draw_info *info,
+                 unsigned drawid_offset,
+                 const struct pipe_draw_indirect_info *indirect,
+                 const struct pipe_draw_start_count_bias *draw, FILE *f)
 {
    int sh, i;
 
    DUMP(draw_info, info);
-   if (info->count_from_stream_output)
-      DUMP_M(stream_output_target, info,
-             count_from_stream_output);
-   if (info->indirect) {
-      DUMP_M(resource, info, indirect->buffer);
-      if (info->indirect->indirect_draw_count)
-         DUMP_M(resource, info, indirect->indirect_draw_count);
+   PRINT_NAMED(int, "drawid offset", drawid_offset);
+   DUMP(draw_start_count_bias, draw);
+   if (indirect) {
+      if (indirect->buffer)
+         DUMP_M(resource, indirect, buffer);
+      if (indirect->indirect_draw_count)
+         DUMP_M(resource, indirect, indirect_draw_count);
+      if (indirect->count_from_stream_output)
+         DUMP_M(stream_output_target, indirect, count_from_stream_output);
    }
 
    fprintf(f, "\n");
@@ -479,6 +485,8 @@ dd_dump_blit(struct dd_draw_state *dstate, struct pipe_blit_info *info, FILE *f)
    DUMP_M_ADDR(scissor_state, info, scissor);
    DUMP_M(uint, info, render_condition_enable);
 
+   DUMP_M(uint, info, swizzle_enable);
+
    if (info->render_condition_enable)
       dd_dump_render_condition(dstate, f);
 }
@@ -495,7 +503,7 @@ dd_dump_get_query_result_resource(struct call_get_query_result_resource *info, F
 {
    fprintf(f, "%s:\n", __func__ + 8);
    DUMP_M(query_type, info, query_type);
-   DUMP_M(uint, info, wait);
+   DUMP_M(query_flags, info, flags);
    DUMP_M(query_value_type, info, result_type);
    DUMP_M(int, info, index);
    DUMP_M(resource, info, resource);
@@ -632,7 +640,10 @@ dd_dump_call(FILE *f, struct dd_draw_state *state, struct dd_call *call)
       dd_dump_flush(state, &call->info.flush, f);
       break;
    case CALL_DRAW_VBO:
-      dd_dump_draw_vbo(state, &call->info.draw_vbo.draw, f);
+      dd_dump_draw_vbo(state, &call->info.draw_vbo.info,
+                       call->info.draw_vbo.drawid_offset,
+                       &call->info.draw_vbo.indirect,
+                       &call->info.draw_vbo.draw, f);
       break;
    case CALL_LAUNCH_GRID:
       dd_dump_launch_grid(state, &call->info.launch_grid, f);
@@ -689,7 +700,7 @@ dd_dump_call(FILE *f, struct dd_draw_state *state, struct dd_call *call)
 static void
 dd_kill_process(void)
 {
-#ifdef PIPE_OS_UNIX
+#if DETECT_OS_POSIX
    sync();
 #endif
    fprintf(stderr, "dd: Aborting the process...\n");
@@ -705,14 +716,14 @@ dd_unreference_copy_of_call(struct dd_call *dst)
    case CALL_FLUSH:
       break;
    case CALL_DRAW_VBO:
-      pipe_so_target_reference(&dst->info.draw_vbo.draw.count_from_stream_output, NULL);
+      pipe_so_target_reference(&dst->info.draw_vbo.indirect.count_from_stream_output, NULL);
       pipe_resource_reference(&dst->info.draw_vbo.indirect.buffer, NULL);
       pipe_resource_reference(&dst->info.draw_vbo.indirect.indirect_draw_count, NULL);
-      if (dst->info.draw_vbo.draw.index_size &&
-          !dst->info.draw_vbo.draw.has_user_indices)
-         pipe_resource_reference(&dst->info.draw_vbo.draw.index.resource, NULL);
+      if (dst->info.draw_vbo.info.index_size &&
+          !dst->info.draw_vbo.info.has_user_indices)
+         pipe_resource_reference(&dst->info.draw_vbo.info.index.resource, NULL);
       else
-         dst->info.draw_vbo.draw.index.user = NULL;
+         dst->info.draw_vbo.info.index.user = NULL;
       break;
    case CALL_LAUNCH_GRID:
       pipe_resource_reference(&dst->info.launch_grid.indirect, NULL);
@@ -1297,39 +1308,74 @@ dd_context_flush(struct pipe_context *_pipe,
 
 static void
 dd_context_draw_vbo(struct pipe_context *_pipe,
-                    const struct pipe_draw_info *info)
+                    const struct pipe_draw_info *info,
+                    unsigned drawid_offset,
+                    const struct pipe_draw_indirect_info *indirect,
+                    const struct pipe_draw_start_count_bias *draws,
+                    unsigned num_draws)
 {
    struct dd_context *dctx = dd_context(_pipe);
    struct pipe_context *pipe = dctx->pipe;
    struct dd_draw_record *record = dd_create_record(dctx);
 
    record->call.type = CALL_DRAW_VBO;
-   record->call.info.draw_vbo.draw = *info;
-   record->call.info.draw_vbo.draw.count_from_stream_output = NULL;
-   pipe_so_target_reference(&record->call.info.draw_vbo.draw.count_from_stream_output,
-                            info->count_from_stream_output);
+   record->call.info.draw_vbo.info = *info;
+   record->call.info.draw_vbo.drawid_offset = drawid_offset;
+   record->call.info.draw_vbo.draw = draws[0];
    if (info->index_size && !info->has_user_indices) {
-      record->call.info.draw_vbo.draw.index.resource = NULL;
-      pipe_resource_reference(&record->call.info.draw_vbo.draw.index.resource,
+      record->call.info.draw_vbo.info.index.resource = NULL;
+      pipe_resource_reference(&record->call.info.draw_vbo.info.index.resource,
                               info->index.resource);
    }
 
-   if (info->indirect) {
-      record->call.info.draw_vbo.indirect = *info->indirect;
-      record->call.info.draw_vbo.draw.indirect = &record->call.info.draw_vbo.indirect;
-
+   if (indirect) {
+      record->call.info.draw_vbo.indirect = *indirect;
       record->call.info.draw_vbo.indirect.buffer = NULL;
       pipe_resource_reference(&record->call.info.draw_vbo.indirect.buffer,
-                              info->indirect->buffer);
+                              indirect->buffer);
       record->call.info.draw_vbo.indirect.indirect_draw_count = NULL;
       pipe_resource_reference(&record->call.info.draw_vbo.indirect.indirect_draw_count,
-                              info->indirect->indirect_draw_count);
+                              indirect->indirect_draw_count);
+      record->call.info.draw_vbo.indirect.count_from_stream_output = NULL;
+      pipe_so_target_reference(&record->call.info.draw_vbo.indirect.count_from_stream_output,
+                               indirect->count_from_stream_output);
    } else {
-      memset(&record->call.info.draw_vbo.indirect, 0, sizeof(*info->indirect));
+      memset(&record->call.info.draw_vbo.indirect, 0, sizeof(*indirect));
    }
 
    dd_before_draw(dctx, record);
-   pipe->draw_vbo(pipe, info);
+   pipe->draw_vbo(pipe, info, drawid_offset, indirect, draws, num_draws);
+   dd_after_draw(dctx, record);
+}
+
+static void
+dd_context_draw_vertex_state(struct pipe_context *_pipe,
+                             struct pipe_vertex_state *state,
+                             uint32_t partial_velem_mask,
+                             struct pipe_draw_vertex_state_info info,
+                             const struct pipe_draw_start_count_bias *draws,
+                             unsigned num_draws)
+{
+   struct dd_context *dctx = dd_context(_pipe);
+   struct pipe_context *pipe = dctx->pipe;
+   struct dd_draw_record *record = dd_create_record(dctx);
+
+   record->call.type = CALL_DRAW_VBO;
+   memset(&record->call.info.draw_vbo.info, 0,
+          sizeof(record->call.info.draw_vbo.info));
+   record->call.info.draw_vbo.info.mode = info.mode;
+   record->call.info.draw_vbo.info.index_size = 4;
+   record->call.info.draw_vbo.info.instance_count = 1;
+   record->call.info.draw_vbo.drawid_offset = 0;
+   record->call.info.draw_vbo.draw = draws[0];
+   record->call.info.draw_vbo.info.index.resource = NULL;
+   pipe_resource_reference(&record->call.info.draw_vbo.info.index.resource,
+                           state->input.indexbuf);
+   memset(&record->call.info.draw_vbo.indirect, 0,
+          sizeof(record->call.info.draw_vbo.indirect));
+
+   dd_before_draw(dctx, record);
+   pipe->draw_vertex_state(pipe, state, partial_velem_mask, info, draws, num_draws);
    dd_after_draw(dctx, record);
 }
 
@@ -1433,7 +1479,7 @@ dd_context_generate_mipmap(struct pipe_context *_pipe,
 static void
 dd_context_get_query_result_resource(struct pipe_context *_pipe,
                                      struct pipe_query *query,
-                                     bool wait,
+                                     enum pipe_query_flags flags,
                                      enum pipe_query_value_type result_type,
                                      int index,
                                      struct pipe_resource *resource,
@@ -1446,7 +1492,7 @@ dd_context_get_query_result_resource(struct pipe_context *_pipe,
 
    record->call.type = CALL_GET_QUERY_RESULT_RESOURCE;
    record->call.info.get_query_result_resource.query = query;
-   record->call.info.get_query_result_resource.wait = wait;
+   record->call.info.get_query_result_resource.flags = flags;
    record->call.info.get_query_result_resource.result_type = result_type;
    record->call.info.get_query_result_resource.index = index;
    record->call.info.get_query_result_resource.resource = NULL;
@@ -1458,7 +1504,7 @@ dd_context_get_query_result_resource(struct pipe_context *_pipe,
    record->call.info.get_query_result_resource.query_type = dquery->type;
 
    dd_before_draw(dctx, record);
-   pipe->get_query_result_resource(pipe, dquery->query, wait,
+   pipe->get_query_result_resource(pipe, dquery->query, flags,
                                    result_type, index, resource, offset);
    dd_after_draw(dctx, record);
 }
@@ -1587,10 +1633,10 @@ dd_context_clear_texture(struct pipe_context *_pipe,
  */
 
 static void *
-dd_context_transfer_map(struct pipe_context *_pipe,
-                        struct pipe_resource *resource, unsigned level,
-                        unsigned usage, const struct pipe_box *box,
-                        struct pipe_transfer **transfer)
+dd_context_buffer_map(struct pipe_context *_pipe,
+                      struct pipe_resource *resource, unsigned level,
+                      unsigned usage, const struct pipe_box *box,
+                      struct pipe_transfer **transfer)
 {
    struct dd_context *dctx = dd_context(_pipe);
    struct pipe_context *pipe = dctx->pipe;
@@ -1602,7 +1648,41 @@ dd_context_transfer_map(struct pipe_context *_pipe,
 
       dd_before_draw(dctx, record);
    }
-   void *ptr = pipe->transfer_map(pipe, resource, level, usage, box, transfer);
+   void *ptr = pipe->buffer_map(pipe, resource, level, usage, box, transfer);
+   if (record) {
+      record->call.info.transfer_map.transfer_ptr = *transfer;
+      record->call.info.transfer_map.ptr = ptr;
+      if (*transfer) {
+         record->call.info.transfer_map.transfer = **transfer;
+         record->call.info.transfer_map.transfer.resource = NULL;
+         pipe_resource_reference(&record->call.info.transfer_map.transfer.resource,
+                                 (*transfer)->resource);
+      } else {
+         memset(&record->call.info.transfer_map.transfer, 0, sizeof(struct pipe_transfer));
+      }
+
+      dd_after_draw(dctx, record);
+   }
+   return ptr;
+}
+
+static void *
+dd_context_texture_map(struct pipe_context *_pipe,
+                       struct pipe_resource *resource, unsigned level,
+                       unsigned usage, const struct pipe_box *box,
+                       struct pipe_transfer **transfer)
+{
+   struct dd_context *dctx = dd_context(_pipe);
+   struct pipe_context *pipe = dctx->pipe;
+   struct dd_draw_record *record =
+      dd_screen(dctx->base.screen)->transfers ? dd_create_record(dctx) : NULL;
+
+   if (record) {
+      record->call.type = CALL_TRANSFER_MAP;
+
+      dd_before_draw(dctx, record);
+   }
+   void *ptr = pipe->texture_map(pipe, resource, level, usage, box, transfer);
    if (record) {
       record->call.info.transfer_map.transfer_ptr = *transfer;
       record->call.info.transfer_map.ptr = ptr;
@@ -1648,7 +1728,7 @@ dd_context_transfer_flush_region(struct pipe_context *_pipe,
 }
 
 static void
-dd_context_transfer_unmap(struct pipe_context *_pipe,
+dd_context_buffer_unmap(struct pipe_context *_pipe,
                           struct pipe_transfer *transfer)
 {
    struct dd_context *dctx = dd_context(_pipe);
@@ -1667,7 +1747,32 @@ dd_context_transfer_unmap(struct pipe_context *_pipe,
 
       dd_before_draw(dctx, record);
    }
-   pipe->transfer_unmap(pipe, transfer);
+   pipe->buffer_unmap(pipe, transfer);
+   if (record)
+      dd_after_draw(dctx, record);
+}
+
+static void
+dd_context_texture_unmap(struct pipe_context *_pipe,
+                          struct pipe_transfer *transfer)
+{
+   struct dd_context *dctx = dd_context(_pipe);
+   struct pipe_context *pipe = dctx->pipe;
+   struct dd_draw_record *record =
+      dd_screen(dctx->base.screen)->transfers ? dd_create_record(dctx) : NULL;
+
+   if (record) {
+      record->call.type = CALL_TRANSFER_UNMAP;
+      record->call.info.transfer_unmap.transfer_ptr = transfer;
+      record->call.info.transfer_unmap.transfer = *transfer;
+      record->call.info.transfer_unmap.transfer.resource = NULL;
+      pipe_resource_reference(
+            &record->call.info.transfer_unmap.transfer.resource,
+            transfer->resource);
+
+      dd_before_draw(dctx, record);
+   }
+   pipe->texture_unmap(pipe, transfer);
    if (record)
       dd_after_draw(dctx, record);
 }
@@ -1705,7 +1810,7 @@ dd_context_texture_subdata(struct pipe_context *_pipe,
                            unsigned level, unsigned usage,
                            const struct pipe_box *box,
                            const void *data, unsigned stride,
-                           unsigned layer_stride)
+                           uintptr_t layer_stride)
 {
    struct dd_context *dctx = dd_context(_pipe);
    struct pipe_context *pipe = dctx->pipe;
@@ -1747,9 +1852,12 @@ dd_init_draw_functions(struct dd_context *dctx)
    CTX_INIT(flush_resource);
    CTX_INIT(generate_mipmap);
    CTX_INIT(get_query_result_resource);
-   CTX_INIT(transfer_map);
+   CTX_INIT(buffer_map);
+   CTX_INIT(texture_map);
    CTX_INIT(transfer_flush_region);
-   CTX_INIT(transfer_unmap);
+   CTX_INIT(buffer_unmap);
+   CTX_INIT(texture_unmap);
    CTX_INIT(buffer_subdata);
    CTX_INIT(texture_subdata);
+   CTX_INIT(draw_vertex_state);
 }

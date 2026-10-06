@@ -33,38 +33,60 @@
 #include "main/dispatch.h"
 #include "main/varray.h"
 
+static unsigned
+element_size(union gl_vertex_format_user format)
+{
+   return _mesa_bytes_per_vertex_attrib(format.Size, format.Type);
+}
+
+static void
+init_attrib(struct glthread_attrib *attrib, int index, int size, GLenum type)
+{
+   attrib->Format = MESA_PACK_VFORMAT(type, size, 0, 0, 0);
+   attrib->ElementSize = element_size(attrib->Format);
+   attrib->RelativeOffset = 0;
+   attrib->BufferIndex = index;
+   attrib->Stride = attrib->ElementSize;
+   attrib->Divisor = 0;
+   attrib->EnabledAttribCount = 0;
+   attrib->Pointer = NULL;
+}
 
 void
 _mesa_glthread_reset_vao(struct glthread_vao *vao)
 {
-   static unsigned default_elem_size[VERT_ATTRIB_MAX] = {
-      [VERT_ATTRIB_NORMAL] = 12,
-      [VERT_ATTRIB_COLOR1] = 12,
-      [VERT_ATTRIB_FOG] = 4,
-      [VERT_ATTRIB_COLOR_INDEX] = 4,
-      [VERT_ATTRIB_EDGEFLAG] = 1,
-      [VERT_ATTRIB_POINT_SIZE] = 4,
-   };
-
    vao->CurrentElementBufferName = 0;
    vao->UserEnabled = 0;
    vao->Enabled = 0;
    vao->BufferEnabled = 0;
    vao->UserPointerMask = 0;
+   vao->NonNullPointerMask = 0;
    vao->NonZeroDivisorMask = 0;
 
    for (unsigned i = 0; i < ARRAY_SIZE(vao->Attrib); i++) {
-      unsigned elem_size = default_elem_size[i];
-      if (!elem_size)
-         elem_size = 16;
-
-      vao->Attrib[i].ElementSize = elem_size;
-      vao->Attrib[i].RelativeOffset = 0;
-      vao->Attrib[i].BufferIndex = i;
-      vao->Attrib[i].Stride = elem_size;
-      vao->Attrib[i].Divisor = 0;
-      vao->Attrib[i].EnabledAttribCount = 0;
-      vao->Attrib[i].Pointer = NULL;
+      switch (i) {
+      case VERT_ATTRIB_NORMAL:
+         init_attrib(&vao->Attrib[i], i, 3, GL_FLOAT);
+         break;
+      case VERT_ATTRIB_COLOR1:
+         init_attrib(&vao->Attrib[i], i, 3, GL_FLOAT);
+         break;
+      case VERT_ATTRIB_FOG:
+         init_attrib(&vao->Attrib[i], i, 1, GL_FLOAT);
+         break;
+      case VERT_ATTRIB_COLOR_INDEX:
+         init_attrib(&vao->Attrib[i], i, 1, GL_FLOAT);
+         break;
+      case VERT_ATTRIB_EDGEFLAG:
+         init_attrib(&vao->Attrib[i], i, 1, GL_UNSIGNED_BYTE);
+         break;
+      case VERT_ATTRIB_POINT_SIZE:
+         init_attrib(&vao->Attrib[i], i, 1, GL_FLOAT);
+         break;
+      default:
+         init_attrib(&vao->Attrib[i], i, 4, GL_FLOAT);
+         break;
+      }
    }
 }
 
@@ -80,7 +102,7 @@ lookup_vao(struct gl_context *ctx, GLuint id)
        glthread->LastLookedUpVAO->Name == id) {
       vao = glthread->LastLookedUpVAO;
    } else {
-      vao = _mesa_HashLookupLocked(glthread->VAOs, id);
+      vao = _mesa_HashLookupLocked(&glthread->VAOs, id);
       if (!vao)
          return NULL;
 
@@ -134,7 +156,7 @@ _mesa_glthread_DeleteVertexArrays(struct gl_context *ctx,
          glthread->LastLookedUpVAO = NULL;
 
       /* The ID is immediately freed for re-use */
-      _mesa_HashRemoveLocked(glthread->VAOs, vao->Name);
+      _mesa_HashRemoveLocked(&glthread->VAOs, vao->Name);
       free(vao);
    }
 }
@@ -159,7 +181,7 @@ _mesa_glthread_GenVertexArrays(struct gl_context *ctx,
 
       vao->Name = id;
       _mesa_glthread_reset_vao(vao);
-      _mesa_HashInsertLocked(glthread->VAOs, id, vao);
+      _mesa_HashInsertLocked(&glthread->VAOs, id, vao);
    }
 }
 
@@ -335,14 +357,15 @@ void _mesa_glthread_AttribDivisor(struct gl_context *ctx, const GLuint *vaobj,
 static void
 attrib_pointer(struct glthread_state *glthread, struct glthread_vao *vao,
                GLuint buffer, gl_vert_attrib attrib,
-               GLint size, GLenum type, GLsizei stride,
+               union gl_vertex_format_user format, GLsizei stride,
                const void *pointer)
 {
    if (attrib >= VERT_ATTRIB_MAX)
       return;
 
-   unsigned elem_size = _mesa_bytes_per_vertex_attrib(size, type);
+   unsigned elem_size = element_size(format);
 
+   vao->Attrib[attrib].Format = format;
    vao->Attrib[attrib].ElementSize = elem_size;
    vao->Attrib[attrib].Stride = stride ? stride : elem_size;
    vao->Attrib[attrib].Pointer = pointer;
@@ -354,25 +377,30 @@ attrib_pointer(struct glthread_state *glthread, struct glthread_vao *vao,
       vao->UserPointerMask &= ~(1u << attrib);
    else
       vao->UserPointerMask |= 1u << attrib;
+
+   if (pointer)
+      vao->NonNullPointerMask |= 1u << attrib;
+   else
+      vao->NonNullPointerMask &= ~(1u << attrib);
 }
 
 void
 _mesa_glthread_AttribPointer(struct gl_context *ctx, gl_vert_attrib attrib,
-                             GLint size, GLenum type, GLsizei stride,
-                             const void *pointer)
+                             union gl_vertex_format_user format,
+                             GLsizei stride, const void *pointer)
 {
    struct glthread_state *glthread = &ctx->GLThread;
 
    attrib_pointer(glthread, glthread->CurrentVAO,
                   glthread->CurrentArrayBufferName,
-                  attrib, size, type, stride, pointer);
+                  attrib, format, stride, pointer);
 }
 
 void
 _mesa_glthread_DSAAttribPointer(struct gl_context *ctx, GLuint vaobj,
                                 GLuint buffer, gl_vert_attrib attrib,
-                                GLint size, GLenum type, GLsizei stride,
-                                GLintptr offset)
+                                union gl_vertex_format_user format,
+                                GLsizei stride, GLintptr offset)
 {
    struct glthread_state *glthread = &ctx->GLThread;
    struct glthread_vao *vao;
@@ -381,45 +409,48 @@ _mesa_glthread_DSAAttribPointer(struct gl_context *ctx, GLuint vaobj,
    if (!vao)
       return;
 
-   attrib_pointer(glthread, vao, buffer, attrib, size, type, stride,
+   attrib_pointer(glthread, vao, buffer, attrib, format, stride,
                   (const void*)offset);
 }
 
 static void
 attrib_format(struct glthread_state *glthread, struct glthread_vao *vao,
-              GLuint attribindex, GLint size, GLenum type,
+              GLuint attribindex, union gl_vertex_format_user format,
               GLuint relativeoffset)
 {
    if (attribindex >= VERT_ATTRIB_GENERIC_MAX)
       return;
 
-   unsigned elem_size = _mesa_bytes_per_vertex_attrib(size, type);
+   unsigned elem_size = element_size(format);
 
    unsigned i = VERT_ATTRIB_GENERIC(attribindex);
+   vao->Attrib[i].Format = format;
    vao->Attrib[i].ElementSize = elem_size;
    vao->Attrib[i].RelativeOffset = relativeoffset;
 }
 
 void
 _mesa_glthread_AttribFormat(struct gl_context *ctx, GLuint attribindex,
-                            GLint size, GLenum type, GLuint relativeoffset)
+                            union gl_vertex_format_user format,
+                            GLuint relativeoffset)
 {
    struct glthread_state *glthread = &ctx->GLThread;
 
-   attrib_format(glthread, glthread->CurrentVAO, attribindex, size, type,
+   attrib_format(glthread, glthread->CurrentVAO, attribindex, format,
                  relativeoffset);
 }
 
 void
 _mesa_glthread_DSAAttribFormat(struct gl_context *ctx, GLuint vaobj,
-                               GLuint attribindex, GLint size, GLenum type,
+                               GLuint attribindex,
+                               union gl_vertex_format_user format,
                                GLuint relativeoffset)
 {
    struct glthread_state *glthread = &ctx->GLThread;
    struct glthread_vao *vao = lookup_vao(ctx, vaobj);
 
    if (vao)
-      attrib_format(glthread, vao, attribindex, size, type, relativeoffset);
+      attrib_format(glthread, vao, attribindex, format, relativeoffset);
 }
 
 static void
@@ -438,6 +469,11 @@ bind_vertex_buffer(struct glthread_state *glthread, struct glthread_vao *vao,
       vao->UserPointerMask &= ~(1u << i);
    else
       vao->UserPointerMask |= 1u << i;
+
+   if (offset)
+      vao->NonNullPointerMask |= 1u << i;
+   else
+      vao->NonNullPointerMask &= ~(1u << i);
 }
 
 void
@@ -645,4 +681,95 @@ _mesa_glthread_ClientAttribDefault(struct gl_context *ctx, GLbitfield mask)
    glthread->PrimitiveRestartFixedIndex = false;
    glthread->CurrentVAO = &glthread->DefaultVAO;
    _mesa_glthread_reset_vao(glthread->CurrentVAO);
+}
+
+void
+_mesa_glthread_InterleavedArrays(struct gl_context *ctx, GLenum format,
+                                 GLsizei stride, const GLvoid *pointer)
+{
+   struct gl_interleaved_layout layout;
+   unsigned tex = VERT_ATTRIB_TEX(ctx->GLThread.ClientActiveTexture);
+
+   if (stride < 0 || !_mesa_get_interleaved_layout(format, &layout))
+      return;
+
+   if (!stride)
+      stride = layout.defstride;
+
+   _mesa_glthread_ClientState(ctx, NULL, VERT_ATTRIB_EDGEFLAG, false);
+   _mesa_glthread_ClientState(ctx, NULL, VERT_ATTRIB_COLOR_INDEX, false);
+   /* XXX also disable secondary color and generic arrays? */
+
+   /* Texcoords */
+   if (layout.tflag) {
+      _mesa_glthread_ClientState(ctx, NULL, tex, true);
+      _mesa_glthread_AttribPointer(ctx, tex,
+                                   MESA_PACK_VFORMAT(GL_FLOAT, layout.tcomps,
+                                                     0, 0, 0),
+                                   stride, (GLubyte *)pointer + layout.toffset);
+   } else {
+      _mesa_glthread_ClientState(ctx, NULL, tex, false);
+   }
+
+   /* Color */
+   if (layout.cflag) {
+      _mesa_glthread_ClientState(ctx, NULL, VERT_ATTRIB_COLOR0, true);
+      _mesa_glthread_AttribPointer(ctx, VERT_ATTRIB_COLOR0,
+                                   MESA_PACK_VFORMAT(layout.ctype, layout.ccomps,
+                                                     1, 0, 0),
+                                   stride, (GLubyte *)pointer + layout.coffset);
+   } else {
+      _mesa_glthread_ClientState(ctx, NULL, VERT_ATTRIB_COLOR0, false);
+   }
+
+   /* Normals */
+   if (layout.nflag) {
+      _mesa_glthread_ClientState(ctx, NULL, VERT_ATTRIB_NORMAL, true);
+      _mesa_glthread_AttribPointer(ctx, VERT_ATTRIB_NORMAL,
+                                   MESA_PACK_VFORMAT(GL_FLOAT, 3, 1, 0, 0),
+                                   stride, (GLubyte *) pointer + layout.noffset);
+   } else {
+      _mesa_glthread_ClientState(ctx, NULL, VERT_ATTRIB_NORMAL, false);
+   }
+
+   /* Vertices */
+   _mesa_glthread_ClientState(ctx, NULL, VERT_ATTRIB_POS, true);
+   _mesa_glthread_AttribPointer(ctx, VERT_ATTRIB_POS,
+                                MESA_PACK_VFORMAT(GL_FLOAT, layout.vcomps,
+                                                  0, 0, 0),
+                                stride, (GLubyte *) pointer + layout.voffset);
+}
+
+static void
+unbind_uploaded_vbos(void *_vao, void *_ctx)
+{
+   struct gl_context *ctx = _ctx;
+   struct gl_vertex_array_object *vao = _vao;
+
+   assert(ctx->API != API_OPENGL_CORE);
+
+   for (unsigned i = 0; i < ARRAY_SIZE(vao->BufferBinding); i++) {
+      if (vao->BufferBinding[i].BufferObj &&
+          vao->BufferBinding[i].BufferObj->GLThreadInternal) {
+         /* We don't need to restore the user pointer because it's never
+          * overwritten. When we bind a VBO internally, the user pointer
+          * in gl_array_attribute::Ptr becomes ignored and unchanged.
+          */
+         _mesa_bind_vertex_buffer(ctx, vao, i, NULL, 0,
+                                  vao->BufferBinding[i].Stride, false, false);
+      }
+   }
+}
+
+/* Unbind VBOs in all VAOs that glthread bound for non-VBO vertex uploads
+ * to restore original states.
+ */
+void
+_mesa_glthread_unbind_uploaded_vbos(struct gl_context *ctx)
+{
+   assert(ctx->API != API_OPENGL_CORE);
+
+   /* Iterate over all VAOs. */
+   _mesa_HashWalk(&ctx->Array.Objects, unbind_uploaded_vbos, ctx);
+   unbind_uploaded_vbos(ctx->Array.DefaultVAO, ctx);
 }

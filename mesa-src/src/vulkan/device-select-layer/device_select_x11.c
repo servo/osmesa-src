@@ -67,12 +67,16 @@ int device_select_find_xcb_pci_default(struct device_pci_info *devices, uint32_t
   int scrn;
   xcb_connection_t *conn;
   int default_idx = -1;
+  drmDevicePtr xdev = NULL;
+
   conn = xcb_connect(NULL, &scrn);
-  if (!conn)
+  if (xcb_connection_has_error(conn)) {
+    xcb_disconnect(conn);
     return -1;
+  }
 
   xcb_query_extension_cookie_t dri3_cookie;
-  xcb_query_extension_reply_t *dri3_reply;
+  xcb_query_extension_reply_t *dri3_reply = NULL;
 
   dri3_cookie = xcb_query_extension(conn, 4, "DRI3");
   dri3_reply = xcb_query_extension_reply(conn, dri3_cookie, NULL);
@@ -82,6 +86,7 @@ int device_select_find_xcb_pci_default(struct device_pci_info *devices, uint32_t
 
   if (dri3_reply->present == 0)
     goto out;
+
   setup = xcb_get_setup(conn);
   iter = xcb_setup_roots_iterator(setup);
 
@@ -91,8 +96,8 @@ int device_select_find_xcb_pci_default(struct device_pci_info *devices, uint32_t
   if (dri3_fd == -1)
     goto out;
 
-  drmDevicePtr xdev;
   int ret = drmGetDevice2(dri3_fd, 0, &xdev);
+  close(dri3_fd);
   if (ret < 0)
     goto out;
 
@@ -112,7 +117,10 @@ int device_select_find_xcb_pci_default(struct device_pci_info *devices, uint32_t
     if (default_idx != -1)
       break;
   }
+
 out:
+  free(dri3_reply);
+  drmFreeDevice(&xdev); /* Is NULL pointer safe. */
   xcb_disconnect(conn);
   return default_idx;
 }

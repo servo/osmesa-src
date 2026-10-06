@@ -1,34 +1,16 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "svga_cmd.h"
 
 #include "pipe/p_state.h"
 #include "pipe/p_defines.h"
 #include "util/u_inlines.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "util/format/u_format.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
@@ -65,7 +47,7 @@ svga_get_tex_sampler_view(struct pipe_context *pipe,
    SVGA3dSurface1Flags flags = SVGA3D_SURFACE_HINT_TEXTURE;
    SVGA3dSurfaceFormat format = svga_translate_format(ss, pt->format,
                                                       PIPE_BIND_SAMPLER_VIEW);
-   boolean view = TRUE;
+   bool view = true;
 
    assert(pt);
    assert(min_lod <= max_lod);
@@ -80,13 +62,13 @@ svga_get_tex_sampler_view(struct pipe_context *pipe,
        * results as a view.
        */
       if (min_lod == 0 && max_lod >= pt->last_level)
-         view = FALSE;
+         view = false;
 
       if (ss->debug.no_sampler_view)
-         view = FALSE;
+         view = false;
 
       if (ss->debug.force_sampler_view)
-         view = TRUE;
+         view = true;
    }
 
    /* First try the cache */
@@ -151,7 +133,7 @@ svga_get_tex_sampler_view(struct pipe_context *pipe,
                                           flags, format,
                                           min_lod,
                                           max_lod - min_lod + 1,
-                                          -1, 1, -1, FALSE,
+                                          -1, 1, -1, false,
                                           &sv->key);
 
    if (!sv->handle) {
@@ -193,7 +175,7 @@ svga_validate_sampler_view(struct svga_context *svga,
 
    age = tex->age;
 
-   if (tex->b.b.target == PIPE_TEXTURE_CUBE)
+   if (tex->b.target == PIPE_TEXTURE_CUBE)
       numFaces = 6;
    else
       numFaces = 1;
@@ -205,9 +187,9 @@ svga_validate_sampler_view(struct svga_context *svga,
             svga_texture_copy_handle(svga,
                                      tex->handle, 0, 0, 0, i, k,
                                      v->handle, 0, 0, 0, i - v->min_lod, k,
-                                     u_minify(tex->b.b.width0, i),
-                                     u_minify(tex->b.b.height0, i),
-                                     u_minify(tex->b.b.depth0, i));
+                                     u_minify(tex->b.width0, i),
+                                     u_minify(tex->b.height0, i),
+                                     u_minify(tex->b.depth0, i));
       }
    }
 
@@ -223,7 +205,9 @@ svga_destroy_sampler_view_priv(struct svga_sampler_view *v)
    if (v->handle != tex->handle) {
       struct svga_screen *ss = svga_screen(v->texture->screen);
       SVGA_DBG(DEBUG_DMA, "unref sid %p (sampler view)\n", v->handle);
-      svga_screen_surface_destroy(ss, &v->key, &v->handle);
+      svga_screen_surface_destroy(ss, &v->key,
+                                  svga_was_texture_rendered_to(tex),
+                                  &v->handle);
    }
 
    /* Note: we're not refcounting the texture resource here to avoid

@@ -13,7 +13,7 @@ Basic guidelines
 -  Whenever possible, patches should only affect individual Mesa/Gallium
    components.
 -  Patches should never introduce build breaks and should be bisectable
-   (see ``git bisect``.)
+   (see ``Git bisect``.)
 -  Patches should be properly :ref:`formatted <formatting>`.
 -  Patches should be sufficiently :ref:`tested <testing>` before
    submitting.
@@ -25,9 +25,9 @@ Basic guidelines
 Patch formatting
 ----------------
 
--  Lines should be limited to 75 characters or less so that git logs
-   displayed in 80-column terminals avoid line wrapping. Note that git
-   log uses 4 spaces of indentation (4 + 75 < 80).
+-  Lines should be limited to 75 characters or less so that Git logs
+   displayed in 80-column terminals avoid line wrapping. Note that
+   ``git log`` uses 4 spaces of indentation (4 + 75 < 80).
 -  The first line should be a short, concise summary of the change
    prefixed with a module name. Examples:
 
@@ -35,7 +35,7 @@ Patch formatting
 
       mesa: Add support for querying GL_VERTEX_ATTRIB_ARRAY_LONG
 
-      gallium: add PIPE_CAP_DEVICE_RESET_STATUS_QUERY
+      gallium: add pipe_caps.device_reset_status_query
 
       i965: Fix missing type in local variable declaration.
 
@@ -52,14 +52,14 @@ Patch formatting
       platform.
 
 -  A "Signed-off-by:" line is not required, but not discouraged either.
--  If a patch addresses an issue in gitlab, use the Closes: tag For
+-  If a patch addresses an issue in GitLab, use the Closes: tag For
    example:
 
    ::
 
       Closes: https://gitlab.freedesktop.org/mesa/mesa/-/issues/1
 
-   Prefer the full url to just ``Closes: #1``, since the url makes it
+   Prefer the full URL to just ``Closes: #1``, since the URL makes it
    easier to get to the bug page from ``git log``
 
    **Do not use the ``Fixes:`` tag for this!** Mesa already uses
@@ -100,7 +100,7 @@ Patch formatting
       Acked-by: Joe Hacker <jhacker@foo.com>
 
 -  When updating a merge request add all the tags (``Acked-by:``, ``Reviewed-by:``,
-   ``Fixes:``, ``Cc: mesa-stable`` and/or other) to the commit messages.
+   ``Fixes:``, ``Backport-to:`` and/or other) to the commit messages.
    This provides reviewers with quick feedback if the patch has already
    been reviewed.
 
@@ -131,8 +131,19 @@ is the preferred way to nominate a commit that should be backported.
 There are scripts that will figure out which releases to apply the patch
 to automatically, so you don't need to figure it out.
 
-Alternatively, you may use a "CC:" tag. Here are some examples of such a
-note::
+Alternatively, you may use the ``Backport-to:`` tag, as presented in the
+following example::
+
+    Backport-to: 21.0
+
+This will backport the commit to the 21.0 branch, as well as any more recent
+stable branch. Multiple ``Backport-to:`` lines are allowed, but only the
+lowest number mentioned actually matters, so for clarity, please only use one.
+
+The last option is deprecated and mostly here for historical reasons
+dating back to when patch submission was done via emails: using a ``Cc:``
+tag. Support for this tag will be removed at some point.
+Here are some examples of such a note::
 
     Cc: mesa-stable
     Cc: 20.0 <mesa-stable>
@@ -163,11 +174,11 @@ check for regressions.
 As mentioned at the beginning, patches should be bisectable. A good way
 to test this is to make use of the \`git rebase\` command, to run your
 tests on each commit. Assuming your branch is based off
-``origin/master``, you can run:
+``origin/main``, you can run:
 
-::
+.. code-block:: sh
 
-   $ git rebase --interactive --exec "meson test -C build/" origin/master
+   $ git rebase --interactive --exec "meson test -C build/" origin/main
 
 replacing ``"meson test"`` with whatever other test you want to run.
 
@@ -182,13 +193,13 @@ Patches are submitted to the Mesa project via a
 Add labels to your MR to help reviewers find it. For example:
 
 -  Mesa changes affecting all drivers: mesa
--  Hardware vendor specific code: amd, intel, nvidia, ...
--  Driver specific code: anvil, freedreno, i965, iris, radeonsi, radv,
+-  Hardware vendor specific code: AMD common, intel, ...
+-  Driver specific code: ANV, freedreno, i965, iris, radeonsi, RADV,
    vc4, ...
 -  Other tag examples: gallium, util
 
 Tick the following when creating the MR. It allows developers to rebase
-your work on top of master.
+your work on top of main.
 
 ::
 
@@ -225,7 +236,7 @@ Reviewing Patches
 
 To participate in code review, you can monitor the GitLab Mesa `Merge
 Requests <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests>`__
-page, and/or register for notifications in your gitlab settings.
+page, and/or register for notifications in your GitLab settings.
 
 When you've reviewed a patch, please be unambiguous about your review.
 That is, state either
@@ -254,14 +265,14 @@ the issues are resolved first.
 These Reviewed-by, Acked-by, and Tested-by tags should also be amended
 into commits in a MR before it is merged.
 
-When providing a Reviewed-by, Acked-by, or Tested-by tag in a gitlab MR,
+When providing a Reviewed-by, Acked-by, or Tested-by tag in a GitLab MR,
 enclose the tag in backticks:
 
 ::
 
    `Reviewed-by: Joe Hacker <jhacker@example.com>`
 
-This is the markdown format for literal, and will prevent gitlab from
+This is the markdown format for literal, and will prevent GitLab from
 hiding the < and > symbols.
 
 Review by non-experts is encouraged. Understanding how someone else goes
@@ -269,6 +280,34 @@ about solving a problem is a great way to learn your way around the
 project. The submitter is expected to evaluate whether they have an
 appropriate amount of review feedback from people who also understand
 the code before merging their patches.
+
+.. _merging:
+
+Merging merge requests
+----------------------
+
+Once a merge request has been appropriately reviewed, its author can decide to
+merge it.
+
+.. warning::
+   Pushing (``git push``) directly to ``main`` is forbidden. This bypasses all
+   the CI checks and is likely to cause issues for everyone else.
+
+.. warning::
+   Do not use the "Merge"/"Merge when pipeline succeeds"/"Set to auto-merge"
+   buttons.
+
+We use a `custom script <https://gitlab.com/marge-org/marge-bot>`__ to manage
+this, triggered by **assigning the MR** to the pseudo-user `@marge-bot
+<https://gitlab.freedesktop.org/marge-bot>`__.
+
+Authors who do not have ``Developer`` access (or above) should ask on the
+merge request for someone else to do it for them, or reach on
+:doc:`other channels <lists>` if the MR reviewers don't have access themselves.
+
+Do not merge someone else's MR unless you are sure they don't have a new
+version that they are testing locally for instance.
+**When in doubt, ask**, for instance by leaving a comment on that MR.
 
 Nominating a commit for a stable branch
 ---------------------------------------
@@ -280,7 +319,7 @@ branch and release. In order or preference:
   a specific commit.
 - By adding the ``Cc: mesa-stable`` tag in the commit message as described above.
 - By submitting a merge request against the ``staging/year.quarter``
-  branch on gitlab.
+  branch on GitLab. Refer to the :ref:`instructions below <backports>`.
 
 Please **DO NOT** send patches to mesa-stable@lists.freedesktop.org, it
 is not monitored actively and is a historical artifact.
@@ -304,13 +343,13 @@ accepted and which are not. The stable-release manager is also given
 broad discretion in rejecting patches that have been nominated.
 
 -  Patch must conform with the :ref:`Basic guidelines <guidelines>`
--  Patch must have landed in master first. In case where the original
+-  Patch must have landed in main first. In case where the original
    patch is too large and/or otherwise contradicts with the rules set
    within, a backport is appropriate.
 -  It must not introduce a regression - be that build or runtime wise.
 
    .. note::
-      If the regression is due to faulty piglit/dEQP/CTS/other test
+      If the regression is due to faulty Piglit/dEQP/CTS/other test
       the latter must be fixed first. A reference to the offending test(s)
       and respective fix(es) should be provided in the nominated patch.
 
@@ -350,15 +389,45 @@ Sending backports for the stable branch
 By default merge conflicts are resolved by the stable-release manager.
 The release maintainer should resolve trivial conflicts, but for complex
 conflicts they should ask the original author to provide a backport or
-de-nominate the patch.
+denominate the patch.
 
 For patches that either need to be nominated after they've landed in
-master, or that are known ahead of time to not not apply cleanly to a
-stable branch (such as due to a rename), using a gitlab MR is most
+main, or that are known ahead of time to not not apply cleanly to a
+stable branch (such as due to a rename), using a GitLab MR is most
 appropriate. The MR should be based on and target the
-staging/year.quarter branch, not on the year.quarter branch, per the
-stable branch policy. Assigning the MR to release maintainer for said
-branch or mentioning them is helpful, but not required.
+``staging/year.quarter`` branch, not on the ``year.quarter`` branch,
+per the stable branch policy. Assigning the MR to release maintainer for
+said branch or mentioning them is helpful, but not required.
+
+Make sure to use ``git cherry-pick -x`` when cherry-picking the commits
+from the main branch. This adds the "cherry picked from commit ..." line
+to the commit message, to allow the release maintainters to mark those
+as backported, which in turn allows the tools to correctly report any
+future ``Fixes:`` affecting the commits you backported.
+
+Documentation patches
+---------------------
+
+Our documentation is written as `reStructuredText`_ files in the
+:file:`docs` folder, and built using `Sphinx`_.
+
+.. code-block:: sh
+
+   # Install dependencies (adapt for your distro)
+   apk add coreutils graphviz py3-clang clang-dev musl-dev linux-headers
+   pip3 install sphinx===5.1.1 mako===1.2.3 hawkmoth===0.16.0
+
+   # Build docs
+   sphinx-build -W -b html docs docs-html/
+
+The preferred language of the documentation is US English. This
+doesn't mean that everyone is expected to pay close attention to
+the different English variants, but it does mean someone might
+suggest a spelling-change, either during review or as a follow-up
+merge-request.
+
+.. _reStructuredText: https://docutils.sourceforge.io/rst.html
+.. _Sphinx: https://www.sphinx-doc.org/
 
 Git tips
 --------
@@ -366,7 +435,7 @@ Git tips
 -  ``git rebase -i ...`` is your friend. Don't be afraid to use it.
 -  Apply a fixup to commit FOO.
 
-   .. code-block:: console
+   .. code-block:: sh
 
       git add ...
       git commit --fixup=FOO
@@ -374,6 +443,6 @@ Git tips
 
 -  Test for build breakage between patches e.g last 8 commits.
 
-   .. code-block:: console
+   .. code-block:: sh
 
       git rebase -i --exec="ninja -C build/" HEAD~8

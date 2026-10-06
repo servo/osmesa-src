@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "util/u_inlines.h"
 #include "pipe/p_defines.h"
@@ -144,7 +126,7 @@ static void
 define_blend_state_object(struct svga_context *svga,
                           struct svga_blend_state *bs)
 {
-   SVGA3dDXBlendStatePerRT perRT[SVGA3D_MAX_RENDER_TARGETS];
+   SVGA3dDXBlendStatePerRT perRT[SVGA3D_DX_MAX_RENDER_TARGETS];
    int i;
 
    assert(svga_have_vgpu10(svga));
@@ -186,76 +168,76 @@ emulate_logicop(struct svga_context *svga,
    switch (logicop_func) {
    case PIPE_LOGICOP_XOR:
    case PIPE_LOGICOP_INVERT:
-      blend->need_white_fragments = TRUE;
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->need_white_fragments = true;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_ONE;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_ONE;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_SUBTRACT;
       break;
    case PIPE_LOGICOP_CLEAR:
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_ZERO;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_ZERO;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_MINIMUM;
       break;
    case PIPE_LOGICOP_COPY:
-      blend->rt[buffer].blend_enable = FALSE;
+      blend->rt[buffer].blend_enable = false;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_ONE;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_ZERO;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_ADD;
       break;
    case PIPE_LOGICOP_COPY_INVERTED:
-      blend->rt[buffer].blend_enable   = TRUE;
+      blend->rt[buffer].blend_enable   = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_INVSRCCOLOR;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_ZERO;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_ADD;
       break;
    case PIPE_LOGICOP_NOOP:
-      blend->rt[buffer].blend_enable   = TRUE;
+      blend->rt[buffer].blend_enable   = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_ZERO;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_DESTCOLOR;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_ADD;
       break;
    case PIPE_LOGICOP_SET:
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_ONE;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_ONE;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_MAXIMUM;
       break;
    case PIPE_LOGICOP_AND:
       /* Approximate with minimum - works for the 0 & anything case: */
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_SRCCOLOR;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_DESTCOLOR;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_MINIMUM;
       break;
    case PIPE_LOGICOP_AND_REVERSE:
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_SRCCOLOR;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_INVDESTCOLOR;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_MINIMUM;
       break;
    case PIPE_LOGICOP_AND_INVERTED:
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_INVSRCCOLOR;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_DESTCOLOR;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_MINIMUM;
       break;
    case PIPE_LOGICOP_OR:
       /* Approximate with maximum - works for the 1 | anything case: */
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_SRCCOLOR;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_DESTCOLOR;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_MAXIMUM;
       break;
    case PIPE_LOGICOP_OR_REVERSE:
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_SRCCOLOR;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_INVDESTCOLOR;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_MAXIMUM;
       break;
    case PIPE_LOGICOP_OR_INVERTED:
-      blend->rt[buffer].blend_enable = TRUE;
+      blend->rt[buffer].blend_enable = true;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_INVSRCCOLOR;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_DESTCOLOR;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_MAXIMUM;
@@ -264,7 +246,7 @@ emulate_logicop(struct svga_context *svga,
    case PIPE_LOGICOP_NOR:
    case PIPE_LOGICOP_EQUIV:
       /* Fill these in with plausible values */
-      blend->rt[buffer].blend_enable = FALSE;
+      blend->rt[buffer].blend_enable = false;
       blend->rt[buffer].srcblend       = SVGA3D_BLENDOP_ONE;
       blend->rt[buffer].dstblend       = SVGA3D_BLENDOP_ZERO;
       blend->rt[buffer].blendeq        = SVGA3D_BLENDEQ_ADD;
@@ -278,11 +260,11 @@ emulate_logicop(struct svga_context *svga,
    blend->rt[buffer].blendeq_alpha = blend->rt[buffer].blendeq;
 
    if (logicop_func == PIPE_LOGICOP_XOR) {
-      pipe_debug_message(&svga->debug.callback, CONFORMANCE,
+      util_debug_message(&svga->debug.callback, CONFORMANCE,
                          "XOR logicop mode has limited support");
    }
    else if (logicop_func != PIPE_LOGICOP_COPY) {
-      pipe_debug_message(&svga->debug.callback, CONFORMANCE,
+      util_debug_message(&svga->debug.callback, CONFORMANCE,
                          "general logicops are not supported");
    }
 }
@@ -321,7 +303,7 @@ svga_create_blend_state(struct pipe_context *pipe,
        */
       if (templ->logicop_enable) {
          if (ss->haveBlendLogicops) {
-            blend->logicop_enabled = TRUE;
+            blend->logicop_enabled = true;
             blend->logicop_mode = translate_logicop(templ->logicop_func);
             blend->rt[i].blendeq = SVGA3D_BLENDEQ_ADD;
             blend->rt[i].blendeq_alpha = SVGA3D_BLENDEQ_ADD;
@@ -359,7 +341,7 @@ svga_create_blend_state(struct pipe_context *pipe,
             if (blend->rt[i].srcblend_alpha != blend->rt[i].srcblend ||
                 blend->rt[i].dstblend_alpha != blend->rt[i].dstblend ||
                 blend->rt[i].blendeq_alpha  != blend->rt[i].blendeq) {
-               blend->rt[i].separate_alpha_blend_enable = TRUE;
+               blend->rt[i].separate_alpha_blend_enable = true;
             }
          }
          else {
@@ -393,7 +375,7 @@ svga_create_blend_state(struct pipe_context *pipe,
              templ->rt[0].rgb_dst_factor == PIPE_BLENDFACTOR_CONST_ALPHA ||
              templ->rt[0].rgb_src_factor == PIPE_BLENDFACTOR_INV_CONST_ALPHA ||
              templ->rt[0].rgb_dst_factor == PIPE_BLENDFACTOR_INV_CONST_ALPHA) {
-            blend->blend_color_alpha = TRUE;
+            blend->blend_color_alpha = true;
          }
       }
 

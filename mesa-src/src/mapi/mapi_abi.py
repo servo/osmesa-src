@@ -24,8 +24,6 @@
 # Authors:
 #    Chia-I Wu <olv@lunarg.com>
 
-from __future__ import print_function
-
 import sys
 # make it possible to import glapi
 import os
@@ -390,7 +388,7 @@ class ABIPrinter(object):
         """Return the initializer for struct mapi_stub array."""
         stubs = []
         for ent in self.entries_sorted_by_names:
-            stubs.append('%s{ (void *) %d, %d, NULL }' % (
+            stubs.append('%s{ %d, %d }' % (
                 self.indent, pool_offsets[ent], ent.slot))
 
         return ',\n'.join(stubs)
@@ -481,6 +479,10 @@ class ABIPrinter(object):
         print('#ifdef MAPI_TMP_DEFINES')
         print(self.c_public_includes())
         print()
+        print('#if defined(_WIN32) && defined(_WINDOWS_)')
+        print('#error "Should not include <windows.h> here"')
+        print('#endif')
+        print()
         print(self.c_public_declarations(self.prefix_lib))
         print('#undef MAPI_TMP_DEFINES')
         print('#endif /* MAPI_TMP_DEFINES */')
@@ -495,7 +497,7 @@ class ABIPrinter(object):
         if self.lib_need_noop_array:
             print()
             print('#ifdef MAPI_TMP_NOOP_ARRAY')
-            print('#ifdef DEBUG')
+            print('#if MESA_DEBUG')
             print()
             print(self.c_noop_functions(self.prefix_noop, self.prefix_warn))
             print()
@@ -503,13 +505,13 @@ class ABIPrinter(object):
             print(self.c_noop_initializer(self.prefix_noop, False))
             print('};')
             print()
-            print('#else /* DEBUG */')
+            print('#else /* !MESA_DEBUG */')
             print()
             print('const mapi_func table_%s_array[] = {' % (self.prefix_noop))
             print(self.c_noop_initializer(self.prefix_noop, True))
             print('};')
             print()
-            print('#endif /* DEBUG */')
+            print('#endif /* MESA_DEBUG */')
             print('#undef MAPI_TMP_NOOP_ARRAY')
             print('#endif /* MAPI_TMP_NOOP_ARRAY */')
 
@@ -576,10 +578,10 @@ class GLAPIPrinter(ABIPrinter):
             self._override_for_api(ent)
         super(GLAPIPrinter, self).__init__(entries)
 
-        self.api_defines = ['GL_GLEXT_PROTOTYPES']
-        self.api_headers = ['"GL/gl.h"', '"GL/glext.h"']
+        self.api_defines = []
+        self.api_headers = []
         self.api_call = 'GLAPI'
-        self.api_entry = 'APIENTRY'
+        self.api_entry = 'GLAPIENTRY'
         self.api_attrs = ''
 
         self.lib_need_table_size = False
@@ -606,7 +608,7 @@ class GLAPIPrinter(ABIPrinter):
 #define GLAPI_PREFIX(func)  gl##func
 #define GLAPI_PREFIX_STR(func)  "gl"#func
 
-typedef int GLclampx;
+#include "util/glheader.h"
 #endif /* _GLAPI_TMP_H_ */"""
 
         return header
@@ -633,7 +635,7 @@ class SharedGLAPIPrinter(GLAPIPrinter):
     def _get_c_header(self):
         header = """#ifndef _GLAPI_TMP_H_
 #define _GLAPI_TMP_H_
-typedef int GLclampx;
+#include "util/glheader.h"
 #endif /* _GLAPI_TMP_H_ */"""
 
         return header

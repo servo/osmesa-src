@@ -19,7 +19,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from __future__ import print_function
 import argparse
 import errno
 import os
@@ -74,9 +73,17 @@ def main():
         with open('{}.expected'.format(file), 'rb') as f:
             expected = f.read().splitlines()
 
-        actual = subprocess.check_output(
-            runner + ['--just-log', '--version', '150', file]
-        ).splitlines()
+        proc= subprocess.run(
+            runner + ['--just-log', '--version', '150', '--link', file],
+            stdout=subprocess.PIPE
+        )
+        if proc.returncode == 255:
+            print("Test returned general error, possibly missing linker")
+            sys.exit(77)
+        elif proc.returncode != 0:
+            print("Test returned error: {}, output:\n{}\n".format(proc.returncode, proc.stdout))
+
+        actual = proc.stdout.splitlines()
 
         if actual == expected:
             print('PASS')

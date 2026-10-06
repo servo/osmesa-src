@@ -71,6 +71,7 @@ struct nvc0_screen {
 
    struct nvc0_context *cur_ctx;
    struct nvc0_graph_state save_state;
+   simple_mtx_t state_lock;
 
    int num_occlusion_queries_active;
 
@@ -125,6 +126,7 @@ struct nvc0_screen {
    struct nouveau_object *eng3d; /* sqrt(1/2)|kepler> + sqrt(1/2)|fermi> */
    struct nouveau_object *eng2d;
    struct nouveau_object *m2mf;
+   struct nouveau_object *copy;
    struct nouveau_object *compute;
    struct nouveau_object *nvsw;
 };
@@ -152,36 +154,10 @@ int nvc0_screen_tsc_alloc(struct nvc0_screen *, void *);
 int nve4_screen_compute_setup(struct nvc0_screen *, struct nouveau_pushbuf *);
 int nvc0_screen_compute_setup(struct nvc0_screen *, struct nouveau_pushbuf *);
 
-int nvc0_screen_resize_text_area(struct nvc0_screen *, uint64_t);
+int nvc0_screen_resize_text_area(struct nvc0_screen *, struct nouveau_pushbuf *, uint64_t);
 
 // 3D Only
-void nvc0_screen_bind_cb_3d(struct nvc0_screen *, bool *, int, int, int, uint64_t);
-
-static inline void
-nvc0_resource_fence(struct nv04_resource *res, uint32_t flags)
-{
-   struct nvc0_screen *screen = nvc0_screen(res->base.screen);
-
-   if (res->mm) {
-      nouveau_fence_ref(screen->base.fence.current, &res->fence);
-      if (flags & NOUVEAU_BO_WR)
-         nouveau_fence_ref(screen->base.fence.current, &res->fence_wr);
-   }
-}
-
-static inline void
-nvc0_resource_validate(struct nv04_resource *res, uint32_t flags)
-{
-   if (likely(res->bo)) {
-      if (flags & NOUVEAU_BO_WR)
-         res->status |= NOUVEAU_BUFFER_STATUS_GPU_WRITING |
-            NOUVEAU_BUFFER_STATUS_DIRTY;
-      if (flags & NOUVEAU_BO_RD)
-         res->status |= NOUVEAU_BUFFER_STATUS_GPU_READING;
-
-      nvc0_resource_fence(res, flags);
-   }
-}
+void nvc0_screen_bind_cb_3d(struct nvc0_screen *, struct nouveau_pushbuf *, bool *, int, int, int, uint64_t);
 
 struct nvc0_format {
    uint32_t rt;

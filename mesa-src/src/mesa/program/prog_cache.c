@@ -26,8 +26,8 @@
  **************************************************************************/
 
 
-#include "main/glheader.h"
-#include "main/mtypes.h"
+#include "util/glheader.h"
+#include "main/shader_types.h"
 
 #include "main/shaderobj.h"
 #include "program/prog_cache.h"
@@ -126,7 +126,7 @@ clear_cache(struct gl_context *ctx, struct gl_program_cache *cache,
 	 } else {
 	    _mesa_reference_program(ctx, &c->program, NULL);
 	 }
-	 free(c);
+	 FREE(c);
       }
       cache->items[i] = NULL;
    }
@@ -146,7 +146,7 @@ _mesa_new_program_cache(void)
       cache->items =
          calloc(cache->size, sizeof(struct cache_item *));
       if (!cache->items) {
-         free(cache);
+         FREE(cache);
          return NULL;
       }
    }
@@ -159,16 +159,7 @@ _mesa_delete_program_cache(struct gl_context *ctx, struct gl_program_cache *cach
 {
    clear_cache(ctx, cache, GL_FALSE);
    free(cache->items);
-   free(cache);
-}
-
-void
-_mesa_delete_shader_cache(struct gl_context *ctx,
-			  struct gl_program_cache *cache)
-{
-   clear_cache(ctx, cache, GL_TRUE);
-   free(cache->items);
-   free(cache);
+   FREE(cache);
 }
 
 
@@ -222,35 +213,6 @@ _mesa_program_cache_insert(struct gl_context *ctx,
 	 rehash(cache);
       else
 	 clear_cache(ctx, cache, GL_FALSE);
-   }
-
-   cache->n_items++;
-   c->next = cache->items[hash % cache->size];
-   cache->items[hash % cache->size] = c;
-}
-
-void
-_mesa_shader_cache_insert(struct gl_context *ctx,
-			  struct gl_program_cache *cache,
-			  const void *key, GLuint keysize,
-			  struct gl_shader_program *program)
-{
-   const GLuint hash = hash_key(key, keysize);
-   struct cache_item *c = CALLOC_STRUCT(cache_item);
-
-   c->hash = hash;
-
-   c->key = malloc(keysize);
-   memcpy(c->key, key, keysize);
-   c->keysize = keysize;
-
-   c->program = (struct gl_program *)program;  /* no refcount change */
-
-   if (cache->n_items > cache->size * 1.5) {
-      if (cache->size < 1000)
-	 rehash(cache);
-      else
-	 clear_cache(ctx, cache, GL_TRUE);
    }
 
    cache->n_items++;

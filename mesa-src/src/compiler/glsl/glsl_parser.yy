@@ -32,9 +32,9 @@
 #include "ast.h"
 #include "glsl_parser_extras.h"
 #include "compiler/glsl_types.h"
-#include "main/context.h"
 #include "util/u_string.h"
 #include "util/format/u_format.h"
+#include "main/consts_exts.h"
 
 #ifdef _MSC_VER
 #pragma warning( disable : 4065 ) // switch statement contains 'default' but no 'case' labels
@@ -151,7 +151,7 @@ static bool match_layout_qualifier(const char *s1, const char *s2,
 %token <identifier> IDENTIFIER TYPE_IDENTIFIER NEW_IDENTIFIER
 %type <identifier> any_identifier
 %type <interface_block> instance_name_opt
-%token <real> FLOATCONSTANT
+%token <real> FLOATCONSTANT FLOAT16CONSTANT
 %token <dreal> DOUBLECONSTANT
 %token <n> INTCONSTANT UINTCONSTANT BOOLCONSTANT
 %token <n64> INT64CONSTANT UINT64CONSTANT
@@ -164,7 +164,7 @@ static bool match_layout_qualifier(const char *s1, const char *s2,
 %token INVARIANT PRECISE
 %token LOWP MEDIUMP HIGHP SUPERP PRECISION
 
-%token VERSION_TOK EXTENSION LINE COLON EOL INTERFACE OUTPUT
+%token VERSION_TOK EXTENSION LINE COLON EOL INTERFACE_TOK OUTPUT
 %token PRAGMA_DEBUG_ON PRAGMA_DEBUG_OFF
 %token PRAGMA_OPTIMIZE_ON PRAGMA_OPTIMIZE_OFF
 %token PRAGMA_WARNING_ON PRAGMA_WARNING_OFF
@@ -364,12 +364,12 @@ pragma_statement:
    }
    | PRAGMA_WARNING_ON EOL
    {
-      void *mem_ctx = state->linalloc;
+      linear_ctx *mem_ctx = state->linalloc;
       $$ = new(mem_ctx) ast_warnings_toggle(true);
    }
    | PRAGMA_WARNING_OFF EOL
    {
-      void *mem_ctx = state->linalloc;
+      linear_ctx *mem_ctx = state->linalloc;
       $$ = new(mem_ctx) ast_warnings_toggle(false);
    }
    ;
@@ -429,56 +429,63 @@ variable_identifier:
 primary_expression:
    variable_identifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_identifier, NULL, NULL, NULL);
       $$->set_location(@1);
       $$->primary_expression.identifier = $1;
    }
    | INTCONSTANT
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_int_constant, NULL, NULL, NULL);
       $$->set_location(@1);
       $$->primary_expression.int_constant = $1;
    }
    | UINTCONSTANT
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_uint_constant, NULL, NULL, NULL);
       $$->set_location(@1);
       $$->primary_expression.uint_constant = $1;
    }
    | INT64CONSTANT
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_int64_constant, NULL, NULL, NULL);
       $$->set_location(@1);
       $$->primary_expression.int64_constant = $1;
    }
    | UINT64CONSTANT
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_uint64_constant, NULL, NULL, NULL);
       $$->set_location(@1);
       $$->primary_expression.uint64_constant = $1;
    }
+   | FLOAT16CONSTANT
+   {
+      linear_ctx *ctx = state->linalloc;
+      $$ = new(ctx) ast_expression(ast_float16_constant, NULL, NULL, NULL);
+      $$->set_location(@1);
+      $$->primary_expression.float16_constant = $1;
+   }
    | FLOATCONSTANT
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_float_constant, NULL, NULL, NULL);
       $$->set_location(@1);
       $$->primary_expression.float_constant = $1;
    }
    | DOUBLECONSTANT
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_double_constant, NULL, NULL, NULL);
       $$->set_location(@1);
       $$->primary_expression.double_constant = $1;
    }
    | BOOLCONSTANT
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_bool_constant, NULL, NULL, NULL);
       $$->set_location(@1);
       $$->primary_expression.bool_constant = $1;
@@ -493,7 +500,7 @@ postfix_expression:
    primary_expression
    | postfix_expression '[' integer_expression ']'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_array_index, $1, $3, NULL);
       $$->set_location_range(@1, @4);
    }
@@ -503,20 +510,20 @@ postfix_expression:
    }
    | postfix_expression DOT_TOK FIELD_SELECTION
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_field_selection, $1, NULL, NULL);
       $$->set_location_range(@1, @3);
       $$->primary_expression.identifier = $3;
    }
    | postfix_expression INC_OP
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_post_inc, $1, NULL, NULL);
       $$->set_location_range(@1, @2);
    }
    | postfix_expression DEC_OP
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_post_dec, $1, NULL, NULL);
       $$->set_location_range(@1, @2);
    }
@@ -569,13 +576,13 @@ function_call_header:
 function_identifier:
    type_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_function_expression($1);
       $$->set_location(@1);
       }
    | postfix_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_function_expression($1);
       $$->set_location(@1);
       }
@@ -590,19 +597,19 @@ unary_expression:
    postfix_expression
    | INC_OP unary_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_pre_inc, $2, NULL, NULL);
       $$->set_location(@1);
    }
    | DEC_OP unary_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_pre_dec, $2, NULL, NULL);
       $$->set_location(@1);
    }
    | unary_operator unary_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression($1, $2, NULL, NULL);
       $$->set_location_range(@1, @2);
    }
@@ -620,19 +627,19 @@ multiplicative_expression:
    unary_expression
    | multiplicative_expression '*' unary_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_mul, $1, $3);
       $$->set_location_range(@1, @3);
    }
    | multiplicative_expression '/' unary_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_div, $1, $3);
       $$->set_location_range(@1, @3);
    }
    | multiplicative_expression '%' unary_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_mod, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -642,13 +649,13 @@ additive_expression:
    multiplicative_expression
    | additive_expression '+' multiplicative_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_add, $1, $3);
       $$->set_location_range(@1, @3);
    }
    | additive_expression '-' multiplicative_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_sub, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -658,13 +665,13 @@ shift_expression:
    additive_expression
    | shift_expression LEFT_OP additive_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_lshift, $1, $3);
       $$->set_location_range(@1, @3);
    }
    | shift_expression RIGHT_OP additive_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_rshift, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -674,25 +681,25 @@ relational_expression:
    shift_expression
    | relational_expression '<' shift_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_less, $1, $3);
       $$->set_location_range(@1, @3);
    }
    | relational_expression '>' shift_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_greater, $1, $3);
       $$->set_location_range(@1, @3);
    }
    | relational_expression LE_OP shift_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_lequal, $1, $3);
       $$->set_location_range(@1, @3);
    }
    | relational_expression GE_OP shift_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_gequal, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -702,13 +709,13 @@ equality_expression:
    relational_expression
    | equality_expression EQ_OP relational_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_equal, $1, $3);
       $$->set_location_range(@1, @3);
    }
    | equality_expression NE_OP relational_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_nequal, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -718,7 +725,7 @@ and_expression:
    equality_expression
    | and_expression '&' equality_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_bit_and, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -728,7 +735,7 @@ exclusive_or_expression:
    and_expression
    | exclusive_or_expression '^' and_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_bit_xor, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -738,7 +745,7 @@ inclusive_or_expression:
    exclusive_or_expression
    | inclusive_or_expression '|' exclusive_or_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_bit_or, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -748,7 +755,7 @@ logical_and_expression:
    inclusive_or_expression
    | logical_and_expression AND_OP inclusive_or_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_logic_and, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -758,7 +765,7 @@ logical_xor_expression:
    logical_and_expression
    | logical_xor_expression XOR_OP logical_and_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_logic_xor, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -768,7 +775,7 @@ logical_or_expression:
    logical_xor_expression
    | logical_or_expression OR_OP logical_xor_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_bin(ast_logic_or, $1, $3);
       $$->set_location_range(@1, @3);
    }
@@ -778,7 +785,7 @@ conditional_expression:
    logical_or_expression
    | logical_or_expression '?' expression ':' assignment_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression(ast_conditional, $1, $3, $5);
       $$->set_location_range(@1, @5);
    }
@@ -788,7 +795,7 @@ assignment_expression:
    conditional_expression
    | unary_expression assignment_operator assignment_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression($2, $1, $3, NULL);
       $$->set_location_range(@1, @3);
    }
@@ -815,7 +822,7 @@ expression:
    }
    | expression ',' assignment_expression
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       if ($1->oper != ast_sequence) {
          $$ = new(ctx) ast_expression(ast_sequence, NULL, NULL, NULL);
          $$->set_location_range(@1, @3);
@@ -888,7 +895,7 @@ function_header_with_parameters:
 function_header:
    fully_specified_type variable_identifier '('
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_function();
       $$->set_location(@2);
       $$->return_type = $1;
@@ -896,7 +903,7 @@ function_header:
 
       if ($1->qualifier.is_subroutine_decl()) {
          /* add type for IDENTIFIER search */
-         state->symbols->add_type($2, glsl_type::get_subroutine_instance($2));
+         state->symbols->add_type($2, glsl_subroutine_type($2));
       } else
          state->symbols->add_function(new(state) ir_function($2));
       state->symbols->push_scope();
@@ -906,7 +913,7 @@ function_header:
 parameter_declarator:
    type_specifier any_identifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_parameter_declarator();
       $$->set_location_range(@1, @2);
       $$->type = new(ctx) ast_fully_specified_type();
@@ -917,24 +924,12 @@ parameter_declarator:
    }
    | layout_qualifier type_specifier any_identifier
    {
-      if (state->allow_layout_qualifier_on_function_parameter) {
-         void *ctx = state->linalloc;
-         $$ = new(ctx) ast_parameter_declarator();
-         $$->set_location_range(@2, @3);
-         $$->type = new(ctx) ast_fully_specified_type();
-         $$->type->set_location(@2);
-         $$->type->specifier = $2;
-         $$->identifier = $3;
-         state->symbols->add_variable(new(state) ir_variable(NULL, $3, ir_var_auto));
-      } else {
-         _mesa_glsl_error(&@1, state,
-                          "is is not allowed on function parameter");
-         YYERROR;
-      }
+      _mesa_glsl_error(&@1, state, "is is not allowed on function parameter");
+      YYERROR;
    }
    | type_specifier any_identifier array_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_parameter_declarator();
       $$->set_location_range(@1, @3);
       $$->type = new(ctx) ast_fully_specified_type();
@@ -957,7 +952,7 @@ parameter_declaration:
    }
    | parameter_qualifier parameter_type_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_parameter_declarator();
       $$->set_location(@2);
       $$->type = new(ctx) ast_fully_specified_type();
@@ -1048,7 +1043,7 @@ init_declarator_list:
    single_declaration
    | init_declarator_list ',' any_identifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($3, NULL, NULL);
       decl->set_location(@3);
 
@@ -1058,7 +1053,7 @@ init_declarator_list:
    }
    | init_declarator_list ',' any_identifier array_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($3, $4, NULL);
       decl->set_location_range(@3, @4);
 
@@ -1068,7 +1063,7 @@ init_declarator_list:
    }
    | init_declarator_list ',' any_identifier array_specifier '=' initializer
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($3, $4, $6);
       decl->set_location_range(@3, @4);
 
@@ -1078,7 +1073,7 @@ init_declarator_list:
    }
    | init_declarator_list ',' any_identifier '=' initializer
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($3, NULL, $5);
       decl->set_location(@3);
 
@@ -1092,14 +1087,14 @@ init_declarator_list:
 single_declaration:
    fully_specified_type
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       /* Empty declaration list is valid. */
       $$ = new(ctx) ast_declarator_list($1);
       $$->set_location(@1);
    }
    | fully_specified_type any_identifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($2, NULL, NULL);
       decl->set_location(@2);
 
@@ -1110,7 +1105,7 @@ single_declaration:
    }
    | fully_specified_type any_identifier array_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($2, $3, NULL);
       decl->set_location_range(@2, @3);
 
@@ -1121,7 +1116,7 @@ single_declaration:
    }
    | fully_specified_type any_identifier array_specifier '=' initializer
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($2, $3, $5);
       decl->set_location_range(@2, @3);
 
@@ -1132,7 +1127,7 @@ single_declaration:
    }
    | fully_specified_type any_identifier '=' initializer
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($2, NULL, $4);
       decl->set_location(@2);
 
@@ -1143,7 +1138,7 @@ single_declaration:
    }
    | INVARIANT variable_identifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($2, NULL, NULL);
       decl->set_location(@2);
 
@@ -1155,7 +1150,7 @@ single_declaration:
    }
    | PRECISE variable_identifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($2, NULL, NULL);
       decl->set_location(@2);
 
@@ -1170,14 +1165,14 @@ single_declaration:
 fully_specified_type:
    type_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_fully_specified_type();
       $$->set_location(@1);
       $$->specifier = $1;
    }
    | type_qualifier type_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_fully_specified_type();
       $$->set_location_range(@1, @2);
       $$->qualifier = $1;
@@ -1236,6 +1231,7 @@ layout_qualifier_id:
       if (!$$.flags.i &&
           (state->AMD_conservative_depth_enable ||
            state->ARB_conservative_depth_enable ||
+           state->EXT_conservative_depth_enable ||
            state->is_version(420, 0))) {
          if (match_layout_qualifier($1, "depth_any", state) == 0) {
             $$.flags.q.depth_type = 1;
@@ -1260,6 +1256,11 @@ layout_qualifier_id:
          if ($$.flags.i && state->ARB_conservative_depth_warn) {
             _mesa_glsl_warning(& @1, state,
                                "GL_ARB_conservative_depth "
+                               "layout qualifier `%s' is used", $1);
+         }
+         if ($$.flags.i && state->EXT_conservative_depth_warn) {
+            _mesa_glsl_warning(& @1, state,
+                               "GL_EXT_conservative_depth "
                                "layout qualifier `%s' is used", $1);
          }
       }
@@ -1451,10 +1452,10 @@ layout_qualifier_id:
                                 "valid in fragment shaders");
             }
 
-	    if (state->INTEL_conservative_rasterization_enable) {
-	       $$.flags.q.inner_coverage = 1;
-	    } else {
-	       _mesa_glsl_error(& @1, state,
+            if (state->INTEL_conservative_rasterization_enable) {
+               $$.flags.q.inner_coverage = 1;
+            } else {
+               _mesa_glsl_error(& @1, state,
                                 "inner_coverage layout qualifier present, "
                                 "but the INTEL_conservative_rasterization extension "
                                 "is not enabled.");
@@ -1469,7 +1470,7 @@ layout_qualifier_id:
             }
 
             if (state->ARB_post_depth_coverage_enable ||
-		state->INTEL_conservative_rasterization_enable) {
+                state->INTEL_conservative_rasterization_enable) {
                $$.flags.q.post_depth_coverage = 1;
             } else {
                _mesa_glsl_error(& @1, state,
@@ -1737,7 +1738,7 @@ layout_qualifier_id:
    | any_identifier '=' constant_expression
    {
       memset(& $$, 0, sizeof($$));
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
 
       if ($3->oper != ast_int_constant &&
           $3->oper != ast_uint_constant &&
@@ -1768,6 +1769,11 @@ layout_qualifier_id:
                                "identifier `%s' used", $1);
          }
          $$.location = $3;
+      }
+
+      if (match_layout_qualifier("num_views", $1, state) == 0) {
+         $$.flags.q.explicit_numviews = 1;
+         $$.num_views = $3;
       }
 
       if (match_layout_qualifier("component", $1, state) == 0) {
@@ -1812,7 +1818,7 @@ layout_qualifier_id:
          if (!state->has_geometry_shader()) {
             _mesa_glsl_error(& @3, state,
                              "#version 150 max_vertices qualifier "
-                             "specified", $3);
+                             "specified");
          }
       }
 
@@ -1875,7 +1881,7 @@ layout_qualifier_id:
              !state->EXT_geometry_shader_enable) {
             _mesa_glsl_error(& @3, state,
                              "GL_ARB_gpu_shader5 invocations "
-                             "qualifier specified", $3);
+                             "qualifier specified");
          }
       }
 
@@ -1906,11 +1912,11 @@ layout_qualifier_id:
       if ($$.flags.q.uniform && !state->has_uniform_buffer_objects()) {
          _mesa_glsl_error(& @1, state,
                           "#version 140 / GL_ARB_uniform_buffer_object "
-                          "layout qualifier `%s' is used", $1);
+                          "layout qualifier `uniform' is used");
       } else if ($$.flags.q.uniform && state->ARB_uniform_buffer_object_warn) {
          _mesa_glsl_warning(& @1, state,
                             "#version 140 / GL_ARB_uniform_buffer_object "
-                            "layout qualifier `%s' is used", $1);
+                            "layout qualifier `uniform' is used");
       }
    }
    ;
@@ -1959,7 +1965,7 @@ subroutine_qualifier:
 subroutine_type_list:
    any_identifier
    {
-        void *ctx = state->linalloc;
+        linear_ctx *ctx = state->linalloc;
         ast_declaration *decl = new(ctx)  ast_declaration($1, NULL, NULL);
         decl->set_location(@1);
 
@@ -1968,7 +1974,7 @@ subroutine_type_list:
    }
    | subroutine_type_list ',' any_identifier
    {
-        void *ctx = state->linalloc;
+        linear_ctx *ctx = state->linalloc;
         ast_declaration *decl = new(ctx)  ast_declaration($3, NULL, NULL);
         decl->set_location(@3);
 
@@ -2059,9 +2065,9 @@ type_qualifier:
        * output from one shader stage will still match an input of a subsequent
        * stage without the input being declared as invariant."
        *
-       * On the desktop side, this text first appears in GLSL 4.30.
+       * On the desktop side, this text first appears in GLSL 4.20.
        */
-      if (state->is_version(430, 300) && $$.flags.q.in)
+      if (state->is_version(420, 300) && $$.flags.q.in)
          _mesa_glsl_error(&@1, state, "invariant qualifiers cannot be used with shader inputs");
    }
    | interpolation_qualifier type_qualifier
@@ -2224,7 +2230,7 @@ storage_qualifier:
           $$.stream = state->out_qualifier->stream;
       }
 
-      if (state->has_enhanced_layouts()) {
+      if (state->has_enhanced_layouts() && state->exts->ARB_transform_feedback3) {
           $$.flags.q.xfb_buffer = 1;
           $$.flags.q.explicit_xfb_buffer = 0;
           $$.xfb_buffer = state->out_qualifier->xfb_buffer;
@@ -2291,7 +2297,7 @@ memory_qualifier:
 array_specifier:
    '[' ']'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_array_specifier(@1, new(ctx) ast_expression(
                                                   ast_unsized_array_dim, NULL,
                                                   NULL, NULL));
@@ -2299,13 +2305,13 @@ array_specifier:
    }
    | '[' constant_expression ']'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_array_specifier(@1, $2);
       $$->set_location_range(@1, @3);
    }
    | array_specifier '[' ']'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = $1;
 
       if (state->check_arrays_of_arrays_allowed(& @1)) {
@@ -2335,31 +2341,31 @@ type_specifier:
 type_specifier_nonarray:
    basic_type_specifier_nonarray
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_type_specifier($1);
       $$->set_location(@1);
    }
    | struct_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_type_specifier($1);
       $$->set_location(@1);
    }
    | TYPE_IDENTIFIER
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_type_specifier($1);
       $$->set_location(@1);
    }
    ;
 
 basic_type_specifier_nonarray:
-   VOID_TOK                 { $$ = glsl_type::void_type; }
+   VOID_TOK                 { $$ = &glsl_type_builtin_void; }
    | BASIC_TYPE_TOK         { $$ = $1; }
    | UNSIGNED BASIC_TYPE_TOK
    {
-      if ($2 == glsl_type::int_type) {
-         $$ = glsl_type::uint_type;
+      if ($2 == &glsl_type_builtin_int) {
+         $$ = &glsl_type_builtin_uint;
       } else {
          _mesa_glsl_error(&@1, state,
                           "\"unsigned\" is only allowed before \"int\"");
@@ -2388,14 +2394,14 @@ precision_qualifier:
 struct_specifier:
    STRUCT any_identifier '{' struct_declaration_list '}'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_struct_specifier($2, $4);
       $$->set_location_range(@2, @5);
-      state->symbols->add_type($2, glsl_type::void_type);
+      state->symbols->add_type($2, &glsl_type_builtin_void);
    }
    | STRUCT '{' struct_declaration_list '}'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
 
       /* All anonymous structs have the same name. This simplifies matching of
        * globals whose type is an unnamed struct.
@@ -2425,7 +2431,7 @@ struct_declaration_list:
 struct_declaration:
    fully_specified_type struct_declarator_list ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_fully_specified_type *const type = $1;
       type->set_location(@1);
 
@@ -2476,13 +2482,13 @@ struct_declarator_list:
 struct_declarator:
    any_identifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_declaration($1, NULL, NULL);
       $$->set_location(@1);
    }
    | any_identifier array_specifier
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_declaration($1, $2, NULL);
       $$->set_location_range(@1, @2);
    }
@@ -2503,7 +2509,7 @@ initializer:
 initializer_list:
    initializer
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_aggregate_initializer();
       $$->set_location(@1);
       $$->expressions.push_tail(& $1->link);
@@ -2538,7 +2544,7 @@ simple_statement:
 compound_statement:
    '{' '}'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_compound_statement(true, NULL);
       $$->set_location_range(@1, @2);
    }
@@ -2548,7 +2554,7 @@ compound_statement:
    }
    statement_list '}'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_compound_statement(true, $3);
       $$->set_location_range(@1, @4);
       state->symbols->pop_scope();
@@ -2563,13 +2569,13 @@ statement_no_new_scope:
 compound_statement_no_new_scope:
    '{' '}'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_compound_statement(false, NULL);
       $$->set_location_range(@1, @2);
    }
    | '{' statement_list '}'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_compound_statement(false, $2);
       $$->set_location_range(@1, @3);
    }
@@ -2609,13 +2615,13 @@ statement_list:
 expression_statement:
    ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_statement(NULL);
       $$->set_location(@1);
    }
    | expression ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_expression_statement($1);
       $$->set_location(@1);
    }
@@ -2650,7 +2656,7 @@ condition:
    }
    | fully_specified_type any_identifier '=' initializer
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_declaration *decl = new(ctx) ast_declaration($2, NULL, $4);
       ast_declarator_list *declarator = new(ctx) ast_declarator_list($1);
       decl->set_location_range(@2, @4);
@@ -2750,21 +2756,21 @@ case_statement_list:
 iteration_statement:
    WHILE '(' condition ')' statement_no_new_scope
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_iteration_statement(ast_iteration_statement::ast_while,
                                             NULL, $3, NULL, $5);
       $$->set_location_range(@1, @4);
    }
-   | DO statement WHILE '(' expression ')' ';'
+   | DO statement_no_new_scope WHILE '(' expression ')' ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_iteration_statement(ast_iteration_statement::ast_do_while,
                                             NULL, $5, NULL, $2);
       $$->set_location_range(@1, @6);
    }
    | FOR '(' for_init_statement for_rest_statement ')' statement_no_new_scope
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_iteration_statement(ast_iteration_statement::ast_for,
                                             $3, $4.cond, $4.rest, $6);
       $$->set_location_range(@1, @6);
@@ -2801,31 +2807,31 @@ for_rest_statement:
 jump_statement:
    CONTINUE ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_jump_statement(ast_jump_statement::ast_continue, NULL);
       $$->set_location(@1);
    }
    | BREAK ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_jump_statement(ast_jump_statement::ast_break, NULL);
       $$->set_location(@1);
    }
    | RETURN ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_jump_statement(ast_jump_statement::ast_return, NULL);
       $$->set_location(@1);
    }
    | RETURN expression ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_jump_statement(ast_jump_statement::ast_return, $2);
       $$->set_location_range(@1, @2);
    }
    | DISCARD ';' // Fragment shader only.
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_jump_statement(ast_jump_statement::ast_discard, NULL);
       $$->set_location(@1);
    }
@@ -2834,7 +2840,7 @@ jump_statement:
 demote_statement:
    DEMOTE ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_demote_statement();
       $$->set_location(@1);
    }
@@ -2851,7 +2857,7 @@ external_declaration:
 function_definition:
    function_prototype compound_statement_no_new_scope
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       $$ = new(ctx) ast_function_definition();
       $$->set_location_range(@1, @2);
       $$->prototype = $1;
@@ -2983,7 +2989,7 @@ member_list:
 member_declaration:
    fully_specified_type struct_declarator_list ';'
    {
-      void *ctx = state->linalloc;
+      linear_ctx *ctx = state->linalloc;
       ast_fully_specified_type *type = $1;
       type->set_location(@1);
 
@@ -3118,5 +3124,7 @@ layout_defaults:
       if (!state->out_qualifier->push_to_global(& @1, state)) {
          YYERROR;
       }
+
+      (void)yynerrs;
    }
    ;

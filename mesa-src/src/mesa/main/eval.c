@@ -37,12 +37,13 @@
  */
 
 
-#include "glheader.h"
+#include "util/glheader.h"
 #include "context.h"
 #include "eval.h"
 #include "macros.h"
 #include "mtypes.h"
 #include "main/dispatch.h"
+#include "api_exec_decl.h"
 
 
 /*
@@ -353,7 +354,7 @@ map1(GLenum target, GLfloat u1, GLfloat u2, GLint ustride,
       pnts = _mesa_copy_map_points1d(target, ustride, uorder, (GLdouble*) points);
 
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_EVAL_BIT);
    vbo_exec_update_eval_maps(ctx);
    map->Order = uorder;
    map->u1 = u1;
@@ -449,7 +450,7 @@ map2( GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
                                   vstride, vorder, (GLdouble*) points);
 
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_EVAL_BIT);
    vbo_exec_update_eval_maps(ctx);
    map->Uorder = uorder;
    map->u1 = u1;
@@ -770,7 +771,7 @@ _mesa_MapGrid1f( GLint un, GLfloat u1, GLfloat u2 )
       _mesa_error( ctx, GL_INVALID_VALUE, "glMapGrid1f" );
       return;
    }
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_EVAL_BIT);
    vbo_exec_update_eval_maps(ctx);
    ctx->Eval.MapGrid1un = un;
    ctx->Eval.MapGrid1u1 = u1;
@@ -801,7 +802,7 @@ _mesa_MapGrid2f( GLint un, GLfloat u1, GLfloat u2,
       return;
    }
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_EVAL_BIT);
    vbo_exec_update_eval_maps(ctx);
    ctx->Eval.MapGrid2un = un;
    ctx->Eval.MapGrid2u1 = u1;
@@ -820,19 +821,6 @@ _mesa_MapGrid2d( GLint un, GLdouble u1, GLdouble u2,
 {
    _mesa_MapGrid2f( un, (GLfloat) u1, (GLfloat) u2,
 		    vn, (GLfloat) v1, (GLfloat) v2 );
-}
-
-
-void
-_mesa_install_eval_vtxfmt(struct _glapi_table *disp,
-                          const GLvertexformat *vfmt)
-{
-   SET_EvalCoord1f(disp, vfmt->EvalCoord1f);
-   SET_EvalCoord1fv(disp, vfmt->EvalCoord1fv);
-   SET_EvalCoord2f(disp, vfmt->EvalCoord2f);
-   SET_EvalCoord2fv(disp, vfmt->EvalCoord2fv);
-   SET_EvalPoint1(disp, vfmt->EvalPoint1);
-   SET_EvalPoint2(disp, vfmt->EvalPoint2);
 }
 
 

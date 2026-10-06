@@ -44,7 +44,7 @@
    } while (0);
 #endif
 
-#include "vma.h"
+#include "util/vma.h"
 
 namespace {
 
@@ -76,6 +76,11 @@ struct random_test {
       : heap_holes{allocation{MEM_START_PAGE, MEM_PAGES}}, rand{seed}
    {
       util_vma_heap_init(&heap, MEM_START_PAGE * MEM_PAGE_SIZE, MEM_SIZE);
+   }
+
+   ~random_test()
+   {
+      util_vma_heap_finish(&heap);
    }
 
    void test(unsigned long count)

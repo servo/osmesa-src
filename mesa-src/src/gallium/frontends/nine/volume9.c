@@ -1,24 +1,7 @@
 /*
  * Copyright 2011 Joakim Sindholt <opensource@zhasha.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "device9.h"
 #include "volume9.h"
@@ -100,7 +83,7 @@ NineVolume9_ctor( struct NineVolume9 *This,
                                                     pDesc->Format,
                                                     This->info.target,
                                                     This->info.nr_samples,
-                                                    This->info.bind, FALSE,
+                                                    This->info.bind, false,
                                                     pDesc->Pool == D3DPOOL_SCRATCH);
 
     if (This->info.format == PIPE_FORMAT_NONE)
@@ -116,11 +99,10 @@ NineVolume9_ctor( struct NineVolume9 *This,
                                                          pDesc->Format,
                                                          This->info.target,
                                                          This->info.nr_samples,
-                                                         This->info.bind, FALSE,
-                                                         TRUE);
+                                                         This->info.bind, false,
+                                                         true);
     if (This->info.format != This->format_internal ||
-        /* DYNAMIC Textures requires same stride as ram buffers.
-         * Do not use workaround by default as it eats more virtual space */
+        /* See surface9.c */
         (pParams->device->workarounds.dynamic_texture_workaround &&
          pDesc->Pool == D3DPOOL_DEFAULT && pDesc->Usage & D3DUSAGE_DYNAMIC)) {
         This->stride_internal = nine_format_get_stride(This->format_internal,
@@ -149,7 +131,7 @@ NineVolume9_dtor( struct NineVolume9 *This )
 
     if (This->transfer) {
         struct pipe_context *pipe = nine_context_get_pipe_multithread(This->base.device);
-        pipe->transfer_unmap(pipe, This->transfer);
+        pipe->texture_unmap(pipe, This->transfer);
         This->transfer = NULL;
     }
 
@@ -190,7 +172,7 @@ static inline void
 NineVolume9_MarkContainerDirty( struct NineVolume9 *This )
 {
     struct NineBaseTexture9 *tex;
-#if defined(DEBUG) || !defined(NDEBUG)
+#if MESA_DEBUG || !defined(NDEBUG)
     /* This is always contained by a NineVolumeTexture9. */
     GUID id = IID_IDirect3DVolumeTexture9;
     REFIID ref = &id;
@@ -202,7 +184,7 @@ NineVolume9_MarkContainerDirty( struct NineVolume9 *This )
     tex = NineBaseTexture9(This->base.container);
     assert(tex);
     if (This->desc.Pool == D3DPOOL_MANAGED)
-        tex->managed.dirty = TRUE;
+        tex->managed.dirty = true;
 
     BASETEX_REGISTER_UPDATE(tex);
 }
@@ -290,13 +272,13 @@ NineVolume9_LockBox( struct NineVolume9 *This,
     }
 
     if (Flags & D3DLOCK_DISCARD) {
-        usage = PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE;
+        usage = PIPE_MAP_WRITE | PIPE_MAP_DISCARD_RANGE;
     } else {
         usage = (Flags & D3DLOCK_READONLY) ?
-            PIPE_TRANSFER_READ : PIPE_TRANSFER_READ_WRITE;
+            PIPE_MAP_READ : PIPE_MAP_READ_WRITE;
     }
     if (Flags & D3DLOCK_DONOTWAIT)
-        usage |= PIPE_TRANSFER_DONTBLOCK;
+        usage |= PIPE_MAP_DONTBLOCK;
 
     if (pBox) {
         user_assert(pBox->Right > pBox->Left, D3DERR_INVALIDCALL);
@@ -344,7 +326,7 @@ NineVolume9_LockBox( struct NineVolume9 *This,
         else
             pipe = NineDevice9_GetPipe(This->base.device);
         pLockedVolume->pBits =
-            pipe->transfer_map(pipe, resource, This->level, usage,
+            pipe->texture_map(pipe, resource, This->level, usage,
                                &box, &This->transfer);
         if (no_refs)
             nine_context_get_pipe_release(This->base.device);
@@ -375,7 +357,7 @@ NineVolume9_UnlockBox( struct NineVolume9 *This )
     user_assert(This->lock_count, D3DERR_INVALIDCALL);
     if (This->transfer) {
         pipe = nine_context_get_pipe_acquire(This->base.device);
-        pipe->transfer_unmap(pipe, This->transfer);
+        pipe->texture_unmap(pipe, This->transfer);
         This->transfer = NULL;
         nine_context_get_pipe_release(This->base.device);
     }

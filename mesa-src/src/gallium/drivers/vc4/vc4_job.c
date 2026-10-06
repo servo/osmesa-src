@@ -30,6 +30,7 @@
 #include "vc4_cl_dump.h"
 #include "vc4_context.h"
 #include "util/hash_table.h"
+#include "util/perf/cpu_trace.h"
 
 static void
 vc4_job_free(struct vc4_context *vc4, struct vc4_job *job)
@@ -103,6 +104,9 @@ vc4_flush_jobs_writing_resource(struct vc4_context *vc4,
                                                            prsc);
         if (entry) {
                 struct vc4_job *job = entry->data;
+
+                MESA_TRACE_FUNC();
+
                 vc4_job_submit(vc4, job);
         }
 }
@@ -112,6 +116,8 @@ vc4_flush_jobs_reading_resource(struct vc4_context *vc4,
                                 struct pipe_resource *prsc)
 {
         struct vc4_resource *rsc = vc4_resource(prsc);
+
+        MESA_TRACE_FUNC();
 
         vc4_flush_jobs_writing_resource(vc4, prsc);
 
@@ -156,7 +162,7 @@ vc4_flush_jobs_reading_resource(struct vc4_context *vc4,
 }
 
 /**
- * Returns a vc4_job struture for tracking V3D rendering to a particular FBO.
+ * Returns a vc4_job structure for tracking V3D rendering to a particular FBO.
  *
  * If we've already started rendering to this FBO, then return old same job,
  * otherwise make a new one.  If we're beginning rendering to an FBO, make
@@ -369,6 +375,8 @@ vc4_submit_setup_rcl_msaa_surface(struct vc4_job *job,
 void
 vc4_job_submit(struct vc4_context *vc4, struct vc4_job *job)
 {
+        MESA_TRACE_FUNC();
+
         if (!job->needs_flush)
                 goto done;
 
@@ -380,7 +388,7 @@ vc4_job_submit(struct vc4_context *vc4, struct vc4_job *job)
                 goto done;
         }
 
-        if (vc4_debug & VC4_DEBUG_CL) {
+        if (VC4_DBG(CL)) {
                 fprintf(stderr, "BCL:\n");
                 vc4_dump_cl(job->bcl.base, cl_offset(&job->bcl), false);
         }
@@ -486,7 +494,7 @@ vc4_job_submit(struct vc4_context *vc4, struct vc4_job *job)
                 }
         }
 
-        if (!(vc4_debug & VC4_DEBUG_NORAST)) {
+        if (!VC4_DBG(NORAST)) {
                 int ret;
 
                 ret = vc4_ioctl(vc4->fd, DRM_IOCTL_VC4_SUBMIT_CL, &submit);
@@ -505,15 +513,15 @@ vc4_job_submit(struct vc4_context *vc4, struct vc4_job *job)
         if (vc4->last_emit_seqno - vc4->screen->finished_seqno > 5) {
                 if (!vc4_wait_seqno(vc4->screen,
                                     vc4->last_emit_seqno - 5,
-                                    PIPE_TIMEOUT_INFINITE,
+                                    OS_TIMEOUT_INFINITE,
                                     "job throttling")) {
                         fprintf(stderr, "Job throttling failed\n");
                 }
         }
 
-        if (vc4_debug & VC4_DEBUG_ALWAYS_SYNC) {
+        if (VC4_DBG(ALWAYS_SYNC)) {
                 if (!vc4_wait_seqno(vc4->screen, vc4->last_emit_seqno,
-                                    PIPE_TIMEOUT_INFINITE, "sync")) {
+                                    OS_TIMEOUT_INFINITE, "sync")) {
                         fprintf(stderr, "Wait failed.\n");
                         abort();
                 }

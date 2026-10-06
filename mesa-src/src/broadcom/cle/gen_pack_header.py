@@ -22,15 +22,11 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-from __future__ import (
-    absolute_import, division, print_function, unicode_literals
-)
 import xml.parsers.expat
 import re
 import sys
-import copy
 
-license =  """/* Generated code, see v3d_packet_v21.xml, v3d_packet_v33.xml and gen_pack_header.py */
+license =  """/* Generated code, see vc4_packet.xml, v3d_packet.xml and gen_pack_header.py */
 """
 
 pack_header = """%(license)s
@@ -116,7 +112,7 @@ class Field(object):
         self.type = attrs["type"]
 
         if self.type == 'bool' and self.start != self.end:
-            print("#error Field {} has bool type but more than one bit of size".format(self.name));
+            print("#error Field {} has bool type but more than one bit of size".format(self.name))
 
         if "prefix" in attrs:
             self.prefix = safe_name(attrs["prefix"]).upper()
@@ -218,7 +214,7 @@ class Group(object):
             last_byte = field.end // 8
 
             for b in range(first_byte, last_byte + 1):
-                if not b in bytes:
+                if b not in bytes:
                     bytes[b] = self.Byte()
 
                 bytes[b].fields.append(field)
@@ -243,7 +239,7 @@ class Group(object):
 
         for index in range(self.length):
             # Handle MBZ bytes
-            if not index in bytes:
+            if index not in bytes:
                 print("   cl[%2d] = 0;" % index)
                 continue
             byte = bytes[index]
@@ -279,7 +275,6 @@ class Group(object):
 
             byte_start = index * 8
 
-            v = None
             prefix = "   cl[%2d] =" % index
 
             field_index = 0
@@ -299,46 +294,46 @@ class Group(object):
                     value = "%s - 1" % value
 
                 if field.type == "mbo":
-                    s = "__gen_mbo(%d, %d)" % \
+                    s = "util_bitpack_ones(%d, %d)" % \
                         (start, end)
                 elif field.type == "address":
                     extra_shift = (31 - (end - start)) // 8 * 8
                     s = "__gen_address_offset(&values->%s)" % byte.address.name
                 elif field.type == "uint":
-                    s = "__gen_uint(%s, %d, %d)" % \
+                    s = "util_bitpack_uint(%s, %d, %d)" % \
                         (value, start, end)
                 elif field.type in self.parser.enums:
-                    s = "__gen_uint(%s, %d, %d)" % \
+                    s = "util_bitpack_uint(%s, %d, %d)" % \
                         (value, start, end)
                 elif field.type == "int":
-                    s = "__gen_sint(%s, %d, %d)" % \
+                    s = "util_bitpack_sint(%s, %d, %d)" % \
                         (value, start, end)
                 elif field.type == "bool":
-                    s = "__gen_uint(%s, %d, %d)" % \
+                    s = "util_bitpack_uint(%s, %d, %d)" % \
                         (value, start, end)
                 elif field.type == "float":
                     s = "#error %s float value mixed in with other fields" % name
                 elif field.type == "f187":
-                    s = "__gen_uint(fui(%s) >> 16, %d, %d)" % \
+                    s = "util_bitpack_uint(fui(%s) >> 16, %d, %d)" % \
                         (value, start, end)
                 elif field.type == "offset":
                     s = "__gen_offset(%s, %d, %d)" % \
                         (value, start, end)
                 elif field.type == 'ufixed':
-                    s = "__gen_ufixed(%s, %d, %d, %d)" % \
+                    s = "util_bitpack_ufixed(%s, %d, %d, %d)" % \
                         (value, start, end, field.fractional_size)
                 elif field.type == 'sfixed':
-                    s = "__gen_sfixed(%s, %d, %d, %d)" % \
+                    s = "util_bitpack_sfixed(%s, %d, %d, %d)" % \
                         (value, start, end, field.fractional_size)
                 elif field.type in self.parser.structs:
-                    s = "__gen_uint(v%d_%d, %d, %d)" % \
+                    s = "util_bitpack_uint(v%d_%d, %d, %d)" % \
                         (index, field_index, start, end)
                     field_index = field_index + 1
                 else:
                     print("/* unhandled field %s, type %s */\n" % (name, field.type))
                     s = None
 
-                if not s == None:
+                if s is not None:
                     shift = byte_start - field_byte_start + extra_shift
                     if shift:
                         s = "%s >> %d" % (s, shift)
@@ -386,7 +381,6 @@ class Group(object):
                     convert = "__gen_unpack_sfixed"
                 else:
                     print("/* unhandled field %s, type %s */\n" % (field.name, field.type))
-                    s = None
 
                 plusone = ""
                 if field.minus_one:
@@ -548,9 +542,9 @@ class Parser(object):
     def emit_header(self, name):
         default_fields = []
         for field in self.group.fields:
-            if not type(field) is Field:
+            if type(field) is not Field:
                 continue
-            if field.default == None:
+            if field.default is None:
                 continue
             default_fields.append("   .%-35s = %6d" % (field.name, field.default))
 
@@ -580,7 +574,7 @@ class Parser(object):
             return
 
         name = self.register
-        if not self.reg_num == None:
+        if self.reg_num is not None:
             print('#define %-33s 0x%04x' %
                   (self.gen_prefix(name + "_num"), self.reg_num))
 

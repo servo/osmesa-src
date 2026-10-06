@@ -22,19 +22,24 @@
  * IN THE SOFTWARE.
  */
 
+#include "v3d_decoder.h"
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <string.h>
+#ifdef WITH_LIBEXPAT
 #include <expat.h>
+#endif
 #include <inttypes.h>
 #include <zlib.h>
 
 #include <util/macros.h>
 #include <util/ralloc.h>
+#include <util/u_debug.h>
 
-#include "v3d_decoder.h"
 #include "v3d_packet_helpers.h"
 #include "v3d_xml.h"
 #include "broadcom/clif/clif_private.h"
@@ -51,6 +56,8 @@ struct v3d_spec {
         int nenums;
         struct v3d_enum *enums[256];
 };
+
+#ifdef WITH_LIBEXPAT
 
 struct location {
         const char *filename;
@@ -74,6 +81,8 @@ struct parser_context {
         int parse_depth;
         int parse_skip_depth;
 };
+
+#endif /* WITH_LIBEXPAT */
 
 const char *
 v3d_group_get_name(struct v3d_group *group)
@@ -127,6 +136,8 @@ v3d_spec_find_enum(struct v3d_spec *spec, const char *name)
 
         return NULL;
 }
+
+#ifdef WITH_LIBEXPAT
 
 static void __attribute__((noreturn))
 fail(struct location *loc, const char *msg, ...)
@@ -254,51 +265,6 @@ get_register_offset(const char **atts, uint32_t *offset)
                         *offset = strtoul(atts[i + 1], &p, 0);
         }
         return;
-}
-
-static void
-get_start_end_pos(int *start, int *end)
-{
-        /* start value has to be mod with 32 as we need the relative
-         * start position in the first DWord. For the end position, add
-         * the length of the field to the start position to get the
-         * relative postion in the 64 bit address.
-         */
-        if (*end - *start > 32) {
-                int len = *end - *start;
-                *start = *start % 32;
-                *end = *start + len;
-        } else {
-                *start = *start % 32;
-                *end = *end % 32;
-        }
-
-        return;
-}
-
-static inline uint64_t
-mask(int start, int end)
-{
-        uint64_t v;
-
-        v = ~0ULL >> (63 - end + start);
-
-        return v << start;
-}
-
-static inline uint64_t
-field(uint64_t value, int start, int end)
-{
-        get_start_end_pos(&start, &end);
-        return (value & mask(start, end)) >> (start);
-}
-
-static inline uint64_t
-field_address(uint64_t value, int start, int end)
-{
-        /* no need to right shift for address/offset */
-        get_start_end_pos(&start, &end);
-        return (value & mask(start, end));
 }
 
 static struct v3d_type
@@ -645,9 +611,16 @@ static uint32_t zlib_inflate(const void *compressed_data,
         return zstream.total_out;
 }
 
+#endif /* WITH_LIBEXPAT */
+
 struct v3d_spec *
 v3d_spec_load(const struct v3d_device_info *devinfo)
 {
+        struct v3d_spec *spec = calloc(1, sizeof(struct v3d_spec));
+        if (!spec)
+                return NULL;
+
+#ifdef WITH_LIBEXPAT
         struct parser_context ctx;
         void *buf;
         uint8_t *text_data = NULL;
@@ -656,11 +629,11 @@ v3d_spec_load(const struct v3d_device_info *devinfo)
 
         for (int i = 0; i < ARRAY_SIZE(genxml_files_table); i++) {
                 if (i != 0) {
-                        assert(genxml_files_table[i - 1].gen_10 <
-                               genxml_files_table[i].gen_10);
+                        assert(genxml_files_table[i - 1].ver_10 <
+                               genxml_files_table[i].ver_10);
                 }
 
-                if (genxml_files_table[i].gen_10 <= devinfo->ver) {
+                if (genxml_files_table[i].ver_10 <= devinfo->ver) {
                         text_offset = genxml_files_table[i].offset;
                         text_length = genxml_files_table[i].length;
                 }
@@ -668,6 +641,7 @@ v3d_spec_load(const struct v3d_device_info *devinfo)
 
         if (text_length == 0) {
                 fprintf(stderr, "unable to find gen (%u) data\n", devinfo->ver);
+                free(spec);
                 return NULL;
         }
 
@@ -677,13 +651,14 @@ v3d_spec_load(const struct v3d_device_info *devinfo)
         XML_SetUserData(ctx.parser, &ctx);
         if (ctx.parser == NULL) {
                 fprintf(stderr, "failed to create parser\n");
+                free(spec);
                 return NULL;
         }
 
         XML_SetElementHandler(ctx.parser, start_element, end_element);
         XML_SetCharacterDataHandler(ctx.parser, character_data);
 
-        ctx.spec = xzalloc(sizeof(*ctx.spec));
+        ctx.spec = spec;
 
         total_length = zlib_inflate(compress_genxmls,
                                     sizeof(compress_genxmls),
@@ -702,6 +677,7 @@ v3d_spec_load(const struct v3d_device_info *devinfo)
                         XML_ErrorString(XML_GetErrorCode(ctx.parser)));
                 XML_ParserFree(ctx.parser);
                 free(text_data);
+                free(spec);
                 return NULL;
         }
 
@@ -709,6 +685,10 @@ v3d_spec_load(const struct v3d_device_info *devinfo)
         free(text_data);
 
         return ctx.spec;
+#else /* !WITH_LIBEXPAT */
+        debug_warn_once("CLIF dumping not supported due to missing libexpat");
+        return spec;
+#endif /* !WITH_LIBEXPAT */
 }
 
 struct v3d_group *
@@ -877,7 +857,7 @@ v3d_field_iterator_next(struct clif_dump *clif, struct v3d_field_iterator *iter)
                 if (iter->field->minus_one)
                         value++;
                 if (strcmp(iter->field->name, "Vec size") == 0 && value == 0)
-                        value = 1 << (e - s);
+                        value = 1 << (e - s + 1);
                 snprintf(iter->value, sizeof(iter->value), "%u", value);
                 enum_name = v3d_get_enum_name(&iter->field->inline_enum, value);
                 break;

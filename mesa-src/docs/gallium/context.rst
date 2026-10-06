@@ -40,14 +40,32 @@ CSO objects handled by the context object:
 Resource Binding State
 ^^^^^^^^^^^^^^^^^^^^^^
 
-This state describes how resources in various flavours (textures,
+This state describes how resources in various flavors (textures,
 buffers, surfaces) are bound to the driver.
 
 
 * ``set_constant_buffer`` sets a constant buffer to be used for a given shader
-  type. index is used to indicate which buffer to set (some apis may allow
+  type. index is used to indicate which buffer to set (some APIs may allow
   multiple ones to be set, and binding a specific one later, though drivers
   are mostly restricted to the first one right now).
+  If take_ownership is true, the buffer reference is passed to the driver, so
+  that the driver doesn't have to increment the reference count.
+
+* ``set_inlinable_constants`` sets inlinable constants for constant buffer 0.
+
+These are constants that the driver would like to inline in the IR
+of the current shader and recompile it. Drivers can determine which
+constants they prefer to inline in finalize_nir and store that
+information in shader_info::*inlinable_uniform*. When the state tracker
+or frontend uploads constants to a constant buffer, it can pass
+inlinable constants separately via this call.
+
+Any ``set_constant_buffer`` call invalidates inlinable constants, so
+``set_inlinable_constants`` must be called after it. Binding a shader also
+invalidates this state.
+
+There is no ``PIPE_CAP`` for this. Drivers shouldn't set the shader_info
+fields if they don't implement ``set_inlinable_constants``.
 
 * ``set_framebuffer_state``
 
@@ -66,7 +84,7 @@ objects. They all follow simple, one-method binding calls, e.g.
 * ``set_blend_color``
 * ``set_sample_mask``  sets the per-context multisample sample mask.  Note
   that this takes effect even if multisampling is not explicitly enabled if
-  the frambuffer surface(s) are multisampled.  Also, this mask is AND-ed
+  the framebuffer surface(s) are multisampled.  Also, this mask is AND-ed
   with the optional fragment shader sample mask output (when emitted).
 * ``set_sample_locations`` sets the sample locations used for rasterization.
   ```get_sample_position``` still returns the default locations. When NULL,
@@ -84,7 +102,7 @@ objects. They all follow simple, one-method binding calls, e.g.
   PIPE_MAX_VIEWPORTS.
 * ``set_viewport_states``
 * ``set_window_rectangles`` sets the window rectangles to be used for
-  rendering, as defined by GL_EXT_window_rectangles. There are two
+  rendering, as defined by :ext:`GL_EXT_window_rectangles`. There are two
   modes - include and exclude, which define whether the supplied
   rectangles are to be used for including fragments or excluding
   them. All of the rectangles are ORed together, so in exclude mode,
@@ -100,19 +118,22 @@ objects. They all follow simple, one-method binding calls, e.g.
     levels. This corresponds to GL's ``PATCH_DEFAULT_OUTER_LEVEL``.
   * ``default_inner_level`` is the default value for the inner tessellation
     levels. This corresponds to GL's ``PATCH_DEFAULT_INNER_LEVEL``.
+* ``set_patch_vertices`` sets the number of vertices per input patch
+  for tessellation.
 
 * ``set_debug_callback`` sets the callback to be used for reporting
-  various debug messages, eventually reported via KHR_debug and
+  various debug messages, eventually reported via :ext:`GL_KHR_debug` and
   similar mechanisms.
 
 Samplers
 ^^^^^^^^
 
-pipe_sampler_state objects control how textures are sampled (coordinate
-wrap modes, interpolation modes, etc).  Note that samplers are not used
-for texture buffer objects.  That is, pipe_context::bind_sampler_views()
-will not bind a sampler if the corresponding sampler view refers to a
-PIPE_BUFFER resource.
+pipe_sampler_state objects control how textures are sampled (coordinate wrap
+modes, interpolation modes, etc). Samplers are only required for texture
+instructions for which nir_tex_instr_need_sampler returns true. Drivers must
+ignore samplers for other texture instructions. Frontends may or may not bind
+samplers when no texture instruction use them. Notably, frontends may not bind
+samplers for texture buffer objects, which are never accessed with samplers.
 
 Sampler Views
 ^^^^^^^^^^^^^
@@ -145,7 +166,7 @@ to the array index which is used for sampling.
 
   Sampler views outside of ``[start_slot, start_slot + num_views)`` are
   unmodified.  If ``views`` is NULL, the behavior is the same as if
-  ``views[n]`` was NULL for the entire range, ie. releasing the reference
+  ``views[n]`` was NULL for the entire range, i.e. releasing the reference
   for all the sampler views in the specified range.
 
 * ``create_sampler_view`` creates a new sampler view. ``texture`` is associated
@@ -159,7 +180,7 @@ to the array index which is used for sampling.
 Hardware Atomic buffers
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-Buffers containing hw atomics are required to support the feature
+Buffers containing HW atomics are required to support the feature
 on some drivers.
 
 Drivers that require this need to fill the ``set_hw_atomic_buffers`` method.
@@ -214,7 +235,7 @@ Two stream output targets can use the same resource at the same time, but
 with a disjoint memory range.
 
 Additionally, the stream output target internally maintains the offset
-into the buffer which is incremented everytime something is written to it.
+into the buffer which is incremented every time something is written to it.
 The internal offset is equal to how much data has already been written.
 It can be stored in device memory and the CPU actually doesn't have to query
 it.
@@ -235,6 +256,10 @@ discussed above.
   for the purposes of the draw_auto stage. -1 means the buffer should
   be appended to, and everything else sets the internal offset.
 
+* ``stream_output_target_offset`` Retrieve the internal stream offset from
+  an streamout target. This is used to implement Vulkan pause/resume support
+  which needs to pass the internal offset to the API.
+
 NOTE: The currently-bound vertex or geometry shader must be compiled with
 the properly-filled-in structure pipe_stream_output_info describing which
 outputs should be written to buffers and how. The structure is part of
@@ -244,7 +269,7 @@ Clearing
 ^^^^^^^^
 
 Clear is one of the most difficult concepts to nail down to a single
-interface (due to both different requirements from APIs and also driver/hw
+interface (due to both different requirements from APIs and also driver/HW
 specific differences).
 
 ``clear`` initializes some or all of the surfaces currently bound to
@@ -332,7 +357,7 @@ buffer.
 In indexed draw, ``min_index`` and ``max_index`` respectively provide a lower
 and upper bound of the indices contained in the index buffer inside the range
 between ``start`` to ``start``+``count``-1.  This allows the driver to
-determine which subset of vertices will be referenced during te draw call
+determine which subset of vertices will be referenced during the draw call
 without having to scan the index buffer.  Providing a over-estimation of the
 the true bounds, for example, a ``min_index`` and ``max_index`` of 0 and
 0xffffffff respectively, must give exactly the same rendering, albeit with less
@@ -536,12 +561,15 @@ has completed, drawing will be predicated on the outcome of the query.
 If ``mode`` is PIPE_RENDER_COND_BY_REGION_WAIT or
 PIPE_RENDER_COND_BY_REGION_NO_WAIT rendering will be predicated as above
 for the non-REGION modes but in the case that an occlusion query returns
-a non-zero result, regions which were occluded may be ommitted by subsequent
+a non-zero result, regions which were occluded may be omitted by subsequent
 drawing commands.  This can result in better performance with some GPUs.
 Normally, if the occlusion query returned a non-zero result subsequent
 drawing happens normally so fragments may be generated, shaded and
 processed even where they're known to be obscured.
 
+The ''render_condition_mem'' function specifies the drawing is dependent
+on a value in memory. A buffer resource and offset denote which 32-bit
+value to use for the query. This is used for Vulkan API.
 
 Flushing
 ^^^^^^^^
@@ -605,11 +633,11 @@ is forever considered to be signaled.
 Once a re-usable ``pipe_fence_handle`` becomes signaled, it can be reset
 back into an unsignaled state. The ``pipe_fence_handle`` will be reset to
 the unsignaled state by performing a wait operation on said object, i.e.
-``fence_server_sync``. As a corollary to this behaviour, a re-usable
+``fence_server_sync``. As a corollary to this behavior, a re-usable
 ``pipe_fence_handle`` can only have one waiter.
 
-This behaviour is useful in producer <-> consumer chains. It helps avoid
-unecessarily sharing a new ``pipe_fence_handle`` each time a new frame is
+This behavior is useful in producer <-> consumer chains. It helps avoid
+unnecessarily sharing a new ``pipe_fence_handle`` each time a new frame is
 ready. Instead, the fences are exchanged once ahead of time, and access is synchronized
 through GPU signaling instead of direct producer <-> consumer communication.
 
@@ -637,8 +665,10 @@ Blitting
 These methods emulate classic blitter controls.
 
 These methods operate directly on ``pipe_resource`` objects, and stand
-apart from any 3D state in the context.  Blitting functionality may be
-moved to a separate abstraction at some point in the future.
+apart from any 3D state in the context. Each method is assumed to have an
+implicit memory barrier around itself. They do not need any explicit
+``memory_barrier``. Blitting functionality may be moved to a separate
+abstraction at some point in the future.
 
 ``resource_copy_region`` blits a region of a resource to a region of another
 resource, provided that both resources have the same format, or compatible
@@ -656,7 +686,7 @@ anything to queries currently gathering data).
 As opposed to manually drawing a textured quad, this lets the pipe driver choose
 the optimal method for blitting (like using a special 2D engine), and usually
 offers, for example, accelerated stencil-only copies even where
-PIPE_CAP_SHADER_STENCIL_EXPORT is not available.
+pipe_caps.shader_stencil_export is not available.
 
 
 Transfers
@@ -670,6 +700,11 @@ The returned pointer points to the start of the mapped range according to
 the box region, not the beginning of the resource. If transfer_map fails,
 the returned pointer to the buffer memory is NULL, and the pointer
 to the transfer object remains unchanged (i.e. it can be non-NULL).
+
+When mapping an MSAA surface, the samples are implicitly resolved to
+single-sampled for reads (returning the first sample for depth/stencil/integer,
+averaged for others).  See u_transfer_helper's U_TRANSFER_HELPER_MSAA_MAP for a
+way to get that behavior using a resolve blit.
 
 ``transfer_unmap`` remove the memory mapping for and destroy
 the transfer object. The pointer into the resource should be considered
@@ -745,7 +780,7 @@ content unchanged. Similarly, calling this function to uncommit an already
 uncommitted memory region is allowed.
 
 For buffers, the given box must be aligned to multiples of
-``PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE``. As an exception to this rule, if the size
+``pipe_caps.sparse_buffer_page_size``. As an exception to this rule, if the size
 of the buffer is not a multiple of the page size, changing the commit state of
 the last (partial) page requires a box that ends at the end of the buffer
 (i.e., box->x + box->width == buffer->width0).
@@ -754,49 +789,49 @@ the last (partial) page requires a box that ends at the end of the buffer
 
 .. _pipe_transfer:
 
-PIPE_TRANSFER
+PIPE_MAP
 ^^^^^^^^^^^^^
 
 These flags control the behavior of a transfer object.
 
-``PIPE_TRANSFER_READ``
+``PIPE_MAP_READ``
   Resource contents read back (or accessed directly) at transfer create time.
 
-``PIPE_TRANSFER_WRITE``
+``PIPE_MAP_WRITE``
   Resource contents will be written back at transfer_unmap time (or modified
   as a result of being accessed directly).
 
-``PIPE_TRANSFER_MAP_DIRECTLY``
+``PIPE_MAP_DIRECTLY``
   a transfer should directly map the resource. May return NULL if not supported.
 
-``PIPE_TRANSFER_DISCARD_RANGE``
+``PIPE_MAP_DISCARD_RANGE``
   The memory within the mapped region is discarded.  Cannot be used with
-  ``PIPE_TRANSFER_READ``.
+  ``PIPE_MAP_READ``.
 
-``PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE``
+``PIPE_MAP_DISCARD_WHOLE_RESOURCE``
   Discards all memory backing the resource.  It should not be used with
-  ``PIPE_TRANSFER_READ``.
+  ``PIPE_MAP_READ``.
 
-``PIPE_TRANSFER_DONTBLOCK``
+``PIPE_MAP_DONTBLOCK``
   Fail if the resource cannot be mapped immediately.
 
-``PIPE_TRANSFER_UNSYNCHRONIZED``
+``PIPE_MAP_UNSYNCHRONIZED``
   Do not synchronize pending operations on the resource when mapping. The
   interaction of any writes to the map and any operations pending on the
-  resource are undefined. Cannot be used with ``PIPE_TRANSFER_READ``.
+  resource are undefined. Cannot be used with ``PIPE_MAP_READ``.
 
-``PIPE_TRANSFER_FLUSH_EXPLICIT``
+``PIPE_MAP_FLUSH_EXPLICIT``
   Written ranges will be notified later with :ref:`transfer_flush_region`.
-  Cannot be used with ``PIPE_TRANSFER_READ``.
+  Cannot be used with ``PIPE_MAP_READ``.
 
-``PIPE_TRANSFER_PERSISTENT``
+``PIPE_MAP_PERSISTENT``
   Allows the resource to be used for rendering while mapped.
   PIPE_RESOURCE_FLAG_MAP_PERSISTENT must be set when creating
   the resource.
   If COHERENT is not set, memory_barrier(PIPE_BARRIER_MAPPED_BUFFER)
   must be called to ensure the device can see what the CPU has written.
 
-``PIPE_TRANSFER_COHERENT``
+``PIPE_MAP_COHERENT``
   If PERSISTENT is set, this ensures any writes done by the device are
   immediately visible to the CPU and vice versa.
   PIPE_RESOURCE_FLAG_MAP_COHERENT must be set when creating
@@ -842,10 +877,31 @@ program: ``bind_sampler_states`` may be used to set up texture
 samplers for the compute stage and ``set_sampler_views`` may
 be used to bind a number of sampler views to it.
 
+Compute kernel queries
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. _get_compute_state_info:
+
+get_compute_state_info
+%%%%%%%%%%%%%%%%%%%%%%
+
+This function allows frontends to query kernel information defined inside
+``pipe_compute_state_object_info``.
+
+.. _get_compute_state_subgroup_size:
+
+get_compute_state_subgroup_size
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+This function returns the choosen subgroup size when ``launch_grid`` is
+called with the given block size. This doesn't need to be implemented when
+only one size is reported through ``PIPE_COMPUTE_CAP_SUBGROUP_SIZES`` or
+``pipe_compute_state_object_info::simd_sizes``.
+
 Mipmap generation
 ^^^^^^^^^^^^^^^^^
 
-If PIPE_CAP_GENERATE_MIPMAP is true, ``generate_mipmap`` can be used
+If pipe_caps.generate_mipmap is true, ``generate_mipmap`` can be used
 to generate mipmaps for the specified texture resource.
 It replaces texel image levels base_level+1 through
 last_level for layers range from first_layer through last_layer.
@@ -871,7 +927,7 @@ notifications are single-shot, i.e. subsequent calls to
 Bindless
 ^^^^^^^^
 
-If PIPE_CAP_BINDLESS_TEXTURE is TRUE, the following ``pipe_context`` functions
+If pipe_caps.bindless_texture is TRUE, the following ``pipe_context`` functions
 are used to create/delete bindless handles, and to make them resident in the
 current context when they are going to be used by shaders.
 
@@ -909,4 +965,4 @@ uploaded data, unless:
   mapping, memory_barrier(PIPE_BARRIER_MAPPED_BUFFER) should be called on the
   context that has mapped the resource. No flush is required.
 
-* Mapping the resource with PIPE_TRANSFER_MAP_DIRECTLY.
+* Mapping the resource with PIPE_MAP_DIRECTLY.

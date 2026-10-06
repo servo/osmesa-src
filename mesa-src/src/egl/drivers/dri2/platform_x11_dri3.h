@@ -23,7 +23,7 @@
 #ifndef EGL_X11_DRI3_INCLUDED
 #define EGL_X11_DRI3_INCLUDED
 
-#include "egl_dri2.h"
+#include "platform_x11.h"
 
 _EGL_DRIVER_TYPECAST(dri3_egl_surface, _EGLSurface, obj)
 
@@ -35,10 +35,7 @@ struct dri3_egl_surface {
 extern const __DRIimageLoaderExtension dri3_image_loader_extension;
 extern struct dri2_egl_display_vtbl dri3_x11_display_vtbl;
 
-EGLBoolean
-dri3_x11_connect(struct dri2_egl_display *dri2_dpy);
-
-uint32_t
-dri2_format_for_depth(struct dri2_egl_display *dri2_dpy, uint32_t depth);
+enum dri2_egl_driver_fail
+dri3_x11_connect(struct dri2_egl_display *dri2_dpy, bool zink, bool swrast);
 
 #endif

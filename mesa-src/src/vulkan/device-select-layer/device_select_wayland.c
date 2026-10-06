@@ -20,7 +20,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#include "macros.h"
+#include "util/macros.h"
 #include <wayland-client.h>
 #include "wayland-drm-client-protocol.h"
 #include "device_select.h"
@@ -83,7 +83,7 @@ device_select_registry_global(void *data, struct wl_registry *registry, uint32_t
 			      const char *interface, uint32_t version)
 {
    struct device_select_wayland_info *info = data;
-   if (strcmp(interface, "wl_drm") == 0) {
+   if (strcmp(interface, wl_drm_interface.name) == 0) {
       info->wl_drm = wl_registry_bind(registry, name, &wl_drm_interface, MIN2(version, 2));
       wl_drm_add_listener(info->wl_drm, &ds_drm_listener, data);
    }
@@ -137,9 +137,12 @@ int device_select_find_wayland_pci_default(struct device_pci_info *devices, uint
 	 if (default_idx != -1)
 	    break;
       }
+
+      drmFreeDevice(&info.dev_info);
    }
 
-   wl_drm_destroy(info.wl_drm);
+   if (info.wl_drm)
+      wl_drm_destroy(info.wl_drm);
    wl_registry_destroy(registry);
    wl_display_disconnect(display);
  out:

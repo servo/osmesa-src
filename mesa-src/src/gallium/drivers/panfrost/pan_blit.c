@@ -27,105 +27,91 @@
  *
  */
 
-#include "pan_context.h"
-#include "pan_util.h"
 #include "util/format/u_format.h"
+#include "pan_context.h"
+#include "pan_resource.h"
+#include "pan_util.h"
 
-static void
-panfrost_blitter_save(
-        struct panfrost_context *ctx,
-        struct blitter_context *blitter)
+void
+panfrost_blitter_save(struct panfrost_context *ctx,
+                      const enum panfrost_blitter_op blitter_op)
 {
+   struct blitter_context *blitter = ctx->blitter;
 
-        util_blitter_save_vertex_buffer_slot(blitter, ctx->vertex_buffers);
-        util_blitter_save_vertex_elements(blitter, ctx->vertex);
-        util_blitter_save_vertex_shader(blitter, ctx->shader[PIPE_SHADER_VERTEX]);
-        util_blitter_save_rasterizer(blitter, ctx->rasterizer);
-        util_blitter_save_viewport(blitter, &ctx->pipe_viewport);
-        util_blitter_save_scissor(blitter, &ctx->scissor);
-        util_blitter_save_fragment_shader(blitter, ctx->shader[PIPE_SHADER_FRAGMENT]);
-        util_blitter_save_blend(blitter, ctx->blend);
-        util_blitter_save_depth_stencil_alpha(blitter, ctx->depth_stencil);
-        util_blitter_save_stencil_ref(blitter, &ctx->stencil_ref);
-        util_blitter_save_so_targets(blitter, 0, NULL);
-        util_blitter_save_sample_mask(blitter, ctx->sample_mask);
+   util_blitter_save_vertex_buffers(blitter, ctx->vertex_buffers,
+                                    util_last_bit(ctx->vb_mask));
+   util_blitter_save_vertex_elements(blitter, ctx->vertex);
+   util_blitter_save_vertex_shader(blitter,
+                                   ctx->uncompiled[PIPE_SHADER_VERTEX]);
+   util_blitter_save_rasterizer(blitter, ctx->rasterizer);
+   util_blitter_save_viewport(blitter, &ctx->pipe_viewport);
+   util_blitter_save_so_targets(blitter, 0, NULL, 0);
 
-        util_blitter_save_framebuffer(blitter, &ctx->pipe_framebuffer);
-        util_blitter_save_fragment_sampler_states(blitter,
-                        ctx->sampler_count[PIPE_SHADER_FRAGMENT],
-                        (void **)(&ctx->samplers[PIPE_SHADER_FRAGMENT]));
-        util_blitter_save_fragment_sampler_views(blitter,
-                        ctx->sampler_view_count[PIPE_SHADER_FRAGMENT],
-                        (struct pipe_sampler_view **)&ctx->sampler_views[PIPE_SHADER_FRAGMENT]);
-        util_blitter_save_fragment_constant_buffer_slot(blitter,
-                        ctx->constant_buffer[PIPE_SHADER_FRAGMENT].cb);
-}
+   if (blitter_op & PAN_SAVE_FRAGMENT_STATE) {
+      if (blitter_op & PAN_SAVE_FRAGMENT_CONSTANT)
+         util_blitter_save_fragment_constant_buffer_slot(
+            blitter, ctx->constant_buffer[PIPE_SHADER_FRAGMENT].cb);
 
-static bool
-panfrost_u_blitter_blit(struct pipe_context *pipe,
-                        const struct pipe_blit_info *info)
-{
-        struct panfrost_context *ctx = pan_context(pipe);
+      util_blitter_save_blend(blitter, ctx->blend);
+      util_blitter_save_depth_stencil_alpha(blitter, ctx->depth_stencil);
+      util_blitter_save_stencil_ref(blitter, &ctx->stencil_ref);
+      util_blitter_save_fragment_shader(blitter,
+                                        ctx->uncompiled[PIPE_SHADER_FRAGMENT]);
+      util_blitter_save_sample_mask(blitter, ctx->sample_mask,
+                                    ctx->min_samples);
+      util_blitter_save_scissor(blitter, &ctx->scissor);
+   }
 
-        if (!util_blitter_is_blit_supported(ctx->blitter, info))
-                unreachable("Unsupported blit\n");
+   if (blitter_op & PAN_SAVE_FRAMEBUFFER)
+      util_blitter_save_framebuffer(blitter, &ctx->pipe_framebuffer);
 
-        /* TODO: Scissor */
+   if (blitter_op & PAN_SAVE_TEXTURES) {
+      util_blitter_save_fragment_sampler_states(
+         blitter, ctx->sampler_count[PIPE_SHADER_FRAGMENT],
+         (void **)(&ctx->samplers[PIPE_SHADER_FRAGMENT]));
+      util_blitter_save_fragment_sampler_views(
+         blitter, ctx->sampler_view_count[PIPE_SHADER_FRAGMENT],
+         (struct pipe_sampler_view **)&ctx->sampler_views[PIPE_SHADER_FRAGMENT]);
+   }
 
-        panfrost_blitter_save(ctx, ctx->blitter);
-        util_blitter_blit(ctx->blitter, info);
-
-        return true;
+   if (!(blitter_op & PAN_DISABLE_RENDER_COND)) {
+      util_blitter_save_render_condition(blitter,
+                                         (struct pipe_query *)ctx->cond_query,
+                                         ctx->cond_cond, ctx->cond_mode);
+   }
 }
 
 void
-panfrost_blit(struct pipe_context *pipe,
-              const struct pipe_blit_info *info)
+panfrost_blit_no_afbc_legalization(struct pipe_context *pipe,
+                                   const struct pipe_blit_info *info)
 {
-        /* We don't have a hardware blit, so we just fake it with
-         * u_blitter. We could do a little better by culling
-         * vertex jobs, though. */
+   struct panfrost_context *ctx = pan_context(pipe);
 
-        if (panfrost_u_blitter_blit(pipe, info))
-                return;
-
-        return;
+   panfrost_blitter_save(ctx, info->render_condition_enable
+                                 ? PAN_RENDER_BLIT_COND
+                                 : PAN_RENDER_BLIT);
+   util_blitter_blit(ctx->blitter, info, NULL);
 }
-
-/* Blits a framebuffer to "itself". Mali is a tiler, so the
- * framebuffer is implicitly cleared every frame, so if there is
- * no actual glClear(), we have to blit it back ourselves.
- */
 
 void
-panfrost_blit_wallpaper(struct panfrost_context *ctx, struct pipe_box *box)
+panfrost_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
 {
-        struct panfrost_batch *batch = ctx->wallpaper_batch;
-        struct pipe_blit_info binfo = {0};
+   struct panfrost_context *ctx = pan_context(pipe);
 
-        panfrost_blitter_save(ctx, ctx->blitter_wallpaper);
+   if (info->render_condition_enable && !panfrost_render_condition_check(ctx))
+      return;
 
-        struct pipe_surface *surf = batch->key.cbufs[0];
-        unsigned level = surf->u.tex.level;
-        unsigned layer = surf->u.tex.first_layer;
-        assert(surf->u.tex.last_layer == layer);
+   if (!util_blitter_is_blit_supported(ctx->blitter, info))
+      unreachable("Unsupported blit\n");
 
-        binfo.src.resource = binfo.dst.resource = batch->key.cbufs[0]->texture;
-        binfo.src.level = binfo.dst.level = level;
-        binfo.src.box.x = binfo.dst.box.x = box->x;
-        binfo.src.box.y = binfo.dst.box.y = box->y;
-        binfo.src.box.z = binfo.dst.box.z = layer;
-        binfo.src.box.width = binfo.dst.box.width = box->width;
-        binfo.src.box.height = binfo.dst.box.height = box->height;
-        binfo.src.box.depth = binfo.dst.box.depth = 1;
+   /* Legalize here because it could trigger a recursive blit otherwise */
+   struct panfrost_resource *src = pan_resource(info->src.resource);
+   enum pipe_format src_view_format = util_format_linear(info->src.format);
+   pan_legalize_format(ctx, src, src_view_format, false, false);
 
-        binfo.src.format = binfo.dst.format = batch->key.cbufs[0]->format;
+   struct panfrost_resource *dst = pan_resource(info->dst.resource);
+   enum pipe_format dst_view_format = util_format_linear(info->dst.format);
+   pan_legalize_format(ctx, dst, dst_view_format, true, false);
 
-        assert(batch->key.nr_cbufs == 1);
-        binfo.mask = PIPE_MASK_RGBA;
-        binfo.filter = PIPE_TEX_FILTER_LINEAR;
-        binfo.scissor_enable = FALSE;
-
-        util_blitter_blit(ctx->blitter_wallpaper, &binfo);
+   panfrost_blit_no_afbc_legalization(pipe, info);
 }
-

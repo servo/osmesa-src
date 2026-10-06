@@ -66,6 +66,7 @@
 #include "gallivm/lp_bld_pack.h"
 
 #include "lp_bld_depth.h"
+#include "lp_state_fs.h"
 
 
 /** Used to select fields from pipe_stencil_state */
@@ -94,7 +95,6 @@ lp_build_stencil_test_single(struct lp_build_context *bld,
    LLVMBuilderRef builder = bld->gallivm->builder;
    const unsigned stencilMax = 255; /* XXX fix */
    struct lp_type type = bld->type;
-   LLVMValueRef res;
 
    /*
     * SSE2 has intrinsics for signed comparisons, but not unsigned ones. Values
@@ -117,8 +117,8 @@ lp_build_stencil_test_single(struct lp_build_context *bld,
       stencilVals = LLVMBuildAnd(builder, stencilVals, valuemask, "");
    }
 
-   res = lp_build_cmp(bld, stencil->func, stencilRef, stencilVals);
-
+   LLVMValueRef res = lp_build_cmp(bld, stencil->func,
+                                   stencilRef, stencilVals);
    return res;
 }
 
@@ -173,12 +173,11 @@ lp_build_stencil_op_single(struct lp_build_context *bld,
 {
    LLVMBuilderRef builder = bld->gallivm->builder;
    struct lp_type type = bld->type;
-   LLVMValueRef res;
    LLVMValueRef max = lp_build_const_int_vec(bld->gallivm, type, 0xff);
-   unsigned stencil_op;
 
    assert(type.sign);
 
+   unsigned stencil_op;
    switch (op) {
    case S_FAIL_OP:
       stencil_op = stencil->fail_op;
@@ -194,6 +193,7 @@ lp_build_stencil_op_single(struct lp_build_context *bld,
       stencil_op = PIPE_STENCIL_OP_KEEP;
    }
 
+   LLVMValueRef res;
    switch (stencil_op) {
    case PIPE_STENCIL_OP_KEEP:
       res = stencilVals;
@@ -267,21 +267,25 @@ lp_build_stencil_op(struct lp_build_context *bld,
    }
 
    if (stencil[0].writemask != 0xff ||
-       (stencil[1].enabled && front_facing != NULL && stencil[1].writemask != 0xff)) {
+       (stencil[1].enabled && front_facing != NULL &&
+        stencil[1].writemask != 0xff)) {
       /* mask &= stencil[0].writemask */
       LLVMValueRef writemask = lp_build_const_int_vec(bld->gallivm, bld->type,
                                                       stencil[0].writemask);
-      if (stencil[1].enabled && stencil[1].writemask != stencil[0].writemask && front_facing != NULL) {
-         LLVMValueRef back_writemask = lp_build_const_int_vec(bld->gallivm, bld->type,
-                                                         stencil[1].writemask);
-         writemask = lp_build_select(bld, front_facing, writemask, back_writemask);
+      if (stencil[1].enabled &&
+          stencil[1].writemask != stencil[0].writemask &&
+          front_facing != NULL) {
+         LLVMValueRef back_writemask =
+            lp_build_const_int_vec(bld->gallivm, bld->type,
+                                   stencil[1].writemask);
+         writemask = lp_build_select(bld, front_facing,
+                                     writemask, back_writemask);
       }
 
       mask = LLVMBuildAnd(builder, mask, writemask, "");
       /* res = (res & mask) | (stencilVals & ~mask) */
       res = lp_build_select_bitwise(bld, mask, res, stencilVals);
-   }
-   else {
+   } else {
       /* res = mask ? res : stencilVals */
       res = lp_build_select(bld, mask, res, stencilVals);
    }
@@ -311,18 +315,18 @@ lp_depth_type(const struct util_format_description *format_desc,
    z_swizzle = format_desc->swizzle[0];
    if (z_swizzle < 4) {
       if (format_desc->channel[z_swizzle].type == UTIL_FORMAT_TYPE_FLOAT) {
-         type.floating = TRUE;
+         type.floating = true;
          assert(z_swizzle == 0);
          assert(format_desc->channel[z_swizzle].size == 32);
       }
-      else if(format_desc->channel[z_swizzle].type == UTIL_FORMAT_TYPE_UNSIGNED) {
+      else if (format_desc->channel[z_swizzle].type == UTIL_FORMAT_TYPE_UNSIGNED) {
          assert(format_desc->block.bits <= 32);
          assert(format_desc->channel[z_swizzle].normalized);
          if (format_desc->channel[z_swizzle].size < format_desc->block.bits) {
             /* Prefer signed integers when possible, as SSE has less support
              * for unsigned comparison;
              */
-            type.sign = TRUE;
+            type.sign = true;
          }
       }
       else
@@ -343,7 +347,7 @@ lp_depth_type(const struct util_format_description *format_desc,
  * in the Z buffer (typically 0xffffff00 or 0x00ffffff).  That lets us
  * get by with fewer bit twiddling steps.
  */
-static boolean
+static bool
 get_z_shift_and_mask(const struct util_format_description *format_desc,
                      unsigned *shift, unsigned *width, unsigned *mask)
 {
@@ -360,7 +364,7 @@ get_z_shift_and_mask(const struct util_format_description *format_desc,
    z_swizzle = format_desc->swizzle[0];
 
    if (z_swizzle == PIPE_SWIZZLE_NONE)
-      return FALSE;
+      return false;
 
    *width = format_desc->channel[z_swizzle].size;
    /* & 31 is for the same reason as the 32-bit limit above */
@@ -372,7 +376,7 @@ get_z_shift_and_mask(const struct util_format_description *format_desc,
       *mask = ((1 << *width) - 1) << *shift;
    }
 
-   return TRUE;
+   return true;
 }
 
 
@@ -381,17 +385,14 @@ get_z_shift_and_mask(const struct util_format_description *format_desc,
  * to put the stencil bits in the least significant position.
  * (i.e. 0x000000ff)
  */
-static boolean
+static bool
 get_s_shift_and_mask(const struct util_format_description *format_desc,
                      unsigned *shift, unsigned *mask)
 {
-   unsigned s_swizzle;
-   unsigned sz;
-
-   s_swizzle = format_desc->swizzle[1];
+   const unsigned s_swizzle = format_desc->swizzle[1];
 
    if (s_swizzle == PIPE_SWIZZLE_NONE)
-      return FALSE;
+      return false;
 
    /* just special case 64bit d/s format */
    if (format_desc->block.bits > 32) {
@@ -399,14 +400,14 @@ get_s_shift_and_mask(const struct util_format_description *format_desc,
       assert(format_desc->format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT);
       *shift = 0;
       *mask = 0xff;
-      return TRUE;
+      return true;
    }
 
    *shift = format_desc->channel[s_swizzle].shift;
-   sz = format_desc->channel[s_swizzle].size;
+   const unsigned sz = format_desc->channel[s_swizzle].size;
    *mask = (1U << sz) - 1U;
 
-   return TRUE;
+   return true;
 }
 
 
@@ -435,7 +436,7 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
    assert(type.length <= 16);
    assert(type.floating);
 
-   if(util_cpu_caps.has_sse && type.length == 4) {
+   if (util_get_cpu_caps()->has_sse && type.length == 4) {
       const char *movmskintr = "llvm.x86.sse.movmsk.ps";
       const char *popcntintr = "llvm.ctpop.i32";
       LLVMValueRef bits = LLVMBuildBitCast(builder, maskvalue,
@@ -446,7 +447,7 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
                                        LLVMInt32TypeInContext(context), bits);
       count = LLVMBuildZExt(builder, count, LLVMIntTypeInContext(context, 64), "");
    }
-   else if(util_cpu_caps.has_avx && type.length == 8) {
+   else if (util_get_cpu_caps()->has_avx && type.length == 8) {
       const char *movmskintr = "llvm.x86.avx.movmsk.ps.256";
       const char *popcntintr = "llvm.ctpop.i32";
       LLVMValueRef bits = LLVMBuildBitCast(builder, maskvalue,
@@ -456,9 +457,7 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
       count = lp_build_intrinsic_unary(builder, popcntintr,
                                        LLVMInt32TypeInContext(context), bits);
       count = LLVMBuildZExt(builder, count, LLVMIntTypeInContext(context, 64), "");
-   }
-   else {
-      unsigned i;
+   } else {
       LLVMValueRef countv = LLVMBuildAnd(builder, maskvalue, countmask, "countv");
       LLVMTypeRef counttype = LLVMIntTypeInContext(context, type.length * 8);
       LLVMTypeRef i8vntype = LLVMVectorType(LLVMInt8TypeInContext(context), type.length * 4);
@@ -468,7 +467,7 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
 
       countv = LLVMBuildBitCast(builder, countv, i8vntype, "");
 
-       for (i = 0; i < type.length; i++) {
+       for (unsigned i = 0; i < type.length; i++) {
 #if UTIL_ARCH_LITTLE_ENDIAN
           shuffles[i] = lp_build_const_int32(gallivm, 4*i);
 #else
@@ -509,7 +508,7 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
           count = LLVMBuildZExt(builder, count, LLVMIntTypeInContext(context, 64), "");
        }
    }
-   newcount = LLVMBuildLoad(builder, counter, "origcount");
+   newcount = LLVMBuildLoad2(builder, LLVMTypeOf(count), counter, "origcount");
    newcount = LLVMBuildAdd(builder, newcount, count, "newcount");
    LLVMBuildStore(builder, newcount, counter);
 }
@@ -532,7 +531,7 @@ void
 lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
                                      struct lp_type z_src_type,
                                      const struct util_format_description *format_desc,
-                                     boolean is_1d,
+                                     bool is_1d,
                                      LLVMValueRef depth_ptr,
                                      LLVMValueRef depth_stride,
                                      LLVMValueRef *z_fb,
@@ -541,19 +540,16 @@ lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
 {
    LLVMBuilderRef builder = gallivm->builder;
    LLVMValueRef shuffles[LP_MAX_VECTOR_LENGTH / 4];
-   LLVMValueRef zs_dst1, zs_dst2;
-   LLVMValueRef zs_dst_ptr;
    LLVMValueRef depth_offset1, depth_offset2;
-   LLVMTypeRef load_ptr_type;
-   unsigned depth_bytes = format_desc->block.bits / 8;
+   const unsigned depth_bytes = format_desc->block.bits / 8;
    struct lp_type zs_type = lp_depth_type(format_desc, z_src_type.length);
-   struct lp_type zs_load_type = zs_type;
 
+   struct lp_type zs_load_type = zs_type;
    zs_load_type.length = zs_load_type.length / 2;
-   load_ptr_type = LLVMPointerType(lp_build_vec_type(gallivm, zs_load_type), 0);
+
+   LLVMTypeRef zs_dst_type = lp_build_vec_type(gallivm, zs_load_type);
 
    if (z_src_type.length == 4) {
-      unsigned i;
       LLVMValueRef looplsb = LLVMBuildAnd(builder, loop_counter,
                                           lp_build_const_int32(gallivm, 1), "");
       LLVMValueRef loopmsb = LLVMBuildAnd(builder, loop_counter,
@@ -565,11 +561,10 @@ lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
       depth_offset1 = LLVMBuildAdd(builder, depth_offset1, offset2, "");
 
       /* just concatenate the loaded 2x2 values into 4-wide vector */
-      for (i = 0; i < 4; i++) {
+      for (unsigned i = 0; i < 4; i++) {
          shuffles[i] = lp_build_const_int32(gallivm, i);
       }
-   }
-   else {
+   } else {
       unsigned i;
       LLVMValueRef loopx2 = LLVMBuildShl(builder, loop_counter,
                                          lp_build_const_int32(gallivm, 1), "");
@@ -587,16 +582,19 @@ lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
    depth_offset2 = LLVMBuildAdd(builder, depth_offset1, depth_stride, "");
 
    /* Load current z/stencil values from z/stencil buffer */
-   zs_dst_ptr = LLVMBuildGEP(builder, depth_ptr, &depth_offset1, 1, "");
+   LLVMTypeRef load_ptr_type = LLVMPointerType(zs_dst_type, 0);
+   LLVMTypeRef int8_type = LLVMInt8TypeInContext(gallivm->context);
+   LLVMValueRef zs_dst_ptr =
+      LLVMBuildGEP2(builder, int8_type, depth_ptr, &depth_offset1, 1, "");
    zs_dst_ptr = LLVMBuildBitCast(builder, zs_dst_ptr, load_ptr_type, "");
-   zs_dst1 = LLVMBuildLoad(builder, zs_dst_ptr, "");
+   LLVMValueRef zs_dst1 = LLVMBuildLoad2(builder, zs_dst_type, zs_dst_ptr, "");
+   LLVMValueRef zs_dst2;
    if (is_1d) {
       zs_dst2 = lp_build_undef(gallivm, zs_load_type);
-   }
-   else {
-      zs_dst_ptr = LLVMBuildGEP(builder, depth_ptr, &depth_offset2, 1, "");
+   } else {
+      zs_dst_ptr = LLVMBuildGEP2(builder, int8_type, depth_ptr, &depth_offset2, 1, "");
       zs_dst_ptr = LLVMBuildBitCast(builder, zs_dst_ptr, load_ptr_type, "");
-      zs_dst2 = LLVMBuildLoad(builder, zs_dst_ptr, "");
+      zs_dst2 = LLVMBuildLoad2(builder, zs_dst_type, zs_dst_ptr, "");
    }
 
    *z_fb = LLVMBuildShuffleVector(builder, zs_dst1, zs_dst2,
@@ -617,7 +615,6 @@ lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
 
    else if (format_desc->block.bits > 32) {
       /* rely on llvm to handle too wide vector we have here nicely */
-      unsigned i;
       struct lp_type typex2 = zs_type;
       struct lp_type s_type = zs_type;
       LLVMValueRef shuffles1[LP_MAX_VECTOR_LENGTH / 4];
@@ -632,7 +629,7 @@ lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
       tmp = LLVMBuildBitCast(builder, *z_fb,
                              lp_build_vec_type(gallivm, typex2), "");
 
-      for (i = 0; i < zs_type.length; i++) {
+      for (unsigned i = 0; i < zs_type.length; i++) {
          shuffles1[i] = lp_build_const_int32(gallivm, i * 2);
          shuffles2[i] = lp_build_const_int32(gallivm, i * 2 + 1);
       }
@@ -649,6 +646,7 @@ lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
    lp_build_name(*s_fb, "s_dst");
    lp_build_name(*z_fb, "z_dst");
 }
+
 
 /**
  * Store depth/stencil values.
@@ -671,7 +669,7 @@ void
 lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
                                       struct lp_type z_src_type,
                                       const struct util_format_description *format_desc,
-                                      boolean is_1d,
+                                      bool is_1d,
                                       LLVMValueRef mask_value,
                                       LLVMValueRef z_fb,
                                       LLVMValueRef s_fb,
@@ -714,9 +712,7 @@ lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
       depth_offset1 = LLVMBuildMul(builder, looplsb,
                                    lp_build_const_int32(gallivm, depth_bytes * 2), "");
       depth_offset1 = LLVMBuildAdd(builder, depth_offset1, offset2, "");
-   }
-   else {
-      unsigned i;
+   } else {
       LLVMValueRef loopx2 = LLVMBuildShl(builder, loop_counter,
                                          lp_build_const_int32(gallivm, 1), "");
       assert(z_src_type.length == 8);
@@ -725,16 +721,17 @@ lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
        * We load 2x4 values, and need to swizzle them (order
        * 0,1,4,5,2,3,6,7) - not so hot with avx unfortunately.
        */
-      for (i = 0; i < 8; i++) {
+      for (unsigned i = 0; i < 8; i++) {
          shuffles[i] = lp_build_const_int32(gallivm, (i&1) + (i&2) * 2 + (i&4) / 2);
       }
    }
 
    depth_offset2 = LLVMBuildAdd(builder, depth_offset1, depth_stride, "");
 
-   zs_dst_ptr1 = LLVMBuildGEP(builder, depth_ptr, &depth_offset1, 1, "");
+   LLVMTypeRef int8_type = LLVMInt8TypeInContext(gallivm->context);
+   zs_dst_ptr1 = LLVMBuildGEP2(builder, int8_type, depth_ptr, &depth_offset1, 1, "");
    zs_dst_ptr1 = LLVMBuildBitCast(builder, zs_dst_ptr1, load_ptr_type, "");
-   zs_dst_ptr2 = LLVMBuildGEP(builder, depth_ptr, &depth_offset2, 1, "");
+   zs_dst_ptr2 = LLVMBuildGEP2(builder, int8_type, depth_ptr, &depth_offset2, 1, "");
    zs_dst_ptr2 = LLVMBuildBitCast(builder, zs_dst_ptr2, load_ptr_type, "");
 
    if (format_desc->block.bits > 32) {
@@ -759,8 +756,7 @@ lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
       if (z_src_type.length == 4) {
          zs_dst1 = lp_build_extract_range(gallivm, z_value, 0, 2);
          zs_dst2 = lp_build_extract_range(gallivm, z_value, 2, 2);
-      }
-      else {
+      } else {
          assert(z_src_type.length == 8);
          zs_dst1 = LLVMBuildShuffleVector(builder, z_value, z_value,
                                           LLVMConstVector(&shuffles[0],
@@ -769,19 +765,16 @@ lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
                                           LLVMConstVector(&shuffles[4],
                                                           zs_load_type.length), "");
       }
-   }
-   else {
+   } else {
       if (z_src_type.length == 4) {
          zs_dst1 = lp_build_interleave2(gallivm, z_type,
                                         z_value, s_value, 0);
          zs_dst2 = lp_build_interleave2(gallivm, z_type,
                                         z_value, s_value, 1);
-      }
-      else {
-         unsigned i;
+      } else {
          LLVMValueRef shuffles[LP_MAX_VECTOR_LENGTH / 2];
          assert(z_src_type.length == 8);
-         for (i = 0; i < 8; i++) {
+         for (unsigned i = 0; i < 8; i++) {
             shuffles[i*2] = lp_build_const_int32(gallivm, (i&1) + (i&2) * 2 + (i&4) / 2);
             shuffles[i*2+1] = lp_build_const_int32(gallivm, (i&1) + (i&2) * 2 + (i&4) / 2 +
                                                    z_src_type.length);
@@ -805,6 +798,7 @@ lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
    }
 }
 
+
 /**
  * Generate code for performing depth and/or stencil tests.
  * We operate on a vector of values (typically n 2x2 quads).
@@ -822,7 +816,7 @@ lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
  */
 void
 lp_build_depth_stencil_test(struct gallivm_state *gallivm,
-                            const struct pipe_depth_state *depth,
+                            const struct lp_depth_state *depth,
                             const struct pipe_stencil_state stencil[2],
                             struct lp_type z_src_type,
                             const struct util_format_description *format_desc,
@@ -835,7 +829,8 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
                             LLVMValueRef face,
                             LLVMValueRef *z_value,
                             LLVMValueRef *s_value,
-                            boolean do_branch)
+                            bool do_branch,
+                            bool restrict_depth)
 {
    LLVMBuilderRef builder = gallivm->builder;
    struct lp_type z_type;
@@ -849,18 +844,20 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
    LLVMValueRef z_pass = NULL, s_pass_mask = NULL;
    LLVMValueRef current_mask = mask ? lp_build_mask_value(mask) : *cov_mask;
    LLVMValueRef front_facing = NULL;
-   boolean have_z, have_s;
+   bool have_z, have_s;
 
    /*
     * Depths are expected to be between 0 and 1, even if they are stored in
     * floats. Setting these bits here will ensure that the lp_build_conv() call
     * below won't try to unnecessarily clamp the incoming values.
+    * If depths are expected outside 0..1 don't set these bits.
     */
-   if(z_src_type.floating) {
-      z_src_type.sign = FALSE;
-      z_src_type.norm = TRUE;
-   }
-   else {
+   if (z_src_type.floating) {
+      if (restrict_depth) {
+         z_src_type.sign = false;
+         z_src_type.norm = true;
+      }
+   } else {
       assert(!z_src_type.sign);
       assert(z_src_type.norm);
    }
@@ -880,8 +877,8 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
 
    /* Sanity checking */
    {
-      const unsigned z_swizzle = format_desc->swizzle[0];
-      const unsigned s_swizzle = format_desc->swizzle[1];
+      ASSERTED const unsigned z_swizzle = format_desc->swizzle[0];
+      ASSERTED const unsigned s_swizzle = format_desc->swizzle[1];
 
       assert(z_swizzle != PIPE_SWIZZLE_NONE ||
              s_swizzle != PIPE_SWIZZLE_NONE);
@@ -907,8 +904,7 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
             assert(format_desc->channel[z_swizzle].type ==
                    UTIL_FORMAT_TYPE_FLOAT);
             assert(format_desc->channel[z_swizzle].size == 32);
-         }
-         else {
+         } else {
             assert(format_desc->channel[z_swizzle].type ==
                    UTIL_FORMAT_TYPE_UNSIGNED);
             assert(format_desc->channel[z_swizzle].normalized);
@@ -1116,8 +1112,7 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
                                             stencil_refs, stencil_vals,
                                             z_pass_mask, front_facing);
       }
-   }
-   else {
+   } else {
       /* No depth test: apply Z-pass operator to stencil buffer values which
        * passed the stencil test.
        */
@@ -1145,8 +1140,7 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
       else
          *z_value = stencil_vals;
       *s_value = *z_value;
-   }
-   else {
+   } else {
       *z_value = z_dst;
       *s_value = stencil_vals;
    }

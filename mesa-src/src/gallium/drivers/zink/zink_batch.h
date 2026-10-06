@@ -24,54 +24,108 @@
 #ifndef ZINK_BATCH_H
 #define ZINK_BATCH_H
 
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
+#include "zink_types.h"
 
 #include "util/list.h"
+#include "util/set.h"
 #include "util/u_dynarray.h"
 
-struct zink_context;
-struct zink_fence;
-struct zink_framebuffer;
-struct zink_gfx_program;
-struct zink_render_pass;
-struct zink_resource;
-struct zink_sampler_view;
+#include "zink_fence.h"
 
-#define ZINK_BATCH_DESC_SIZE 1000
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-struct zink_batch {
-   VkCommandBuffer cmdbuf;
-   VkDescriptorPool descpool;
-   int descs_left;
-   struct zink_fence *fence;
-
-   struct zink_render_pass *rp;
-   struct zink_framebuffer *fb;
-   struct set *programs;
-
-   struct set *resources;
-   struct set *sampler_views;
-
-   struct util_dynarray zombie_samplers;
-
-   struct set *active_queries; /* zink_query objects which were active at some point in this batch */
-};
 
 void
-zink_start_batch(struct zink_context *ctx, struct zink_batch *batch);
+zink_reset_batch_state(struct zink_context *ctx, struct zink_batch_state *bs);
 
 void
-zink_end_batch(struct zink_context *ctx, struct zink_batch *batch);
+zink_clear_batch_state(struct zink_context *ctx, struct zink_batch_state *bs);
 
 void
-zink_batch_reference_resoure(struct zink_batch *batch,
-                             struct zink_resource *res);
+zink_batch_reset_all(struct zink_context *ctx);
 
 void
-zink_batch_reference_sampler_view(struct zink_batch *batch,
-                                  struct zink_sampler_view *sv);
+zink_batch_state_destroy(struct zink_screen *screen, struct zink_batch_state *bs);
 
 void
-zink_batch_reference_program(struct zink_batch *batch,
-                             struct zink_gfx_program *prog);
+zink_batch_state_clear_resources(struct zink_screen *screen, struct zink_batch_state *bs);
+
+void
+zink_reset_batch(struct zink_context *ctx);
+void
+zink_start_batch(struct zink_context *ctx);
+
+void
+zink_end_batch(struct zink_context *ctx);
+
+void
+zink_batch_reference_resource_rw(struct zink_context *ctx,
+                                 struct zink_resource *res,
+                                 bool write);
+void
+zink_batch_reference_resource(struct zink_context *ctx, struct zink_resource *res);
+
+bool
+zink_batch_reference_resource_move(struct zink_context *ctx, struct zink_resource *res);
+
+void
+zink_batch_reference_program(struct zink_context *ctx,
+                             struct zink_program *pg);
+
+void
+zink_batch_bind_db(struct zink_context *ctx);
+void
+debug_describe_zink_batch_state(char *buf, const struct zink_batch_state *ptr);
+
+static ALWAYS_INLINE bool
+zink_batch_usage_is_unflushed(const struct zink_batch_usage *u)
+{
+   return u && u->unflushed;
+}
+
+static ALWAYS_INLINE void
+zink_batch_usage_unset(struct zink_batch_usage **u, struct zink_batch_state *bs)
+{
+   (void)p_atomic_cmpxchg((uintptr_t *)u, (uintptr_t)&bs->usage, (uintptr_t)NULL);
+}
+
+static ALWAYS_INLINE void
+zink_batch_usage_set(struct zink_batch_usage **u, struct zink_batch_state *bs)
+{
+   *u = &bs->usage;
+}
+
+static ALWAYS_INLINE bool
+zink_batch_usage_matches(const struct zink_batch_usage *u, const struct zink_batch_state *bs)
+{
+   return u == &bs->usage;
+}
+
+static ALWAYS_INLINE bool
+zink_batch_usage_exists(const struct zink_batch_usage *u)
+{
+   return u && (u->usage || u->unflushed);
+}
+
+bool
+zink_screen_usage_check_completion(struct zink_screen *screen, const struct zink_batch_usage *u);
+bool
+zink_screen_usage_check_completion_fast(struct zink_screen *screen, const struct zink_batch_usage *u);
+
+bool
+zink_batch_usage_check_completion(struct zink_context *ctx, const struct zink_batch_usage *u);
+
+void
+zink_batch_usage_wait(struct zink_context *ctx, struct zink_batch_usage *u);
+
+void
+zink_batch_usage_try_wait(struct zink_context *ctx, struct zink_batch_usage *u);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

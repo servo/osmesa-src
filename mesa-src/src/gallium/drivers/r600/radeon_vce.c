@@ -1,34 +1,8 @@
-/**************************************************************************
- *
- * Copyright 2013 Advanced Micro Devices, Inc.
- * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
- * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER(S) OR AUTHOR(S) BE LIABLE FOR
- * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
- * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
- * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- **************************************************************************/
-
 /*
+ * Copyright 2013 Advanced Micro Devices, Inc.
  * Authors:
  *      Christian König <christian.koenig@amd.com>
- *
+ * SPDX-License-Identifier: MIT
  */
 
 #include <stdio.h>
@@ -63,7 +37,7 @@ static void (*get_pic_param)(struct rvce_encoder *enc,
  */
 static void flush(struct rvce_encoder *enc)
 {
-	enc->ws->cs_flush(enc->cs, PIPE_FLUSH_ASYNC, NULL);
+	enc->ws->cs_flush(&enc->cs, PIPE_FLUSH_ASYNC, NULL);
 	enc->task_info_idx = 0;
 	enc->bs_idx = 0;
 }
@@ -71,7 +45,7 @@ static void flush(struct rvce_encoder *enc)
 #if 0
 static void dump_feedback(struct rvce_encoder *enc, struct rvid_buffer *fb)
 {
-	uint32_t *ptr = enc->ws->buffer_map(fb->res->buf, enc->cs, PIPE_TRANSFER_READ_WRITE);
+	uint32_t *ptr = enc->ws->buffer_map(fb->res->buf, &enc->cs, PIPE_MAP_READ_WRITE);
 	unsigned i = 0;
 	fprintf(stderr, "\n");
 	fprintf(stderr, "encStatus:\t\t\t%08x\n", ptr[i++]);
@@ -105,7 +79,7 @@ static void reset_cpb(struct rvce_encoder *enc)
 	for (i = 0; i < enc->cpb_num; ++i) {
 		struct rvce_cpb_slot *slot = &enc->cpb_array[i];
 		slot->index = i;
-		slot->picture_type = PIPE_H264_ENC_PICTURE_TYPE_SKIP;
+		slot->picture_type = PIPE_H2645_ENC_PICTURE_TYPE_SKIP;
 		slot->frame_num = 0;
 		slot->pic_order_cnt = 0;
 		list_addtail(&slot->list, &enc->cpb_slots);
@@ -120,16 +94,16 @@ static void sort_cpb(struct rvce_encoder *enc)
 	struct rvce_cpb_slot *i, *l0 = NULL, *l1 = NULL;
 
 	LIST_FOR_EACH_ENTRY(i, &enc->cpb_slots, list) {
-		if (i->frame_num == enc->pic.ref_idx_l0)
+		if (i->frame_num == enc->pic.ref_idx_l0_list[0])
 			l0 = i;
 
-		if (i->frame_num == enc->pic.ref_idx_l1)
+		if (i->frame_num == enc->pic.ref_idx_l1_list[0])
 			l1 = i;
 
-		if (enc->pic.picture_type == PIPE_H264_ENC_PICTURE_TYPE_P && l0)
+		if (enc->pic.picture_type == PIPE_H2645_ENC_PICTURE_TYPE_P && l0)
 			break;
 
-		if (enc->pic.picture_type == PIPE_H264_ENC_PICTURE_TYPE_B &&
+		if (enc->pic.picture_type == PIPE_H2645_ENC_PICTURE_TYPE_B &&
 		    l0 && l1)
 			break;
 	}
@@ -204,7 +178,7 @@ static unsigned get_cpb_num(struct rvce_encoder *enc)
  */
 struct rvce_cpb_slot *current_slot(struct rvce_encoder *enc)
 {
-	return LIST_ENTRY(struct rvce_cpb_slot, enc->cpb_slots.prev, list);
+	return list_entry(enc->cpb_slots.prev, struct rvce_cpb_slot, list);
 }
 
 /**
@@ -212,7 +186,7 @@ struct rvce_cpb_slot *current_slot(struct rvce_encoder *enc)
  */
 struct rvce_cpb_slot *l0_slot(struct rvce_encoder *enc)
 {
-	return LIST_ENTRY(struct rvce_cpb_slot, enc->cpb_slots.next, list);
+	return list_entry(enc->cpb_slots.next, struct rvce_cpb_slot, list);
 }
 
 /**
@@ -220,7 +194,7 @@ struct rvce_cpb_slot *l0_slot(struct rvce_encoder *enc)
  */
 struct rvce_cpb_slot *l1_slot(struct rvce_encoder *enc)
 {
-	return LIST_ENTRY(struct rvce_cpb_slot, enc->cpb_slots.next->next, list);
+	return list_entry(enc->cpb_slots.next->next, struct rvce_cpb_slot, list);
 }
 
 /**
@@ -256,7 +230,7 @@ static void rvce_destroy(struct pipe_video_codec *encoder)
 		rvid_destroy_buffer(&fb);
 	}
 	rvid_destroy_buffer(&enc->cpb);
-	enc->ws->cs_destroy(enc->cs);
+	enc->ws->cs_destroy(&enc->cs);
 	FREE(enc->cpb_array);
 	FREE(enc);
 }
@@ -270,7 +244,7 @@ static void rvce_begin_frame(struct pipe_video_codec *encoder,
 	struct pipe_h264_enc_picture_desc *pic = (struct pipe_h264_enc_picture_desc *)picture;
 
 	bool need_rate_control =
-		enc->pic.rate_ctrl.rate_ctrl_method != pic->rate_ctrl.rate_ctrl_method ||
+		enc->pic.rate_ctrl[0].rate_ctrl_method != pic->rate_ctrl[0].rate_ctrl_method ||
 		enc->pic.quant_i_frames != pic->quant_i_frames ||
 		enc->pic.quant_p_frames != pic->quant_p_frames ||
 		enc->pic.quant_b_frames != pic->quant_b_frames;
@@ -281,10 +255,10 @@ static void rvce_begin_frame(struct pipe_video_codec *encoder,
 	enc->get_buffer(vid_buf->resources[0], &enc->handle, &enc->luma);
 	enc->get_buffer(vid_buf->resources[1], NULL, &enc->chroma);
 
-	if (pic->picture_type == PIPE_H264_ENC_PICTURE_TYPE_IDR)
+	if (pic->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_IDR)
 		reset_cpb(enc);
-	else if (pic->picture_type == PIPE_H264_ENC_PICTURE_TYPE_P ||
-	         pic->picture_type == PIPE_H264_ENC_PICTURE_TYPE_B)
+	else if (pic->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_P ||
+	         pic->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_B)
 		sort_cpb(enc);
 	
 	if (!enc->stream_handle) {
@@ -323,19 +297,20 @@ static void rvce_encode_bitstream(struct pipe_video_codec *encoder,
 		RVID_ERR("Can't create feedback buffer.\n");
 		return;
 	}
-	if (!radeon_emitted(enc->cs, 0))
+	if (!radeon_emitted(&enc->cs, 0))
 		enc->session(enc);
 	enc->encode(enc);
 	enc->feedback(enc);
 }
 
-static void rvce_end_frame(struct pipe_video_codec *encoder,
+static int rvce_end_frame(struct pipe_video_codec *encoder,
 			   struct pipe_video_buffer *source,
 			   struct pipe_picture_desc *picture)
 {
 	struct rvce_encoder *enc = (struct rvce_encoder*)encoder;
-	struct rvce_cpb_slot *slot = LIST_ENTRY(
-		struct rvce_cpb_slot, enc->cpb_slots.prev, list);
+	struct rvce_cpb_slot *slot = list_entry(enc->cpb_slots.prev,
+	                                        struct rvce_cpb_slot,
+	                                        list);
 
 	if (!enc->dual_inst || enc->bs_idx > 1)
 		flush(enc);
@@ -348,18 +323,20 @@ static void rvce_end_frame(struct pipe_video_codec *encoder,
 		list_del(&slot->list);
 		list_add(&slot->list, &enc->cpb_slots);
 	}
+	return 0;
 }
 
 static void rvce_get_feedback(struct pipe_video_codec *encoder,
-			      void *feedback, unsigned *size)
+			      void *feedback, unsigned *size,
+				  struct pipe_enc_feedback_metadata* metadata)
 {
 	struct rvce_encoder *enc = (struct rvce_encoder*)encoder;
 	struct rvid_buffer *fb = feedback;
 
 	if (size) {
-		uint32_t *ptr = enc->ws->buffer_map(
-			fb->res->buf, enc->cs,
-			PIPE_TRANSFER_READ_WRITE | RADEON_TRANSFER_TEMPORARY);
+		uint32_t *ptr = enc->ws->buffer_map(enc->ws,
+			fb->res->buf, &enc->cs,
+			PIPE_MAP_READ_WRITE | RADEON_MAP_TEMPORARY);
 
 		if (ptr[1]) {
 			*size = ptr[4] - ptr[9];
@@ -367,7 +344,7 @@ static void rvce_get_feedback(struct pipe_video_codec *encoder,
 			*size = 0;
 		}
 
-		enc->ws->buffer_unmap(fb->res->buf);
+		enc->ws->buffer_unmap(enc->ws, fb->res->buf);
 	}
 	//dump_feedback(enc, fb);
 	rvid_destroy_buffer(fb);
@@ -415,8 +392,7 @@ struct pipe_video_codec *rvce_create_encoder(struct pipe_context *context,
 	if (!enc)
 		return NULL;
 
-	if (rscreen->info.drm_minor >= 42)
-		enc->use_vui = true;
+	enc->use_vui = true;
 
 	enc->base = *templ;
 	enc->base.context = context;
@@ -431,8 +407,8 @@ struct pipe_video_codec *rvce_create_encoder(struct pipe_context *context,
 
 	enc->screen = context->screen;
 	enc->ws = ws;
-	enc->cs = ws->cs_create(rctx->ctx, RING_VCE, rvce_cs_flush, enc, false);
-	if (!enc->cs) {
+
+	if (!ws->cs_create(&enc->cs, rctx->ctx, AMD_IP_VCE, rvce_cs_flush, enc)) {
 		RVID_ERR("Can't get command submission context.\n");
 		goto error;
 	}
@@ -477,8 +453,7 @@ struct pipe_video_codec *rvce_create_encoder(struct pipe_context *context,
 	return &enc->base;
 
 error:
-	if (enc->cs)
-		enc->ws->cs_destroy(enc->cs);
+	enc->ws->cs_destroy(&enc->cs);
 
 	rvid_destroy_buffer(&enc->cpb);
 
@@ -513,14 +488,14 @@ bool rvce_is_fw_version_supported(struct r600_common_screen *rscreen)
 /**
  * Add the buffer as relocation to the current command submission
  */
-void rvce_add_buffer(struct rvce_encoder *enc, struct pb_buffer *buf,
-                     enum radeon_bo_usage usage, enum radeon_bo_domain domain,
+void rvce_add_buffer(struct rvce_encoder *enc, struct pb_buffer_lean *buf,
+                     unsigned usage, enum radeon_bo_domain domain,
                      signed offset)
 {
 	int reloc_idx;
 
-	reloc_idx = enc->ws->cs_add_buffer(enc->cs, buf, usage | RADEON_USAGE_SYNCHRONIZED,
-					   domain, 0);
+	reloc_idx = enc->ws->cs_add_buffer(&enc->cs, buf, usage | RADEON_USAGE_SYNCHRONIZED,
+					   domain);
 	if (enc->use_vm) {
 		uint64_t addr;
 		addr = enc->ws->buffer_get_virtual_address(buf);

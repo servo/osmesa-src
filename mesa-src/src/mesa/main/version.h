@@ -28,7 +28,7 @@
 #define VERSION_H
 
 #include <stdbool.h>
-#include "glheader.h"
+#include "util/glheader.h"
 #include "menums.h"
 
 struct gl_context;
@@ -57,6 +57,9 @@ _mesa_get_driver_uuid(struct gl_context *ctx, GLint *uuid);
 
 extern void
 _mesa_get_device_uuid(struct gl_context *ctx, GLint *uuid);
+
+extern void
+_mesa_get_device_luid(struct gl_context *ctx, GLint *luid);
 
 extern int
 _mesa_get_shading_language_version(const struct gl_context *ctx,

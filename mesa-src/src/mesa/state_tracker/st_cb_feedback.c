@@ -40,7 +40,10 @@
 
 #include "main/context.h"
 #include "main/feedback.h"
+#include "main/framebuffer.h"
 #include "main/varray.h"
+
+#include "util/u_memory.h"
 
 #include "vbo/vbo.h"
 
@@ -83,14 +86,14 @@ static void
 feedback_vertex(struct gl_context *ctx, const struct draw_context *draw,
                 const struct vertex_header *v)
 {
-   const struct st_context *st = st_context(ctx);
-   struct st_vertex_program *stvp = (struct st_vertex_program *)st->vp;
+   struct gl_vertex_program *stvp =
+      (struct gl_vertex_program *)ctx->VertexProgram._Current;
    GLfloat win[4];
    const GLfloat *color, *texcoord;
-   GLuint slot;
+   uint8_t slot;
 
    win[0] = v->data[0][0];
-   if (st_fb_orientation(ctx->DrawBuffer) == Y_0_TOP)
+   if (_mesa_fb_orientation(ctx->DrawBuffer) == Y_0_TOP)
       win[1] = ctx->DrawBuffer->Height - v->data[0][1];
    else
       win[1] = v->data[0][1];
@@ -103,13 +106,13 @@ feedback_vertex(struct gl_context *ctx, const struct draw_context *draw,
     */
 
    slot = stvp->result_to_output[VARYING_SLOT_COL0];
-   if (slot != ~0U)
+   if (slot != 0xff)
       color = v->data[slot];
    else
       color = ctx->Current.Attrib[VERT_ATTRIB_COLOR0];
 
    slot = stvp->result_to_output[VARYING_SLOT_TEX0];
-   if (slot != ~0U)
+   if (slot != 0xff)
       texcoord = v->data[slot];
    else
       texcoord = ctx->Current.Attrib[VERT_ATTRIB_TEX0];
@@ -176,7 +179,7 @@ feedback_reset_stipple_counter( struct draw_stage *stage )
 static void
 feedback_destroy( struct draw_stage *stage )
 {
-   free(stage);
+   FREE(stage);
 }
 
 /**
@@ -185,7 +188,7 @@ feedback_destroy( struct draw_stage *stage )
 static struct draw_stage *
 draw_glfeedback_stage(struct gl_context *ctx, struct draw_context *draw)
 {
-   struct feedback_stage *fs = ST_CALLOC_STRUCT(feedback_stage);
+   struct feedback_stage *fs = CALLOC_STRUCT(feedback_stage);
 
    fs->stage.draw = draw;
    fs->stage.next = NULL;
@@ -248,7 +251,7 @@ select_reset_stipple_counter( struct draw_stage *stage )
 static void
 select_destroy( struct draw_stage *stage )
 {
-   free(stage);
+   FREE(stage);
 }
 
 
@@ -258,7 +261,7 @@ select_destroy( struct draw_stage *stage )
 static struct draw_stage *
 draw_glselect_stage(struct gl_context *ctx, struct draw_context *draw)
 {
-   struct feedback_stage *fs = ST_CALLOC_STRUCT(feedback_stage);
+   struct feedback_stage *fs = CALLOC_STRUCT(feedback_stage);
 
    fs->stage.draw = draw;
    fs->stage.next = NULL;
@@ -274,7 +277,7 @@ draw_glselect_stage(struct gl_context *ctx, struct draw_context *draw)
 }
 
 
-static void
+void
 st_RenderMode(struct gl_context *ctx, GLenum newMode )
 {
    struct st_context *st = st_context(ctx);
@@ -285,14 +288,19 @@ st_RenderMode(struct gl_context *ctx, GLenum newMode )
 
    if (newMode == GL_RENDER) {
       /* restore normal VBO draw function */
-      st_init_draw_functions(&ctx->Driver);
+      st_init_draw_functions(st->screen, &ctx->Driver);
    }
    else if (newMode == GL_SELECT) {
-      if (!st->selection_stage)
-         st->selection_stage = draw_glselect_stage(ctx, draw);
-      draw_set_rasterize_stage(draw, st->selection_stage);
-      /* Plug in new vbo draw function */
-      ctx->Driver.Draw = st_feedback_draw_vbo;
+      if (ctx->Const.HardwareAcceleratedSelect)
+         st_init_hw_select_draw_functions(st->screen, &ctx->Driver);
+      else {
+         if (!st->selection_stage)
+            st->selection_stage = draw_glselect_stage(ctx, draw);
+         draw_set_rasterize_stage(draw, st->selection_stage);
+         /* Plug in new vbo draw function */
+         ctx->Driver.DrawGallium = st_feedback_draw_vbo;
+         ctx->Driver.DrawGalliumMultiMode = st_feedback_draw_vbo_multi_mode;
+      }
    }
    else {
       struct gl_program *vp = st->ctx->VertexProgram._Current;
@@ -301,16 +309,14 @@ st_RenderMode(struct gl_context *ctx, GLenum newMode )
          st->feedback_stage = draw_glfeedback_stage(ctx, draw);
       draw_set_rasterize_stage(draw, st->feedback_stage);
       /* Plug in new vbo draw function */
-      ctx->Driver.Draw = st_feedback_draw_vbo;
+      ctx->Driver.DrawGallium = st_feedback_draw_vbo;
+      ctx->Driver.DrawGalliumMultiMode = st_feedback_draw_vbo_multi_mode;
       /* need to generate/use a vertex program that emits pos/color/tex */
       if (vp)
-         st->dirty |= ST_NEW_VERTEX_PROGRAM(st, st_program(vp));
+         ctx->NewDriverState |= ST_NEW_VERTEX_PROGRAM(ctx, vp);
    }
-}
 
-
-
-void st_init_feedback_functions(struct dd_function_table *functions)
-{
-   functions->RenderMode = st_RenderMode;
+   /* Restore geometry shader states when leaving GL_SELECT mode. */
+   if (ctx->RenderMode == GL_SELECT && ctx->Const.HardwareAcceleratedSelect)
+      ctx->NewDriverState |= ST_NEW_GS_SSBOS | ST_NEW_GS_CONSTANTS | ST_NEW_GS_STATE;
 }

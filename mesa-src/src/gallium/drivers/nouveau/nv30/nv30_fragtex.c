@@ -29,6 +29,7 @@
 #include "nv30/nv30-40_3d.xml.h"
 #include "nv30/nv30_context.h"
 #include "nv30/nv30_format.h"
+#include "nv30/nv30_winsys.h"
 
 void
 nv30_fragtex_validate(struct nv30_context *nv30)
@@ -96,24 +97,24 @@ nv30_fragtex_validate(struct nv30_context *nv30)
              */
             if (ss->pipe.compare_mode != PIPE_TEX_COMPARE_R_TO_TEXTURE) {
                if (fmt->nv30 == NV30_3D_TEX_FORMAT_FORMAT_Z16) {
-                  if (ss->pipe.normalized_coords)
+                  if (!ss->pipe.unnormalized_coords)
                      format |= NV30_3D_TEX_FORMAT_FORMAT_A8L8;
                   else
                      format |= NV30_3D_TEX_FORMAT_FORMAT_A8L8_RECT;
                } else
                if (fmt->nv30 == NV30_3D_TEX_FORMAT_FORMAT_Z24) {
-                  if (ss->pipe.normalized_coords)
+                  if (!ss->pipe.unnormalized_coords)
                      format |= NV30_3D_TEX_FORMAT_FORMAT_HILO16;
                   else
                      format |= NV30_3D_TEX_FORMAT_FORMAT_HILO16_RECT;
                } else {
-                  if (ss->pipe.normalized_coords)
+                  if (!ss->pipe.unnormalized_coords)
                      format |= fmt->nv30;
                   else
                      format |= fmt->nv30_rect;
                }
             } else {
-               if (ss->pipe.normalized_coords)
+               if (!ss->pipe.unnormalized_coords)
                   format |= fmt->nv30;
                else
                   format |= fmt->nv30_rect;
@@ -173,6 +174,7 @@ nv30_fragtex_sampler_states_bind(struct pipe_context *pipe,
 
 void
 nv30_fragtex_set_sampler_views(struct pipe_context *pipe, unsigned nr,
+                               bool take_ownership,
                                struct pipe_sampler_view **views)
 {
    struct nv30_context *nv30 = nv30_context(pipe);
@@ -180,7 +182,12 @@ nv30_fragtex_set_sampler_views(struct pipe_context *pipe, unsigned nr,
 
    for (i = 0; i < nr; i++) {
       nouveau_bufctx_reset(nv30->bufctx, BUFCTX_FRAGTEX(i));
-      pipe_sampler_view_reference(&nv30->fragprog.textures[i], views[i]);
+      if (take_ownership) {
+         pipe_sampler_view_reference(&nv30->fragprog.textures[i], NULL);
+         nv30->fragprog.textures[i] = views[i];
+      } else {
+         pipe_sampler_view_reference(&nv30->fragprog.textures[i], views[i]);
+      }
       nv30->fragprog.dirty_samplers |= (1 << i);
    }
 
@@ -198,15 +205,17 @@ nv30_fragtex_set_sampler_views(struct pipe_context *pipe, unsigned nr,
 static void
 nv30_set_sampler_views(struct pipe_context *pipe, enum pipe_shader_type shader,
                        unsigned start, unsigned nr,
+                       unsigned unbind_num_trailing_slots,
+                       bool take_ownership,
                        struct pipe_sampler_view **views)
 {
    assert(start == 0);
    switch (shader) {
    case PIPE_SHADER_FRAGMENT:
-      nv30_fragtex_set_sampler_views(pipe, nr, views);
+      nv30_fragtex_set_sampler_views(pipe, nr, take_ownership, views);
       break;
    case PIPE_SHADER_VERTEX:
-      nv40_verttex_set_sampler_views(pipe, nr, views);
+      nv40_verttex_set_sampler_views(pipe, nr, take_ownership, views);
       break;
    default:
       ;

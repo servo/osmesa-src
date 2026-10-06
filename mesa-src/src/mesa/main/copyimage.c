@@ -20,21 +20,20 @@
  * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand <jason.ekstrand@intel.com>
  */
 
 #include "context.h"
-#include "glheader.h"
+#include "util/glheader.h"
 #include "errors.h"
 #include "enums.h"
-#include "copyimage.h"
 #include "teximage.h"
 #include "texobj.h"
 #include "fbobject.h"
 #include "textureview.h"
 #include "glformats.h"
+#include "api_exec_decl.h"
+
+#include "state_tracker/st_cb_copyimage.h"
 
 enum mesa_block_class {
    BLOCK_CLASS_128_BITS,
@@ -101,6 +100,9 @@ prepare_target_err(struct gl_context *ctx, GLuint name, GLenum target,
       break;
    case GL_TEXTURE_EXTERNAL_OES:
       /* Only exists in ES */
+      if (_mesa_is_gles(ctx))
+         break;
+      FALLTHROUGH;
    case GL_TEXTURE_BUFFER:
    default:
       _mesa_error(ctx, GL_INVALID_ENUM,
@@ -237,7 +239,11 @@ prepare_target_err(struct gl_context *ctx, GLuint name, GLenum target,
       if (target == GL_TEXTURE_CUBE_MAP) {
          int i;
 
-         assert(z < MAX_FACES);  /* should have been caught earlier */
+         if (z < 0 || z >= MAX_FACES) {
+            _mesa_error(ctx, GL_INVALID_VALUE,
+                        "glCopyImageSubData(cube face (%sZ = %d)", dbg_prefix, z);
+            return false;
+         }
 
          /* make sure all the cube faces are present */
          for (i = 0; i < depth; i++) {
@@ -567,12 +573,12 @@ copy_image_subdata(struct gl_context *ctx,
          newDstZ = 0;
       }
 
-      ctx->Driver.CopyImageSubData(ctx,
-                                   srcTexImage, srcRenderbuffer,
-                                   srcX, srcY, newSrcZ,
-                                   dstTexImage, dstRenderbuffer,
-                                   dstX, dstY, newDstZ,
-                                   srcWidth, srcHeight);
+      st_CopyImageSubData(ctx,
+                          srcTexImage, srcRenderbuffer,
+                          srcX, srcY, newSrcZ,
+                          dstTexImage, dstRenderbuffer,
+                          dstX, dstY, newDstZ,
+                          srcWidth, srcHeight);
    }
 }
 

@@ -55,6 +55,8 @@
 #include "frontend/vdpau_funcs.h"
 #include "frontend/drm_driver.h"
 
+#include "drm-uapi/drm_fourcc.h"
+
 static struct pipe_resource *
 st_vdpau_video_surface_gallium(struct gl_context *ctx, const void *vdpSurface,
                                GLuint index)
@@ -129,11 +131,13 @@ st_vdpau_resource_from_description(struct gl_context *ctx,
    memset(&whandle, 0, sizeof(whandle));
    whandle.type = WINSYS_HANDLE_TYPE_FD;
    whandle.handle = desc->handle;
+   whandle.modifier = DRM_FORMAT_MOD_INVALID;
    whandle.offset = desc->offset;
    whandle.stride = desc->stride;
+   whandle.format = VdpFormatRGBAToPipe(desc->format);
 
-   res = st->pipe->screen->resource_from_handle(st->pipe->screen, &templ, &whandle,
-						PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
+   res = st->screen->resource_from_handle(st->screen, &templ, &whandle,
+                                          PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
    close(desc->handle);
 
    return res;
@@ -178,16 +182,14 @@ st_vdpau_video_surface_dma_buf(struct gl_context *ctx, const void *vdpSurface,
    return st_vdpau_resource_from_description(ctx, &desc);
 }
 
-static void
+void
 st_vdpau_map_surface(struct gl_context *ctx, GLenum target, GLenum access,
                      GLboolean output, struct gl_texture_object *texObj,
                      struct gl_texture_image *texImage,
                      const void *vdpSurface, GLuint index)
 {
    struct st_context *st = st_context(ctx);
-   struct pipe_screen *screen = st->pipe->screen;
-   struct st_texture_object *stObj = st_texture_object(texObj);
-   struct st_texture_image *stImage = st_texture_image(texImage);
+   struct pipe_screen *screen = st->screen;
 
    struct pipe_resource *res;
    mesa_format texFormat;
@@ -214,10 +216,11 @@ st_vdpau_map_surface(struct gl_context *ctx, GLenum target, GLenum access,
       struct winsys_handle whandle = { .type = WINSYS_HANDLE_TYPE_FD };
       unsigned usage = PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE;
 
-      if (screen->get_param(screen, PIPE_CAP_DMABUF) &&
-          res->screen->get_param(res->screen, PIPE_CAP_DMABUF) &&
+      if (screen->caps.dmabuf &&
+          res->screen->caps.dmabuf &&
           res->screen->resource_get_handle(res->screen, NULL, res, &whandle,
                                            usage)) {
+         whandle.modifier = DRM_FORMAT_MOD_INVALID;
          new_res = screen->resource_from_handle(screen, res, &whandle, usage);
          close(whandle.handle);
       }
@@ -232,9 +235,9 @@ st_vdpau_map_surface(struct gl_context *ctx, GLenum target, GLenum access,
    }
 
    /* switch to surface based */
-   if (!stObj->surface_based) {
+   if (!texObj->surface_based) {
       _mesa_clear_texture_object(ctx, texObj, NULL);
-      stObj->surface_based = GL_TRUE;
+      texObj->surface_based = GL_TRUE;
    }
 
    texFormat = st_pipe_format_to_mesa_format(res->format);
@@ -242,35 +245,34 @@ st_vdpau_map_surface(struct gl_context *ctx, GLenum target, GLenum access,
    _mesa_init_teximage_fields(ctx, texImage,
                               res->width0, res->height0, 1, 0, GL_RGBA,
                               texFormat);
+   _mesa_update_texture_object_swizzle(ctx, texObj);
 
-   pipe_resource_reference(&stObj->pt, res);
-   st_texture_release_all_sampler_views(st, stObj);
-   pipe_resource_reference(&stImage->pt, res);
+   pipe_resource_reference(&texObj->pt, res);
+   st_texture_release_all_sampler_views(st, texObj);
+   pipe_resource_reference(&texImage->pt, res);
 
-   stObj->surface_format = res->format;
-   stObj->level_override = -1;
-   stObj->layer_override = layer_override;
+   texObj->surface_format = res->format;
+   texObj->level_override = -1;
+   texObj->layer_override = layer_override;
 
    _mesa_dirty_texobj(ctx, texObj);
    pipe_resource_reference(&res, NULL);
 }
 
-static void
+void
 st_vdpau_unmap_surface(struct gl_context *ctx, GLenum target, GLenum access,
                        GLboolean output, struct gl_texture_object *texObj,
                        struct gl_texture_image *texImage,
                        const void *vdpSurface, GLuint index)
 {
    struct st_context *st = st_context(ctx);
-   struct st_texture_object *stObj = st_texture_object(texObj);
-   struct st_texture_image *stImage = st_texture_image(texImage);
 
-   pipe_resource_reference(&stObj->pt, NULL);
-   st_texture_release_all_sampler_views(st, stObj);
-   pipe_resource_reference(&stImage->pt, NULL);
+   pipe_resource_reference(&texObj->pt, NULL);
+   st_texture_release_all_sampler_views(st, texObj);
+   pipe_resource_reference(&texImage->pt, NULL);
 
-   stObj->level_override = -1;
-   stObj->layer_override = -1;
+   texObj->level_override = -1;
+   texObj->layer_override = -1;
 
    _mesa_dirty_texobj(ctx, texObj);
 
@@ -280,10 +282,4 @@ st_vdpau_unmap_surface(struct gl_context *ctx, GLenum target, GLenum access,
    st_flush(st, NULL, 0);
 }
 
-void
-st_init_vdpau_functions(struct dd_function_table *functions)
-{
-   functions->VDPAUMapSurface = st_vdpau_map_surface;
-   functions->VDPAUUnmapSurface = st_vdpau_unmap_surface;
-}
 #endif

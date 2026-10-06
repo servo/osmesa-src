@@ -45,25 +45,41 @@ lp_build_gather_elem(struct gallivm_state *gallivm,
                      unsigned length,
                      unsigned src_width,
                      unsigned dst_width,
-                     boolean aligned,
+                     bool aligned,
                      LLVMValueRef base_ptr,
                      LLVMValueRef offsets,
                      unsigned i,
-                     boolean vector_justify);
+                     bool vector_justify);
 
 LLVMValueRef
 lp_build_gather(struct gallivm_state *gallivm,
                 unsigned length,
                 unsigned src_width,
                 struct lp_type dst_type,
-                boolean aligned,
+                bool aligned,
                 LLVMValueRef base_ptr,
                 LLVMValueRef offsets,
-                boolean vector_justify);
+                bool vector_justify);
 
 LLVMValueRef
 lp_build_gather_values(struct gallivm_state * gallivm,
                        LLVMValueRef * values,
                        unsigned value_count);
+
+LLVMValueRef
+lp_build_masked_gather(struct gallivm_state *gallivm,
+                       unsigned length,
+                       unsigned bit_size,
+                       LLVMTypeRef vec_type,
+                       LLVMValueRef offset_ptr,
+                       LLVMValueRef exec_mask);
+
+void
+lp_build_masked_scatter(struct gallivm_state *gallivm,
+                        unsigned length,
+                        unsigned bit_size,
+                        LLVMValueRef offset_ptr,
+                        LLVMValueRef value_vec,
+                        LLVMValueRef exec_mask);
 
 #endif /* LP_BLD_GATHER_H_ */

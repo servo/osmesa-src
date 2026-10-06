@@ -22,14 +22,13 @@
  */
 
 #include <gtest/gtest.h>
-#include "main/glheader.h"
 
 #include "glapi/glapi.h"
 #include "glapitable.h"
 
 struct name_offset {
    const char *name;
-   unsigned int offset;
+   size_t offset;
 };
 
 extern const struct name_offset linux_gl_abi[];
@@ -43,7 +42,7 @@ TEST(GetProcAddress, ABIOffsetByName)
     */
    for (unsigned i = 0; linux_gl_abi[i].name != NULL; i++) {
       EXPECT_EQ(linux_gl_abi[i].offset,
-		_glapi_get_proc_offset(linux_gl_abi[i].name))
+		_mesa_glapi_get_proc_offset(linux_gl_abi[i].name))
 	 << "function name: " << linux_gl_abi[i].name;
    }
 }
@@ -105,11 +104,11 @@ TEST(GetProcAddress, QueriedDispatchSizeBigEnough)
 {
    const unsigned table_entries = sizeof(struct _glapi_table) / sizeof(void *);
 
-   /* _glapi_get_dispatch_table_size returns the size of the extended dispatch
+   /* _mesa_glapi_get_dispatch_table_size returns the size of the extended dispatch
     * table.  This is the size of the static table with some extra entries for
     * drivers to use for extensions that the core does not know about.
     */
-   EXPECT_LT(table_entries, _glapi_get_dispatch_table_size());
+   EXPECT_EQ(table_entries, _mesa_glapi_get_dispatch_table_size());
 }
 
 TEST(GetProcAddress, KnownDispatchOffsetsAreConsistent)
@@ -124,7 +123,7 @@ TEST(GetProcAddress, KnownDispatchOffsetsAreConsistent)
     */
    for (unsigned i = 0; known_dispatch[i].name != NULL; i++) {
       EXPECT_EQ(known_dispatch[i].offset,
-		_glapi_get_proc_offset(known_dispatch[i].name))
+		_mesa_glapi_get_proc_offset(known_dispatch[i].name))
 	 << "function name: " << known_dispatch[i].name;
    }
 }
@@ -1131,8 +1130,8 @@ const struct name_offset known_dispatch[] = {
    { "glGetAttribLocation", _O(GetAttribLocation) },
    { "glDrawBuffers", _O(DrawBuffers) },
    { "glClampColor", _O(ClampColor) },
-   { "glDrawArraysInstancedARB", _O(DrawArraysInstancedARB) },
-   { "glDrawElementsInstancedARB", _O(DrawElementsInstancedARB) },
+   { "glDrawArraysInstanced", _O(DrawArraysInstanced) },
+   { "glDrawElementsInstanced", _O(DrawElementsInstanced) },
    { "glRenderbufferStorageMultisample", _O(RenderbufferStorageMultisample) },
    { "glFramebufferTexture", _O(FramebufferTexture) },
    { "glProgramParameteri", _O(ProgramParameteri) },
@@ -1290,7 +1289,7 @@ const struct name_offset known_dispatch[] = {
    { "glSecondaryColor3usv", _O(SecondaryColor3usv) },
    { "glSecondaryColorPointer", _O(SecondaryColorPointer) },
    { "glMultiDrawArrays", _O(MultiDrawArrays) },
-   { "glMultiDrawElementsEXT", _O(MultiDrawElementsEXT) },
+   { "glMultiDrawElements", _O(MultiDrawElements) },
    { "glFogCoordPointer", _O(FogCoordPointer) },
    { "glFogCoordd", _O(FogCoordd) },
    { "glFogCoorddv", _O(FogCoorddv) },

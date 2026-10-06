@@ -60,8 +60,8 @@ pb_slab_reclaim(struct pb_slabs *slabs, struct pb_slab_entry *entry)
    slab->num_free++;
 
    /* Add slab to the group's list if it isn't already linked. */
-   if (!slab->head.next) {
-      struct pb_slab_group *group = &slabs->groups[entry->group_index];
+   if (!list_is_linked(&slab->head)) {
+      struct pb_slab_group *group = &slabs->groups[entry->slab->group_index];
       list_addtail(&slab->head, &group->slabs);
    }
 
@@ -71,18 +71,45 @@ pb_slab_reclaim(struct pb_slabs *slabs, struct pb_slab_entry *entry)
    }
 }
 
-static void
+#define MAX_FAILED_RECLAIMS 2
+
+static unsigned
 pb_slabs_reclaim_locked(struct pb_slabs *slabs)
 {
-   while (!list_is_empty(&slabs->reclaim)) {
-      struct pb_slab_entry *entry =
-         LIST_ENTRY(struct pb_slab_entry, slabs->reclaim.next, head);
-
-      if (!slabs->can_reclaim(slabs->priv, entry))
+   struct pb_slab_entry *entry, *next;
+   unsigned num_failed_reclaims = 0;
+   unsigned num_reclaims = 0;
+   LIST_FOR_EACH_ENTRY_SAFE(entry, next, &slabs->reclaim, head) {
+      if (slabs->can_reclaim(slabs->priv, entry)) {
+         pb_slab_reclaim(slabs, entry);
+         num_reclaims++;
+      /* there are typically three possible scenarios when reclaiming:
+       * - all entries reclaimed
+       * - no entries reclaimed
+       * - all but one entry reclaimed
+       * in the scenario where a slab contains many (10+) unused entries,
+       * the driver should not walk the entire list, as this is likely to
+       * result in zero reclaims if the first few entries fail to reclaim
+       */
+      } else if (++num_failed_reclaims >= MAX_FAILED_RECLAIMS) {
          break;
-
-      pb_slab_reclaim(slabs, entry);
+      }
    }
+   return num_reclaims;
+}
+
+static unsigned
+pb_slabs_reclaim_all_locked(struct pb_slabs *slabs)
+{
+   struct pb_slab_entry *entry, *next;
+   unsigned num_reclaims = 0;
+   LIST_FOR_EACH_ENTRY_SAFE(entry, next, &slabs->reclaim, head) {
+      if (slabs->can_reclaim(slabs->priv, entry)) {
+         pb_slab_reclaim(slabs, entry);
+         num_reclaims++;
+      }
+   }
+   return num_reclaims;
 }
 
 /* Allocate a slab entry of the given size from the given heap.
@@ -95,32 +122,47 @@ pb_slabs_reclaim_locked(struct pb_slabs *slabs)
  * Note that slab_free can also be called by this function.
  */
 struct pb_slab_entry *
-pb_slab_alloc(struct pb_slabs *slabs, unsigned size, unsigned heap)
+pb_slab_alloc_reclaimed(struct pb_slabs *slabs, unsigned size, unsigned heap, bool reclaim_all)
 {
    unsigned order = MAX2(slabs->min_order, util_logbase2_ceil(size));
    unsigned group_index;
    struct pb_slab_group *group;
    struct pb_slab *slab;
    struct pb_slab_entry *entry;
+   unsigned entry_size = 1 << order;
+   bool three_fourths = false;
+
+   /* If the size is <= 3/4 of the entry size, use a slab with entries using
+    * 3/4 sizes to reduce overallocation.
+    */
+   if (slabs->allow_three_fourths_allocations && size <= entry_size * 3 / 4) {
+      entry_size = entry_size * 3 / 4;
+      three_fourths = true;
+   }
 
    assert(order < slabs->min_order + slabs->num_orders);
    assert(heap < slabs->num_heaps);
 
-   group_index = heap * slabs->num_orders + (order - slabs->min_order);
+   group_index = (heap * slabs->num_orders + (order - slabs->min_order)) *
+                 (1 + slabs->allow_three_fourths_allocations) + three_fourths;
    group = &slabs->groups[group_index];
 
-   mtx_lock(&slabs->mutex);
+   simple_mtx_lock(&slabs->mutex);
 
    /* If there is no candidate slab at all, or the first slab has no free
     * entries, try reclaiming entries.
     */
    if (list_is_empty(&group->slabs) ||
-       list_is_empty(&LIST_ENTRY(struct pb_slab, group->slabs.next, head)->free))
-      pb_slabs_reclaim_locked(slabs);
+       list_is_empty(&list_entry(group->slabs.next, struct pb_slab, head)->free)) {
+      if (reclaim_all)
+         pb_slabs_reclaim_all_locked(slabs);
+      else
+         pb_slabs_reclaim_locked(slabs);
+   }
 
    /* Remove slabs without free entries. */
    while (!list_is_empty(&group->slabs)) {
-      slab = LIST_ENTRY(struct pb_slab, group->slabs.next, head);
+      slab = list_entry(group->slabs.next, struct pb_slab, head);
       if (!list_is_empty(&slab->free))
          break;
 
@@ -135,22 +177,28 @@ pb_slab_alloc(struct pb_slabs *slabs, unsigned size, unsigned heap)
        * There's a chance that racing threads will end up allocating multiple
        * slabs for the same group, but that doesn't hurt correctness.
        */
-      mtx_unlock(&slabs->mutex);
-      slab = slabs->slab_alloc(slabs->priv, heap, 1 << order, group_index);
+      simple_mtx_unlock(&slabs->mutex);
+      slab = slabs->slab_alloc(slabs->priv, heap, entry_size, group_index);
       if (!slab)
          return NULL;
-      mtx_lock(&slabs->mutex);
+      simple_mtx_lock(&slabs->mutex);
 
       list_add(&slab->head, &group->slabs);
    }
 
-   entry = LIST_ENTRY(struct pb_slab_entry, slab->free.next, head);
+   entry = list_entry(slab->free.next, struct pb_slab_entry, head);
    list_del(&entry->head);
    slab->num_free--;
 
-   mtx_unlock(&slabs->mutex);
+   simple_mtx_unlock(&slabs->mutex);
 
    return entry;
+}
+
+struct pb_slab_entry *
+pb_slab_alloc(struct pb_slabs *slabs, unsigned size, unsigned heap)
+{
+   return pb_slab_alloc_reclaimed(slabs, size, heap, false);
 }
 
 /* Free the given slab entry.
@@ -162,9 +210,9 @@ pb_slab_alloc(struct pb_slabs *slabs, unsigned size, unsigned heap)
 void
 pb_slab_free(struct pb_slabs* slabs, struct pb_slab_entry *entry)
 {
-   mtx_lock(&slabs->mutex);
+   simple_mtx_lock(&slabs->mutex);
    list_addtail(&entry->head, &slabs->reclaim);
-   mtx_unlock(&slabs->mutex);
+   simple_mtx_unlock(&slabs->mutex);
 }
 
 /* Check if any of the entries handed to pb_slab_free are ready to be re-used.
@@ -173,12 +221,14 @@ pb_slab_free(struct pb_slabs* slabs, struct pb_slab_entry *entry)
  * some no longer used memory. However, calling this function is not strictly
  * required since pb_slab_alloc will eventually do the same thing.
  */
-void
+unsigned
 pb_slabs_reclaim(struct pb_slabs *slabs)
 {
-   mtx_lock(&slabs->mutex);
-   pb_slabs_reclaim_locked(slabs);
-   mtx_unlock(&slabs->mutex);
+   unsigned num_reclaims;
+   simple_mtx_lock(&slabs->mutex);
+   num_reclaims = pb_slabs_reclaim_locked(slabs);
+   simple_mtx_unlock(&slabs->mutex);
+   return num_reclaims;
 }
 
 /* Initialize the slabs manager.
@@ -191,7 +241,7 @@ pb_slabs_reclaim(struct pb_slabs *slabs)
 bool
 pb_slabs_init(struct pb_slabs *slabs,
               unsigned min_order, unsigned max_order,
-              unsigned num_heaps,
+              unsigned num_heaps, bool allow_three_fourth_allocations,
               void *priv,
               slab_can_reclaim_fn *can_reclaim,
               slab_alloc_fn *slab_alloc,
@@ -206,6 +256,7 @@ pb_slabs_init(struct pb_slabs *slabs,
    slabs->min_order = min_order;
    slabs->num_orders = max_order - min_order + 1;
    slabs->num_heaps = num_heaps;
+   slabs->allow_three_fourths_allocations = allow_three_fourth_allocations;
 
    slabs->priv = priv;
    slabs->can_reclaim = can_reclaim;
@@ -214,7 +265,8 @@ pb_slabs_init(struct pb_slabs *slabs,
 
    list_inithead(&slabs->reclaim);
 
-   num_groups = slabs->num_orders * slabs->num_heaps;
+   num_groups = slabs->num_orders * slabs->num_heaps *
+                (1 + allow_three_fourth_allocations);
    slabs->groups = CALLOC(num_groups, sizeof(*slabs->groups));
    if (!slabs->groups)
       return false;
@@ -224,7 +276,7 @@ pb_slabs_init(struct pb_slabs *slabs,
       list_inithead(&group->slabs);
    }
 
-   (void) mtx_init(&slabs->mutex, mtx_plain);
+   (void) simple_mtx_init(&slabs->mutex, mtx_plain);
 
    return true;
 }
@@ -243,10 +295,10 @@ pb_slabs_deinit(struct pb_slabs *slabs)
     */
    while (!list_is_empty(&slabs->reclaim)) {
       struct pb_slab_entry *entry =
-         LIST_ENTRY(struct pb_slab_entry, slabs->reclaim.next, head);
+         list_entry(slabs->reclaim.next, struct pb_slab_entry, head);
       pb_slab_reclaim(slabs, entry);
    }
 
    FREE(slabs->groups);
-   mtx_destroy(&slabs->mutex);
+   simple_mtx_destroy(&slabs->mutex);
 }

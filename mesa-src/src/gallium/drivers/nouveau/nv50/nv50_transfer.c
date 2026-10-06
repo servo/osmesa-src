@@ -51,6 +51,115 @@ nv50_m2mf_rect_setup(struct nv50_m2mf_rect *rect,
    }
 }
 
+/* This is very similar to nv50_2d_texture_do_copy, but doesn't require
+ * miptree objects. Maybe refactor? Although it's not straightforward.
+ */
+static void
+nv50_2d_transfer_rect(struct nv50_context *nv50,
+                      const struct nv50_m2mf_rect *dst,
+                      const struct nv50_m2mf_rect *src,
+                      uint32_t nblocksx, uint32_t nblocksy)
+{
+   struct nouveau_pushbuf *push = nv50->base.pushbuf;
+   struct nouveau_bufctx *bctx = nv50->bufctx;
+   const int cpp = dst->cpp;
+
+   nouveau_bufctx_refn(bctx, 0, src->bo, src->domain | NOUVEAU_BO_RD);
+   nouveau_bufctx_refn(bctx, 0, dst->bo, dst->domain | NOUVEAU_BO_WR);
+   nouveau_pushbuf_bufctx(push, bctx);
+   PUSH_VAL(push);
+
+   uint32_t format;
+   switch (cpp) {
+   case 1:
+      format = G80_SURFACE_FORMAT_R8_UNORM;
+      break;
+   case 2:
+      format = G80_SURFACE_FORMAT_R16_UNORM;
+      break;
+   case 4:
+      format = G80_SURFACE_FORMAT_BGRA8_UNORM;
+      break;
+   case 8:
+      format = G80_SURFACE_FORMAT_RGBA16_FLOAT;
+      break;
+   case 16:
+      format = G80_SURFACE_FORMAT_RGBA32_FLOAT;
+      break;
+   default:
+      assert(!"Unexpected cpp");
+      format = G80_SURFACE_FORMAT_R8_UNORM;
+   }
+
+   if (nouveau_bo_memtype(src->bo)) {
+      BEGIN_NV04(push, NV50_2D(SRC_FORMAT), 5);
+      PUSH_DATA (push, format);
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, src->tile_mode);
+      PUSH_DATA (push, src->depth);
+      PUSH_DATA (push, src->z);
+      BEGIN_NV04(push, NV50_2D(SRC_WIDTH), 4);
+      PUSH_DATA (push, src->width);
+      PUSH_DATA (push, src->height);
+      PUSH_DATAh(push, src->bo->offset + src->base);
+      PUSH_DATA (push, src->bo->offset + src->base);
+   } else {
+      BEGIN_NV04(push, NV50_2D(SRC_FORMAT), 2);
+      PUSH_DATA (push, format);
+      PUSH_DATA (push, 1);
+      BEGIN_NV04(push, NV50_2D(SRC_PITCH), 5);
+      PUSH_DATA (push, src->pitch);
+      PUSH_DATA (push, src->width);
+      PUSH_DATA (push, src->height);
+      PUSH_DATAh(push, src->bo->offset + src->base);
+      PUSH_DATA (push, src->bo->offset + src->base);
+   }
+
+   if (nouveau_bo_memtype(dst->bo)) {
+      BEGIN_NV04(push, NV50_2D(DST_FORMAT), 5);
+      PUSH_DATA (push, format);
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, dst->tile_mode);
+      PUSH_DATA (push, dst->depth);
+      PUSH_DATA (push, dst->z);
+      BEGIN_NV04(push, NV50_2D(DST_WIDTH), 4);
+      PUSH_DATA (push, dst->width);
+      PUSH_DATA (push, dst->height);
+      PUSH_DATAh(push, dst->bo->offset + dst->base);
+      PUSH_DATA (push, dst->bo->offset + dst->base);
+   } else {
+      BEGIN_NV04(push, NV50_2D(DST_FORMAT), 2);
+      PUSH_DATA (push, format);
+      PUSH_DATA (push, 1);
+      BEGIN_NV04(push, NV50_2D(DST_PITCH), 5);
+      PUSH_DATA (push, dst->pitch);
+      PUSH_DATA (push, dst->width);
+      PUSH_DATA (push, dst->height);
+      PUSH_DATAh(push, dst->bo->offset + dst->base);
+      PUSH_DATA (push, dst->bo->offset + dst->base);
+   }
+
+   BEGIN_NV04(push, NV50_2D(BLIT_CONTROL), 1);
+   PUSH_DATA (push, NV50_2D_BLIT_CONTROL_FILTER_POINT_SAMPLE);
+   BEGIN_NV04(push, NV50_2D(BLIT_DST_X), 4);
+   PUSH_DATA (push, dst->x);
+   PUSH_DATA (push, dst->y);
+   PUSH_DATA (push, nblocksx);
+   PUSH_DATA (push, nblocksy);
+   BEGIN_NV04(push, NV50_2D(BLIT_DU_DX_FRACT), 4);
+   PUSH_DATA (push, 0);
+   PUSH_DATA (push, 1);
+   PUSH_DATA (push, 0);
+   PUSH_DATA (push, 1);
+   BEGIN_NV04(push, NV50_2D(BLIT_SRC_X_FRACT), 4);
+   PUSH_DATA (push, 0);
+   PUSH_DATA (push, src->x);
+   PUSH_DATA (push, 0);
+   PUSH_DATA (push, src->y);
+
+   nouveau_bufctx_reset(bctx, 0);
+}
+
 void
 nv50_m2mf_transfer_rect(struct nv50_context *nv50,
                         const struct nv50_m2mf_rect *dst,
@@ -68,10 +177,27 @@ nv50_m2mf_transfer_rect(struct nv50_context *nv50,
 
    assert(dst->cpp == src->cpp);
 
+   /* Workaround: M2MF appears to break at the 64k boundary for tiled
+    * textures, which can really only happen with RGBA32 formats.
+    */
+   bool eng2d = false;
+   if (nouveau_bo_memtype(src->bo)) {
+      if (src->width * cpp > 65536)
+         eng2d = true;
+   }
+   if (nouveau_bo_memtype(dst->bo)) {
+      if (dst->width * cpp > 65536)
+         eng2d = true;
+   }
+   if (eng2d) {
+      nv50_2d_transfer_rect(nv50, dst, src, nblocksx, nblocksy);
+      return;
+   }
+
    nouveau_bufctx_refn(bctx, 0, src->bo, src->domain | NOUVEAU_BO_RD);
    nouveau_bufctx_refn(bctx, 0, dst->bo, dst->domain | NOUVEAU_BO_WR);
    nouveau_pushbuf_bufctx(push, bctx);
-   nouveau_pushbuf_validate(push);
+   PUSH_VAL(push);
 
    if (nouveau_bo_memtype(src->bo)) {
       BEGIN_NV04(push, NV50_M2MF(LINEAR_IN), 6);
@@ -153,47 +279,56 @@ nv50_sifc_linear_u8(struct nouveau_context *nv,
    struct nv50_context *nv50 = nv50_context(&nv->pipe);
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
    uint32_t *src = (uint32_t *)data;
-   unsigned count = (size + 3) / 4;
-   unsigned xcoord = offset & 0xff;
+   unsigned count = DIV_ROUND_UP(size, 4);
+   unsigned max_size = 0x8000;
 
    nouveau_bufctx_refn(nv50->bufctx, 0, dst, domain | NOUVEAU_BO_WR);
    nouveau_pushbuf_bufctx(push, nv50->bufctx);
-   nouveau_pushbuf_validate(push);
 
-   offset &= ~0xff;
-
-   BEGIN_NV04(push, NV50_2D(DST_FORMAT), 2);
-   PUSH_DATA (push, G80_SURFACE_FORMAT_R8_UNORM);
-   PUSH_DATA (push, 1);
-   BEGIN_NV04(push, NV50_2D(DST_PITCH), 5);
-   PUSH_DATA (push, 262144);
-   PUSH_DATA (push, 65536);
-   PUSH_DATA (push, 1);
-   PUSH_DATAh(push, dst->offset + offset);
-   PUSH_DATA (push, dst->offset + offset);
-   BEGIN_NV04(push, NV50_2D(SIFC_BITMAP_ENABLE), 2);
-   PUSH_DATA (push, 0);
-   PUSH_DATA (push, G80_SURFACE_FORMAT_R8_UNORM);
-   BEGIN_NV04(push, NV50_2D(SIFC_WIDTH), 10);
-   PUSH_DATA (push, size);
-   PUSH_DATA (push, 1);
-   PUSH_DATA (push, 0);
-   PUSH_DATA (push, 1);
-   PUSH_DATA (push, 0);
-   PUSH_DATA (push, 1);
-   PUSH_DATA (push, 0);
-   PUSH_DATA (push, xcoord);
-   PUSH_DATA (push, 0);
-   PUSH_DATA (push, 0);
+   PUSH_VAL(push);
 
    while (count) {
-      unsigned nr = MIN2(count, NV04_PFIFO_MAX_PACKET_LEN);
+      unsigned xcoord = offset & 0xff;
+      offset &= ~0xff;
 
-      BEGIN_NI04(push, NV50_2D(SIFC_DATA), nr);
-      PUSH_DATAp(push, src, nr);
+      BEGIN_NV04(push, NV50_2D(DST_FORMAT), 2);
+      PUSH_DATA (push, G80_SURFACE_FORMAT_R8_UNORM);
+      PUSH_DATA (push, 1);
+      BEGIN_NV04(push, NV50_2D(DST_PITCH), 5);
+      PUSH_DATA (push, 262144);
+      PUSH_DATA (push, 65536);
+      PUSH_DATA (push, 1);
+      PUSH_DATAh(push, dst->offset + offset);
+      PUSH_DATA (push, dst->offset + offset);
+      BEGIN_NV04(push, NV50_2D(SIFC_BITMAP_ENABLE), 2);
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, G80_SURFACE_FORMAT_R8_UNORM);
+      BEGIN_NV04(push, NV50_2D(SIFC_WIDTH), 10);
+      PUSH_DATA (push, MIN2(size, max_size));
+      PUSH_DATA (push, 1);
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, 1);
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, 1);
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, xcoord);
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, 0);
 
-      src += nr;
-      count -= nr;
+      unsigned iter_count = MIN2(count, max_size / 4);
+      count -= iter_count;
+      offset += max_size;
+      size -= max_size;
+
+      while (iter_count) {
+         unsigned nr = MIN2(iter_count, NV04_PFIFO_MAX_PACKET_LEN);
+
+         BEGIN_NI04(push, NV50_2D(SIFC_DATA), nr);
+         PUSH_DATAp(push, src, nr);
+
+         src += nr;
+         iter_count -= nr;
+      }
    }
 
    nouveau_bufctx_reset(nv50->bufctx, 0);
@@ -211,7 +346,7 @@ nv50_m2mf_copy_linear(struct nouveau_context *nv,
    nouveau_bufctx_refn(bctx, 0, src, srcdom | NOUVEAU_BO_RD);
    nouveau_bufctx_refn(bctx, 0, dst, dstdom | NOUVEAU_BO_WR);
    nouveau_pushbuf_bufctx(push, bctx);
-   nouveau_pushbuf_validate(push);
+   PUSH_VAL(push);
 
    BEGIN_NV04(push, NV50_M2MF(LINEAR_IN), 1);
    PUSH_DATA (push, 1);
@@ -249,7 +384,6 @@ nv50_miptree_transfer_map(struct pipe_context *pctx,
                           const struct pipe_box *box,
                           struct pipe_transfer **ptransfer)
 {
-   struct nv50_screen *screen = nv50_screen(pctx->screen);
    struct nv50_context *nv50 = nv50_context(pctx);
    struct nouveau_device *dev = nv50->screen->base.device;
    const struct nv50_miptree *mt = nv50_miptree(res);
@@ -258,7 +392,7 @@ nv50_miptree_transfer_map(struct pipe_context *pctx,
    int ret;
    unsigned flags = 0;
 
-   if (usage & PIPE_TRANSFER_MAP_DIRECTLY)
+   if (usage & PIPE_MAP_DIRECTLY)
       return NULL;
 
    tx = CALLOC_STRUCT(nv50_transfer);
@@ -300,7 +434,7 @@ nv50_miptree_transfer_map(struct pipe_context *pctx,
    tx->rect[1].pitch = tx->base.stride;
    tx->rect[1].domain = NOUVEAU_BO_GART;
 
-   if (usage & PIPE_TRANSFER_READ) {
+   if (usage & PIPE_MAP_READ) {
       unsigned base = tx->rect[0].base;
       unsigned z = tx->rect[0].z;
       unsigned i;
@@ -323,12 +457,12 @@ nv50_miptree_transfer_map(struct pipe_context *pctx,
       return tx->rect[1].bo->map;
    }
 
-   if (usage & PIPE_TRANSFER_READ)
+   if (usage & PIPE_MAP_READ)
       flags = NOUVEAU_BO_RD;
-   if (usage & PIPE_TRANSFER_WRITE)
+   if (usage & PIPE_MAP_WRITE)
       flags |= NOUVEAU_BO_WR;
 
-   ret = nouveau_bo_map(tx->rect[1].bo, flags, screen->base.client);
+   ret = BO_MAP(nv50->base.screen, tx->rect[1].bo, flags, nv50->base.client);
    if (ret) {
       nouveau_bo_ref(NULL, &tx->rect[1].bo);
       FREE(tx);
@@ -348,7 +482,7 @@ nv50_miptree_transfer_unmap(struct pipe_context *pctx,
    struct nv50_miptree *mt = nv50_miptree(tx->base.resource);
    unsigned i;
 
-   if (tx->base.usage & PIPE_TRANSFER_WRITE) {
+   if (tx->base.usage & PIPE_MAP_WRITE) {
       for (i = 0; i < tx->base.box.depth; ++i) {
          nv50_m2mf_transfer_rect(nv50, &tx->rect[0], &tx->rect[1],
                                  tx->nblocksx, tx->nblocksy);
@@ -360,7 +494,7 @@ nv50_miptree_transfer_unmap(struct pipe_context *pctx,
       }
 
       /* Allow the copies above to finish executing before freeing the source */
-      nouveau_fence_work(nv50->screen->base.fence.current,
+      nouveau_fence_work(nv50->base.fence,
                          nouveau_fence_unref_bo, tx->rect[1].bo);
    } else {
       nouveau_bo_ref(NULL, &tx->rect[1].bo);
@@ -386,7 +520,7 @@ nv50_cb_bo_push(struct nouveau_context *nv,
       unsigned nr = MIN2(words, NV04_PFIFO_MAX_PACKET_LEN);
 
       PUSH_SPACE(push, nr + 3);
-      PUSH_REFN (push, bo, NOUVEAU_BO_WR | domain);
+      PUSH_REF1 (push, bo, NOUVEAU_BO_WR | domain);
       BEGIN_NV04(push, NV50_3D(CB_ADDR), 1);
       PUSH_DATA (push, (offset << 6) | bufid);
       BEGIN_NI04(push, NV50_3D(CB_DATA(0)), nr);
@@ -409,8 +543,7 @@ nv50_cb_push(struct nouveau_context *nv,
    /* Go through all the constbuf binding points of this buffer and try to
     * find one which contains the region to be updated.
     */
-   /* XXX compute? */
-   for (s = 0; s < 3 && !cb; s++) {
+   for (s = 0; s < NV50_MAX_SHADER_STAGES && !cb; s++) {
       uint16_t bindings = res->cb_bindings[s];
       while (bindings) {
          int i = ffs(bindings) - 1;

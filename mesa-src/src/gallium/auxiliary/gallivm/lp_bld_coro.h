@@ -27,8 +27,13 @@
 #define LP_BLD_CORO_H
 
 #include <stdbool.h>
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "gallivm/lp_bld.h"
+#include "gallivm/lp_bld_intr.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 struct gallivm_state;
 LLVMValueRef lp_build_coro_id(struct gallivm_state *gallivm);
@@ -55,6 +60,10 @@ LLVMValueRef lp_build_coro_suspend(struct gallivm_state *gallivm, bool last);
 LLVMValueRef lp_build_coro_alloc(struct gallivm_state *gallivm, LLVMValueRef id);
 
 LLVMValueRef lp_build_coro_begin_alloc_mem(struct gallivm_state *gallivm, LLVMValueRef coro_id);
+
+LLVMValueRef lp_build_coro_alloc_mem_array(struct gallivm_state *gallivm,
+					   LLVMValueRef coro_hdl_ptr, LLVMValueRef coro_idx,
+					   LLVMValueRef coro_num_hdls);
 void lp_build_coro_free_mem(struct gallivm_state *gallivm, LLVMValueRef coro_id, LLVMValueRef coro_hdl);
 
 struct lp_build_coro_suspend_info {
@@ -69,4 +78,18 @@ void lp_build_coro_suspend_switch(struct gallivm_state *gallivm,
 
 void lp_build_coro_add_malloc_hooks(struct gallivm_state *gallivm);
 void lp_build_coro_declare_malloc_hooks(struct gallivm_state *gallivm);
+
+static inline void lp_build_coro_add_presplit(LLVMValueRef coro)
+{
+#if LLVM_VERSION_MAJOR >= 15
+   lp_add_function_attr(coro, -1, LP_FUNC_ATTR_PRESPLITCORO);
+#else
+   LLVMAddTargetDependentFunctionAttr(coro, "coroutine.presplit", "0");
+#endif
+}
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

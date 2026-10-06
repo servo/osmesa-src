@@ -27,21 +27,23 @@
 /// executable code as an ELF object file.
 ///
 
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Transforms/Utils/Cloning.h>
+
 #include "llvm/codegen.hpp"
 #include "llvm/compat.hpp"
 #include "llvm/util.hpp"
 #include "core/error.hpp"
 
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/Support/TargetRegistry.h>
-#include <llvm/Transforms/Utils/Cloning.h>
+using clover::binary;
+using clover::build_error;
+using namespace clover::llvm;
+using ::llvm::TargetMachine;
+
+#if defined(USE_LIBELF)
 
 #include <libelf.h>
 #include <gelf.h>
-
-using namespace clover;
-using namespace clover::llvm;
-using ::llvm::TargetMachine;
 
 namespace {
    namespace elf {
@@ -114,8 +116,16 @@ namespace {
 
       std::unique_ptr<TargetMachine> tm {
          t->createTargetMachine(target.triple, target.cpu, "", {},
-                                ::llvm::None, compat::default_code_model,
+#if LLVM_VERSION_MAJOR >= 16
+                                std::nullopt, std::nullopt,
+#else
+                                ::llvm::None, ::llvm::None,
+#endif
+#if LLVM_VERSION_MAJOR >= 18
+                                ::llvm::CodeGenOptLevel::Default) };
+#else
                                 ::llvm::CodeGenOpt::Default) };
+#endif
       if (!tm)
          fail(r_log, build_error(),
               "Could not create TargetMachine: " + target.triple);
@@ -130,7 +140,7 @@ namespace {
          tm->Options.MCOptions.AsmVerbose =
             (ft == compat::CGFT_AssemblyFile);
 
-         if (compat::add_passes_to_emit_file(*tm, pm, os, ft))
+         if (tm->addPassesToEmitFile(pm, os, nullptr, ft))
             fail(r_log, build_error(), "TargetMachine can't emit this file");
 
          pm.run(mod);
@@ -140,7 +150,7 @@ namespace {
    }
 }
 
-module
+binary
 clover::llvm::build_module_native(::llvm::Module &mod, const target &target,
                                   const clang::CompilerInstance &c,
                                   std::string &r_log) {
@@ -154,10 +164,27 @@ clover::llvm::print_module_native(const ::llvm::Module &mod,
                                   const target &target) {
    std::string log;
    try {
-      std::unique_ptr< ::llvm::Module> cmod { compat::clone_module(mod) };
+      std::unique_ptr< ::llvm::Module> cmod { ::llvm::CloneModule(mod) };
       return as_string(emit_code(*cmod, target,
                                  compat::CGFT_AssemblyFile, log));
    } catch (...) {
       return "Couldn't output native disassembly: " + log;
    }
 }
+
+#else
+
+binary
+clover::llvm::build_module_native(::llvm::Module &mod, const target &target,
+                                  const clang::CompilerInstance &c,
+                                  std::string &r_log) {
+   unreachable("Native codegen support disabled at build time");
+}
+
+std::string
+clover::llvm::print_module_native(const ::llvm::Module &mod,
+                                  const target &target) {
+   unreachable("Native codegen support disabled at build time");
+}
+
+#endif

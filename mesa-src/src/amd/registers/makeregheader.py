@@ -1,28 +1,8 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
 COPYRIGHT = '''
 /*
  * Copyright 2015-2019 Advanced Micro Devices, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
+ * SPDX-License-Identifier: MIT
  */
 '''
 """
@@ -46,10 +26,14 @@ CHIPS = [
     Object(name='gfx6', disambiguation='GFX6'),
     Object(name='gfx7', disambiguation='GFX7'),
     Object(name='gfx8', disambiguation='GFX8'),
-    Object(name='fiji', disambiguation='GFX8'),
-    Object(name='stoney', disambiguation='GFX8'),
+    Object(name='gfx81', disambiguation='GFX81'),
     Object(name='gfx9', disambiguation='GFX9'),
+    Object(name='gfx940', disambiguation='GFX940'),
     Object(name='gfx10', disambiguation='GFX10'),
+    Object(name='gfx103', disambiguation='GFX103'),
+    Object(name='gfx11', disambiguation='GFX11'),
+    Object(name='gfx115', disambiguation='GFX115'),
+    Object(name='gfx12', disambiguation='GFX12'),
 ]
 
 ######### END HARDCODED CONFIGURATION
@@ -112,6 +96,23 @@ def get_chips_comment(chips, parent=None):
 
     return ', '.join(comment)
 
+def detect_conflict(regdb, field_in_type1, field_in_type2):
+    """
+    Returns False if field_in_type1 and field_in_type2 can be merged
+    into a single field = if writing to field_in_type1 bits won't
+    overwrite adjacent fields in type2, and the other way around.
+    """
+    for idx, type_refs in enumerate([field_in_type1.type_refs, field_in_type2.type_refs]):
+        ref = field_in_type2 if idx == 0 else field_in_type1
+        for type_ref in type_refs:
+            for field in regdb.register_type(type_ref).fields:
+                # If a different field in the other type starts in
+                # the tested field's bits[0, 1] interval
+                if (field.bits[0] > ref.bits[0] and
+                    field.bits[0] <= ref.bits[1]):
+                    return True
+
+    return False
 
 class HeaderWriter(object):
     def __init__(self, regdb, guard=None):
@@ -200,21 +201,10 @@ class HeaderWriter(object):
                 if prev.bits[0] != line.bits[0]:
                     continue
 
-                if prev.bits[1] < line.bits[1]:
+                if prev.bits[1] != line.bits[1]:
                     # Current line's field extends beyond the range of prev.
                     # Need to check for conflicts
-                    conflict = False
-                    for type_ref in prev.type_refs:
-                        for field in regdb.register_type(type_ref).fields:
-                            # The only possible conflict is for a prev field
-                            # that starts at a higher bit.
-                            if (field.bits[0] > line.bits[0] and
-                                field.bits[0] <= line.bits[1]):
-                                conflict = True
-                                break
-                        if conflict:
-                            break
-                    if conflict:
+                    if detect_conflict(regdb, prev, line):
                         continue
 
                 prev.bits[1] = max(prev.bits[1], line.bits[1])

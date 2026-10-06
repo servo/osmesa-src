@@ -35,9 +35,9 @@
 #include "pipe/p_defines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-#include "util/u_pstipple.h"
 #include "util/u_inlines.h"
 #include "util/u_upload_mgr.h"
+#include "util/u_debug_cb.h"
 #include "tgsi/tgsi_exec.h"
 #include "sp_buffer.h"
 #include "sp_clear.h"
@@ -54,19 +54,13 @@
 #include "sp_tex_sample.h"
 #include "sp_image.h"
 
+#include "nir.h"
+
 static void
 softpipe_destroy( struct pipe_context *pipe )
 {
    struct softpipe_context *softpipe = softpipe_context( pipe );
    uint i, sh;
-
-#if DO_PSTIPPLE_IN_HELPER_MODULE
-   if (softpipe->pstipple.sampler)
-      pipe->delete_sampler_state(pipe, softpipe->pstipple.sampler);
-
-   pipe_resource_reference(&softpipe->pstipple.texture, NULL);
-   pipe_sampler_view_reference(&softpipe->pstipple.sampler_view, NULL);
-#endif
 
    if (softpipe->blitter) {
       util_blitter_destroy(softpipe->blitter);
@@ -84,19 +78,15 @@ softpipe_destroy( struct pipe_context *pipe )
    if (softpipe->quad.blend)
       softpipe->quad.blend->destroy( softpipe->quad.blend );
 
-   if (softpipe->quad.pstipple)
-      softpipe->quad.pstipple->destroy( softpipe->quad.pstipple );
-
    if (softpipe->pipe.stream_uploader)
       u_upload_destroy(softpipe->pipe.stream_uploader);
 
    for (i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
       sp_destroy_tile_cache(softpipe->cbuf_cache[i]);
-      pipe_surface_reference(&softpipe->framebuffer.cbufs[i], NULL);
    }
 
    sp_destroy_tile_cache(softpipe->zsbuf_cache);
-   pipe_surface_reference(&softpipe->framebuffer.zsbuf, NULL);
+   util_unreference_framebuffer_state(&softpipe->framebuffer);
 
    for (sh = 0; sh < ARRAY_SIZE(softpipe->tex_cache); sh++) {
       for (i = 0; i < ARRAY_SIZE(softpipe->tex_cache[0]); i++) {
@@ -191,19 +181,6 @@ softpipe_render_condition(struct pipe_context *pipe,
 }
 
 
-static void
-softpipe_set_debug_callback(struct pipe_context *pipe,
-                            const struct pipe_debug_callback *cb)
-{
-   struct softpipe_context *softpipe = softpipe_context(pipe);
-
-   if (cb)
-      softpipe->debug = *cb;
-   else
-      memset(&softpipe->debug, 0, sizeof(softpipe->debug));
-}
-
-
 struct pipe_context *
 softpipe_create_context(struct pipe_screen *screen,
 			void *priv, unsigned flags)
@@ -243,7 +220,7 @@ softpipe_create_context(struct pipe_screen *screen,
    softpipe_init_image_funcs(&softpipe->pipe);
 
    softpipe->pipe.set_framebuffer_state = softpipe_set_framebuffer_state;
-   softpipe->pipe.set_debug_callback = softpipe_set_debug_callback;
+   softpipe->pipe.set_debug_callback = u_default_set_debug_callback;
 
    softpipe->pipe.draw_vbo = softpipe_draw_vbo;
 
@@ -278,7 +255,6 @@ softpipe_create_context(struct pipe_screen *screen,
    softpipe->quad.shade = sp_quad_shade_stage(softpipe);
    softpipe->quad.depth_test = sp_quad_depth_test_stage(softpipe);
    softpipe->quad.blend = sp_quad_blend_stage(softpipe);
-   softpipe->quad.pstipple = sp_quad_polygon_stipple_stage(softpipe);
 
    softpipe->pipe.stream_uploader = u_upload_create_default(&softpipe->pipe);
    if (!softpipe->pipe.stream_uploader)
@@ -346,21 +322,14 @@ softpipe_create_context(struct pipe_screen *screen,
 
    /* plug in AA line/point stages */
    draw_install_aaline_stage(softpipe->draw, &softpipe->pipe);
-   draw_install_aapoint_stage(softpipe->draw, &softpipe->pipe);
+   draw_install_aapoint_stage(softpipe->draw, &softpipe->pipe, nir_type_bool32);
 
-   /* Do polygon stipple w/ texture map + frag prog? */
-#if DO_PSTIPPLE_IN_DRAW_MODULE
+   /* Do polygon stipple w/ texture map + frag prog. */
    draw_install_pstipple_stage(softpipe->draw, &softpipe->pipe);
-#endif
 
-   draw_wide_point_sprites(softpipe->draw, TRUE);
+   draw_wide_point_sprites(softpipe->draw, true);
 
    sp_init_surface_functions(softpipe);
-
-#if DO_PSTIPPLE_IN_HELPER_MODULE
-   /* create the polgon stipple sampler */
-   softpipe->pstipple.sampler = util_pstipple_create_sampler(&softpipe->pipe);
-#endif
 
    return &softpipe->pipe;
 

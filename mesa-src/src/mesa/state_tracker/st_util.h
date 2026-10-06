@@ -36,6 +36,7 @@
 
 
 #include "state_tracker/st_context.h"
+#include "main/context.h"
 
 
 #ifdef __cplusplus
@@ -64,40 +65,11 @@ st_invalidate_readpix_cache(struct st_context *st)
    }
 }
 
-
-#define Y_0_TOP 1
-#define Y_0_BOTTOM 2
-
-static inline GLuint
-st_fb_orientation(const struct gl_framebuffer *fb)
-{
-   if (fb && fb->FlipY) {
-      /* Drawing into a window (on-screen buffer).
-       *
-       * Negate Y scale to flip image vertically.
-       * The NDC Y coords prior to viewport transformation are in the range
-       * [y=-1=bottom, y=1=top]
-       * Hardware window coords are in the range [y=0=top, y=H-1=bottom] where
-       * H is the window height.
-       * Use the viewport transformation to invert Y.
-       */
-      return Y_0_TOP;
-   }
-   else {
-      /* Drawing into user-created FBO (very likely a texture).
-       *
-       * For textures, T=0=Bottom, so by extension Y=0=Bottom for rendering.
-       */
-      return Y_0_BOTTOM;
-   }
-}
-
-
 static inline bool
 st_user_clip_planes_enabled(struct gl_context *ctx)
 {
-   return (ctx->API == API_OPENGL_COMPAT ||
-           ctx->API == API_OPENGLES) && /* only ES 1.x */
+   return (_mesa_is_desktop_gl_compat(ctx) ||
+           _mesa_is_gles1(ctx)) && /* only ES 1.x */
           ctx->Transform.ClipPlanesEnabled;
 }
 
@@ -135,9 +107,40 @@ st_point_size_per_vertex(struct gl_context *ctx)
    return false;
 }
 
-/** clear-alloc a struct-sized object, with casting */
-#define ST_CALLOC_STRUCT(T)   (struct T *) calloc(1, sizeof(struct T))
+static inline void
+st_validate_state(struct st_context *st, uint64_t pipeline_state_mask)
+{
+   struct gl_context *ctx = st->ctx;
 
+   /* Inactive states are shader states not used by shaders at the moment. */
+   uint64_t dirty = ctx->NewDriverState & st->active_states & pipeline_state_mask;
+
+   if (dirty) {
+      ctx->NewDriverState &= ~dirty;
+
+      /* Execute functions that set states that have been changed since
+       * the last draw.
+       *
+       * x86_64: u_bit_scan64 is negligibly faster than u_bit_scan
+       * i386:   u_bit_scan64 is noticably slower than u_bit_scan
+       */
+      st_update_func_t *update_state = st->update_functions;
+
+      if (sizeof(void*) == 8) {
+         while (dirty)
+            update_state[u_bit_scan64(&dirty)](st);
+      } else {
+         /* Split u_bit_scan64 into 2x u_bit_scan32 for i386. */
+         uint32_t dirty_lo = dirty;
+         uint32_t dirty_hi = dirty >> 32;
+
+         while (dirty_lo)
+            update_state[u_bit_scan(&dirty_lo)](st);
+         while (dirty_hi)
+            update_state[32 + u_bit_scan(&dirty_hi)](st);
+      }
+   }
+}
 
 #ifdef __cplusplus
 }

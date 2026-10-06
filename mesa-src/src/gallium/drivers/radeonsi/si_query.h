@@ -1,31 +1,15 @@
 /*
  * Copyright 2015 Advanced Micro Devices, Inc.
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #ifndef SI_QUERY_H
 #define SI_QUERY_H
 
 #include "util/u_threaded_context.h"
+
+#include "ac_perfcounter.h"
 
 struct pipe_context;
 struct pipe_query;
@@ -44,12 +28,7 @@ enum
 {
    SI_QUERY_DRAW_CALLS = PIPE_QUERY_DRIVER_SPECIFIC,
    SI_QUERY_DECOMPRESS_CALLS,
-   SI_QUERY_MRT_DRAW_CALLS,
-   SI_QUERY_PRIM_RESTART_CALLS,
-   SI_QUERY_SPILL_DRAW_CALLS,
    SI_QUERY_COMPUTE_CALLS,
-   SI_QUERY_SPILL_COMPUTE_CALLS,
-   SI_QUERY_DMA_CALLS,
    SI_QUERY_CP_DMA_CALLS,
    SI_QUERY_NUM_VS_FLUSHES,
    SI_QUERY_NUM_PS_FLUSHES,
@@ -68,10 +47,11 @@ enum
    SI_QUERY_REQUESTED_GTT,
    SI_QUERY_MAPPED_VRAM,
    SI_QUERY_MAPPED_GTT,
+   SI_QUERY_SLAB_WASTED_VRAM,
+   SI_QUERY_SLAB_WASTED_GTT,
    SI_QUERY_BUFFER_WAIT_TIME,
    SI_QUERY_NUM_MAPPED_BUFFERS,
    SI_QUERY_NUM_GFX_IBS,
-   SI_QUERY_NUM_SDMA_IBS,
    SI_QUERY_GFX_BO_LIST_SIZE,
    SI_QUERY_GFX_IB_SIZE,
    SI_QUERY_NUM_BYTES_MOVED,
@@ -112,11 +92,6 @@ enum
    SI_QUERY_GPIN_NUM_RB,
    SI_QUERY_GPIN_NUM_SPI,
    SI_QUERY_GPIN_NUM_SE,
-   SI_QUERY_TIME_ELAPSED_SDMA,
-   SI_QUERY_TIME_ELAPSED_SDMA_SI, /* emulated, measured on the CPU */
-   SI_QUERY_PD_NUM_PRIMS_ACCEPTED,
-   SI_QUERY_PD_NUM_PRIMS_REJECTED,
-   SI_QUERY_PD_NUM_PRIMS_INELIGIBLE,
    SI_QUERY_LIVE_SHADER_CACHE_HITS,
    SI_QUERY_LIVE_SHADER_CACHE_MISSES,
    SI_QUERY_MEMORY_SHADER_CACHE_HITS,
@@ -139,7 +114,8 @@ struct si_query_ops {
    bool (*end)(struct si_context *, struct si_query *);
    bool (*get_result)(struct si_context *, struct si_query *, bool wait,
                       union pipe_query_result *result);
-   void (*get_result_resource)(struct si_context *, struct si_query *, bool wait,
+   void (*get_result_resource)(struct si_context *, struct si_query *,
+                               enum pipe_query_flags flags,
                                enum pipe_query_value_type result_type, int index,
                                struct pipe_resource *resource, unsigned offset);
 
@@ -167,17 +143,10 @@ enum
    /* gap */
    /* whether begin_query doesn't clear the result */
    SI_QUERY_HW_FLAG_BEGIN_RESUMES = (1 << 2),
-};
-
-struct si_query_hw_ops {
-   bool (*prepare_buffer)(struct si_context *, struct si_query_buffer *);
-   void (*emit_start)(struct si_context *, struct si_query_hw *, struct si_resource *buffer,
-                      uint64_t va);
-   void (*emit_stop)(struct si_context *, struct si_query_hw *, struct si_resource *buffer,
-                     uint64_t va);
-   void (*clear_result)(struct si_query_hw *, union pipe_query_result *);
-   void (*add_result)(struct si_screen *screen, struct si_query_hw *, void *buffer,
-                      union pipe_query_result *result);
+   /* whether GS invocations and emitted primitives counters are emulated
+    * using atomic adds.
+    */
+   SI_QUERY_EMULATE_GS_COUNTERS = (1 << 3),
 };
 
 struct si_query_buffer {
@@ -189,7 +158,6 @@ struct si_query_buffer {
    struct si_query_buffer *previous;
    /* Offset of the next free result after current query data */
    unsigned results_end;
-   bool unprepared;
 };
 
 void si_query_buffer_destroy(struct si_screen *sctx, struct si_query_buffer *buffer);
@@ -200,7 +168,6 @@ bool si_query_buffer_alloc(struct si_context *sctx, struct si_query_buffer *buff
 
 struct si_query_hw {
    struct si_query b;
-   struct si_query_hw_ops *ops;
    unsigned flags;
 
    /* The query buffer and how many results are in it. */
@@ -208,37 +175,78 @@ struct si_query_hw {
    /* Size of the result in memory for both begin_query and end_query,
     * this can be one or two numbers, or it could even be a size of a structure. */
    unsigned result_size;
-   /* For transform feedback: which stream the query is for */
-   unsigned stream;
+   union {
+      /* For transform feedback: which stream the query is for */
+      unsigned stream;
+      /* For pipeline stats: which counter is active */
+      unsigned index;
+   };
 
    /* Workaround via compute shader */
    struct si_resource *workaround_buf;
    unsigned workaround_offset;
 };
 
-void si_query_hw_destroy(struct si_context *sctx, struct si_query *squery);
-bool si_query_hw_begin(struct si_context *sctx, struct si_query *squery);
-bool si_query_hw_end(struct si_context *sctx, struct si_query *squery);
-bool si_query_hw_get_result(struct si_context *sctx, struct si_query *squery, bool wait,
-                            union pipe_query_result *result);
-void si_query_hw_suspend(struct si_context *sctx, struct si_query *query);
-void si_query_hw_resume(struct si_context *sctx, struct si_query *query);
+unsigned si_query_pipestat_end_dw_offset(struct si_screen *sscreen,
+                                         enum pipe_statistics_query_index index);
 
 /* Shader-based queries */
-struct pipe_query *gfx10_sh_query_create(struct si_screen *screen, enum pipe_query_type query_type,
+
+/**
+ * The query buffer is written to by ESGS NGG shaders with statistics about
+ * generated and (streamout-)emitted primitives.
+ *
+ * The context maintains a ring of these query buffers, and queries simply
+ * point into the ring, allowing an arbitrary number of queries to be active
+ * without additional GPU cost.
+ */
+struct gfx11_sh_query_buffer {
+   struct list_head list;
+   struct si_resource *buf;
+   unsigned refcount;
+
+   /* Offset into the buffer in bytes; points at the first un-emitted entry. */
+   unsigned head;
+};
+
+/* Memory layout of the query buffer. Must be kept in sync with shaders
+ * (including QBO shaders) and should be aligned to cachelines.
+ *
+ * The somewhat awkward memory layout is for compatibility with the
+ * SET_PREDICATION packet, which also means that we're setting the high bit
+ * of all those values unconditionally.
+ */
+struct gfx11_sh_query_buffer_mem {
+   struct {
+      uint64_t generated_primitives_start_dummy;
+      uint64_t emitted_primitives_start_dummy;
+      uint64_t generated_primitives;
+      uint64_t emitted_primitives;
+   } stream[4];
+   uint32_t fence; /* bottom-of-pipe fence: set to ~0 when draws have finished */
+   uint32_t pad[31];
+};
+
+struct gfx11_sh_query {
+   struct si_query b;
+
+   struct gfx11_sh_query_buffer *first;
+   struct gfx11_sh_query_buffer *last;
+   unsigned first_begin;
+   unsigned last_end;
+
+   unsigned stream;
+};
+
+struct pipe_query *gfx11_sh_query_create(struct si_screen *screen, enum pipe_query_type query_type,
                                          unsigned index);
 
 /* Performance counters */
 struct si_perfcounters {
-   unsigned num_groups;
-   unsigned num_blocks;
-   struct si_pc_block *blocks;
+   struct ac_perfcounters base;
 
    unsigned num_stop_cs_dwords;
    unsigned num_instance_cs_dwords;
-
-   bool separate_se;
-   bool separate_instance;
 };
 
 struct pipe_query *si_create_batch_query(struct pipe_context *ctx, unsigned num_queries,
@@ -250,10 +258,7 @@ int si_get_perfcounter_group_info(struct si_screen *, unsigned index,
                                   struct pipe_driver_query_group_info *info);
 
 struct si_qbo_state {
-   void *saved_compute;
    struct pipe_constant_buffer saved_const0;
-   struct pipe_shader_buffer saved_ssbo[3];
-   unsigned saved_ssbo_writable_mask;
 };
 
 #endif /* SI_QUERY_H */

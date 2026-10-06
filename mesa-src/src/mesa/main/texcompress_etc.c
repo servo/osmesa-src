@@ -101,7 +101,7 @@ static const int etc2_modifier_tables_non_opaque[8][4] = {
 /* define etc1_parse_block and etc. */
 #define UINT8_TYPE GLubyte
 #define TAG(x) x
-#include "texcompress_etc_tmp.h"
+#include "util/format/texcompress_etc_tmp.h"
 #undef TAG
 #undef UINT8_TYPE
 
@@ -750,8 +750,8 @@ etc2_unpack_srgb8(uint8_t *dst_row,
 		  tmp = dst[0];
 		  dst[0] = dst[2];
 		  dst[2] = tmp;
-		  dst[3] = 255;
 	       }
+               dst[3] = 255;
 
                dst += comps;
             }

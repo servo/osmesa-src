@@ -258,6 +258,9 @@ BC7_UNORM                   , 128,  4,  4,  1,  un8,  un8,  un8,  un8,     ,    
 BC7_UNORM_SRGB              , 128,  4,  4,  1,  un8,  un8,  un8,  un8,     ,     ,    ,      ,   srgb,  bptc
 BC6H_UF16                   , 128,  4,  4,  1, uf16, uf16, uf16,     ,     ,     ,    ,      , linear,  bptc
 PLANAR_420_8                ,   0,  0,  0,  0,     ,     ,     ,     ,     ,     ,    ,      ,    yuv,
+PLANAR_420_10               ,   0,  0,  0,  0,     ,     ,     ,     ,     ,     ,    ,      ,    yuv,
+PLANAR_420_12               ,   0,  0,  0,  0,     ,     ,     ,     ,     ,     ,    ,      ,    yuv,
+PLANAR_420_16               ,   0,  0,  0,  0,     ,     ,     ,     ,     ,     ,    ,      ,    yuv,
 R8G8B8_UNORM_SRGB           ,  24,  1,  1,  1,  un8,  un8,  un8,     ,     ,     ,    ,   rgb,   srgb,
 ETC1_RGB8                   ,  64,  4,  4,  1,  un8,  un8,  un8,     ,     ,     ,    ,      , linear,  etc1
 ETC2_RGB8                   ,  64,  4,  4,  1,  un8,  un8,  un8,     ,     ,     ,    ,      , linear,  etc2
@@ -330,21 +333,22 @@ ASTC_HDR_2D_10X10_FLT16     , 128, 10, 10,  1, sf16, sf16, sf16, sf16,     ,    
 ASTC_HDR_2D_12X10_FLT16     , 128, 12, 10,  1, sf16, sf16, sf16, sf16,     ,     ,    ,      , linear,  astc
 ASTC_HDR_2D_12X12_FLT16     , 128, 12, 12,  1, sf16, sf16, sf16, sf16,     ,     ,    ,      , linear,  astc
 HIZ                         , 128,  8,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   hiz
+GFX125_HIZ                  , 128,  8,  8,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   hiz
 MCS_2X                      ,   8,  1,  1,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   mcs
 MCS_4X                      ,   8,  1,  1,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   mcs
 MCS_8X                      ,  32,  1,  1,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   mcs
 MCS_16X                     ,  64,  1,  1,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   mcs
-GEN7_CCS_32BPP_X            ,   1, 16,  2,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN7_CCS_64BPP_X            ,   1,  8,  2,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN7_CCS_128BPP_X           ,   1,  4,  2,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN7_CCS_32BPP_Y            ,   1,  8,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN7_CCS_64BPP_Y            ,   1,  4,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN7_CCS_128BPP_Y           ,   1,  2,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN9_CCS_32BPP              ,   2,  8,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN9_CCS_64BPP              ,   2,  4,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN9_CCS_128BPP             ,   2,  2,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN12_CCS_8BPP_Y0           ,   4, 32,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN12_CCS_16BPP_Y0          ,   4, 16,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN12_CCS_32BPP_Y0          ,   4,  8,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN12_CCS_64BPP_Y0          ,   4,  4,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
-GEN12_CCS_128BPP_Y0         ,   4,  2,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX7_CCS_32BPP_X            ,   1, 16,  2,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX7_CCS_64BPP_X            ,   1,  8,  2,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX7_CCS_128BPP_X           ,   1,  4,  2,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX7_CCS_32BPP_Y            ,   1,  8,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX7_CCS_64BPP_Y            ,   1,  4,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX7_CCS_128BPP_Y           ,   1,  2,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX9_CCS_32BPP              ,   2,  8,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX9_CCS_64BPP              ,   2,  4,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX9_CCS_128BPP             ,   2,  2,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX12_CCS_8BPP_Y0           ,   4, 32,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX12_CCS_16BPP_Y0          ,   4, 16,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX12_CCS_32BPP_Y0          ,   4,  8,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX12_CCS_64BPP_Y0          ,   4,  4,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs
+GFX12_CCS_128BPP_Y0         ,   4,  2,  4,  1,     ,     ,     ,     ,     ,     ,    ,      ,       ,   ccs

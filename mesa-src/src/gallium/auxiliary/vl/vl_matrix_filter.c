@@ -138,8 +138,12 @@ vl_matrix_filter_init(struct vl_matrix_filter *filter, struct pipe_context *pipe
    struct pipe_blend_state blend;
    struct pipe_sampler_state sampler;
    struct pipe_vertex_element ve;
-   struct vertex2f *offsets, v, sizes;
+   struct vertex2f *offsets;
    unsigned i, num_offsets = matrix_width * matrix_height;
+   int x;
+   int y;
+   int size_x;
+   int size_y;
 
    assert(filter && pipe);
    assert(video_width && video_height);
@@ -180,7 +184,6 @@ vl_matrix_filter_init(struct vl_matrix_filter *filter, struct pipe_context *pipe
    sampler.mag_img_filter = PIPE_TEX_FILTER_NEAREST;
    sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
    sampler.compare_func = PIPE_FUNC_ALWAYS;
-   sampler.normalized_coords = 1;
    filter->sampler = pipe->create_sampler_state(pipe, &sampler);
    if (!filter->sampler)
       goto error_sampler;
@@ -190,6 +193,7 @@ vl_matrix_filter_init(struct vl_matrix_filter *filter, struct pipe_context *pipe
       goto error_quad;
 
    memset(&ve, 0, sizeof(ve));
+   ve.src_stride = sizeof(struct vertex2f);
    ve.src_offset = 0;
    ve.instance_divisor = 0;
    ve.vertex_buffer_index = 0;
@@ -202,12 +206,15 @@ vl_matrix_filter_init(struct vl_matrix_filter *filter, struct pipe_context *pipe
    if (!offsets)
       goto error_offsets;
 
-   sizes.x = (float)(matrix_width - 1) / 2.0f;
-   sizes.y = (float)(matrix_height - 1) / 2.0f;
+   size_x = (matrix_width - 1) / 2;
+   size_y = (matrix_height - 1) / 2;
 
-   for (v.x = -sizes.x, i = 0; v.x <= sizes.x; v.x += 1.0f)
-      for (v.y = -sizes.y; v.y <= sizes.y; v.y += 1.0f)
-         offsets[i++] = v;
+   for (x = -size_x, i = 0; x <= size_x; x++)
+      for (y = -size_y; y <= size_y; y++) {
+         offsets[i].x = x;
+         offsets[i].y = y;
+         i++;
+      }
 
    for (i = 0; i < num_offsets; ++i) {
       offsets[i].x /= video_width;
@@ -279,6 +286,10 @@ vl_matrix_filter_render(struct vl_matrix_filter *filter,
    viewport.scale[0] = dst->width;
    viewport.scale[1] = dst->height;
    viewport.scale[2] = 1;
+   viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+   viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+   viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+   viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
    memset(&fb_state, 0, sizeof(fb_state));
    fb_state.width = dst->width;
@@ -291,13 +302,13 @@ vl_matrix_filter_render(struct vl_matrix_filter *filter,
    filter->pipe->bind_sampler_states(filter->pipe, PIPE_SHADER_FRAGMENT,
                                      0, 1, &filter->sampler);
    filter->pipe->set_sampler_views(filter->pipe, PIPE_SHADER_FRAGMENT,
-                                   0, 1, &src);
+                                   0, 1, 0, false, &src);
    filter->pipe->bind_vs_state(filter->pipe, filter->vs);
    filter->pipe->bind_fs_state(filter->pipe, filter->fs);
    filter->pipe->set_framebuffer_state(filter->pipe, &fb_state);
    filter->pipe->set_viewport_states(filter->pipe, 0, 1, &viewport);
-   filter->pipe->set_vertex_buffers(filter->pipe, 0, 1, &filter->quad);
    filter->pipe->bind_vertex_elements_state(filter->pipe, filter->ves);
+   util_set_vertex_buffers(filter->pipe, 1, false, &filter->quad);
 
-   util_draw_arrays(filter->pipe, PIPE_PRIM_QUADS, 0, 4);
+   util_draw_arrays(filter->pipe, MESA_PRIM_QUADS, 0, 4);
 }

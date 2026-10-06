@@ -34,31 +34,32 @@
 #ifndef ST_DRAW_H
 #define ST_DRAW_H
 
-#include "main/glheader.h"
+#include "util/glheader.h"
 
-struct _mesa_index_buffer;
-struct _mesa_prim;
 struct gl_context;
 struct st_context;
 
-void st_init_draw_functions(struct dd_function_table *functions);
+void st_init_draw_functions(struct pipe_screen *screen,
+                            struct dd_function_table *functions);
 
 void st_destroy_draw( struct st_context *st );
 
 struct draw_context *st_get_draw_context(struct st_context *st);
 
-extern void
+void
 st_feedback_draw_vbo(struct gl_context *ctx,
-                     const struct _mesa_prim *prims,
-                     GLuint nr_prims,
-                     const struct _mesa_index_buffer *ib,
-		     GLboolean index_bounds_valid,
-                     GLuint min_index,
-                     GLuint max_index,
-                     GLuint num_instances,
-                     GLuint base_instance,
-                     struct gl_transform_feedback_object *tfb_vertcount,
-                     unsigned stream);
+                     const struct pipe_draw_info *info,
+                     unsigned drawid_offset,
+                     const struct pipe_draw_indirect_info *indirect,
+                     const struct pipe_draw_start_count_bias *draws,
+                     unsigned num_draws);
+
+void
+st_feedback_draw_vbo_multi_mode(struct gl_context *ctx,
+                                struct pipe_draw_info *info,
+                                const struct pipe_draw_start_count_bias *draws,
+                                const unsigned char *mode,
+                                unsigned num_draws);
 
 /**
  * When drawing with VBOs, the addresses specified with
@@ -73,6 +74,16 @@ pointer_to_offset(const void *ptr)
    return (unsigned) (((GLsizeiptr) ptr) & 0xffffffffUL);
 }
 
+void
+st_prepare_draw(struct gl_context *ctx, uint64_t state_mask);
+
+void
+st_draw_gallium(struct gl_context *ctx,
+                const struct pipe_draw_info *info,
+                unsigned drawid_offset,
+                const struct pipe_draw_indirect_info *indirect,
+                const struct pipe_draw_start_count_bias *draws,
+                unsigned num_draws);
 
 bool
 st_draw_quad(struct st_context *st,
@@ -80,5 +91,20 @@ st_draw_quad(struct st_context *st,
              float s0, float t0, float s1, float t1,
              const float *color,
              unsigned num_instances);
+
+void
+st_indirect_draw_vbo(struct gl_context *ctx,
+                     GLenum mode, GLenum index_type,
+                     GLintptr indirect_offset,
+                     GLintptr indirect_draw_count_offset,
+                     GLsizei draw_count, GLsizei stride);
+
+bool
+st_draw_hw_select_prepare_common(struct gl_context *ctx);
+bool
+st_draw_hw_select_prepare_mode(struct gl_context *ctx, struct pipe_draw_info *info);
+void
+st_init_hw_select_draw_functions(struct pipe_screen *screen,
+                                 struct dd_function_table *functions);
 
 #endif

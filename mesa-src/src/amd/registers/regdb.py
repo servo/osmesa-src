@@ -1,30 +1,11 @@
 #
 # Copyright 2017-2019 Advanced Micro Devices, Inc.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# on the rights to use, copy, modify, merge, publish, distribute, sub
-# license, and/or sell copies of the Software, and to permit persons to whom
-# the Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice (including the next
-# paragraph) shall be included in all copies or substantial portions of the
-# Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: MIT
 #
 """
 Python package containing common tools for manipulating register JSON.
 """
-
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import itertools
 import json
@@ -213,7 +194,7 @@ class RegisterDatabase(object):
         Perform some basic canonicalization:
         - enum entries are sorted by value
         - register type fields are sorted by starting bit
-        - __register_mappings is sorted by name
+        - __register_mappings is sorted by offset
         - the chips field of register mappings is sorted
 
         Lazily computes the set of all chips mentioned by register mappings.
@@ -230,10 +211,10 @@ class RegisterDatabase(object):
         self.__regmap_by_addr = defaultdict(list)
         self.__chips = set()
 
-        # Merge regiseter mappings using sort order and garbage collect enums
+        # Merge register mappings using sort order and garbage collect enums
         # and register types.
         old_register_mappings = self.__register_mappings
-        old_register_mappings.sort(key=lambda regmap: regmap.name)
+        old_register_mappings.sort(key=lambda regmap: regmap.map.at)
 
         self.__register_mappings = []
         for regmap in old_register_mappings:

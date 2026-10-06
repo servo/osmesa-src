@@ -1,38 +1,18 @@
 /*
  * Copyright © 2009 Corbin Simpson
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS
- * AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
+ * SPDX-License-Identifier: MIT
  */
 
 #ifndef RADEON_DRM_WINSYS_H
 #define RADEON_DRM_WINSYS_H
 
-#include "gallium/drivers/radeon/radeon_winsys.h"
+#include "winsys/radeon_winsys.h"
 #include "pipebuffer/pb_cache.h"
 #include "pipebuffer/pb_slab.h"
 #include "util/u_queue.h"
 #include "util/list.h"
-#include <radeon_drm.h>
+#include "drm-uapi/radeon_drm.h"
 
 struct radeon_drm_cs;
 
@@ -89,6 +69,7 @@ struct radeon_drm_winsys {
    struct radeon_vm_heap vm64;
 
    bool check_vm;
+   bool noop_cs;
 
    struct radeon_surface_manager *surf_man;
 

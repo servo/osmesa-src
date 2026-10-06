@@ -29,26 +29,7 @@
 #include "ppir.h"
 #include "lima_context.h"
 
-#define PPIR_FULL_REG_NUM  6
-
-#define PPIR_VEC1_REG_NUM       (PPIR_FULL_REG_NUM * 4) /* x, y, z, w */
-#define PPIR_VEC2_REG_NUM       (PPIR_FULL_REG_NUM * 3) /* xy, yz, zw */
-#define PPIR_VEC3_REG_NUM       (PPIR_FULL_REG_NUM * 2) /* xyz, yzw */
-#define PPIR_VEC4_REG_NUM       PPIR_FULL_REG_NUM       /* xyzw */
-#define PPIR_HEAD_VEC1_REG_NUM  PPIR_FULL_REG_NUM       /* x */
-#define PPIR_HEAD_VEC2_REG_NUM  PPIR_FULL_REG_NUM       /* xy */
-#define PPIR_HEAD_VEC3_REG_NUM  PPIR_FULL_REG_NUM       /* xyz */
-#define PPIR_HEAD_VEC4_REG_NUM  PPIR_FULL_REG_NUM       /* xyzw */
-
-#define PPIR_VEC1_REG_BASE       0
-#define PPIR_VEC2_REG_BASE       (PPIR_VEC1_REG_BASE + PPIR_VEC1_REG_NUM)
-#define PPIR_VEC3_REG_BASE       (PPIR_VEC2_REG_BASE + PPIR_VEC2_REG_NUM)
-#define PPIR_VEC4_REG_BASE       (PPIR_VEC3_REG_BASE + PPIR_VEC3_REG_NUM)
-#define PPIR_HEAD_VEC1_REG_BASE  (PPIR_VEC4_REG_BASE + PPIR_VEC4_REG_NUM)
-#define PPIR_HEAD_VEC2_REG_BASE  (PPIR_HEAD_VEC1_REG_BASE + PPIR_HEAD_VEC1_REG_NUM)
-#define PPIR_HEAD_VEC3_REG_BASE  (PPIR_HEAD_VEC2_REG_BASE + PPIR_HEAD_VEC2_REG_NUM)
-#define PPIR_HEAD_VEC4_REG_BASE  (PPIR_HEAD_VEC3_REG_BASE + PPIR_HEAD_VEC3_REG_NUM)
-#define PPIR_REG_COUNT           (PPIR_HEAD_VEC4_REG_BASE + PPIR_HEAD_VEC4_REG_NUM)
+#define PPIR_REG_COUNT  (6 * 4)
 
 enum ppir_ra_reg_class {
    ppir_ra_reg_class_vec1,
@@ -68,69 +49,32 @@ enum ppir_ra_reg_class {
    ppir_ra_reg_class_num,
 };
 
-static const int ppir_ra_reg_base[ppir_ra_reg_class_num + 1] = {
-   [ppir_ra_reg_class_vec1]       = PPIR_VEC1_REG_BASE,
-   [ppir_ra_reg_class_vec2]       = PPIR_VEC2_REG_BASE,
-   [ppir_ra_reg_class_vec3]       = PPIR_VEC3_REG_BASE,
-   [ppir_ra_reg_class_vec4]       = PPIR_VEC4_REG_BASE,
-   [ppir_ra_reg_class_head_vec1]  = PPIR_HEAD_VEC1_REG_BASE,
-   [ppir_ra_reg_class_head_vec2]  = PPIR_HEAD_VEC2_REG_BASE,
-   [ppir_ra_reg_class_head_vec3]  = PPIR_HEAD_VEC3_REG_BASE,
-   [ppir_ra_reg_class_head_vec4]  = PPIR_HEAD_VEC4_REG_BASE,
-   [ppir_ra_reg_class_num]        = PPIR_REG_COUNT,
-};
-
-static unsigned int *
-ppir_ra_reg_q_values[ppir_ra_reg_class_num] = {
-   (unsigned int []) {1, 2, 3, 4, 1, 2, 3, 4},
-   (unsigned int []) {2, 3, 3, 3, 1, 2, 3, 3},
-   (unsigned int []) {2, 2, 2, 2, 1, 2, 2, 2},
-   (unsigned int []) {1, 1, 1, 1, 1, 1, 1, 1},
-   (unsigned int []) {1, 1, 1, 1, 1, 1, 1, 1},
-   (unsigned int []) {1, 1, 1, 1, 1, 1, 1, 1},
-   (unsigned int []) {1, 1, 1, 1, 1, 1, 1, 1},
-   (unsigned int []) {1, 1, 1, 1, 1, 1, 1, 1},
-};
-
 struct ra_regs *ppir_regalloc_init(void *mem_ctx)
 {
    struct ra_regs *ret = ra_alloc_reg_set(mem_ctx, PPIR_REG_COUNT, false);
    if (!ret)
       return NULL;
 
-   /* (x, y, z, w) (xy, yz, zw) (xyz, yzw) (xyzw) (x) (xy) (xyz) (xyzw) */
-   static const int class_reg_num[ppir_ra_reg_class_num] = {
-      4, 3, 2, 1, 1, 1, 1, 1,
-   };
-   /* base reg (x, y, z, w) confliction with other regs */
-   for (int h = 0; h < 4; h++) {
-      int base_reg_mask = 1 << h;
-      for (int i = 1; i < ppir_ra_reg_class_num; i++) {
-         int class_reg_base_mask = (1 << ((i % 4) + 1)) - 1;
-         for (int j = 0; j < class_reg_num[i]; j++) {
-            if (base_reg_mask & (class_reg_base_mask << j)) {
-               for (int k = 0; k < PPIR_FULL_REG_NUM; k++) {
-                  ra_add_reg_conflict(ret, k * 4 + h,
-                     ppir_ra_reg_base[i] + k * class_reg_num[i] + j);
-               }
-            }
-         }
+   /* Classes for contiguous 1-4 channel groups anywhere within a register. */
+   struct ra_class *classes[ppir_ra_reg_class_num];
+   for (int i = 0; i < ppir_ra_reg_class_head_vec1; i++) {
+      classes[i] = ra_alloc_contig_reg_class(ret, i + 1);
+
+      for (int j = 0; j < PPIR_REG_COUNT; j += 4) {
+         for (int swiz = 0; swiz < (4 - i); swiz++)
+            ra_class_add_reg(classes[i], j + swiz);
       }
    }
-   /* build all other confliction by the base reg confliction */
-   for (int i = 0; i < PPIR_VEC1_REG_NUM; i++)
-      ra_make_reg_conflicts_transitive(ret, i);
 
-   for (int i = 0; i < ppir_ra_reg_class_num; i++)
-      ra_alloc_reg_class(ret);
+   /* Classes for contiguous 1-4 channels with a start channel of .x */
+   for (int i = ppir_ra_reg_class_head_vec1; i < ppir_ra_reg_class_num; i++) {
+      classes[i] = ra_alloc_contig_reg_class(ret, i - ppir_ra_reg_class_head_vec1 + 1);
 
-   int reg_index = 0;
-   for (int i = 0; i < ppir_ra_reg_class_num; i++) {
-      while (reg_index < ppir_ra_reg_base[i + 1])
-         ra_class_add_reg(ret, i, reg_index++);
+      for (int j = 0; j < PPIR_REG_COUNT; j += 4)
+         ra_class_add_reg(classes[i], j);
    }
 
-   ra_set_finalize(ret, ppir_ra_reg_q_values);
+   ra_set_finalize(ret, NULL);
    return ret;
 }
 
@@ -138,9 +82,6 @@ static void ppir_regalloc_update_reglist_ssa(ppir_compiler *comp)
 {
    list_for_each_entry(ppir_block, block, &comp->block_list, list) {
       list_for_each_entry(ppir_node, node, &block->node_list, list) {
-         if (node->is_end)
-            continue;
-
          if (!node->instr || node->op == ppir_op_const)
             continue;
 
@@ -150,28 +91,14 @@ static void ppir_regalloc_update_reglist_ssa(ppir_compiler *comp)
 
             if (dest->type == ppir_target_ssa) {
                reg = &dest->ssa;
+               if (node->is_out)
+                  reg->out_reg = true;
                list_addtail(&reg->list, &comp->reg_list);
+               comp->reg_num++;
             }
          }
       }
    }
-}
-
-static int get_phy_reg_index(int reg)
-{
-   int i;
-
-   for (i = 0; i < ppir_ra_reg_class_num; i++) {
-      if (reg < ppir_ra_reg_base[i + 1]) {
-         reg -= ppir_ra_reg_base[i];
-         break;
-      }
-   }
-
-   if (i < ppir_ra_reg_class_head_vec1)
-      return reg / (4 - i) * 4 + reg % (4 - i);
-   else
-      return reg * 4;
 }
 
 static void ppir_regalloc_print_result(ppir_compiler *comp)
@@ -203,6 +130,14 @@ static void ppir_regalloc_print_result(ppir_compiler *comp)
          }
          printf("\n");
       }
+   }
+   printf("--------------------------\n");
+
+   printf("======ppir output regs======\n");
+   for (int i = 0; i < ppir_output_num; i++) {
+      if (comp->out_type_to_reg[i] != -1)
+         printf("%s: $%d\n", ppir_output_type_to_str(i),
+                (int)comp->out_type_to_reg[i]);
    }
    printf("--------------------------\n");
 }
@@ -270,7 +205,7 @@ static bool ppir_update_spilled_src(ppir_compiler *comp, ppir_block *block,
 
    ppir_load_node *load = ppir_node_to_load(load_node);
 
-   load->index = -comp->prog->stack_size; /* index sizes are negative */
+   load->index = -comp->prog->state.stack_size; /* index sizes are negative */
    load->num_components = num_components;
 
    ppir_dest *ld_dest = &load->dest;
@@ -314,6 +249,7 @@ static bool ppir_update_spilled_src(ppir_compiler *comp, ppir_block *block,
    alu_dest->write_mask = u_bit_consecutive(0, num_components);
 
    list_addtail(&alu_dest->ssa.list, &comp->reg_list);
+   comp->reg_num++;
 
    if (!ppir_instr_insert_node(load_node->instr, move_node))
       return false;
@@ -354,7 +290,7 @@ static bool ppir_update_spilled_dest_load(ppir_compiler *comp, ppir_block *block
 
    ppir_load_node *load = ppir_node_to_load(load_node);
 
-   load->index = -comp->prog->stack_size; /* index sizes are negative */
+   load->index = -comp->prog->state.stack_size; /* index sizes are negative */
    load->num_components = num_components;
 
    load->dest.type = ppir_target_pipeline;
@@ -414,7 +350,7 @@ static bool ppir_update_spilled_dest(ppir_compiler *comp, ppir_block *block,
 
    ppir_store_node *store = ppir_node_to_store(store_node);
 
-   store->index = -comp->prog->stack_size; /* index sizes are negative */
+   store->index = -comp->prog->state.stack_size; /* index sizes are negative */
 
    ppir_node_target_assign(&store->src, node);
    store->num_components = reg->num_components;
@@ -476,12 +412,13 @@ static bool ppir_regalloc_spill_reg(ppir_compiler *comp, ppir_reg *chosen)
 static ppir_reg *ppir_regalloc_choose_spill_node(ppir_compiler *comp,
                                                  struct ra_graph *g)
 {
-   float spill_costs[list_length(&comp->reg_list)];
+   float spill_costs[comp->reg_num];
    /* experimentally determined, it seems to be worth scaling cost of
     * regs in instructions that have used uniform/store_temp slots,
     * but not too much as to offset the num_components base cost. */
    const float slot_scale = 1.1f;
 
+   memset(spill_costs, 0, sizeof(spill_costs[0]) * comp->reg_num);
    list_for_each_entry(ppir_reg, reg, &comp->reg_list, list) {
       if (reg->spilled) {
          /* not considered for spilling */
@@ -532,7 +469,7 @@ static ppir_reg *ppir_regalloc_choose_spill_node(ppir_compiler *comp,
       }
    }
 
-   for (int i = 0; i < list_length(&comp->reg_list); i++)
+   for (int i = 0; i < comp->reg_num; i++)
       ra_set_node_spill_cost(g, i, spill_costs[i]);
 
    int r = ra_get_best_spill_node(g);
@@ -563,78 +500,33 @@ static void ppir_regalloc_reset_liveness_info(ppir_compiler *comp)
    }
 
    list_for_each_entry(ppir_block, block, &comp->block_list, list) {
-
-      if (block->live_in)
-         ralloc_free(block->live_in);
-      block->live_in = rzalloc_array(comp,
-            struct ppir_liveness, list_length(&comp->reg_list));
-
-      if (block->live_in_set)
-         _mesa_set_destroy(block->live_in_set, NULL);
-      block->live_in_set = _mesa_set_create(comp,
-                                            _mesa_hash_pointer,
-                                            _mesa_key_pointer_equal);
-
-      if (block->live_out)
-         ralloc_free(block->live_out);
-      block->live_out = rzalloc_array(comp,
-            struct ppir_liveness, list_length(&comp->reg_list));
-
-      if (block->live_out_set)
-         _mesa_set_destroy(block->live_out_set, NULL);
-      block->live_out_set = _mesa_set_create(comp,
-                                             _mesa_hash_pointer,
-                                             _mesa_key_pointer_equal);
-
       list_for_each_entry(ppir_instr, instr, &block->instr_list, list) {
 
-         if (instr->live_in)
-            ralloc_free(instr->live_in);
-         instr->live_in = rzalloc_array(comp,
-               struct ppir_liveness, list_length(&comp->reg_list));
+         if (instr->live_mask)
+            ralloc_free(instr->live_mask);
+         instr->live_mask = rzalloc_array(comp, uint8_t,
+                                          reg_mask_size(comp->reg_num));
 
-         if (instr->live_in_set)
-            _mesa_set_destroy(instr->live_in_set, NULL);
-         instr->live_in_set = _mesa_set_create(comp,
-                                               _mesa_hash_pointer,
-                                               _mesa_key_pointer_equal);
+         if (instr->live_set)
+            ralloc_free(instr->live_set);
+         instr->live_set = rzalloc_array(comp, BITSET_WORD, comp->reg_num);
 
          if (instr->live_internal)
             ralloc_free(instr->live_internal);
-         instr->live_internal = rzalloc_array(comp,
-               struct ppir_liveness, list_length(&comp->reg_list));
-
-         if (instr->live_internal_set)
-            _mesa_set_destroy(instr->live_internal_set, NULL);
-         instr->live_internal_set = _mesa_set_create(comp,
-                                               _mesa_hash_pointer,
-                                               _mesa_key_pointer_equal);
-
-         if (instr->live_out)
-            ralloc_free(instr->live_out);
-         instr->live_out = rzalloc_array(comp,
-               struct ppir_liveness, list_length(&comp->reg_list));
-
-         if (instr->live_out_set)
-            _mesa_set_destroy(instr->live_out_set, NULL);
-         instr->live_out_set = _mesa_set_create(comp,
-                                                _mesa_hash_pointer,
-                                                _mesa_key_pointer_equal);
+         instr->live_internal = rzalloc_array(comp, BITSET_WORD, comp->reg_num);
       }
    }
 }
 
 static void ppir_all_interference(ppir_compiler *comp, struct ra_graph *g,
-                                  struct set *liveness)
+                                  BITSET_WORD *liveness)
 {
-   set_foreach(liveness, entry1) {
-      set_foreach(liveness, entry2) {
-         const struct ppir_liveness *r1 = entry1->key;
-         const struct ppir_liveness *r2 = entry2->key;
-         ra_add_node_interference(g, r1->reg->regalloc_index,
-                                     r2->reg->regalloc_index);
+   int i, j;
+   BITSET_FOREACH_SET(i, liveness, comp->reg_num) {
+      BITSET_FOREACH_SET(j, liveness, comp->reg_num) {
+         ra_add_node_interference(g, i, j);
       }
-      _mesa_set_remove(liveness, entry1);
+      BITSET_CLEAR(liveness, i);
    }
 }
 
@@ -645,26 +537,25 @@ static bool ppir_regalloc_prog_try(ppir_compiler *comp, bool *spilled)
    ppir_regalloc_reset_liveness_info(comp);
 
    struct ra_graph *g = ra_alloc_interference_graph(
-      comp->ra, list_length(&comp->reg_list));
+      comp->ra, comp->reg_num);
 
    int n = 0;
    list_for_each_entry(ppir_reg, reg, &comp->reg_list, list) {
       int c = ppir_ra_reg_class_vec1 + (reg->num_components - 1);
       if (reg->is_head)
          c += 4;
-      ra_set_node_class(g, n++, c);
+      ra_set_node_class(g, n++, ra_get_class_from_index(comp->ra, c));
    }
 
    ppir_liveness_analysis(comp);
 
    list_for_each_entry(ppir_block, block, &comp->block_list, list) {
       list_for_each_entry(ppir_instr, instr, &block->instr_list, list) {
-         set_foreach(instr->live_internal_set, entry) {
-            _mesa_set_add(instr->live_in_set, entry->key);
-            _mesa_set_add(instr->live_out_set, entry->key);
+         int i;
+         BITSET_FOREACH_SET(i, instr->live_internal, comp->reg_num) {
+            BITSET_SET(instr->live_set, i);
          }
-         ppir_all_interference(comp, g, instr->live_in_set);
-         ppir_all_interference(comp, g, instr->live_out_set);
+         ppir_all_interference(comp, g, instr->live_set);
       }
    }
 
@@ -676,14 +567,14 @@ static bool ppir_regalloc_prog_try(ppir_compiler *comp, bool *spilled)
          /* stack_size will be used to assemble the frame reg in lima_draw.
           * It is also be used in the spilling code, as negative indices
           * starting from -1, to create stack addresses. */
-         comp->prog->stack_size++;
+         comp->prog->state.stack_size++;
          if (!ppir_regalloc_spill_reg(comp, chosen))
             goto err_out;
          /* Ask the outer loop to call back in. */
          *spilled = true;
 
          ppir_debug("spilled register %d/%d, num_components: %d\n",
-                    chosen->regalloc_index, list_length(&comp->reg_list),
+                    chosen->regalloc_index, comp->reg_num,
                     chosen->num_components);
          goto err_out;
       }
@@ -694,8 +585,12 @@ static bool ppir_regalloc_prog_try(ppir_compiler *comp, bool *spilled)
 
    n = 0;
    list_for_each_entry(ppir_reg, reg, &comp->reg_list, list) {
-      int reg_index = ra_get_node_reg(g, n++);
-      reg->index = get_phy_reg_index(reg_index);
+      reg->index = ra_get_node_reg(g, n++);
+      if (reg->out_reg) {
+         /* We need actual reg number, we don't have swizzle for output regs */
+         assert(!(reg->index & 0x3) && "ppir: output regs don't have swizzle");
+         comp->out_type_to_reg[reg->out_type] = reg->index / 4;
+      }
    }
 
    ralloc_free(g);
@@ -713,7 +608,7 @@ err_out:
 bool ppir_regalloc_prog(ppir_compiler *comp)
 {
    bool spilled = false;
-   comp->prog->stack_size = 0;
+   comp->prog->state.stack_size = 0;
 
    /* Set from an environment variable to force spilling
     * for debugging purposes, see lima_screen.c */
@@ -722,14 +617,25 @@ bool ppir_regalloc_prog(ppir_compiler *comp)
    ppir_regalloc_update_reglist_ssa(comp);
 
    /* No registers? Probably shader consists of discard instruction */
-   if (list_is_empty(&comp->reg_list))
+   if (list_is_empty(&comp->reg_list)) {
+      comp->prog->state.frag_color0_reg = 0;
+      comp->prog->state.frag_color1_reg = -1;
+      comp->prog->state.frag_depth_reg = -1;
       return true;
+   }
 
    /* this will most likely succeed in the first
     * try, except for very complicated shaders */
    while (!ppir_regalloc_prog_try(comp, &spilled))
       if (!spilled)
          return false;
+
+   comp->prog->state.frag_color0_reg =
+      comp->out_type_to_reg[ppir_output_color0];
+   comp->prog->state.frag_color1_reg =
+      comp->out_type_to_reg[ppir_output_color1];
+   comp->prog->state.frag_depth_reg =
+      comp->out_type_to_reg[ppir_output_depth];
 
    return true;
 }

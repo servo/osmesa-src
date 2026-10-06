@@ -27,34 +27,17 @@
 #define DRISW_PRIV_H
 
 #include <X11/extensions/XShm.h>
+#include "kopper_interface.h"
 
 struct drisw_display
 {
-   __GLXDRIdisplay base;
-};
-
-struct drisw_context
-{
-   struct glx_context base;
-   __DRIcontext *driContext;
-
 };
 
 struct drisw_screen
 {
    struct glx_screen base;
 
-   __DRIscreen *driScreen;
-   __GLXDRIscreen vtable;
-   const __DRIcoreExtension *core;
-   const __DRIswrastExtension *swrast;
-   const __DRItexBufferExtension *texBuffer;
-   const __DRIcopySubBufferExtension *copySubBuffer;
-   const __DRI2rendererQueryExtension *rendererQuery;
-
-   const __DRIconfig **driver_configs;
-
-   void *driver;
+   bool kopper;
 };
 
 struct drisw_drawable
@@ -62,18 +45,11 @@ struct drisw_drawable
    __GLXDRIdrawable base;
 
    GC gc;
-   __DRIdrawable *driDrawable;
    struct glx_config *config;
    XImage *ximage;
    XShmSegmentInfo shminfo;
    int xDepth;
+   int swapInterval;
 };
-
-_X_HIDDEN int
-drisw_query_renderer_integer(struct glx_screen *base, int attribute,
-                             unsigned int *value);
-_X_HIDDEN int
-drisw_query_renderer_string(struct glx_screen *base, int attribute,
-                            const char **value);
 
 #endif

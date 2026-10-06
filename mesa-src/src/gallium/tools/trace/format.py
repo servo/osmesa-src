@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 ##########################################################################
 #
 # Copyright 2008 VMware, Inc.
@@ -65,7 +65,7 @@ class AnsiFormatter(Formatter):
 
     _normal = '0m'
     _bold = '1m'
-    _italic = '3m'
+    _italic = '3m' # Not widely supported
     _red = '31m'
     _green = '32m'
     _blue = '34m'
@@ -79,9 +79,7 @@ class AnsiFormatter(Formatter):
         self._escape(self._normal)
 
     def variable(self, name):
-        self._escape(self._italic)
         Formatter.variable(self, name)
-        self._escape(self._normal)
 
     def literal(self, value):
         self._escape(self._blue)
@@ -164,9 +162,9 @@ class WindowsConsoleFormatter(Formatter):
 
 
 def DefaultFormatter(stream):
-    if sys.platform in ('linux2', 'cygwin'):
+    if sys.platform in ('linux2', 'linux', 'cygwin'):
         return AnsiFormatter(stream)
-    elif sys.platform in ('win32',):
+    elif sys.platform in ('win32', ):
         return WindowsConsoleFormatter(stream)
     else:
         return Formatter(stream)

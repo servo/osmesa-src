@@ -1,29 +1,9 @@
-/**************************************************************************
- *
- * Copyright © 2009-2015 VMware, Inc., Palo Alto, CA., USA
- * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE COPYRIGHT HOLDERS, AUTHORS AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- **************************************************************************/
+/*
+ * Copyright (c) 2009-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef __VMWGFX_DRM_H__
 #define __VMWGFX_DRM_H__
@@ -72,6 +52,9 @@ extern "C" {
 #define DRM_VMW_GB_SURFACE_CREATE_EXT   27
 #define DRM_VMW_GB_SURFACE_REF_EXT      28
 #define DRM_VMW_MSG                     29
+#define DRM_VMW_MKSSTAT_RESET           30
+#define DRM_VMW_MKSSTAT_ADD             31
+#define DRM_VMW_MKSSTAT_REMOVE          32
 
 /*************************************************************************/
 /**
@@ -86,6 +69,18 @@ extern "C" {
  *
  * DRM_VMW_PARAM_SM4_1
  * SM4_1 support is enabled.
+ *
+ * DRM_VMW_PARAM_SM5
+ * SM5 support is enabled.
+ *
+ * DRM_VMW_PARAM_GL43
+ * SM5.1+GL4.3 support is enabled.
+ *
+ * DRM_VMW_PARAM_DEVICE_ID
+ * PCI ID of the underlying SVGA device.
+ *
+ * DRM_VMW_PARAM_USER_SRF
+ * Userspace managed surface support is enabled.
  */
 
 #define DRM_VMW_PARAM_NUM_STREAMS      0
@@ -104,6 +99,9 @@ extern "C" {
 #define DRM_VMW_PARAM_HW_CAPS2         13
 #define DRM_VMW_PARAM_SM4_1            14
 #define DRM_VMW_PARAM_SM5              15
+#define DRM_VMW_PARAM_GL43             16
+#define DRM_VMW_PARAM_DEVICE_ID        17
+#define DRM_VMW_PARAM_USER_SRF         18
 
 /**
  * enum drm_vmw_handle_type - handle type for ref ioctls
@@ -1134,7 +1132,7 @@ struct drm_vmw_handle_close_arg {
  * svga3d surface flags split into 2, upper half and lower half.
  */
 enum drm_vmw_surface_version {
-	drm_vmw_gb_surface_v1
+	drm_vmw_gb_surface_v1,
 };
 
 /**
@@ -1231,6 +1229,44 @@ struct drm_vmw_msg_arg {
 	__u64 receive;
 	__s32 send_only;
 	__u32 receive_len;
+};
+
+/**
+ * struct drm_vmw_mksstat_add_arg
+ *
+ * @stat: Pointer to user-space stat-counters array, page-aligned.
+ * @info: Pointer to user-space counter-infos array, page-aligned.
+ * @strs: Pointer to user-space stat strings, page-aligned.
+ * @stat_len: Length in bytes of stat-counters array.
+ * @info_len: Length in bytes of counter-infos array.
+ * @strs_len: Length in bytes of the stat strings, terminators included.
+ * @description: Pointer to instance descriptor string; will be truncated
+ *               to MKS_GUEST_STAT_INSTANCE_DESC_LENGTH chars.
+ * @id: Output identifier of the produced record; -1 if error.
+ *
+ * Argument to the DRM_VMW_MKSSTAT_ADD ioctl.
+ */
+struct drm_vmw_mksstat_add_arg {
+	__u64 stat;
+	__u64 info;
+	__u64 strs;
+	__u64 stat_len;
+	__u64 info_len;
+	__u64 strs_len;
+	__u64 description;
+	__u64 id;
+};
+
+/**
+ * struct drm_vmw_mksstat_remove_arg
+ *
+ * @id: Identifier of the record being disposed, originally obtained through
+ *      DRM_VMW_MKSSTAT_ADD ioctl.
+ *
+ * Argument to the DRM_VMW_MKSSTAT_REMOVE ioctl.
+ */
+struct drm_vmw_mksstat_remove_arg {
+	__u64 id;
 };
 
 #if defined(__cplusplus)

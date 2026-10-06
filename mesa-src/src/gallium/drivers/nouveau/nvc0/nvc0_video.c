@@ -62,7 +62,7 @@ nvc0_decoder_decode_bitstream(struct pipe_video_codec *decoder,
    assert(ret == 2);
 }
 
-static void
+static int
 nvc0_decoder_end_frame(struct pipe_video_codec *decoder,
                        struct pipe_video_buffer *video_target,
                        struct pipe_picture_desc *picture)
@@ -85,13 +85,15 @@ nvc0_decoder_end_frame(struct pipe_video_codec *decoder,
 
    nvc0_decoder_vp(dec, desc, target, comm_seq, vp_caps, is_ref, refs);
    nvc0_decoder_ppp(dec, desc, target, comm_seq);
+   return 0;
 }
 
 struct pipe_video_codec *
 nvc0_create_decoder(struct pipe_context *context,
                     const struct pipe_video_codec *templ)
 {
-   struct nouveau_screen *screen = &((struct nvc0_context *)context)->screen->base;
+   struct nvc0_context *nvc0 = nvc0_context(context);
+   struct nouveau_screen *screen = &nvc0->screen->base;
    struct nouveau_vp3_decoder *dec;
    struct nouveau_pushbuf **push;
    union nouveau_bo_config cfg;
@@ -105,9 +107,6 @@ nvc0_create_decoder(struct pipe_context *context,
    uint32_t timeout;
    u32 tmp_size = 0;
 
-   if (getenv("XVMC_VL"))
-       return vl_create_decoder(context, templ);
-
    if (templ->entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM) {
       debug_printf("%x\n", templ->entrypoint);
       return NULL;
@@ -116,7 +115,7 @@ nvc0_create_decoder(struct pipe_context *context,
    dec = CALLOC_STRUCT(nouveau_vp3_decoder);
    if (!dec)
       return NULL;
-   dec->client = screen->client;
+   dec->client = nvc0->base.client;
    dec->base = *templ;
    nouveau_vp3_decoder_init_common(&dec->base);
 
@@ -145,9 +144,9 @@ nvc0_create_decoder(struct pipe_context *context,
             data = &nvc0_args;
          } else {
             unsigned engine[] = {
-               NVE0_FIFO_ENGINE_BSP,
-               NVE0_FIFO_ENGINE_VP,
-               NVE0_FIFO_ENGINE_PPP
+               NOUVEAU_FIFO_ENGINE_BSP,
+               NOUVEAU_FIFO_ENGINE_VP,
+               NOUVEAU_FIFO_ENGINE_PPP
             };
 
             nve0_args.engine = engine[i];
@@ -160,8 +159,8 @@ nvc0_create_decoder(struct pipe_context *context,
                                   data, size, &dec->channel[i]);
 
          if (!ret)
-            ret = nouveau_pushbuf_new(screen->client, dec->channel[i], 4,
-                                   32 * 1024, true, &dec->pushbuf[i]);
+            ret = nouveau_pushbuf_create(screen, &nvc0->base, nvc0->base.client, dec->channel[i],
+                                         4, 32 * 1024, &dec->pushbuf[i]);
          if (ret)
             break;
       }
@@ -292,14 +291,14 @@ nvc0_create_decoder(struct pipe_context *context,
    if (ret)
       goto fail;
 
-   nouveau_bo_map(dec->fence_bo, NOUVEAU_BO_RDWR, screen->client);
+   BO_MAP(screen, dec->fence_bo, NOUVEAU_BO_RDWR, screen->client);
    dec->fence_map = dec->fence_bo->map;
    dec->fence_map[0] = dec->fence_map[4] = dec->fence_map[8] = 0;
    dec->comm = (struct comm *)(dec->fence_map + (COMM_OFFSET/sizeof(*dec->fence_map)));
 
    /* So lets test if the fence is working? */
-   nouveau_pushbuf_space(push[0], 16, 1, 0);
-   PUSH_REFN (push[0], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
+   PUSH_SPACE_EX(push[0], 16, 1, 0);
+   PUSH_REF1 (push[0], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
    BEGIN_NVC0(push[0], SUBC_BSP(0x240), 3);
    PUSH_DATAh(push[0], dec->fence_bo->offset);
    PUSH_DATA (push[0], dec->fence_bo->offset);
@@ -309,8 +308,8 @@ nvc0_create_decoder(struct pipe_context *context,
    PUSH_DATA (push[0], 0);
    PUSH_KICK (push[0]);
 
-   nouveau_pushbuf_space(push[1], 16, 1, 0);
-   PUSH_REFN (push[1], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
+   PUSH_SPACE_EX(push[1], 16, 1, 0);
+   PUSH_REF1 (push[1], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
    BEGIN_NVC0(push[1], SUBC_VP(0x240), 3);
    PUSH_DATAh(push[1], (dec->fence_bo->offset + 0x10));
    PUSH_DATA (push[1], (dec->fence_bo->offset + 0x10));
@@ -320,8 +319,8 @@ nvc0_create_decoder(struct pipe_context *context,
    PUSH_DATA (push[1], 0);
    PUSH_KICK (push[1]);
 
-   nouveau_pushbuf_space(push[2], 16, 1, 0);
-   PUSH_REFN (push[2], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
+   PUSH_SPACE_EX(push[2], 16, 1, 0);
+   PUSH_REF1 (push[2], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
    BEGIN_NVC0(push[2], SUBC_PPP(0x240), 3);
    PUSH_DATAh(push[2], (dec->fence_bo->offset + 0x20));
    PUSH_DATA (push[2], (dec->fence_bo->offset + 0x20));

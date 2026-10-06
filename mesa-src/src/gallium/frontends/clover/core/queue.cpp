@@ -25,6 +25,7 @@
 #include "pipe/p_screen.h"
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
+#include "util/u_debug.h"
 
 using namespace clover;
 
@@ -32,7 +33,7 @@ namespace {
    void
    debug_notify_callback(void *data,
                          unsigned *id,
-                         enum pipe_debug_type type,
+                         enum util_debug_type type,
                          const char *fmt,
                          va_list args) {
       const command_queue *queue = (const command_queue *)data;
@@ -44,13 +45,39 @@ namespace {
 
 command_queue::command_queue(clover::context &ctx, clover::device &dev,
                              cl_command_queue_properties props) :
-   context(ctx), device(dev), props(props) {
+   context(ctx), device(dev), _props(props) {
    pipe = dev.pipe->context_create(dev.pipe, NULL, PIPE_CONTEXT_COMPUTE_ONLY);
    if (!pipe)
       throw error(CL_INVALID_DEVICE);
 
    if (ctx.notify) {
-      struct pipe_debug_callback cb;
+      struct util_debug_callback cb;
+      memset(&cb, 0, sizeof(cb));
+      cb.debug_message = &debug_notify_callback;
+      cb.data = this;
+      if (pipe->set_debug_callback)
+         pipe->set_debug_callback(pipe, &cb);
+   }
+}
+command_queue::command_queue(clover::context &ctx, clover::device &dev,
+                             std::vector<cl_queue_properties> properties) :
+   context(ctx), device(dev), _properties(properties), _props(0) {
+
+   for(std::vector<cl_queue_properties>::size_type i = 0; i != properties.size(); i += 2) {
+      if (properties[i] == 0)
+         break;
+      if (properties[i] == CL_QUEUE_PROPERTIES)
+         _props |= properties[i + 1];
+      else if (properties[i] != CL_QUEUE_SIZE)
+         throw error(CL_INVALID_VALUE);
+   }
+
+   pipe = dev.pipe->context_create(dev.pipe, NULL, PIPE_CONTEXT_COMPUTE_ONLY);
+   if (!pipe)
+      throw error(CL_INVALID_DEVICE);
+
+   if (ctx.notify) {
+      struct util_debug_callback cb;
       memset(&cb, 0, sizeof(cb));
       cb.debug_message = &debug_notify_callback;
       cb.data = this;
@@ -65,10 +92,15 @@ command_queue::~command_queue() {
 
 void
 command_queue::flush() {
+   std::lock_guard<std::mutex> lock(queued_events_mutex);
+   flush_unlocked();
+}
+
+void
+command_queue::flush_unlocked() {
    pipe_screen *screen = device().pipe;
    pipe_fence_handle *fence = NULL;
 
-   std::lock_guard<std::mutex> lock(queued_events_mutex);
    if (!queued_events.empty()) {
       pipe->flush(pipe, &fence, 0);
 
@@ -82,14 +114,32 @@ command_queue::flush() {
    }
 }
 
+void
+command_queue::svm_migrate(const std::vector<void const*> &svm_pointers,
+                           const std::vector<size_t> &sizes,
+                           cl_mem_migration_flags flags) {
+   if (!pipe->svm_migrate)
+      return;
+
+   bool to_device = !(flags & CL_MIGRATE_MEM_OBJECT_HOST);
+   bool mem_undefined = flags & CL_MIGRATE_MEM_OBJECT_CONTENT_UNDEFINED;
+   pipe->svm_migrate(pipe, svm_pointers.size(), svm_pointers.data(),
+                     sizes.data(), to_device, mem_undefined);
+}
+
 cl_command_queue_properties
+command_queue::props() const {
+   return _props;
+}
+
+std::vector<cl_queue_properties>
 command_queue::properties() const {
-   return props;
+   return _properties;
 }
 
 bool
 command_queue::profiling_enabled() const {
-   return props & CL_QUEUE_PROFILING_ENABLE;
+   return _props & CL_QUEUE_PROFILING_ENABLE;
 }
 
 void
@@ -99,4 +149,10 @@ command_queue::sequence(hard_event &ev) {
       queued_events.back()().chain(ev);
 
    queued_events.push_back(ev);
+
+   // Arbitrary threshold.
+   // The CTS tends to run a lot of subtests without flushing with the image
+   // tests, so flush regularly to prevent stack overflows.
+   if (queued_events.size() > 1000)
+      flush_unlocked();
 }

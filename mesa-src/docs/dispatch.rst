@@ -51,7 +51,7 @@ of the context current in the thread, and the second pointer stores the
 address of the *dispatch table* associated with that context. The
 dispatch table stores pointers to functions that actually implement
 specific GL functions. Each time a new context is made current in a
-thread, these pointers a updated.
+thread, these pointers are updated.
 
 The implementation of functions such as ``glVertex3fv`` becomes
 conceptually simple:
@@ -71,16 +71,15 @@ This can be implemented in just a few lines of C code. The file
    {
        const struct _glapi_table * const dispatch = GET_DISPATCH();
 
-       (*dispatch->Vertex3f)(x, y, z);
+       dispatch->Vertex3f(x, y, z);
    }
 
 The problem with this simple implementation is the large amount of
 overhead that it adds to every GL function call.
 
 In a multithreaded environment, a naive implementation of
-``GET_DISPATCH`` involves a call to ``pthread_getspecific`` or a similar
-function. Mesa provides a wrapper function called
-``_glapi_get_dispatch`` that is used by default.
+``GET_DISPATCH()`` involves a call to ``_mesa_glapi_get_dispatch()`` or
+``_mesa_glapi_tls_Dispatch``.
 
 3. Optimizations
 ----------------
@@ -90,51 +89,18 @@ performance hit imposed by GL dispatch. This section describes these
 optimizations. The benefits of each optimization and the situations
 where each can or cannot be used are listed.
 
-3.1. Dual dispatch table pointers
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The vast majority of OpenGL applications use the API in a single
-threaded manner. That is, the application has only one thread that makes
-calls into the GL. In these cases, not only do the calls to
-``pthread_getspecific`` hurt performance, but they are completely
-unnecessary! It is possible to detect this common case and avoid these
-calls.
-
-Each time a new dispatch table is set, Mesa examines and records the ID
-of the executing thread. If the same thread ID is always seen, Mesa
-knows that the application is, from OpenGL's point of view, single
-threaded.
-
-As long as an application is single threaded, Mesa stores a pointer to
-the dispatch table in a global variable called ``_glapi_Dispatch``. The
-pointer is also stored in a per-thread location via
-``pthread_setspecific``. When Mesa detects that an application has
-become multithreaded, ``NULL`` is stored in ``_glapi_Dispatch``.
-
-Using this simple mechanism the dispatch functions can detect the
-multithreaded case by comparing ``_glapi_Dispatch`` to ``NULL``. The
-resulting implementation of ``GET_DISPATCH`` is slightly more complex,
-but it avoids the expensive ``pthread_getspecific`` call in the common
-case.
-
-.. code-block:: c
-   :caption: Improved ``GET_DISPATCH`` Implementation
-
-   #define GET_DISPATCH() \
-       (_glapi_Dispatch != NULL) \
-           ? _glapi_Dispatch : pthread_getspecific(&_glapi_Dispatch_key)
-
-3.2. ELF TLS
+3.1. ELF TLS
 ~~~~~~~~~~~~
 
 Starting with the 2.4.20 Linux kernel, each thread is allocated an area
 of per-thread, global storage. Variables can be put in this area using
-some extensions to GCC. By storing the dispatch table pointer in this
-area, the expensive call to ``pthread_getspecific`` and the test of
-``_glapi_Dispatch`` can be avoided.
+some extensions to GCC that called ``ELF TLS``. By storing the dispatch table
+pointer in this area, the expensive call to ``pthread_getspecific`` and
+the test of ``_mesa_glapi_Dispatch`` can be avoided. As we don't support for
+Linux kernel earlier than 2.4.20, so we can always using ``ELF TLS``.
 
 The dispatch table pointer is stored in a new variable called
-``_glapi_tls_Dispatch``. A new variable name is used so that a single
+``_mesa_glapi_tls_Dispatch``. A new variable name is used so that a single
 libGL can implement both interfaces. This allows the libGL to operate
 with direct rendering drivers that use either interface. Once the
 pointer is properly declared, ``GET_DISPACH`` becomes a simple variable
@@ -143,19 +109,14 @@ reference.
 .. code-block:: c
    :caption: TLS ``GET_DISPATCH`` Implementation
 
-   extern __thread struct _glapi_table *_glapi_tls_Dispatch
-       __attribute__((tls_model("initial-exec")));
+   extern __THREAD_INITIAL_EXEC struct _glapi_table *_mesa_glapi_tls_Dispatch;
 
-   #define GET_DISPATCH() _glapi_tls_Dispatch
+   #define GET_DISPATCH() _mesa_glapi_tls_Dispatch
 
-Use of this path is controlled by the preprocessor define
-``USE_ELF_TLS``. Any platform capable of using ELF TLS should use this
-as the default dispatch method.
-
-3.3. Assembly Language Dispatch Stubs
+3.2. Assembly Language Dispatch Stubs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Many platforms has difficulty properly optimizing the tail-call in the
+Many platforms have difficulty properly optimizing the tail-call in the
 dispatch stubs. Platforms like x86 that pass parameters on the stack
 seem to have even more difficulty optimizing these routines. All of the
 dispatch routines are very short, and it is trivial to create optimal
@@ -168,24 +129,21 @@ The biggest hurdle to creating assembly stubs is handling the various
 ways that the dispatch table pointer can be accessed. There are four
 different methods that can be used:
 
-#. Using ``_glapi_Dispatch`` directly in builds for non-multithreaded
+#. Using ``_mesa_glapi_Dispatch`` directly in builds for non-multithreaded
    environments.
-#. Using ``_glapi_Dispatch`` and ``_glapi_get_dispatch`` in
+#. Using ``_mesa_glapi_Dispatch`` and ``_mesa_glapi_get_dispatch`` in
    multithreaded environments.
-#. Using ``_glapi_Dispatch`` and ``pthread_getspecific`` in
-   multithreaded environments.
-#. Using ``_glapi_tls_Dispatch`` directly in TLS enabled multithreaded
+#. Using ``_mesa_glapi_tls_Dispatch`` directly in TLS enabled multithreaded
    environments.
 
 People wishing to implement assembly stubs for new platforms should
-focus on #4 if the new platform supports TLS. Otherwise, implement #2
-followed by #3. Environments that do not support multithreading are
+focus on #3 if the new platform supports TLS. Otherwise implement #2.
+Environments that do not support multithreading are
 uncommon and not terribly relevant.
 
 Selection of the dispatch table pointer access method is controlled by a
 few preprocessor defines.
 
--  If ``USE_ELF_TLS`` is defined, method #3 is used.
 -  If ``HAVE_PTHREAD`` is defined, method #2 is used.
 -  If none of the preceding are defined, method #1 is used.
 
@@ -231,7 +189,7 @@ dispatch functions from being built.
 
 .. _fixedsize:
 
-3.4. Fixed-Length Dispatch Stubs
+3.3. Fixed-Length Dispatch Stubs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 To implement ``glXGetProcAddress``, Mesa stores a table that associates

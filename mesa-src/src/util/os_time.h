@@ -28,7 +28,7 @@
 /**
  * @file
  * OS independent time-manipulation functions.
- * 
+ *
  * @author Jose Fonseca <jfonseca@vmware.com>
  */
 
@@ -37,12 +37,14 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* must be equal to PIPE_TIMEOUT_INFINITE */
+#define ONE_SECOND_IN_NS INT64_C(1000000000)
+
 #define OS_TIMEOUT_INFINITE 0xffffffffffffffffull
 
 /*
@@ -59,6 +61,17 @@ static inline int64_t
 os_time_get(void)
 {
    return os_time_get_nano() / 1000;
+}
+
+
+static inline struct tm *
+os_localtime(const time_t *timer, struct tm *buf)
+{
+#ifdef _WIN32
+   return localtime_s(buf, timer) ? NULL : buf;
+#else
+   return localtime_r(timer, buf);
+#endif
 }
 
 

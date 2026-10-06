@@ -35,6 +35,9 @@
 #include "texobj.h"
 #include "teximage.h"
 #include "enums.h"
+#include "api_exec_decl.h"
+
+#include "state_tracker/st_context.h"
 
 mesa_format
 _mesa_get_shader_image_format(GLenum format)
@@ -159,6 +162,77 @@ _mesa_get_shader_image_format(GLenum format)
 
    default:
       return MESA_FORMAT_NONE;
+   }
+}
+
+GLenum
+_mesa_get_shader_image_pixel_type(GLenum image_format)
+{
+   /* This is the mapping from image format to pixel type described in table
+    * 8.35 from the OpenGL 4.6 Compatibility spec.
+    */
+   switch (image_format) {
+   case GL_RGBA32F:
+   case GL_RG32F:
+   case GL_R32F:
+      return GL_FLOAT;
+
+   case GL_RGBA16F:
+   case GL_RG16F:
+   case GL_R16F:
+      return GL_HALF_FLOAT;
+
+   case GL_R11F_G11F_B10F:
+      return GL_UNSIGNED_INT_10F_11F_11F_REV;
+
+   case GL_RGBA32UI:
+   case GL_RG32UI:
+   case GL_R32UI:
+      return GL_UNSIGNED_INT;
+
+   case GL_RGBA16UI:
+   case GL_RG16UI:
+   case GL_R16UI:
+   case GL_RGBA16:
+   case GL_RG16:
+   case GL_R16:
+      return GL_UNSIGNED_SHORT;
+
+   case GL_RGB10_A2UI:
+   case GL_RGB10_A2:
+      return GL_UNSIGNED_INT_2_10_10_10_REV;
+
+   case GL_RGBA8UI:
+   case GL_RG8UI:
+   case GL_R8UI:
+   case GL_RGBA8:
+   case GL_RG8:
+   case GL_R8:
+      return GL_UNSIGNED_BYTE;
+
+   case GL_RGBA32I:
+   case GL_RG32I:
+   case GL_R32I:
+      return GL_INT;
+
+   case GL_RGBA16I:
+   case GL_RG16I:
+   case GL_R16I:
+   case GL_RGBA16_SNORM:
+   case GL_RG16_SNORM:
+   case GL_R16_SNORM:
+      return GL_SHORT;
+
+   case GL_RGBA8I:
+   case GL_RG8I:
+   case GL_R8I:
+   case GL_RGBA8_SNORM:
+   case GL_RG8_SNORM:
+   case GL_R8_SNORM:
+      return GL_BYTE;
+
+   default:
+      return GL_NONE;
    }
 }
 
@@ -468,10 +542,10 @@ _mesa_is_image_unit_valid(struct gl_context *ctx, struct gl_image_unit *u)
    if (!t->_BaseComplete && !t->_MipmapComplete)
        _mesa_test_texobj_completeness(ctx, t);
 
-   if (u->Level < t->BaseLevel ||
+   if (u->Level < t->Attrib.BaseLevel ||
        u->Level > t->_MaxLevel ||
-       (u->Level == t->BaseLevel && !t->_BaseComplete) ||
-       (u->Level != t->BaseLevel && !t->_MipmapComplete))
+       (u->Level == t->Attrib.BaseLevel && !t->_BaseComplete) ||
+       (u->Level != t->Attrib.BaseLevel && !t->_MipmapComplete))
       return GL_FALSE;
 
    if (_mesa_tex_target_is_layered(t->Target) &&
@@ -495,7 +569,7 @@ _mesa_is_image_unit_valid(struct gl_context *ctx, struct gl_image_unit *u)
    if (!tex_format)
       return GL_FALSE;
 
-   switch (t->ImageFormatCompatibilityType) {
+   switch (t->Attrib.ImageFormatCompatibilityType) {
    case GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE:
       if (_mesa_get_format_bytes(tex_format) !=
           _mesa_get_format_bytes(u->_ActualFormat))
@@ -588,8 +662,8 @@ bind_image_texture(struct gl_context *ctx, struct gl_texture_object *texObj,
 
    u = &ctx->ImageUnits[unit];
 
-   FLUSH_VERTICES(ctx, 0);
-   ctx->NewDriverState |= ctx->DriverFlags.NewImageUnits;
+   FLUSH_VERTICES(ctx, 0, 0);
+   ctx->NewDriverState |= ST_NEW_IMAGE_UNITS;
 
    set_image_binding(u, texObj, level, layered, layer, access, format);
 }
@@ -641,11 +715,10 @@ _mesa_BindImageTexture(GLuint unit, GLuint texture, GLint level,
        * so those are excluded from this requirement.
        *
        * Additionally, issue 10 of the OES_EGL_image_external_essl3 spec
-       * states that glBindImageTexture must accept external textures.
+       * states that glBindImageTexture must accept external texture objects.
        */
-      if (_mesa_is_gles(ctx) && !texObj->Immutable &&
-          texObj->Target != GL_TEXTURE_BUFFER &&
-          texObj->Target != GL_TEXTURE_EXTERNAL_OES) {
+      if (_mesa_is_gles(ctx) && !texObj->Immutable && !texObj->External &&
+          texObj->Target != GL_TEXTURE_BUFFER) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glBindImageTexture(!immutable)");
          return;
@@ -687,8 +760,8 @@ bind_image_textures(struct gl_context *ctx, GLuint first, GLuint count,
    int i;
 
    /* Assume that at least one binding will be changed */
-   FLUSH_VERTICES(ctx, 0);
-   ctx->NewDriverState |= ctx->DriverFlags.NewImageUnits;
+   FLUSH_VERTICES(ctx, 0, 0);
+   ctx->NewDriverState |= ST_NEW_IMAGE_UNITS;
 
    /* Note that the error semantics for multi-bind commands differ from
     * those of other GL commands.
@@ -709,7 +782,7 @@ bind_image_textures(struct gl_context *ctx, GLuint first, GLuint count,
     *       their parameters are valid and no other error occurs."
     */
 
-   _mesa_HashLockMutex(ctx->Shared->TexObjects);
+   _mesa_HashLockMutex(&ctx->Shared->TexObjects);
 
    for (i = 0; i < count; i++) {
       struct gl_image_unit *u = &ctx->ImageUnits[first + i];
@@ -786,7 +859,7 @@ bind_image_textures(struct gl_context *ctx, GLuint first, GLuint count,
       }
    }
 
-   _mesa_HashUnlockMutex(ctx->Shared->TexObjects);
+   _mesa_HashUnlockMutex(&ctx->Shared->TexObjects);
 }
 
 void GLAPIENTRY
@@ -803,7 +876,8 @@ _mesa_BindImageTextures(GLuint first, GLsizei count, const GLuint *textures)
 {
    GET_CURRENT_CONTEXT(ctx);
 
-   if (!ctx->Extensions.ARB_shader_image_load_store) {
+   if (!ctx->Extensions.ARB_shader_image_load_store &&
+       !_mesa_is_gles31(ctx)) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "glBindImageTextures()");
       return;
    }

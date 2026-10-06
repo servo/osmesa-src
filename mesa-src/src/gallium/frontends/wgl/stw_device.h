@@ -29,19 +29,22 @@
 #define STW_DEVICE_H_
 
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
+#include "frontend/api.h"
 #include "util/u_handle_table.h"
+#include "util/u_dynarray.h"
+#include "util/xmlconfig.h"
 #include <GL/gl.h>
+#include "stw_gdishim.h"
 #include "gldrv.h"
 #include "stw_pixelformat.h"
 
-
-#define STW_MAX_PIXELFORMATS   256
-
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 struct pipe_screen;
-struct st_api;
-struct st_manager;
+struct pipe_frontend_screen;
 struct stw_framebuffer;
 
 struct stw_device
@@ -52,17 +55,15 @@ struct stw_device
    bool screen_initialized;
    struct pipe_screen *screen;
 
-   /* Cache some PIPE_CAP_* */
+   /* Cache some pipe_caps.* */
    unsigned max_2d_length;
 
-   struct st_api *stapi;
-   struct st_manager *smapi;
+   struct pipe_frontend_screen *fscreen;
 
    LUID AdapterLuid;
 
-   struct stw_pixelformat_info pixelformats[STW_MAX_PIXELFORMATS];
+   struct util_dynarray pixelformats;
    unsigned pixelformat_count;
-   unsigned pixelformat_extended_count;
 
    struct WGLCALLBACKS callbacks;
 
@@ -76,7 +77,7 @@ struct stw_device
    CRITICAL_SECTION fb_mutex;
    struct stw_framebuffer *fb_head;
    
-#ifdef DEBUG
+#if MESA_DEBUG
    unsigned long memdbg_no;
 #endif
 
@@ -84,14 +85,25 @@ struct stw_device
    int refresh_rate;
    int swap_interval;
 
+   driOptionCache option_cache;
+   driOptionCache option_info;
+   struct st_config_options st_options;
+
    bool initialized;
+   bool zink;
 };
 
 
 extern struct stw_device *stw_dev;
 
-boolean
-stw_init_screen(void);
+bool
+stw_init_screen(HDC hdc);
+
+struct stw_device *
+stw_get_device(void);
+
+char *
+stw_get_config_xml(void);
 
 static inline struct stw_context *
 stw_lookup_context_locked( DHGLRC dhglrc )
@@ -115,6 +127,16 @@ stw_unlock_contexts(struct stw_device *stw_dev)
    LeaveCriticalSection(&stw_dev->ctx_mutex);
 }
 
+static inline struct stw_context *
+stw_lookup_context( DHGLRC dhglrc )
+{
+   struct stw_context *ret;
+   stw_lock_contexts(stw_dev);
+   ret = stw_lookup_context_locked(dhglrc);
+   stw_unlock_contexts(stw_dev);
+   return ret;
+}
+
 
 static inline void
 stw_lock_framebuffers(struct stw_device *stw_dev)
@@ -129,5 +151,8 @@ stw_unlock_framebuffers(struct stw_device *stw_dev)
    LeaveCriticalSection(&stw_dev->fb_mutex);
 }
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* STW_DEVICE_H_ */

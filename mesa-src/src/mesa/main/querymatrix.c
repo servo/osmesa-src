@@ -13,11 +13,12 @@
 
 
 #include <stdlib.h>
-#include "c99_math.h"
-#include "glheader.h"
-#include "querymatrix.h"
+#include <math.h>
+
+#include "util/glheader.h"
 #include "main/get.h"
 #include "util/macros.h"
+#include "api_exec_decl.h"
 
 
 /**
@@ -40,7 +41,7 @@
 
 
 GLbitfield GLAPIENTRY
-_mesa_QueryMatrixxOES(GLfixed mantissa[16], GLint exponent[16])
+_mesa_QueryMatrixxOES(GLfixed *mantissa, GLint *exponent)
 {
    GLfloat matrix[16];
    GLint tmp;

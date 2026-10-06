@@ -1,38 +1,17 @@
-
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef SVGA_SCREEN_CACHE_H_
 #define SVGA_SCREEN_CACHE_H_
 
-
-#include "svga_types.h"
 #include "svga_reg.h"
 #include "svga3d_reg.h"
 
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 
 #include "util/list.h"
 
@@ -70,10 +49,11 @@ struct svga_host_surface_cache_key
    uint32_t sampleCount:5;
    uint32_t scanout:1;
    uint32_t coherent:1;
+   uint32_t persistent:1;
 };
 
 
-struct svga_host_surface_cache_entry 
+struct svga_host_surface_cache_entry
 {
    /** 
     * Head for the LRU list, svga_host_surface_cache::unused, and
@@ -148,12 +128,13 @@ svga_screen_cache_init(struct svga_screen *svgascreen);
 struct svga_winsys_surface *
 svga_screen_surface_create(struct svga_screen *svgascreen,
                            unsigned bind_flags, enum pipe_resource_usage usage,
-                           boolean *validated,
+                           bool *invalidated,
                            struct svga_host_surface_cache_key *key);
 
 void
 svga_screen_surface_destroy(struct svga_screen *svgascreen,
                             const struct svga_host_surface_cache_key *key,
+                            bool to_invalidate,
                             struct svga_winsys_surface **handle);
 
 void

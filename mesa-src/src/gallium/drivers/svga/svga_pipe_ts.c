@@ -1,31 +1,13 @@
-/**********************************************************
- * Copyright 2018-2020 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2018-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
+#include "nir/nir_to_tgsi.h"
 #include "pipe/p_context.h"
 #include "util/u_memory.h"
-#include "tgsi/tgsi_parse.h"
 
 #include "svga_context.h"
 #include "svga_shader.h"
@@ -47,6 +29,15 @@ svga_set_tess_state(struct pipe_context *pipe,
 }
 
 
+static void
+svga_set_patch_vertices(struct pipe_context *pipe, uint8_t patch_vertices)
+{
+   struct svga_context *svga = svga_context(pipe);
+
+   svga->patch_vertices = patch_vertices;
+}
+
+
 static void *
 svga_create_tcs_state(struct pipe_context *pipe,
                       const struct pipe_shader_state *templ)
@@ -54,23 +45,18 @@ svga_create_tcs_state(struct pipe_context *pipe,
    struct svga_context *svga = svga_context(pipe);
    struct svga_tcs_shader *tcs;
 
-   tcs = CALLOC_STRUCT(svga_tcs_shader);
-   if (!tcs)
-      return NULL;
-
    SVGA_STATS_TIME_PUSH(svga_sws(svga), SVGA_STATS_TIME_CREATETCS);
 
-   tcs->base.tokens = tgsi_dup_tokens(templ->tokens);
+   tcs = (struct svga_tcs_shader *)
+            svga_create_shader(pipe, templ, PIPE_SHADER_TESS_CTRL,
+                               sizeof(struct svga_tcs_shader));
+   if (!tcs)
+      goto done;
 
-   /* Collect basic info that we'll need later:
-    */
-   tgsi_scan_shader(tcs->base.tokens, &tcs->base.info);
-
-   tcs->base.id = svga->debug.shader_id++;
-
-   tcs->generic_outputs = svga_get_generic_outputs_mask(&tcs->base.info);
-
+done:
    SVGA_STATS_TIME_POP(svga_sws(svga));
+   (void) svga; /* silence unused var warning */
+
    return tcs;
 }
 
@@ -86,6 +72,10 @@ svga_bind_tcs_state(struct pipe_context *pipe, void *shader)
 
    svga->curr.tcs = tcs;
    svga->dirty |= SVGA_NEW_TCS;
+
+   /* Check if the shader uses samplers */
+   svga_set_curr_shader_use_samplers_flag(svga, PIPE_SHADER_TESS_CTRL,
+                                          svga_shader_use_samplers(&tcs->base));
 }
 
 
@@ -138,23 +128,19 @@ svga_create_tes_state(struct pipe_context *pipe,
    struct svga_context *svga = svga_context(pipe);
    struct svga_tes_shader *tes;
 
-   tes = CALLOC_STRUCT(svga_tes_shader);
-   if (!tes)
-      return NULL;
-
    SVGA_STATS_TIME_PUSH(svga_sws(svga), SVGA_STATS_TIME_CREATETES);
 
-   tes->base.tokens = tgsi_dup_tokens(templ->tokens);
+   tes = (struct svga_tes_shader *)
+            svga_create_shader(pipe, templ, PIPE_SHADER_TESS_EVAL,
+                               sizeof(struct svga_tes_shader));
 
-   /* Collect basic info that we'll need later:
-    */
-   tgsi_scan_shader(tes->base.tokens, &tes->base.info);
+   if (!tes)
+      goto done;
 
-   tes->base.id = svga->debug.shader_id++;
-
-   tes->generic_inputs = svga_get_generic_inputs_mask(&tes->base.info);
-
+done:
    SVGA_STATS_TIME_POP(svga_sws(svga));
+   (void) svga; /* silence unused var warning */
+
    return tes;
 }
 
@@ -170,6 +156,10 @@ svga_bind_tes_state(struct pipe_context *pipe, void *shader)
 
    svga->curr.tes = tes;
    svga->dirty |= SVGA_NEW_TES;
+
+   /* Check if the shader uses samplers */
+   svga_set_curr_shader_use_samplers_flag(svga, PIPE_SHADER_TESS_EVAL,
+                                          svga_shader_use_samplers(&tes->base));
 }
 
 
@@ -210,6 +200,7 @@ void
 svga_init_ts_functions(struct svga_context *svga)
 {
    svga->pipe.set_tess_state = svga_set_tess_state;
+   svga->pipe.set_patch_vertices = svga_set_patch_vertices;
    svga->pipe.create_tcs_state = svga_create_tcs_state;
    svga->pipe.bind_tcs_state = svga_bind_tcs_state;
    svga->pipe.delete_tcs_state = svga_delete_tcs_state;

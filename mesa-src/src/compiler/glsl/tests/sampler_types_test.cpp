@@ -22,7 +22,6 @@
  */
 #include <gtest/gtest.h>
 #include "util/compiler.h"
-#include "main/mtypes.h"
 #include "main/macros.h"
 #include "ir.h"
 
@@ -40,13 +39,13 @@
 #define T(TYPE, DIM, DATA_TYPE, ARR, SHAD, COMPS)           \
 TEST(sampler_types, TYPE)                                   \
 {                                                           \
-   const glsl_type *type = glsl_type::TYPE##_type;          \
+   const glsl_type *type = &glsl_type_builtin_##TYPE;        \
    EXPECT_EQ(GLSL_TYPE_SAMPLER, type->base_type);           \
    EXPECT_EQ(DIM, type->sampler_dimensionality);            \
    EXPECT_EQ(DATA_TYPE, type->sampled_type);                \
    ARR;                                                     \
    SHAD;                                                    \
-   EXPECT_EQ(COMPS, type->coordinate_components());         \
+   EXPECT_EQ(COMPS, glsl_get_sampler_coordinate_components(type));         \
 }
 
 T( sampler1D,        GLSL_SAMPLER_DIM_1D,   GLSL_TYPE_FLOAT, NONARRAY, COLOR,  1)

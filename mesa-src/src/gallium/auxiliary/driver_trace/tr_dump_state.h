@@ -30,11 +30,25 @@
 
 #include "pipe/p_state.h"
 #include "pipe/p_shader_tokens.h"
+#include "pipe/p_video_codec.h"
 
+struct winsys_handle;
 
 void trace_dump_resource_template(const struct pipe_resource *templat);
 
+void trace_dump_video_codec_template(const struct pipe_video_codec *templat);
+
+void trace_dump_video_buffer_template(const struct pipe_video_buffer *templat);
+
+void trace_dump_pipe_picture_desc(const struct pipe_picture_desc *picture);
+
+void trace_dump_pipe_vpp_blend(const struct pipe_vpp_blend *blend);
+
+void trace_dump_pipe_vpp_desc(const struct pipe_vpp_desc *process_properties);
+
 void trace_dump_box(const struct pipe_box *box);
+
+void trace_dump_u_rect(const struct u_rect *rect);
 
 void trace_dump_rasterizer_state(const struct pipe_rasterizer_state *state);
 
@@ -62,10 +76,13 @@ void trace_dump_stencil_ref(const struct pipe_stencil_ref *state);
 
 void trace_dump_framebuffer_state(const struct pipe_framebuffer_state *state);
 
+void trace_dump_framebuffer_state_deep(const struct pipe_framebuffer_state *state);
+
 void trace_dump_sampler_state(const struct pipe_sampler_state *state);
 
-void trace_dump_sampler_view_template(const struct pipe_sampler_view *view,
-                                      enum pipe_texture_target target);
+void trace_dump_sampler_view_template(const struct pipe_sampler_view *view);
+
+void trace_dump_surface(const struct pipe_surface *surface);
 
 void trace_dump_surface_template(const struct pipe_surface *state,
                                  enum pipe_texture_target target);
@@ -82,13 +99,24 @@ void trace_dump_shader_buffer(const struct pipe_shader_buffer *buffer);
 
 void trace_dump_draw_info(const struct pipe_draw_info *state);
 
+void trace_dump_draw_vertex_state_info(struct pipe_draw_vertex_state_info state);
+
+void trace_dump_draw_start_count(const struct pipe_draw_start_count_bias *state);
+
+void trace_dump_draw_indirect_info(const struct pipe_draw_indirect_info *state);
+
 void trace_dump_blit_info(const struct pipe_blit_info *);
 
-void trace_dump_query_result(unsigned query_type,
+void trace_dump_query_result(unsigned query_type, unsigned index,
                              const union pipe_query_result *result);
 
 void trace_dump_grid_info(const struct pipe_grid_info *state);
 
+void trace_dump_compute_state_object_info(const struct pipe_compute_state_object_info *state);
+
 void trace_dump_image_view(const struct pipe_image_view *view);
 
+void trace_dump_memory_info(const struct pipe_memory_info *state);
+
+void trace_dump_winsys_handle(const struct winsys_handle *whandle);
 #endif /* TR_STATE_H */

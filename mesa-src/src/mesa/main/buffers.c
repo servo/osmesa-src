@@ -30,16 +30,24 @@
 
 
 
-#include "glheader.h"
+#include "util/glheader.h"
 #include "buffers.h"
 #include "context.h"
+#include "draw_validate.h"
 #include "enums.h"
 #include "fbobject.h"
+#include "framebuffer.h"
 #include "hash.h"
 #include "mtypes.h"
+#include "state.h"
 #include "util/bitscan.h"
 #include "util/u_math.h"
+#include "api_exec_decl.h"
 
+#include "state_tracker/st_manager.h"
+#include "state_tracker/st_atom.h"
+#include "state_tracker/st_context.h"
+#include "state_tracker/st_util.h"
 
 #define BAD_MASK ~0u
 
@@ -65,7 +73,6 @@ supported_buffer_bitmask(const struct gl_context *ctx,
    }
    else {
       /* A window system framebuffer */
-      GLint i;
       mask = BUFFER_BIT_FRONT_LEFT; /* always have this */
       if (fb->Visual.stereoMode) {
          mask |= BUFFER_BIT_FRONT_RIGHT;
@@ -75,10 +82,6 @@ supported_buffer_bitmask(const struct gl_context *ctx,
       }
       else if (fb->Visual.doubleBufferMode) {
          mask |= BUFFER_BIT_BACK_LEFT;
-      }
-
-      for (i = 0; i < fb->Visual.numAuxBuffers; i++) {
-         mask |= (BUFFER_BIT_AUX0 << i);
       }
    }
 
@@ -161,7 +164,6 @@ draw_buffer_enum_to_bitmask(const struct gl_context *ctx, GLenum buffer)
       case GL_FRONT_LEFT:
          return BUFFER_BIT_FRONT_LEFT;
       case GL_AUX0:
-         return BUFFER_BIT_AUX0;
       case GL_AUX1:
       case GL_AUX2:
       case GL_AUX3:
@@ -220,10 +222,9 @@ read_buffer_enum_to_index(const struct gl_context *ctx, GLenum buffer)
          return BUFFER_FRONT_LEFT;
       case GL_FRONT_LEFT:
          return BUFFER_FRONT_LEFT;
-      case GL_AUX0:
-         return BUFFER_AUX0;
       case GL_FRONT_AND_BACK:
          return BUFFER_FRONT_LEFT;
+      case GL_AUX0:
       case GL_AUX1:
       case GL_AUX2:
       case GL_AUX3:
@@ -288,7 +289,7 @@ draw_buffer(struct gl_context *ctx, struct gl_framebuffer *fb,
 {
    GLbitfield destMask;
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_COLOR_BUFFER_BIT);
 
    if (MESA_VERBOSE & VERBOSE_API) {
       _mesa_debug(ctx, "%s %s\n", caller, _mesa_enum_to_string(buffer));
@@ -322,10 +323,8 @@ draw_buffer(struct gl_context *ctx, struct gl_framebuffer *fb,
 
    /* Call device driver function only if fb is the bound draw buffer */
    if (fb == ctx->DrawBuffer) {
-      if (ctx->Driver.DrawBuffer)
-         ctx->Driver.DrawBuffer(ctx);
-      if (ctx->Driver.DrawBufferAllocate)
-         ctx->Driver.DrawBufferAllocate(ctx);
+      if (_mesa_is_winsys_fbo(ctx->DrawBuffer))
+         _mesa_draw_buffer_allocate(ctx);
    }
 }
 
@@ -435,7 +434,7 @@ draw_buffers(struct gl_context *ctx, struct gl_framebuffer *fb, GLsizei n,
    GLbitfield usedBufferMask, supportedMask;
    GLbitfield destMask[MAX_DRAW_BUFFERS];
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_COLOR_BUFFER_BIT);
 
    if (!no_error) {
       /* Turns out n==0 is a valid input that should not produce an error.
@@ -461,7 +460,7 @@ draw_buffers(struct gl_context *ctx, struct gl_framebuffer *fb, GLsizei n,
        *  and the constant must be BACK or NONE."
        * (same restriction applies with GL_EXT_draw_buffers specification)
        */
-      if (ctx->API == API_OPENGLES2 && _mesa_is_winsys_fbo(fb) &&
+      if (_mesa_is_gles2(ctx) && _mesa_is_winsys_fbo(fb) &&
           (n != 1 || (buffers[0] != GL_NONE && buffers[0] != GL_BACK))) {
          _mesa_error(ctx, GL_INVALID_OPERATION, "%s(invalid buffers)", caller);
          return;
@@ -590,7 +589,7 @@ draw_buffers(struct gl_context *ctx, struct gl_framebuffer *fb, GLsizei n,
              * INVALID_OPERATION." (same restriction applies with
              * GL_EXT_draw_buffers specification)
              */
-            if (ctx->API == API_OPENGLES2 && _mesa_is_user_fbo(fb) &&
+            if (_mesa_is_gles2(ctx) && _mesa_is_user_fbo(fb) &&
                 buffers[output] != GL_NONE &&
                 buffers[output] != GL_COLOR_ATTACHMENT0 + output) {
                _mesa_error(ctx, GL_INVALID_OPERATION,
@@ -631,10 +630,8 @@ draw_buffers(struct gl_context *ctx, struct gl_framebuffer *fb, GLsizei n,
     * may not be valid.
     */
    if (fb == ctx->DrawBuffer) {
-      if (ctx->Driver.DrawBuffer)
-         ctx->Driver.DrawBuffer(ctx);
-      if (ctx->Driver.DrawBufferAllocate)
-         ctx->Driver.DrawBufferAllocate(ctx);
+      if (_mesa_is_winsys_fbo(ctx->DrawBuffer))
+         _mesa_draw_buffer_allocate(ctx);
    }
 }
 
@@ -733,9 +730,9 @@ _mesa_NamedFramebufferDrawBuffers(GLuint framebuffer, GLsizei n,
 static void
 updated_drawbuffers(struct gl_context *ctx, struct gl_framebuffer *fb)
 {
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS, GL_COLOR_BUFFER_BIT);
 
-   if (ctx->API == API_OPENGL_COMPAT && !ctx->Extensions.ARB_ES2_compatibility) {
+   if (_mesa_is_desktop_gl_compat(ctx) && !ctx->Extensions.ARB_ES2_compatibility) {
       /* Flag the FBO as requiring validation. */
       if (_mesa_is_user_fbo(fb)) {
 	 fb->_Status = 0;
@@ -743,6 +740,34 @@ updated_drawbuffers(struct gl_context *ctx, struct gl_framebuffer *fb)
    }
 }
 
+static void
+update_drawbuffer_mask(struct gl_context *ctx, struct gl_framebuffer *fb,
+                       GLbitfield *buffers, GLbitfield *draw_buffers)
+{
+   *draw_buffers = 0;
+   for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
+      gl_buffer_index buf = fb->_ColorDrawBufferIndexes[i];
+      if (buf < BUFFER_COLOR0)
+         continue;
+
+      if (*buffers & (1 << (buf - BUFFER_COLOR0)))
+         *draw_buffers |= (1 << i);
+   }
+}
+
+void
+_mesa_update_drawbuffer_masks(struct gl_context *ctx,
+                              struct gl_framebuffer *fb)
+{
+   update_drawbuffer_mask(ctx, fb, &ctx->DrawBuffer->_IntegerBuffers,
+                          &ctx->DrawBuffer->_IntegerDrawBuffers);
+   update_drawbuffer_mask(ctx, fb, &ctx->DrawBuffer->_BlendForceAlphaToOne,
+                          &ctx->DrawBuffer->_BlendForceAlphaToOneDraw);
+   update_drawbuffer_mask(ctx, fb, &ctx->DrawBuffer->_IsRGB,
+                          &ctx->DrawBuffer->_IsRGBDraw);
+   update_drawbuffer_mask(ctx, fb, &ctx->DrawBuffer->_FP32Buffers,
+                          &ctx->DrawBuffer->_FP32DrawBuffers);
+}
 
 /**
  * Helper function to set the GL_DRAW_BUFFER state for the given context and
@@ -821,6 +846,8 @@ _mesa_drawbuffers(struct gl_context *ctx, struct gl_framebuffer *fb,
       fb->_NumColorDrawBuffers = count;
    }
 
+   _mesa_update_drawbuffer_masks(ctx, fb);
+
    /* set remaining outputs to BUFFER_NONE */
    for (buf = fb->_NumColorDrawBuffers; buf < ctx->Const.MaxDrawBuffers; buf++) {
       if (fb->_ColorDrawBufferIndexes[buf] != BUFFER_NONE) {
@@ -841,6 +868,8 @@ _mesa_drawbuffers(struct gl_context *ctx, struct gl_framebuffer *fb,
          }
       }
    }
+
+   _mesa_update_valid_to_render_state(ctx);
 }
 
 
@@ -900,7 +929,7 @@ read_buffer(struct gl_context *ctx, struct gl_framebuffer *fb,
 {
    gl_buffer_index srcBuffer;
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_PIXEL_MODE_BIT);
 
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "%s %s\n", caller, _mesa_enum_to_string(buffer));
@@ -943,8 +972,19 @@ read_buffer(struct gl_context *ctx, struct gl_framebuffer *fb,
 
    /* Call the device driver function only if fb is the bound read buffer */
    if (fb == ctx->ReadBuffer) {
-      if (ctx->Driver.ReadBuffer)
-         ctx->Driver.ReadBuffer(ctx, buffer);
+      /* Check if we need to allocate a front color buffer.
+       * Front buffers are often allocated on demand (other color buffers are
+       * always allocated in advance).
+       */
+      if ((fb->_ColorReadBufferIndex == BUFFER_FRONT_LEFT ||
+           fb->_ColorReadBufferIndex == BUFFER_FRONT_RIGHT) &&
+          fb->Attachment[fb->_ColorReadBufferIndex].Type == GL_NONE) {
+         assert(_mesa_is_winsys_fbo(fb));
+         /* add the buffer */
+         st_manager_add_color_renderbuffer(ctx, fb, fb->_ColorReadBufferIndex);
+         _mesa_update_state(ctx);
+         st_validate_state(st_context(ctx), ST_PIPELINE_UPDATE_FB_STATE_MASK);
+      }
    }
 }
 

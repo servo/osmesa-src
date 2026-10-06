@@ -38,7 +38,7 @@
 
 #ifdef GLX_DIRECT_RENDERING
 
-#include <GL/internal/dri_interface.h>
+#include "mesa_interface.h"
 #include <stdbool.h>
 #include "loader.h"
 #include "util/macros.h" /* for PRINTFLIKE */
@@ -48,14 +48,13 @@ typedef struct __GLXDRIconfigPrivateRec __GLXDRIconfigPrivate;
 struct __GLXDRIconfigPrivateRec
 {
    struct glx_config base;
-   const __DRIconfig *driConfig;
+   const struct dri_config *driConfig;
 };
 
-extern struct glx_config *driConvertConfigs(const __DRIcoreExtension * core,
-                                           struct glx_config * modes,
-                                           const __DRIconfig ** configs);
+extern struct glx_config *driConvertConfigs(struct glx_config * modes,
+                                           const struct dri_config ** configs);
 
-extern void driDestroyConfigs(const __DRIconfig **configs);
+extern void driDestroyConfigs(const struct dri_config **configs);
 
 extern __GLXDRIdrawable *
 driFetchDrawable(struct glx_context *gc, GLXDrawable glxDrawable);
@@ -63,28 +62,60 @@ driFetchDrawable(struct glx_context *gc, GLXDrawable glxDrawable);
 extern void
 driReleaseDrawables(struct glx_context *gc);
 
-extern const __DRIsystemTimeExtension systemTimeExtension;
+struct dri_ctx_attribs {
+   unsigned major_ver;
+   unsigned minor_ver;
+   uint32_t render_type;
+   uint32_t flags;
+   unsigned api;
+   int reset;
+   int release;
+   int no_error;
+};
 
-extern void dri_message(int level, const char *f, ...) PRINTFLIKE(2, 3);
+extern const struct glx_screen_vtable dri_screen_vtable;
 
-#define InfoMessageF(...) dri_message(_LOADER_INFO, __VA_ARGS__)
-#define ErrorMessageF(...) dri_message(_LOADER_WARNING, __VA_ARGS__)
-#define CriticalErrorMessageF(...) dri_message(_LOADER_FATAL, __VA_ARGS__)
+extern unsigned
+dri_context_error_to_glx_error(unsigned error);
 
-extern const __DRIextension **driOpenDriver(const char *driverName,
-                                            void **out_driver_handle);
+extern int
+dri_convert_glx_attribs(unsigned num_attribs, const uint32_t *attribs,
+                        struct dri_ctx_attribs *dca);
 
-extern bool
-dri2_convert_glx_attribs(unsigned num_attribs, const uint32_t *attribs,
-                         unsigned *major_ver, unsigned *minor_ver,
-                         uint32_t *render_type, uint32_t *flags, unsigned *api,
-                         int *reset, int *release, unsigned *error);
+extern struct glx_context *
+dri_common_create_context(struct glx_screen *base,
+                          struct glx_config *config_base,
+                          struct glx_context *shareList,
+                          int renderType);
 
-extern bool
-dri2_check_no_error(uint32_t flags, struct glx_context *share_context,
-                    int major, unsigned *error);
+extern const __DRIbackgroundCallableExtension driBackgroundCallable;
+extern const __DRIuseInvalidateExtension dri2UseInvalidate;
 
-
+Bool
+dri_bind_context(struct glx_context *context, GLXDrawable draw, GLXDrawable read);
+void
+dri_unbind_context(struct glx_context *context);
+void
+dri_destroy_context(struct glx_context *context);
+struct glx_context *
+dri_create_context_attribs(struct glx_screen *base,
+                           struct glx_config *config_base,
+                           struct glx_context *shareList,
+                           unsigned num_attribs,
+                           const uint32_t *attribs,
+                           unsigned *error);
+_X_HIDDEN int
+glx_dri_query_renderer_integer(struct glx_screen *base, int attribute,
+                            unsigned int *value);
+_X_HIDDEN int
+glx_dri_query_renderer_string(struct glx_screen *base, int attribute,
+                           const char **value);
+char *
+dri_get_driver_name(struct glx_screen *glx_screen);
+void
+dri_bind_tex_image(__GLXDRIdrawable *base, int buffer, const int *attrib_list);
+bool
+dri_screen_init(struct glx_screen *psc, struct glx_display *priv, int screen, int fd, const __DRIextension **loader_extensions, bool driver_name_is_inferred);
 #endif /* GLX_DIRECT_RENDERING */
 
 #endif /* _DRI_COMMON_H */

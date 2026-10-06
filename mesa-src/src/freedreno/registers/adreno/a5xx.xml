@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <database xmlns="http://nouveau.freedesktop.org/"
 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
+xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 <import file="freedreno_copyright.xml"/>
 <import file="adreno/adreno_common.xml"/>
 <import file="adreno/adreno_pm4.xml"/>
@@ -1366,7 +1366,9 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 		<bitfield high="1" low="1" name="CP_ME_BUSY" />
 		<bitfield high="0" low="0" name="HI_BUSY" />
 	</reg32>
-	<reg32 offset="0x0530" name="RBBM_STATUS3"/>
+	<reg32 offset="0x0530" name="RBBM_STATUS3">
+		<bitfield pos="24" name="SMMU_STALLED_ON_FAULT" type="boolean"/>
+	</reg32>
 	<reg32 offset="0x04e1" name="RBBM_INT_0_STATUS"/>
 	<reg32 offset="0x04f0" name="RBBM_AHB_ME_SPLIT_STATUS"/>
 	<reg32 offset="0x04f1" name="RBBM_AHB_PFP_SPLIT_STATUS"/>
@@ -1538,7 +1540,9 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0x0e55" name="VFD_PERFCTR_VFD_SEL_5" type="a5xx_vfd_perfcounter_select"/>
 	<reg32 offset="0x0e56" name="VFD_PERFCTR_VFD_SEL_6" type="a5xx_vfd_perfcounter_select"/>
 	<reg32 offset="0x0e57" name="VFD_PERFCTR_VFD_SEL_7" type="a5xx_vfd_perfcounter_select"/>
-	<reg32 offset="0x0e60" name="VPC_DBG_ECO_CNTL"/> <!-- always 00000400? -->
+	<reg32 offset="0x0e60" name="VPC_DBG_ECO_CNTL">
+		<bitfield name="ALLFLATOPTDIS" pos="10" type="boolean"/>
+	</reg32>
 	<reg32 offset="0x0e61" name="VPC_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
 	<reg32 offset="0x0e62" name="VPC_MODE_CNTL">
 		<bitfield name="BINNING_PASS" pos="0" type="boolean"/>
@@ -1549,6 +1553,7 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0x0e67" name="VPC_PERFCTR_VPC_SEL_3" type="a5xx_vpc_perfcounter_select"/>
 
 	<reg32 offset="0x0e80" name="UCHE_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
+	<reg32 offset="0x0e81" name="UCHE_MODE_CNTL"/>
 	<reg32 offset="0x0e82" name="UCHE_SVM_CNTL"/>
 	<reg32 offset="0x0e87" name="UCHE_WRITE_THRU_BASE_LO"/>
 	<reg32 offset="0x0e88" name="UCHE_WRITE_THRU_BASE_HI"/>
@@ -1684,24 +1689,6 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 
 	<reg32 offset="0x8800" name="GPMU_INST_RAM_BASE"/>
 	<reg32 offset="0x9800" name="GPMU_DATA_RAM_BASE"/>
-	<reg32 offset="0xa881" name="GPMU_SP_POWER_CNTL"/>
-	<reg32 offset="0xa886" name="GPMU_RBCCU_CLOCK_CNTL"/>
-	<reg32 offset="0xa887" name="GPMU_RBCCU_POWER_CNTL"/>
-	<reg32 offset="0xa88b" name="GPMU_SP_PWR_CLK_STATUS">
-		<bitfield name="PWR_ON" pos="20" type="boolean"/>
-	</reg32>
-	<reg32 offset="0xa88d" name="GPMU_RBCCU_PWR_CLK_STATUS">
-		<bitfield name="PWR_ON" pos="20" type="boolean"/>
-	</reg32>
-	<reg32 offset="0xa891" name="GPMU_PWR_COL_STAGGER_DELAY"/>
-	<reg32 offset="0xa892" name="GPMU_PWR_COL_INTER_FRAME_CTRL"/>
-	<reg32 offset="0xa893" name="GPMU_PWR_COL_INTER_FRAME_HYST"/>
-	<reg32 offset="0xa894" name="GPMU_PWR_COL_BINNING_CTRL"/>
-	<reg32 offset="0xa8c1" name="GPMU_WFI_CONFIG"/>
-	<reg32 offset="0xa8d6" name="GPMU_RBBM_INTR_INFO"/>
-	<reg32 offset="0xa8d8" name="GPMU_CM3_SYSRESET"/>
-	<reg32 offset="0xa8e0" name="GPMU_GENERAL_0"/>
-	<reg32 offset="0xa8e1" name="GPMU_GENERAL_1"/>
 
 <!--
 /* COUNTABLE FOR SP PERFCOUNTER */
@@ -1774,8 +1761,28 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0xa87b" name="GPMU_ALWAYS_ON_COUNTER_RESET"/>
 	<reg32 offset="0xa87c" name="GPMU_POWER_COUNTER_SELECT_0"/>
 	<reg32 offset="0xa87d" name="GPMU_POWER_COUNTER_SELECT_1"/>
+
+	<reg32 offset="0xa880" name="GPMU_GPMU_SP_CLOCK_CONTROL"/>
+	<reg32 offset="0xa881" name="GPMU_SP_POWER_CNTL"/>
+	<reg32 offset="0xa886" name="GPMU_RBCCU_CLOCK_CNTL"/>
+	<reg32 offset="0xa887" name="GPMU_RBCCU_POWER_CNTL"/>
+	<reg32 offset="0xa88b" name="GPMU_SP_PWR_CLK_STATUS">
+		<bitfield name="PWR_ON" pos="20" type="boolean"/>
+	</reg32>
+	<reg32 offset="0xa88d" name="GPMU_RBCCU_PWR_CLK_STATUS">
+		<bitfield name="PWR_ON" pos="20" type="boolean"/>
+	</reg32>
+	<reg32 offset="0xa891" name="GPMU_PWR_COL_STAGGER_DELAY"/>
+	<reg32 offset="0xa892" name="GPMU_PWR_COL_INTER_FRAME_CTRL"/>
+	<reg32 offset="0xa893" name="GPMU_PWR_COL_INTER_FRAME_HYST"/>
+	<reg32 offset="0xa894" name="GPMU_PWR_COL_BINNING_CTRL"/>
 	<reg32 offset="0xa8a3" name="GPMU_CLOCK_THROTTLE_CTRL"/>
 	<reg32 offset="0xa8a8" name="GPMU_THROTTLE_UNMASK_FORCE_CTRL"/>
+	<reg32 offset="0xa8c1" name="GPMU_WFI_CONFIG"/>
+	<reg32 offset="0xa8d6" name="GPMU_RBBM_INTR_INFO"/>
+	<reg32 offset="0xa8d8" name="GPMU_CM3_SYSRESET"/>
+	<reg32 offset="0xa8e0" name="GPMU_GENERAL_0"/>
+	<reg32 offset="0xa8e1" name="GPMU_GENERAL_1"/>
 	<reg32 offset="0xac00" name="GPMU_TEMP_SENSOR_ID"/>
 	<reg32 offset="0xac01" name="GPMU_TEMP_SENSOR_CONFIG"/>
 	<reg32 offset="0xac02" name="GPMU_TEMP_VAL"/>
@@ -1809,21 +1816,20 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 	<reg32 offset="0xe000" name="GRAS_CL_CNTL">
 		<bitfield name="ZERO_GB_SCALE_Z" pos="6" type="boolean"/>
 	</reg32>
-	<reg32 offset="0xe001" name="UNKNOWN_E001"/> <!-- always 00000000? -->
+	<bitset name="a5xx_gras_xs_cl_cntl" inline="yes">
+		<bitfield name="CLIP_MASK" low="0" high="7"/>
+		<bitfield name="CULL_MASK" low="8" high="15"/>
+	</bitset>
+	<reg32 offset="0xe001" name="GRAS_VS_CL_CNTL" type="a5xx_gras_xs_cl_cntl"/>
 	<reg32 offset="0xe004" name="UNKNOWN_E004"/> <!-- always 00000000? -->
 	<reg32 offset="0xe005" name="GRAS_CNTL">
 		<!-- see also RB_RENDER_CONTROL0 -->
 		<bitfield name="IJ_PERSP_PIXEL" pos="0" type="boolean"/>
 		<bitfield name="IJ_PERSP_CENTROID" pos="1" type="boolean"/>
 		<bitfield name="IJ_PERSP_SAMPLE" pos="2" type="boolean"/>
-		<!--
-		bit 3 set when blob turns on WCOORD.. which also corresponds to
-		register being set in in HLSQ_CONTROL_3_REG bits 8..15 (which
-		shader does not use).. possibly providing wcoord in an alternate
-		way??
-		Also, when that happens, VARYING bits are turned on as well.
-		 -->
-		<bitfield name="SIZE" pos="3" type="boolean"/>
+		<bitfield name="IJ_LINEAR_PIXEL" pos="3" type="boolean"/>
+		<bitfield name="IJ_LINEAR_CENTROID" pos="4" type="boolean"/>
+		<bitfield name="IJ_LINEAR_SAMPLE" pos="5" type="boolean"/>
 		<bitfield name="COORD_MASK" low="6" high="9" type="hex"/>
 	</reg32>
 	<reg32 offset="0xe006" name="GRAS_CL_GUARDBAND_CLIP_ADJ">
@@ -1842,7 +1848,7 @@ xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
 		<bitfield name="FRONT_CW" pos="2" type="boolean"/>
 		<bitfield name="LINEHALFWIDTH" low="3" high="10" radix="2" type="fixed"/>
 		<bitfield name="POLY_OFFSET" pos="11" type="boolean"/>
-		<bitfield name="MSAA_ENABLE" pos="13" type="boolean"/>
+		<bitfield name="LINE_MODE" pos="13" type="a5xx_line_mode"/>
 		<!-- probably LINEHALFWIDTH is the same as a4xx.. -->
 	</reg32>
 	<reg32 offset="0xe091" name="GRAS_SU_POINT_MINMAX">
@@ -1969,14 +1975,9 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="IJ_PERSP_PIXEL" pos="0" type="boolean"/>
 		<bitfield name="IJ_PERSP_CENTROID" pos="1" type="boolean"/>
 		<bitfield name="IJ_PERSP_SAMPLE" pos="2" type="boolean"/>
-		<!--
-		bit 3 set when blob turns on WCOORD.. which also corresponds to
-		register being set in in HLSQ_CONTROL_3_REG bits 8..15 (which
-		shader does not use).. possibly providing wcoord in an alternate
-		way??
-		Also, when that happens, VARYING bits are turned on as well.
-		 -->
-		<bitfield name="SIZE" pos="3" type="boolean"/>
+		<bitfield name="IJ_LINEAR_PIXEL" pos="3" type="boolean"/>
+		<bitfield name="IJ_LINEAR_CENTROID" pos="4" type="boolean"/>
+		<bitfield name="IJ_LINEAR_SAMPLE" pos="5" type="boolean"/>
 		<bitfield name="COORD_MASK" low="6" high="9" type="hex"/>
 	</reg32>
 	<reg32 offset="0xe145" name="RB_RENDER_CONTROL1">
@@ -2079,11 +2080,11 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="UNK1" pos="1" type="boolean"/>
 	</reg32>
 	<reg32 offset="0xe1b1" name="RB_DEPTH_CNTL">
-		<bitfield name="Z_ENABLE" pos="0" type="boolean"/>
+		<bitfield name="Z_TEST_ENABLE" pos="0" type="boolean"/>
 		<bitfield name="Z_WRITE_ENABLE" pos="1" type="boolean"/>
 		<bitfield name="ZFUNC" low="2" high="4" type="adreno_compare_func"/>
-		<doc>Z_TEST_ENABLE bit is set for zfunc other than GL_ALWAYS or GL_NEVER</doc>
-		<bitfield name="Z_TEST_ENABLE" pos="6" type="boolean"/>
+		<doc>Z_READ_ENABLE bit is set for zfunc other than GL_ALWAYS or GL_NEVER</doc>
+		<bitfield name="Z_READ_ENABLE" pos="6" type="boolean"/>
 	</reg32>
 	<reg32 offset="0xe1b2" name="RB_DEPTH_BUFFER_INFO">
 		<bitfield name="DEPTH_FORMAT" low="0" high="2" type="a5xx_depth_format"/>
@@ -2276,7 +2277,16 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<reg32 offset="0" name="DISABLE"/>
 	</array>
 	<reg32 offset="0xe298" name="VPC_GS_SIV_CNTL"/>
-	<reg32 offset="0xe29a" name="UNKNOWN_E29A"/>
+	<reg32 offset="0xe29a" name="VPC_CLIP_CNTL">
+		<bitfield name="CLIP_MASK" low="0" high="7" type="uint"/>
+		<!-- there can be up to 8 total clip/cull distance outputs,
+		     but apparenly VPC can only deal with vec4, so when there are
+		     more than 4 outputs a second location needs to be programmed
+		-->
+		<bitfield name="CLIP_DIST_03_LOC" low="8" high="15" type="uint"/>
+		<bitfield name="CLIP_DIST_47_LOC" low="16" high="23" type="uint"/>
+	</reg32>
+
 	<reg32 offset="0xe29d" name="VPC_PACK">
 		<bitfield name="NUMNONPOSVAR" low="0" high="7" type="uint"/>
 		<!--
@@ -2371,7 +2381,9 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="POLYMODE_BACK_PTYPE" low="3" high="5" type="adreno_pa_su_sc_draw"/>
 		<bitfield name="POLYMODE_ENABLE" pos="6" type="boolean"/>
 	</reg32>
-	<reg32 offset="0xe389" name="UNKNOWN_E389"/>
+	<reg32 offset="0xe389" name="PC_CLIP_CNTL">
+		<bitfield name="CLIP_MASK" low="0" high="7"/>
+	</reg32>
 	<reg32 offset="0xe38c" name="PC_RESTART_INDEX"/>
 	<reg32 offset="0xe38d" name="PC_GS_LAYERED"/>
 	<reg32 offset="0xe38e" name="PC_GS_PARAM">
@@ -2453,7 +2465,9 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="INSTRLEN" low="1" high="31" type="uint"/>
 	</bitset>
 	<bitset name="a5xx_sp_xs_ctrl_reg0" inline="yes">
-		<!-- bit1 + bit2 set for "buffer" mode (ie. shader small enough to fit internally) -->
+		<!-- bit1 almost always set -->
+		<!-- set for "buffer mode" (ie. shader small enough to fit internally) -->
+		<bitfield name="BUFFER" pos="2" type="boolean"/>
 		<!-- 24 or more (full size) GPRS and blob uses TWO_QUADS instead of FOUR_QUADS -->
 		<bitfield name="THREADSIZE" pos="3" type="a3xx_threadsize"/>
 		<bitfield name="HALFREGFOOTPRINT" low="4" high="9" type="uint"/>
@@ -2504,12 +2518,34 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 	<reg32 offset="0xe5ab" name="UNKNOWN_E5AB"/>
 	<reg32 offset="0xe5ac" name="SP_VS_OBJ_START_LO"/>
 	<reg32 offset="0xe5ad" name="SP_VS_OBJ_START_HI"/>
+
+	<bitset name="a5xx_sp_xs_pvt_mem_param" inline="yes">
+		<bitfield name="MEMSIZEPERITEM" low="0" high="7" shr="9">
+			<doc>The size of memory that ldp/stp can address.</doc>
+		</bitfield>
+		<bitfield name="HWSTACKOFFSET" low="8" high="23" shr="11" type="uint"/>
+		<bitfield name="HWSTACKSIZEPERTHREAD" low="24" high="31">
+                        <doc>Guessing that this is the same as a3xx/a6xx.</doc>
+		</bitfield>
+	</bitset>
+
+	<bitset name="a5xx_sp_xs_pvt_mem_size" inline="yes">
+		<bitfield name="TOTALPVTMEMSIZE" low="0" high="17" shr="12"/>
+	</bitset>
+
+	<reg32 offset="0xe5ae" name="SP_VS_PVT_MEM_PARAM" type="a5xx_sp_xs_pvt_mem_param"/>
+	<reg64 offset="0xe5af" name="SP_VS_PVT_MEM_ADDR" type="waddress" align="32"/>
+	<reg32 offset="0xe5b1" name="SP_VS_PVT_MEM_SIZE" type="a5xx_sp_xs_pvt_mem_size"/>
 	<reg32 offset="0xe5c0" name="SP_FS_CTRL_REG0" type="a5xx_sp_xs_ctrl_reg0"/>
 	<reg32 offset="0xe5c2" name="UNKNOWN_E5C2"/>
 	<reg32 offset="0xe5c3" name="SP_FS_OBJ_START_LO"/>
 	<reg32 offset="0xe5c4" name="SP_FS_OBJ_START_HI"/>
+	<reg32 offset="0xe5c5" name="SP_FS_PVT_MEM_PARAM" type="a5xx_sp_xs_pvt_mem_param"/>
+	<reg64 offset="0xe5c6" name="SP_FS_PVT_MEM_ADDR" type="waddress" align="32"/>
+	<reg32 offset="0xe5c8" name="SP_FS_PVT_MEM_SIZE" type="a5xx_sp_xs_pvt_mem_size"/>
 	<reg32 offset="0xe5c9" name="SP_BLEND_CNTL">
-		<bitfield name="ENABLED" pos="0" type="boolean"/>
+		<!-- per-mrt enable bit -->
+		<bitfield name="ENABLE_BLEND" low="0" high="7"/>
 		<bitfield name="UNK8" pos="8" type="boolean"/>
 		<bitfield name="ALPHA_TO_COVERAGE" pos="10" type="boolean"/>
 	</reg32>
@@ -2543,20 +2579,33 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 	<reg32 offset="0xe5f2" name="UNKNOWN_E5F2"/>
 	<reg32 offset="0xe5f3" name="SP_CS_OBJ_START_LO"/>
 	<reg32 offset="0xe5f4" name="SP_CS_OBJ_START_HI"/>
+	<reg32 offset="0xe5f5" name="SP_CS_PVT_MEM_PARAM" type="a5xx_sp_xs_pvt_mem_param"/>
+	<reg64 offset="0xe5f6" name="SP_CS_PVT_MEM_ADDR" type="waddress" align="32"/>
+	<reg32 offset="0xe5f8" name="SP_CS_PVT_MEM_SIZE" type="a5xx_sp_xs_pvt_mem_size"/>
+
 	<!-- e5f9 something compute related.. seems to change when HLSQ_CS_CNTL_1 changes -->
 
 	<reg32 offset="0xe600" name="SP_HS_CTRL_REG0" type="a5xx_sp_xs_ctrl_reg0"/>
 	<reg32 offset="0xe602" name="UNKNOWN_E602"/>
 	<reg32 offset="0xe603" name="SP_HS_OBJ_START_LO"/>
 	<reg32 offset="0xe604" name="SP_HS_OBJ_START_HI"/>
+	<reg32 offset="0xe605" name="SP_HS_PVT_MEM_PARAM" type="a5xx_sp_xs_pvt_mem_param"/>
+	<reg64 offset="0xe606" name="SP_HS_PVT_MEM_ADDR" type="waddress" align="32"/>
+	<reg32 offset="0xe608" name="SP_HS_PVT_MEM_SIZE" type="a5xx_sp_xs_pvt_mem_size"/>
 	<reg32 offset="0xe610" name="SP_DS_CTRL_REG0" type="a5xx_sp_xs_ctrl_reg0"/>
 	<reg32 offset="0xe62b" name="UNKNOWN_E62B"/>
 	<reg32 offset="0xe62c" name="SP_DS_OBJ_START_LO"/>
 	<reg32 offset="0xe62d" name="SP_DS_OBJ_START_HI"/>
+	<reg32 offset="0xe62e" name="SP_DS_PVT_MEM_PARAM" type="a5xx_sp_xs_pvt_mem_param"/>
+	<reg64 offset="0xe62f" name="SP_DS_PVT_MEM_ADDR" type="waddress" align="32"/>
+	<reg32 offset="0xe631" name="SP_DS_PVT_MEM_SIZE" type="a5xx_sp_xs_pvt_mem_size"/>
 	<reg32 offset="0xe640" name="SP_GS_CTRL_REG0" type="a5xx_sp_xs_ctrl_reg0"/>
 	<reg32 offset="0xe65b" name="UNKNOWN_E65B"/>
 	<reg32 offset="0xe65c" name="SP_GS_OBJ_START_LO"/>
 	<reg32 offset="0xe65d" name="SP_GS_OBJ_START_HI"/>
+	<reg32 offset="0xe65e" name="SP_GS_PVT_MEM_PARAM" type="a5xx_sp_xs_pvt_mem_param"/>
+	<reg64 offset="0xe65f" name="SP_GS_PVT_MEM_ADDR" type="waddress" align="32"/>
+	<reg32 offset="0xe661" name="SP_GS_PVT_MEM_SIZE" type="a5xx_sp_xs_pvt_mem_size"/>
 
 	<reg32 offset="0xe704" name="TPL1_TP_RAS_MSAA_CNTL">
 		<bitfield name="SAMPLES" low="0" high="1" type="a3xx_msaa_samples"/>
@@ -2625,7 +2674,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<!-- SAMPLEID is loaded into a half-precision register: -->
 		<bitfield name="SAMPLEID" low="8" high="15" type="a3xx_regid"/>
 		<bitfield name="SAMPLEMASK" low="16" high="23" type="a3xx_regid"/>
-		<bitfield name="SIZE" low="24" high="31" type="a3xx_regid"/>
+		<bitfield name="CENTERRHW" low="24" high="31" type="a3xx_regid"/>
 	</reg32>
 	<reg32 offset="0xe787" name="HLSQ_CONTROL_3_REG">
 		<!-- register loaded with position (bary.f) -->
@@ -2749,26 +2798,25 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 	<reg32 offset="0x2102" name="RB_2D_SRC_SOLID_DW1"/>
 	<reg32 offset="0x2103" name="RB_2D_SRC_SOLID_DW2"/>
 	<reg32 offset="0x2104" name="RB_2D_SRC_SOLID_DW3"/>
-	<reg32 offset="0x2107" name="RB_2D_SRC_INFO">
+
+	<bitset name="a5xx_2d_surf_info" inline="yes">
 		<bitfield name="COLOR_FORMAT" low="0" high="7" type="a5xx_color_fmt"/>
 		<bitfield name="TILE_MODE" low="8" high="9" type="a5xx_tile_mode"/>
 		<bitfield name="COLOR_SWAP" low="10" high="11" type="a3xx_color_swap"/>
 		<!-- b12 seems to be set when UBWC "FLAGS" buffer enabled -->
 		<bitfield name="FLAGS" pos="12" type="boolean"/>
-	</reg32>
+		<bitfield name="SRGB" pos="13" type="boolean"/>
+	</bitset>
+
+	<reg32 offset="0x2107" name="RB_2D_SRC_INFO" type="a5xx_2d_surf_info"/>
 	<reg32 offset="0x2108" name="RB_2D_SRC_LO"/>
 	<reg32 offset="0x2109" name="RB_2D_SRC_HI"/>
 	<reg32 offset="0x210a" name="RB_2D_SRC_SIZE">
 		<bitfield name="PITCH" low="0" high="15" shr="6" type="uint"/>
 		<bitfield name="ARRAY_PITCH" low="16" high="31" shr="6" type="uint"/>
 	</reg32>
-	<reg32 offset="0x2110" name="RB_2D_DST_INFO">
-		<bitfield name="COLOR_FORMAT" low="0" high="7" type="a5xx_color_fmt"/>
-		<bitfield name="TILE_MODE" low="8" high="9" type="a5xx_tile_mode"/>
-		<bitfield name="COLOR_SWAP" low="10" high="11" type="a3xx_color_swap"/>
-		<!-- b12 seems to be set when UBWC "FLAGS" buffer enabled -->
-		<bitfield name="FLAGS" pos="12" type="boolean"/>
-	</reg32>
+
+	<reg32 offset="0x2110" name="RB_2D_DST_INFO" type="a5xx_2d_surf_info"/>
 	<reg32 offset="0x2111" name="RB_2D_DST_LO"/>
 	<reg32 offset="0x2112" name="RB_2D_DST_HI"/>
 	<reg32 offset="0x2113" name="RB_2D_DST_SIZE">
@@ -2783,29 +2831,15 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
         <reg32 offset="0x2145" name="RB_2D_DST_FLAGS_PITCH" shr="6" type="uint"/>
 	<reg32 offset="0x2180" name="GRAS_2D_BLIT_CNTL"/> <!-- same as 0x2100 -->
 	<!-- looks same as 0x2107: -->
-	<reg32 offset="0x2181" name="GRAS_2D_SRC_INFO">
-		<bitfield name="COLOR_FORMAT" low="0" high="7" type="a5xx_color_fmt"/>
-		<bitfield name="TILE_MODE" low="8" high="9" type="a5xx_tile_mode"/>
-		<bitfield name="COLOR_SWAP" low="10" high="11" type="a3xx_color_swap"/>
-		<!-- b12 seems to be set when UBWC "FLAGS" buffer enabled -->
-		<bitfield name="FLAGS" pos="12" type="boolean"/>
-	</reg32>
+	<reg32 offset="0x2181" name="GRAS_2D_SRC_INFO" type="a5xx_2d_surf_info"/>
 	<!-- looks same as 0x2110: -->
-	<reg32 offset="0x2182" name="GRAS_2D_DST_INFO">
-		<bitfield name="COLOR_FORMAT" low="0" high="7" type="a5xx_color_fmt"/>
-		<bitfield name="TILE_MODE" low="8" high="9" type="a5xx_tile_mode"/>
-		<bitfield name="COLOR_SWAP" low="10" high="11" type="a3xx_color_swap"/>
-		<!-- b12 seems to be set when UBWC "FLAGS" buffer enabled -->
-		<bitfield name="FLAGS" pos="12" type="boolean"/>
-	</reg32>
+	<reg32 offset="0x2182" name="GRAS_2D_DST_INFO" type="a5xx_2d_surf_info"/>
 <!--
 0x2100 and 0x2180 look like same thing (RB and GRAS versions)..
    0x86000000 for copy, 0x00000000 for fill?
 
 0x2184 0x9 for copy, 0x1 for blit (maybe bitmask of enabled src/dst???)
  -->
-	<reg32 offset="0x2100" name="UNKNOWN_2100"/>
-	<reg32 offset="0x2180" name="UNKNOWN_2180"/>
 	<reg32 offset="0x2184" name="UNKNOWN_2184"/>
 </domain>
 
@@ -2864,7 +2898,7 @@ different border-color states per texture..  Looks something like:
 0340: 3c003c00 3c003c00 00000000 00000000 00000000 00000000 00000000 00000000
 
 		 -->
-		<bitfield name="BCOLOR_OFFSET" low="4" high="31"/>
+		<bitfield name="BCOLOR_OFFSET" low="7" high="31"/>
 	</reg32>
 	<reg32 offset="3" name="3"/>
 </domain>
@@ -2884,6 +2918,7 @@ different border-color states per texture..  Looks something like:
 		<value name="A5XX_TEX_2D" value="1"/>
 		<value name="A5XX_TEX_CUBE" value="2"/>
 		<value name="A5XX_TEX_3D" value="3"/>
+		<value name="A5XX_TEX_BUFFER" value="4"/>
 	</enum>
 	<reg32 offset="0" name="0">
 		<bitfield name="TILE_MODE" low="0" high="1" type="a5xx_tile_mode"/>
@@ -2902,11 +2937,19 @@ different border-color states per texture..  Looks something like:
 		<bitfield name="HEIGHT" low="15" high="29" type="uint"/>
 	</reg32>
 	<reg32 offset="2" name="2">
+		<!--
+		b4 and b31 set for buffer/ssbo case, in which case low 15 bits
+		of size encoded in WIDTH, and high 15 bits encoded in HEIGHT
+
+		b31 is probably the 'BUFFER' bit.. it is the one that changes
+		behavior of texture in dEQP-GLES31.functional.texture.texture_buffer.render.as_fragment_texture.buffer_size_131071
+		 -->
+		<bitfield name="BUFFER" pos="4" type="boolean"/>
 		<!-- minimum pitch (for mipmap levels): log2(pitchalign / 64) -->
 		<bitfield name="PITCHALIGN" low="0" high="3" type="uint"/>
 		<doc>Pitch in bytes (so actually stride)</doc>
 		<bitfield name="PITCH" low="7" high="28" type="uint"/>
-		<bitfield name="TYPE" low="29" high="30" type="a5xx_tex_type"/>
+		<bitfield name="TYPE" low="29" high="31" type="a5xx_tex_type"/>
 	</reg32>
 	<reg32 offset="3" name="3">
 		<!--

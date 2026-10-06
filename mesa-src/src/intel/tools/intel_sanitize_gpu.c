@@ -22,6 +22,7 @@
  */
 
 #undef _FILE_OFFSET_BITS /* prevent #define open open64 */
+#undef _TIME_BITS
 
 #include <string.h>
 #include <stdlib.h>
@@ -41,9 +42,9 @@
 #include "util/hash_table.h"
 #include "util/u_math.h"
 
-#define INTEL_LOG_TAG "INTEL-SANITIZE-GPU"
-#include "common/intel_log.h"
-#include "common/gen_clflush.h"
+#define MESA_LOG_TAG "INTEL-SANITIZE-GPU"
+#include "util/log.h"
+#include "common/intel_mem.h"
 
 static int (*libc_open)(const char *pathname, int flags, mode_t mode);
 static int (*libc_close)(int fd);
@@ -68,13 +69,13 @@ struct refcnt_hash_table {
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 #define MUTEX_LOCK() do {                        \
    if (unlikely(pthread_mutex_lock(&mutex))) {   \
-      intel_loge("mutex_lock failed");           \
+      mesa_loge("mutex_lock failed");           \
       abort();                                   \
    }                                             \
 } while (0)
 #define MUTEX_UNLOCK() do {                      \
    if (unlikely(pthread_mutex_unlock(&mutex))) { \
-      intel_loge("mutex_unlock failed");         \
+      mesa_loge("mutex_unlock failed");         \
       abort();                                   \
    }                                             \
 } while (0)
@@ -96,7 +97,7 @@ bo_size(int fd, uint32_t handle)
    if (!t)
       return UINT64_MAX;
    struct hash_entry *e = _mesa_hash_table_search(t, (void*)(uintptr_t)handle);
-   return e ? (uint64_t)e->data : UINT64_MAX;
+   return e ? (uint64_t)(uintptr_t)e->data : UINT64_MAX;
 }
 
 static inline bool
@@ -139,7 +140,7 @@ del_drm_fd(int fd)
    }
 }
 
-/* Our goal is not to have noise good enough for cryto,
+/* Our goal is not to have noise good enough for crypto,
  * but instead values that are unique-ish enough that
  * it is incredibly unlikely that a buffer overwrite
  * will produce the exact same values.
@@ -180,16 +181,18 @@ padding_is_good(int fd, uint32_t handle)
 
    ret = libc_ioctl(fd, DRM_IOCTL_I915_GEM_MMAP, &mmap_arg);
    if (ret != 0) {
-      intel_logd("Unable to map buffer %d for pad checking.", handle);
+      mesa_logd("Unable to map buffer %d for pad checking.", handle);
       return false;
    }
 
    mapped = (uint8_t*) (uintptr_t) mmap_arg.addr_ptr;
+#ifdef SUPPORT_INTEL_INTEGRATED_GPUS
    /* bah-humbug, we need to see the latest contents and
     * if the bo is not cache coherent we likely need to
     * invalidate the cache lines to get it.
     */
-   gen_invalidate_range(mapped, PADDING_SIZE);
+   intel_invalidate_range(mapped, PADDING_SIZE);
+#endif
 
    expected_value = handle & 0xFF;
    for (uint32_t i = 0; i < PADDING_SIZE; ++i) {
@@ -226,7 +229,7 @@ create_with_padding(int fd, struct drm_i915_gem_create *create)
 
    ret = libc_ioctl(fd, DRM_IOCTL_I915_GEM_MMAP, &mmap_arg);
    if (ret != 0) {
-      intel_logd("Unable to map buffer %d for pad creation.\n", create->handle);
+      mesa_logd("Unable to map buffer %d for pad creation.\n", create->handle);
       return 0;
    }
 
@@ -269,7 +272,7 @@ exec_and_check_padding(int fd, unsigned long request,
 
       if (!padding_is_good(fd, handle)) {
          detected_out_of_bounds_write = true;
-         intel_loge("Detected buffer out-of-bounds write in bo %d", handle);
+         mesa_loge("Detected buffer out-of-bounds write in bo %d", handle);
       }
    }
 
@@ -391,7 +394,7 @@ ioctl(int fd, unsigned long request, ...)
    va_end(args);
 
    if (_IOC_TYPE(request) == DRM_IOCTL_BASE && !is_drm_fd(fd) && is_i915(fd)) {
-      intel_loge("missed drm fd %d", fd);
+      mesa_loge("missed drm fd %d", fd);
       add_drm_fd(fd);
    }
 

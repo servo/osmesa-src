@@ -1,22 +1,5 @@
 # Copyright © 2017 Intel Corporation
-
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# SPDX-License-Identifier: MIT
 
 files_r600 = files(
   'r600d_common.h',
@@ -45,8 +28,11 @@ files_r600 = files(
   'r600_pipe.c',
   'r600_pipe.h',
   'r600_public.h',
+  'r600_sfn.cpp',
+  'r600_sfn.h',
   'r600_shader.c',
   'r600_shader.h',
+  'r600_shader_common.h',
   'r600_sq.h',
   'r600_state.c',
   'r600_state_common.c',
@@ -72,41 +58,12 @@ files_r600 = files(
   'radeon_vce.h',
   'radeon_video.c',
   'radeon_video.h',
-  'sb/sb_bc_builder.cpp',
-  'sb/sb_bc_decoder.cpp',
-  'sb/sb_bc_dump.cpp',
-  'sb/sb_bc_finalize.cpp',
-  'sb/sb_bc.h',
-  'sb/sb_bc_parser.cpp',
-  'sb/sb_context.cpp',
-  'sb/sb_core.cpp',
-  'sb/sb_dce_cleanup.cpp',
-  'sb/sb_def_use.cpp',
-  'sb/sb_dump.cpp',
-  'sb/sb_expr.cpp',
-  'sb/sb_expr.h',
-  'sb/sb_gcm.cpp',
-  'sb/sb_gvn.cpp',
-  'sb/sb_if_conversion.cpp',
-  'sb/sb_ir.cpp',
-  'sb/sb_ir.h',
-  'sb/sb_liveness.cpp',
-  'sb/sb_pass.cpp',
-  'sb/sb_pass.h',
-  'sb/sb_peephole.cpp',
-  'sb/sb_psi_ops.cpp',
-  'sb/sb_public.h',
-  'sb/sb_ra_checker.cpp',
-  'sb/sb_ra_coalesce.cpp',
-  'sb/sb_ra_init.cpp',
-  'sb/sb_sched.cpp',
-  'sb/sb_sched.h',
-  'sb/sb_shader.cpp',
-  'sb/sb_shader.h',
-  'sb/sb_ssa_builder.cpp',
-  'sb/sb_valtable.cpp',
   'sfn/sfn_alu_defines.cpp',
   'sfn/sfn_alu_defines.h',
+  'sfn/sfn_alu_readport_validation.cpp',
+  'sfn/sfn_alu_readport_validation.h',
+  'sfn/sfn_assembler.cpp',
+  'sfn/sfn_assembler.h',
   'sfn/sfn_callstack.cpp',
   'sfn/sfn_callstack.h',
   'sfn/sfn_conditionaljumptracker.cpp',
@@ -114,69 +71,68 @@ files_r600 = files(
   'sfn/sfn_defines.h',
   'sfn/sfn_debug.cpp',
   'sfn/sfn_debug.h',
-  'sfn/sfn_emitaluinstruction.cpp',
-  'sfn/sfn_emitaluinstruction.h',
-  'sfn/sfn_emitinstruction.cpp',
-  'sfn/sfn_emitinstruction.h',
-  'sfn/sfn_emitssboinstruction.cpp',
-  'sfn/sfn_emitssboinstruction.h',
-  'sfn/sfn_emittexinstruction.cpp',
-  'sfn/sfn_emittexinstruction.h',
-  'sfn/sfn_emitinstruction.h',
-  'sfn/sfn_instruction_alu.cpp',
-  'sfn/sfn_instruction_alu.h',
-  'sfn/sfn_instruction_base.cpp',
-  'sfn/sfn_instruction_base.h',
-  'sfn/sfn_instruction_block.cpp',
-  'sfn/sfn_instruction_block.h',
-  'sfn/sfn_instruction_cf.cpp',
-  'sfn/sfn_instruction_cf.h',
-  'sfn/sfn_instruction_export.cpp',
-  'sfn/sfn_instruction_export.h',
-  'sfn/sfn_instruction_fetch.cpp',
-  'sfn/sfn_instruction_fetch.h',
-  'sfn/sfn_instruction_gds.cpp',
-  'sfn/sfn_instruction_gds.h',
-  'sfn/sfn_instruction_lds.cpp',
-  'sfn/sfn_instruction_lds.h',
-  'sfn/sfn_instruction_misc.cpp',
-  'sfn/sfn_instruction_misc.h',
-  'sfn/sfn_instruction_tex.cpp',
-  'sfn/sfn_instruction_tex.h',
-  'sfn/sfn_ir_to_assembly.cpp',
-  'sfn/sfn_ir_to_assembly.h',
-  'sfn/sfn_liverange.cpp',
-  'sfn/sfn_liverange.h',
+  'sfn/sfn_instr.cpp',
+  'sfn/sfn_instr.h',
+  'sfn/sfn_instr_alu.cpp',
+  'sfn/sfn_instr_alu.h',
+  'sfn/sfn_instr_alugroup.cpp',
+  'sfn/sfn_instr_alugroup.h',
+  'sfn/sfn_instr_controlflow.cpp',
+  'sfn/sfn_instr_controlflow.h',
+  'sfn/sfn_instr_export.cpp',
+  'sfn/sfn_instr_export.h',
+  'sfn/sfn_instr_fetch.cpp',
+  'sfn/sfn_instr_fetch.h',
+  'sfn/sfn_instr_mem.cpp',
+  'sfn/sfn_instr_mem.h',
+  'sfn/sfn_instr_lds.cpp',
+  'sfn/sfn_instr_lds.h',
+  'sfn/sfn_instr_tex.cpp',
+  'sfn/sfn_instr_tex.h',
+  'sfn/sfn_instrfactory.cpp',
+  'sfn/sfn_instrfactory.h',
+  'sfn/sfn_liverangeevaluator.cpp',
+  'sfn/sfn_liverangeevaluator.h',
+  'sfn/sfn_liverangeevaluator_helpers.cpp',
+  'sfn/sfn_liverangeevaluator_helpers.h',
+  'sfn/sfn_memorypool.cpp',
+  'sfn/sfn_memorypool.h',
   'sfn/sfn_nir.cpp',
   'sfn/sfn_nir.h',
+  'sfn/sfn_nir_legalize_image_load_store.cpp',
+  'sfn/sfn_nir_lower_64bit.cpp',
+  'sfn/sfn_nir_lower_alu.cpp',
+  'sfn/sfn_nir_lower_alu.h',
+  'sfn/sfn_nir_lower_tex.cpp',
+  'sfn/sfn_nir_lower_tex.h',
   'sfn/sfn_nir_lower_fs_out_to_vector.cpp',
   'sfn/sfn_nir_lower_fs_out_to_vector.h',
   'sfn/sfn_nir_lower_tess_io.cpp',
   'sfn/sfn_nir_vectorize_vs_inputs.c',
-  'sfn/sfn_shader_base.cpp',
-  'sfn/sfn_shader_base.h',
-  'sfn/sfn_shader_compute.cpp',
-  'sfn/sfn_shader_compute.h',
-  'sfn/sfn_shader_fragment.cpp',
-  'sfn/sfn_shader_fragment.h',
-  'sfn/sfn_shader_geometry.cpp',
-  'sfn/sfn_shader_geometry.h',
-  'sfn/sfn_shader_tcs.cpp',
-  'sfn/sfn_shader_tcs.h',
-  'sfn/sfn_shader_tess_eval.cpp',
-  'sfn/sfn_shader_tess_eval.h',
-  'sfn/sfn_shader_vertex.cpp',
-  'sfn/sfn_shader_vertex.h',
-  'sfn/sfn_shaderio.cpp',
-  'sfn/sfn_shaderio.h',
-  'sfn/sfn_value.cpp',
-  'sfn/sfn_value.h',
-  'sfn/sfn_value_gpr.cpp',
-  'sfn/sfn_value_gpr.h',
-  'sfn/sfn_valuepool.cpp',
-  'sfn/sfn_valuepool.h',
-  'sfn/sfn_vertexstageexport.cpp',
-  'sfn/sfn_vertexstageexport.h',
+  'sfn/sfn_optimizer.cpp',
+  'sfn/sfn_peephole.cpp',
+  'sfn/sfn_ra.cpp',
+  'sfn/sfn_ra.h',
+  'sfn/sfn_scheduler.cpp',
+  'sfn/sfn_scheduler.h',
+  'sfn/sfn_shader.cpp',
+  'sfn/sfn_shader.h',
+  'sfn/sfn_shader_cs.cpp',
+  'sfn/sfn_shader_cs.h',
+  'sfn/sfn_shader_fs.cpp',
+  'sfn/sfn_shader_fs.h',
+  'sfn/sfn_shader_gs.cpp',
+  'sfn/sfn_shader_gs.h',
+  'sfn/sfn_shader_tess.cpp',
+  'sfn/sfn_shader_tess.h',
+  'sfn/sfn_shader_vs.cpp',
+  'sfn/sfn_shader_vs.h',
+  'sfn/sfn_split_address_loads.cpp',
+  'sfn/sfn_split_address_loads.h',
+  'sfn/sfn_valuefactory.cpp',
+  'sfn/sfn_valuefactory.h',
+  'sfn/sfn_virtualvalues.cpp',
+  'sfn/sfn_virtualvalues.h',
   )
 
 egd_tables_h = custom_target(
@@ -188,23 +144,40 @@ egd_tables_h = custom_target(
 )
 
 r600_c_args = []
-if with_gallium_opencl
-  r600_c_args += '-DHAVE_OPENCL'
+if with_gallium_clover
+  if dep_elf.found()
+    r600_c_args += '-DHAVE_OPENCL'
+  else
+    warning('r600 requires libelf to support opencl.')
+  endif
+endif
+
+r600_cpp_args = []
+if cpp.has_type('std::pmr::monotonic_buffer_resource',
+                 prefix : '#include <memory_resource>')
+   r600_cpp_args += '-DHAVE_MEMORY_RESOURCE'
 endif
 
 libr600 = static_library(
   'r600',
-  [files_r600, egd_tables_h],
+  [files_r600, egd_tables_h, sha1_h],
   c_args : [r600_c_args, '-Wstrict-overflow=0'],
+  cpp_args: r600_cpp_args,
   gnu_symbol_visibility : 'hidden',
   include_directories : [
-    inc_src, inc_mapi, inc_mesa, inc_include, inc_compiler, inc_gallium, inc_gallium_aux, inc_amd_common,
+    inc_src, inc_mapi, inc_mesa, inc_include, inc_gallium, inc_gallium_aux, inc_amd_common,
     inc_gallium_drivers,
   ],
-  dependencies: [dep_libdrm_radeon, dep_elf, dep_llvm, idep_nir, idep_nir_headers],
+  dependencies: [dep_elf, dep_llvm, idep_nir, idep_nir_headers, idep_mesautil],
 )
 
 driver_r600 = declare_dependency(
   compile_args : '-DGALLIUM_R600',
-  link_with : [libr600, libmesa_gallium, libradeonwinsys],
+  link_with : [libr600, libmesa, libradeonwinsys],
 )
+
+if with_tests
+  subdir('sfn/tests')
+endif
+
+

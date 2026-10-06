@@ -31,7 +31,7 @@
 
 
 #include "compiler/glsl/string_to_uint_map.h"
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/context.h"
 #include "main/glspirv.h"
 #include "main/hash.h"
@@ -55,9 +55,9 @@
  * if refcount hits zero).
  * Then set ptr to point to sh, incrementing its refcount.
  */
-void
-_mesa_reference_shader(struct gl_context *ctx, struct gl_shader **ptr,
-                       struct gl_shader *sh)
+static void
+_reference_shader(struct gl_context *ctx, struct gl_shader **ptr,
+                       struct gl_shader *sh, bool skip_locking)
 {
    assert(ptr);
    if (*ptr == sh) {
@@ -71,8 +71,12 @@ _mesa_reference_shader(struct gl_context *ctx, struct gl_shader **ptr,
       assert(old->RefCount > 0);
 
       if (p_atomic_dec_zero(&old->RefCount)) {
-	 if (old->Name != 0)
-	    _mesa_HashRemove(ctx->Shared->ShaderObjects, old->Name);
+         if (old->Name != 0) {
+            if (skip_locking)
+               _mesa_HashRemoveLocked(&ctx->Shared->ShaderObjects, old->Name);
+            else
+               _mesa_HashRemove(&ctx->Shared->ShaderObjects, old->Name);
+         }
          _mesa_delete_shader(ctx, old);
       }
 
@@ -87,13 +91,20 @@ _mesa_reference_shader(struct gl_context *ctx, struct gl_shader **ptr,
    }
 }
 
+void
+_mesa_reference_shader(struct gl_context *ctx, struct gl_shader **ptr,
+                       struct gl_shader *sh)
+{
+   _reference_shader(ctx, ptr, sh, false);
+}
+
 static void
 _mesa_init_shader(struct gl_shader *shader)
 {
    shader->RefCount = 1;
    shader->info.Geom.VerticesOut = -1;
-   shader->info.Geom.InputType = GL_TRIANGLES;
-   shader->info.Geom.OutputType = GL_TRIANGLE_STRIP;
+   shader->info.Geom.InputType = MESA_PRIM_TRIANGLES;
+   shader->info.Geom.OutputType = MESA_PRIM_TRIANGLE_STRIP;
 }
 
 /**
@@ -107,9 +118,6 @@ _mesa_new_shader(GLuint name, gl_shader_stage stage)
    if (shader) {
       shader->Stage = stage;
       shader->Name = name;
-#ifdef DEBUG
-      shader->SourceChecksum = 0xa110c; /* alloc */
-#endif
       _mesa_init_shader(shader);
    }
    return shader;
@@ -126,6 +134,7 @@ _mesa_delete_shader(struct gl_context *ctx, struct gl_shader *sh)
    free((void *)sh->Source);
    free((void *)sh->FallbackSource);
    free(sh->Label);
+   ralloc_free(sh->nir);
    ralloc_free(sh);
 }
 
@@ -151,7 +160,7 @@ _mesa_lookup_shader(struct gl_context *ctx, GLuint name)
 {
    if (name) {
       struct gl_shader *sh = (struct gl_shader *)
-         _mesa_HashLookup(ctx->Shared->ShaderObjects, name);
+         _mesa_HashLookup(&ctx->Shared->ShaderObjects, name);
       /* Note that both gl_shader and gl_shader_program objects are kept
        * in the same hash table.  Check the object's type to be sure it's
        * what we're expecting.
@@ -177,7 +186,7 @@ _mesa_lookup_shader_err(struct gl_context *ctx, GLuint name, const char *caller)
    }
    else {
       struct gl_shader *sh = (struct gl_shader *)
-         _mesa_HashLookup(ctx->Shared->ShaderObjects, name);
+         _mesa_HashLookup(&ctx->Shared->ShaderObjects, name);
       if (!sh) {
          _mesa_error(ctx, GL_INVALID_VALUE, "%s", caller);
          return NULL;
@@ -197,8 +206,7 @@ _mesa_lookup_shader_err(struct gl_context *ctx, GLuint name, const char *caller)
 /**********************************************************************/
 
 void
-_mesa_reference_shader_program_data(struct gl_context *ctx,
-                                    struct gl_shader_program_data **ptr,
+_mesa_reference_shader_program_data(struct gl_shader_program_data **ptr,
                                     struct gl_shader_program_data *data)
 {
    if (*ptr == data)
@@ -210,7 +218,6 @@ _mesa_reference_shader_program_data(struct gl_context *ctx,
       assert(oldData->RefCount > 0);
 
       if (p_atomic_dec_zero(&oldData->RefCount)) {
-         assert(ctx);
          assert(oldData->NumUniformStorage == 0 ||
                 oldData->UniformStorage);
 
@@ -252,9 +259,11 @@ _mesa_reference_shader_program_(struct gl_context *ctx,
       assert(old->RefCount > 0);
 
       if (p_atomic_dec_zero(&old->RefCount)) {
-	 if (old->Name != 0)
-	    _mesa_HashRemove(ctx->Shared->ShaderObjects, old->Name);
+         _mesa_HashLockMutex(&ctx->Shared->ShaderObjects);
+         if (old->Name != 0)
+	         _mesa_HashRemoveLocked(&ctx->Shared->ShaderObjects, old->Name);
          _mesa_delete_shader_program(ctx, old);
+         _mesa_HashUnlockMutex(&ctx->Shared->ShaderObjects);
       }
 
       *ptr = NULL;
@@ -289,9 +298,6 @@ init_shader_program(struct gl_shader_program *prog)
    prog->AttributeBindings = string_to_uint_map_ctor();
    prog->FragDataBindings = string_to_uint_map_ctor();
    prog->FragDataIndexBindings = string_to_uint_map_ctor();
-
-   prog->Geom.UsesEndPrimitive = false;
-   prog->Geom.ActiveStreamMask = 0;
 
    prog->TransformFeedback.BufferMode = GL_INTERLEAVED_ATTRIBS;
 
@@ -339,23 +345,17 @@ _mesa_clear_shader_program_data(struct gl_context *ctx,
       shProg->UniformRemapTable = NULL;
    }
 
-   if (shProg->UniformHash) {
-      string_to_uint_map_dtor(shProg->UniformHash);
-      shProg->UniformHash = NULL;
-   }
+   if (shProg->data)
+      _mesa_program_resource_hash_destroy(shProg);
 
-   if (shProg->data && shProg->data->ProgramResourceHash) {
-      _mesa_hash_table_u64_destroy(shProg->data->ProgramResourceHash, NULL);
-      shProg->data->ProgramResourceHash = NULL;
-   }
-
-   _mesa_reference_shader_program_data(ctx, &shProg->data, NULL);
+   _mesa_reference_shader_program_data(&shProg->data, NULL);
 }
 
 
 /**
  * Free all the data that hangs off a shader program object, but not the
  * object itself.
+ * Must be called with shared->ShaderObjects locked.
  */
 void
 _mesa_free_shader_program_data(struct gl_context *ctx,
@@ -384,7 +384,7 @@ _mesa_free_shader_program_data(struct gl_context *ctx,
 
    /* detach shaders */
    for (i = 0; i < shProg->NumShaders; i++) {
-      _mesa_reference_shader(ctx, &shProg->Shaders[i], NULL);
+      _reference_shader(ctx, &shProg->Shaders[i], NULL, true);
    }
    shProg->NumShaders = 0;
 
@@ -425,7 +425,7 @@ _mesa_lookup_shader_program(struct gl_context *ctx, GLuint name)
    struct gl_shader_program *shProg;
    if (name) {
       shProg = (struct gl_shader_program *)
-         _mesa_HashLookup(ctx->Shared->ShaderObjects, name);
+         _mesa_HashLookup(&ctx->Shared->ShaderObjects, name);
       /* Note that both gl_shader and gl_shader_program objects are kept
        * in the same hash table.  Check the object's type to be sure it's
        * what we're expecting.
@@ -443,22 +443,24 @@ _mesa_lookup_shader_program(struct gl_context *ctx, GLuint name)
  * As above, but record an error if program is not found.
  */
 struct gl_shader_program *
-_mesa_lookup_shader_program_err(struct gl_context *ctx, GLuint name,
-                                const char *caller)
+_mesa_lookup_shader_program_err_glthread(struct gl_context *ctx, GLuint name,
+                                         bool glthread, const char *caller)
 {
    if (!name) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "%s", caller);
+      _mesa_error_glthread_safe(ctx, GL_INVALID_VALUE, glthread, "%s", caller);
       return NULL;
    }
    else {
       struct gl_shader_program *shProg = (struct gl_shader_program *)
-         _mesa_HashLookup(ctx->Shared->ShaderObjects, name);
+         _mesa_HashLookup(&ctx->Shared->ShaderObjects, name);
       if (!shProg) {
-         _mesa_error(ctx, GL_INVALID_VALUE, "%s", caller);
+         _mesa_error_glthread_safe(ctx, GL_INVALID_VALUE, glthread,
+                                   "%s", caller);
          return NULL;
       }
       if (shProg->Type != GL_SHADER_PROGRAM_MESA) {
-         _mesa_error(ctx, GL_INVALID_OPERATION, "%s", caller);
+         _mesa_error_glthread_safe(ctx, GL_INVALID_OPERATION, glthread,
+                                   "%s", caller);
          return NULL;
       }
       return shProg;
@@ -466,8 +468,9 @@ _mesa_lookup_shader_program_err(struct gl_context *ctx, GLuint name,
 }
 
 
-void
-_mesa_init_shader_object_functions(struct dd_function_table *driver)
+struct gl_shader_program *
+_mesa_lookup_shader_program_err(struct gl_context *ctx, GLuint name,
+                                const char *caller)
 {
-   driver->LinkShader = _mesa_ir_link_shader;
+   return _mesa_lookup_shader_program_err_glthread(ctx, name, false, caller);
 }

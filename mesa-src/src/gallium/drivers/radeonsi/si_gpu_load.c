@@ -1,25 +1,7 @@
 /*
  * Copyright 2015 Advanced Micro Devices, Inc.
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 /* The GPU load is measured as follows.
@@ -32,8 +14,8 @@
  * GPU load between the two samples.
  */
 
-#include "radeonsi/si_pipe.h"
-#include "radeonsi/si_query.h"
+#include "si_pipe.h"
+#include "si_query.h"
 #include "util/os_time.h"
 
 /* For good accuracy at 1000 fps or lower. This will be inaccurate for higher
@@ -86,7 +68,8 @@ static void si_update_mmio_counters(struct si_screen *sscreen, union si_mmio_cou
    sscreen->ws->read_registers(sscreen->ws, GRBM_STATUS, 1, &value);
 
    UPDATE_COUNTER(ta, TA_BUSY);
-   UPDATE_COUNTER(gds, GDS_BUSY);
+   if (sscreen->info.gfx_level < GFX12)
+      UPDATE_COUNTER(gds, GDS_BUSY);
    UPDATE_COUNTER(vgt, VGT_BUSY);
    UPDATE_COUNTER(ia, IA_BUSY);
    UPDATE_COUNTER(sx, SX_BUSY);
@@ -101,7 +84,7 @@ static void si_update_mmio_counters(struct si_screen *sscreen, union si_mmio_cou
    UPDATE_COUNTER(gui, GUI_ACTIVE);
    gui_busy = GUI_ACTIVE(value);
 
-   if (sscreen->info.chip_class == GFX7 || sscreen->info.chip_class == GFX8) {
+   if (sscreen->info.gfx_level == GFX7 || sscreen->info.gfx_level == GFX8) {
       /* SRBM_STATUS2 */
       sscreen->ws->read_registers(sscreen->ws, SRBM_STATUS2, 1, &value);
 
@@ -109,7 +92,7 @@ static void si_update_mmio_counters(struct si_screen *sscreen, union si_mmio_cou
       sdma_busy = SDMA_BUSY(value);
    }
 
-   if (sscreen->info.chip_class >= GFX8) {
+   if (sscreen->info.gfx_level >= GFX8) {
       /* CP_STAT */
       sscreen->ws->read_registers(sscreen->ws, CP_STAT, 1, &value);
 
@@ -159,22 +142,25 @@ static int si_gpu_load_thread(void *param)
 
 void si_gpu_load_kill_thread(struct si_screen *sscreen)
 {
-   if (!sscreen->gpu_load_thread)
+   if (!sscreen->gpu_load_thread_created)
       return;
 
    p_atomic_inc(&sscreen->gpu_load_stop_thread);
    thrd_join(sscreen->gpu_load_thread, NULL);
-   sscreen->gpu_load_thread = 0;
+   sscreen->gpu_load_thread_created = false;
 }
 
 static uint64_t si_read_mmio_counter(struct si_screen *sscreen, unsigned busy_index)
 {
    /* Start the thread if needed. */
-   if (!sscreen->gpu_load_thread) {
+   if (!sscreen->gpu_load_thread_created) {
       simple_mtx_lock(&sscreen->gpu_load_mutex);
       /* Check again inside the mutex. */
-      if (!sscreen->gpu_load_thread)
-         sscreen->gpu_load_thread = u_thread_create(si_gpu_load_thread, sscreen);
+      if (!sscreen->gpu_load_thread_created) {
+         if (thrd_success == u_thread_create(&sscreen->gpu_load_thread, si_gpu_load_thread, sscreen)) {
+            sscreen->gpu_load_thread_created = true;
+         }
+      }
       simple_mtx_unlock(&sscreen->gpu_load_mutex);
    }
 

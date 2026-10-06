@@ -39,9 +39,6 @@ struct tgsi_src_register;
 struct tgsi_full_src_register;
 struct tgsi_full_instruction;
 
-void *
-tgsi_align_128bit(void *unaligned);
-
 unsigned
 tgsi_util_get_src_register_swizzle(const struct tgsi_src_register *reg,
                                    unsigned component);
@@ -52,32 +49,24 @@ tgsi_util_get_full_src_register_swizzle(
    const struct tgsi_full_src_register *reg,
    unsigned component );
 
-void
-tgsi_util_set_src_register_swizzle(struct tgsi_src_register *reg,
-                                   unsigned swizzle,
-                                   unsigned component);
-
-
-#define TGSI_UTIL_SIGN_CLEAR    0   /* Force positive */
-#define TGSI_UTIL_SIGN_SET      1   /* Force negative */
-#define TGSI_UTIL_SIGN_TOGGLE   2   /* Negate */
-#define TGSI_UTIL_SIGN_KEEP     3   /* No change */
-
-unsigned
-tgsi_util_get_full_src_register_sign_mode(
-   const struct tgsi_full_src_register *reg,
-   unsigned component);
-
-void
-tgsi_util_set_full_src_register_sign_mode(struct tgsi_full_src_register *reg,
-                                          unsigned sign_mode);
-
+/* returns the channels of the src_idx src register used by the full instruction. */
 unsigned
 tgsi_util_get_inst_usage_mask(const struct tgsi_full_instruction *inst,
                               unsigned src_idx);
 
-struct tgsi_src_register
-tgsi_util_get_src_from_ind(const struct tgsi_ind_register *reg);
+/* Returns the channels of the src_idx src register used by an instruction with
+ * these parameters.
+ */
+unsigned
+tgsi_util_get_src_usage_mask(enum tgsi_opcode opcode,
+                             unsigned src_idx,
+                             uint8_t write_mask,
+                             uint8_t swizzle_x,
+                             uint8_t swizzle_y,
+                             uint8_t swizzle_z,
+                             uint8_t swizzle_w,
+                             enum tgsi_texture_type tex_target,
+                             enum tgsi_texture_type mem_target);
 
 int
 tgsi_util_get_texture_coord_dim(enum tgsi_texture_type tgsi_tex);

@@ -39,32 +39,31 @@ namespace pipe_tessellator_wrap
    {
    private:
       typedef CHWTessellator SUPER;
-      enum pipe_prim_type    prim_mode;
-      PIPE_ALIGN_VAR(32) float     domain_points_u[MAX_POINT_COUNT];
-      PIPE_ALIGN_VAR(32) float     domain_points_v[MAX_POINT_COUNT];
+      enum mesa_prim    prim_mode;
+      alignas(32) float      domain_points_u[MAX_POINT_COUNT];
+      alignas(32) float      domain_points_v[MAX_POINT_COUNT];
       uint32_t               num_domain_points;
-      PIPE_ALIGN_VAR(32) uint32_t  indices[3][MAX_INDEX_COUNT / 3];
 
    public:
-      void Init(enum pipe_prim_type tes_prim_mode,
+      void Init(enum mesa_prim tes_prim_mode,
                 enum pipe_tess_spacing ts_spacing,
                 bool tes_vertex_order_cw, bool tes_point_mode)
       {
-         static D3D11_TESSELLATOR_PARTITIONING CVT_TS_D3D_PARTITIONING[] = {
-                                                                            D3D11_TESSELLATOR_PARTITIONING_FRACTIONAL_ODD,  // PIPE_TESS_SPACING_ODD
-                                                                            D3D11_TESSELLATOR_PARTITIONING_FRACTIONAL_EVEN, // PIPE_TESS_SPACING_EVEN
-                                                                            D3D11_TESSELLATOR_PARTITIONING_INTEGER,         // PIPE_TESS_SPACING_EQUAL
+         static PIPE_TESSELLATOR_PARTITIONING CVT_TS_D3D_PARTITIONING[] = {
+                                                                            PIPE_TESSELLATOR_PARTITIONING_FRACTIONAL_ODD,  // PIPE_TESS_SPACING_ODD
+                                                                            PIPE_TESSELLATOR_PARTITIONING_FRACTIONAL_EVEN, // PIPE_TESS_SPACING_EVEN
+                                                                            PIPE_TESSELLATOR_PARTITIONING_INTEGER,         // PIPE_TESS_SPACING_EQUAL
          };
 
-         D3D11_TESSELLATOR_OUTPUT_PRIMITIVE out_prim;
+         PIPE_TESSELLATOR_OUTPUT_PRIMITIVE out_prim;
          if (tes_point_mode)
-            out_prim = D3D11_TESSELLATOR_OUTPUT_POINT;
-         else if (tes_prim_mode == PIPE_PRIM_LINES)
-            out_prim = D3D11_TESSELLATOR_OUTPUT_LINE;
+            out_prim = PIPE_TESSELLATOR_OUTPUT_POINT;
+         else if (tes_prim_mode == MESA_PRIM_LINES)
+            out_prim = PIPE_TESSELLATOR_OUTPUT_LINE;
          else if (tes_vertex_order_cw)
-            out_prim = D3D11_TESSELLATOR_OUTPUT_TRIANGLE_CW;
+            out_prim = PIPE_TESSELLATOR_OUTPUT_TRIANGLE_CW;
          else
-            out_prim = D3D11_TESSELLATOR_OUTPUT_TRIANGLE_CCW;
+            out_prim = PIPE_TESSELLATOR_OUTPUT_TRIANGLE_CCW;
 
          SUPER::Init(CVT_TS_D3D_PARTITIONING[ts_spacing],
                      out_prim);
@@ -78,7 +77,7 @@ namespace pipe_tessellator_wrap
       {
          switch (prim_mode)
             {
-            case PIPE_PRIM_QUADS:
+            case MESA_PRIM_QUADS:
                SUPER::TessellateQuadDomain(
                                            tess_factors->outer_tf[0],
                                            tess_factors->outer_tf[1],
@@ -88,7 +87,7 @@ namespace pipe_tessellator_wrap
                                            tess_factors->inner_tf[1]);
                break;
 
-            case PIPE_PRIM_TRIANGLES:
+            case MESA_PRIM_TRIANGLES:
                SUPER::TessellateTriDomain(
                                           tess_factors->outer_tf[0],
                                           tess_factors->outer_tf[1],
@@ -96,7 +95,7 @@ namespace pipe_tessellator_wrap
                                           tess_factors->inner_tf[0]);
                break;
 
-            case PIPE_PRIM_LINES:
+            case MESA_PRIM_LINES:
                SUPER::TessellateIsoLineDomain(
                                               tess_factors->outer_tf[0],
                                               tess_factors->outer_tf[1]);
@@ -127,7 +126,7 @@ namespace pipe_tessellator_wrap
 
 /* allocate tessellator */
 struct pipe_tessellator *
-p_tess_init(enum pipe_prim_type tes_prim_mode,
+p_tess_init(enum mesa_prim tes_prim_mode,
             enum pipe_tess_spacing spacing,
             bool tes_vertex_order_cw, bool tes_point_mode)
 {

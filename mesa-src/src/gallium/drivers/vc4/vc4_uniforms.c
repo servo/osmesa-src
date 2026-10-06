@@ -316,7 +316,7 @@ vc4_write_uniforms(struct vc4_context *vc4, struct vc4_compiled_shader *shader,
                                 if (format_swiz[i] >= 4)
                                         continue;
 
-                                color |= (vc4->blend_color.ub[format_swiz[i]] <<
+                                color |= ((uint32_t)vc4->blend_color.ub[format_swiz[i]] <<
                                           (i * 8));
                         }
                         cl_aligned_u32(&uniforms, color);
@@ -324,7 +324,7 @@ vc4_write_uniforms(struct vc4_context *vc4, struct vc4_compiled_shader *shader,
                 }
 
                 case QUNIFORM_BLEND_CONST_COLOR_AAAA: {
-                        uint8_t a = vc4->blend_color.ub[3];
+                        uint32_t a = vc4->blend_color.ub[3];
                         cl_aligned_u32(&uniforms, ((a) |
                                                    (a << 8) |
                                                    (a << 16) |
@@ -338,11 +338,6 @@ vc4_write_uniforms(struct vc4_context *vc4, struct vc4_compiled_shader *shader,
                                        (data <= 1 ?
                                         (vc4->stencil_ref.ref_value[data] << 8) :
                                         0));
-                        break;
-
-                case QUNIFORM_ALPHA_REF:
-                        cl_aligned_f(&uniforms,
-                                     vc4->zsa->base.alpha.ref_value);
                         break;
 
                 case QUNIFORM_SAMPLE_MASK:
@@ -422,7 +417,6 @@ vc4_set_shader_uniform_dirty_flags(struct vc4_compiled_shader *shader)
                         break;
 
                 case QUNIFORM_STENCIL:
-                case QUNIFORM_ALPHA_REF:
                         dirty |= VC4_DIRTY_ZSA;
                         break;
 

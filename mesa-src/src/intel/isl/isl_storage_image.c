@@ -22,10 +22,11 @@
  */
 
 #include "isl_priv.h"
-#include "compiler/brw_compiler.h"
+#include "compiler/intel_shader_enums.h"
 
 bool
-isl_is_storage_image_format(enum isl_format format)
+isl_is_storage_image_format(const struct intel_device_info *devinfo,
+                            enum isl_format format)
 {
    /* XXX: Maybe we should put this in the CSV? */
 
@@ -76,7 +77,7 @@ isl_is_storage_image_format(enum isl_format format)
 }
 
 enum isl_format
-isl_lower_storage_image_format(const struct gen_device_info *devinfo,
+isl_lower_storage_image_format(const struct intel_device_info *devinfo,
                                enum isl_format format)
 {
    switch (format) {
@@ -94,9 +95,24 @@ isl_lower_storage_image_format(const struct gen_device_info *devinfo,
     *
     *   "The surface format for the typed atomic integer operations must
     *    be R32_UINT or R32_SINT."
+    *
+    * But checking the BSpec 1706, you find a different restriction. There the
+    * wording is :
+    *
+    *    "The surface format must be one of R32_UINT, R32_SINT or R32_FLOAT"
+    *
+    * The confusion is probably related to atomic integer messages. For
+    * example an IADD instruction would require a R32_UINT/R32_SINT surface.
+    * But a CMPXCHG instruction does not really care about the type, it just
+    * does bit to bit comparison and swap.
+    *
+    * The confusion seems to have propagated to the simulation environment.
+    * Gfx12 has the same restrictions as Gfx11 regarding doing a CMPXCHG on a
+    * R32_FLOAT surface, but the Gfx11 environment will report an error while
+    * Gfx12 passes fine. More importantly HW doesn't seem to mind.
     */
    case ISL_FORMAT_R32_FLOAT:
-      return ISL_FORMAT_R32_UINT;
+      return format;
 
    /* From HSW to BDW the only 64bpp format supported for typed access is
     * RGBA_UINT16.  IVB falls back to untyped.
@@ -107,8 +123,8 @@ isl_lower_storage_image_format(const struct gen_device_info *devinfo,
    case ISL_FORMAT_R32G32_UINT:
    case ISL_FORMAT_R32G32_SINT:
    case ISL_FORMAT_R32G32_FLOAT:
-      return (devinfo->gen >= 9 ? format :
-              devinfo->gen >= 8 || devinfo->is_haswell ?
+      return (devinfo->ver >= 9 ? format :
+              devinfo->verx10 >= 75 ?
               ISL_FORMAT_R16G16B16A16_UINT :
               ISL_FORMAT_R32G32_UINT);
 
@@ -124,73 +140,89 @@ isl_lower_storage_image_format(const struct gen_device_info *devinfo,
     */
    case ISL_FORMAT_R8G8B8A8_UINT:
    case ISL_FORMAT_R8G8B8A8_SINT:
-      return (devinfo->gen >= 9 ? format :
-              devinfo->gen >= 8 || devinfo->is_haswell ?
+      return (devinfo->ver >= 9 ? format :
+              devinfo->verx10 >= 75 ?
               ISL_FORMAT_R8G8B8A8_UINT : ISL_FORMAT_R32_UINT);
 
    case ISL_FORMAT_R16G16_UINT:
    case ISL_FORMAT_R16G16_SINT:
    case ISL_FORMAT_R16G16_FLOAT:
-      return (devinfo->gen >= 9 ? format :
-              devinfo->gen >= 8 || devinfo->is_haswell ?
+      return (devinfo->ver >= 9 ? format :
+              devinfo->verx10 >= 75 ?
               ISL_FORMAT_R16G16_UINT : ISL_FORMAT_R32_UINT);
 
    case ISL_FORMAT_R8G8_UINT:
    case ISL_FORMAT_R8G8_SINT:
-      return (devinfo->gen >= 9 ? format :
-              devinfo->gen >= 8 || devinfo->is_haswell ?
+      return (devinfo->ver >= 9 ? format :
+              devinfo->verx10 >= 75 ?
               ISL_FORMAT_R8G8_UINT : ISL_FORMAT_R16_UINT);
 
    case ISL_FORMAT_R16_UINT:
    case ISL_FORMAT_R16_FLOAT:
    case ISL_FORMAT_R16_SINT:
-      return (devinfo->gen >= 9 ? format : ISL_FORMAT_R16_UINT);
+      return (devinfo->ver >= 9 ? format : ISL_FORMAT_R16_UINT);
 
    case ISL_FORMAT_R8_UINT:
    case ISL_FORMAT_R8_SINT:
-      return (devinfo->gen >= 9 ? format : ISL_FORMAT_R8_UINT);
+      return (devinfo->ver >= 9 ? format : ISL_FORMAT_R8_UINT);
 
-   /* Neither the 2/10/10/10 nor the 11/11/10 packed formats are supported
+   /* Here the PRMs are a bit out of date. But according to BSpec 47635
+    * (Gfx12.5), the 2/10/10/10 and the 11/11/10 packed formats are supported
     * by the hardware.
     */
    case ISL_FORMAT_R10G10B10A2_UINT:
    case ISL_FORMAT_R10G10B10A2_UNORM:
    case ISL_FORMAT_R11G11B10_FLOAT:
-      return ISL_FORMAT_R32_UINT;
+      return devinfo->verx10 >= 125 ? format : ISL_FORMAT_R32_UINT;
 
-   /* No normalized fixed-point formats are supported by the hardware. */
+   /* No normalized fixed-point formats are supported by the hardware until Gfx11. */
    case ISL_FORMAT_R16G16B16A16_UNORM:
    case ISL_FORMAT_R16G16B16A16_SNORM:
-      return (devinfo->gen >= 11 ? format :
-              devinfo->gen >= 8 || devinfo->is_haswell ?
-              ISL_FORMAT_R16G16B16A16_UINT :
-              ISL_FORMAT_R32G32_UINT);
+      if (devinfo->ver >= 11)
+         return format;
+      if (devinfo->ver >= 9)
+         return ISL_FORMAT_R32G32_UINT;
+      if (devinfo->verx10 >= 75)
+         return ISL_FORMAT_R16G16B16A16_UINT;
+      return ISL_FORMAT_R32G32_UINT;
 
    case ISL_FORMAT_R8G8B8A8_UNORM:
    case ISL_FORMAT_R8G8B8A8_SNORM:
-      return (devinfo->gen >= 11 ? format :
-              devinfo->gen >= 8 || devinfo->is_haswell ?
-              ISL_FORMAT_R8G8B8A8_UINT : ISL_FORMAT_R32_UINT);
+      if (devinfo->ver >= 11)
+         return format;
+      if (devinfo->ver >= 9)
+         return ISL_FORMAT_R32_UINT;
+      if (devinfo->verx10 >= 75)
+         return ISL_FORMAT_R8G8B8A8_UINT;
+      return ISL_FORMAT_R32_UINT;
 
    case ISL_FORMAT_R16G16_UNORM:
    case ISL_FORMAT_R16G16_SNORM:
-      return (devinfo->gen >= 11 ? format :
-              devinfo->gen >= 8 || devinfo->is_haswell ?
-              ISL_FORMAT_R16G16_UINT : ISL_FORMAT_R32_UINT);
+      if (devinfo->ver >= 11)
+         return format;
+      if (devinfo->ver >= 9)
+         return ISL_FORMAT_R32_UINT;
+      if (devinfo->verx10 >= 75)
+         return ISL_FORMAT_R16G16_UINT;
+      return ISL_FORMAT_R32_UINT;
 
    case ISL_FORMAT_R8G8_UNORM:
    case ISL_FORMAT_R8G8_SNORM:
-      return (devinfo->gen >= 11 ? format :
-              devinfo->gen >= 8 || devinfo->is_haswell ?
-              ISL_FORMAT_R8G8_UINT : ISL_FORMAT_R16_UINT);
+      if (devinfo->ver >= 11)
+         return format;
+      if (devinfo->ver >= 9)
+         return ISL_FORMAT_R16_UINT;
+      if (devinfo->verx10 >= 75)
+         return ISL_FORMAT_R8G8_UINT;
+      return ISL_FORMAT_R16_UINT;
 
    case ISL_FORMAT_R16_UNORM:
    case ISL_FORMAT_R16_SNORM:
-      return (devinfo->gen >= 11 ? format : ISL_FORMAT_R16_UINT);
+      return (devinfo->ver >= 11 ? format : ISL_FORMAT_R16_UINT);
 
    case ISL_FORMAT_R8_UNORM:
    case ISL_FORMAT_R8_SNORM:
-      return (devinfo->gen >= 11 ? format : ISL_FORMAT_R8_UINT);
+      return (devinfo->ver >= 11 ? format : ISL_FORMAT_R8_UINT);
 
    default:
       assert(!"Unknown image format");
@@ -199,19 +231,19 @@ isl_lower_storage_image_format(const struct gen_device_info *devinfo,
 }
 
 bool
-isl_has_matching_typed_storage_image_format(const struct gen_device_info *devinfo,
+isl_has_matching_typed_storage_image_format(const struct intel_device_info *devinfo,
                                             enum isl_format fmt)
 {
-   if (devinfo->gen >= 9) {
+   if (devinfo->ver >= 9) {
       return true;
-   } else if (devinfo->gen >= 8 || devinfo->is_haswell) {
+   } else if (devinfo->verx10 >= 75) {
       return isl_format_get_layout(fmt)->bpb <= 64;
    } else {
       return isl_format_get_layout(fmt)->bpb <= 32;
    }
 }
 
-static const struct brw_image_param image_param_defaults = {
+static const struct isl_image_param image_param_defaults = {
    /* Set the swizzling shifts to all-ones to effectively disable
     * swizzling -- See emit_address_calculation() in
     * brw_fs_surface_builder.cpp for a more detailed explanation of
@@ -222,7 +254,7 @@ static const struct brw_image_param image_param_defaults = {
 
 void
 isl_surf_fill_image_param(const struct isl_device *dev,
-                          struct brw_image_param *param,
+                          struct isl_image_param *param,
                           const struct isl_surf *surf,
                           const struct isl_view *view)
 {
@@ -240,12 +272,16 @@ isl_surf_fill_image_param(const struct isl_device *dev,
                     view->array_len :
                     isl_minify(surf->logical_level0_px.d, view->base_level);
 
+   uint32_t tile_z_el, phys_array_layer;
    isl_surf_get_image_offset_el(surf, view->base_level,
                                 surf->dim == ISL_SURF_DIM_3D ?
                                    0 : view->base_array_layer,
                                 surf->dim == ISL_SURF_DIM_3D ?
                                    view->base_array_layer : 0,
-                                &param->offset[0],  &param->offset[1]);
+                                &param->offset[0],  &param->offset[1],
+                                &tile_z_el, &phys_array_layer);
+   assert(tile_z_el == 0);
+   assert(phys_array_layer == 0);
 
    const int cpp = isl_format_get_layout(surf->format)->bpb / 8;
    param->stride[0] = cpp;
@@ -253,7 +289,7 @@ isl_surf_fill_image_param(const struct isl_device *dev,
 
    const struct isl_extent3d image_align_sa =
       isl_surf_get_image_alignment_sa(surf);
-   if (ISL_DEV_GEN(dev) < 9 && surf->dim == ISL_SURF_DIM_3D) {
+   if (ISL_GFX_VER(dev) < 9 && surf->dim == ISL_SURF_DIM_3D) {
       param->stride[2] = isl_align_npot(param->size[0], image_align_sa.w);
       param->stride[3] = isl_align_npot(param->size[1], image_align_sa.h);
    } else {
@@ -307,13 +343,13 @@ isl_surf_fill_image_param(const struct isl_device *dev,
     * brw_fs_surface_builder.cpp) handles this as a sort of tiling with
     * modulus equal to the LOD.
     */
-   param->tiling[2] = (ISL_DEV_GEN(dev) < 9 && surf->dim == ISL_SURF_DIM_3D ?
+   param->tiling[2] = (ISL_GFX_VER(dev) < 9 && surf->dim == ISL_SURF_DIM_3D ?
                        view->base_level : 0);
 }
 
 void
 isl_buffer_fill_image_param(const struct isl_device *dev,
-                            struct brw_image_param *param,
+                            struct isl_image_param *param,
                             enum isl_format format,
                             uint64_t size)
 {

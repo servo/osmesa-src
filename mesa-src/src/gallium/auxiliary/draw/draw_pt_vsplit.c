@@ -23,6 +23,9 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <stdbool.h>
+
+#include "util/macros.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 
@@ -33,33 +36,30 @@
 #define SEGMENT_SIZE 1024
 #define MAP_SIZE     256
 
-/* The largest possible index within an index buffer */
-#define MAX_ELT_IDX 0xffffffff
-
 struct vsplit_frontend {
    struct draw_pt_front_end base;
    struct draw_context *draw;
 
-   unsigned prim;
+   enum mesa_prim prim;
 
    struct draw_pt_middle_end *middle;
 
    unsigned max_vertices;
-   ushort segment_size;
+   uint16_t segment_size;
 
    /* buffers for splitting */
    unsigned fetch_elts[SEGMENT_SIZE];
-   ushort draw_elts[SEGMENT_SIZE];
-   ushort identity_draw_elts[SEGMENT_SIZE];
+   uint16_t draw_elts[SEGMENT_SIZE];
+   uint16_t identity_draw_elts[SEGMENT_SIZE];
 
    struct {
       /* map a fetch element to a draw element */
       unsigned fetches[MAP_SIZE];
-      ushort draws[MAP_SIZE];
-      boolean has_max_fetch;
+      uint16_t draws[MAP_SIZE];
+      bool has_max_fetch;
 
-      ushort num_fetch_elts;
-      ushort num_draw_elts;
+      uint16_t num_fetch_elts;
+      uint16_t num_draw_elts;
    } cache;
 };
 
@@ -68,10 +68,11 @@ static void
 vsplit_clear_cache(struct vsplit_frontend *vsplit)
 {
    memset(vsplit->cache.fetches, 0xff, sizeof(vsplit->cache.fetches));
-   vsplit->cache.has_max_fetch = FALSE;
+   vsplit->cache.has_max_fetch = false;
    vsplit->cache.num_fetch_elts = 0;
    vsplit->cache.num_draw_elts = 0;
 }
+
 
 static void
 vsplit_flush_cache(struct vsplit_frontend *vsplit, unsigned flags)
@@ -80,6 +81,7 @@ vsplit_flush_cache(struct vsplit_frontend *vsplit, unsigned flags)
          vsplit->fetch_elts, vsplit->cache.num_fetch_elts,
          vsplit->draw_elts, vsplit->cache.num_draw_elts, flags);
 }
+
 
 /**
  * Add a fetch element and add it to the draw elements.
@@ -106,6 +108,7 @@ vsplit_add_cache(struct vsplit_frontend *vsplit, unsigned fetch)
    vsplit->draw_elts[vsplit->cache.num_draw_elts++] = vsplit->cache.draws[hash];
 }
 
+
 /**
  * Returns the base index to the elements array.
  * The value is checked for integer overflow (not sure it can happen?).
@@ -113,40 +116,41 @@ vsplit_add_cache(struct vsplit_frontend *vsplit, unsigned fetch)
 static inline unsigned
 vsplit_get_base_idx(unsigned start, unsigned fetch)
 {
-   return draw_overflow_uadd(start, fetch, MAX_ELT_IDX);
+   return util_clamped_uadd(start, fetch);
 }
 
 
 static inline void
-vsplit_add_cache_ubyte(struct vsplit_frontend *vsplit, const ubyte *elts,
+vsplit_add_cache_uint8(struct vsplit_frontend *vsplit, const uint8_t *elts,
                        unsigned start, unsigned fetch, int elt_bias)
 {
    struct draw_context *draw = vsplit->draw;
    unsigned elt_idx;
    elt_idx = vsplit_get_base_idx(start, fetch);
    elt_idx = (unsigned)((int)(DRAW_GET_IDX(elts, elt_idx)) + elt_bias);
-   /* unlike the uint case this can only happen with elt_bias */
+   /* unlike the uint32_t case this can only happen with elt_bias */
    if (elt_bias && elt_idx == DRAW_MAX_FETCH_IDX && !vsplit->cache.has_max_fetch) {
       unsigned hash = elt_idx % MAP_SIZE;
       vsplit->cache.fetches[hash] = 0;
-      vsplit->cache.has_max_fetch = TRUE;
+      vsplit->cache.has_max_fetch = true;
    }
    vsplit_add_cache(vsplit, elt_idx);
 }
 
+
 static inline void
-vsplit_add_cache_ushort(struct vsplit_frontend *vsplit, const ushort *elts,
-                       unsigned start, unsigned fetch, int elt_bias)
+vsplit_add_cache_uint16(struct vsplit_frontend *vsplit, const uint16_t *elts,
+                        unsigned start, unsigned fetch, int elt_bias)
 {
    struct draw_context *draw = vsplit->draw;
    unsigned elt_idx;
    elt_idx = vsplit_get_base_idx(start, fetch);
    elt_idx = (unsigned)((int)(DRAW_GET_IDX(elts, elt_idx)) + elt_bias);
-   /* unlike the uint case this can only happen with elt_bias */
+   /* unlike the uint32_t case this can only happen with elt_bias */
    if (elt_bias && elt_idx == DRAW_MAX_FETCH_IDX && !vsplit->cache.has_max_fetch) {
       unsigned hash = elt_idx % MAP_SIZE;
       vsplit->cache.fetches[hash] = 0;
-      vsplit->cache.has_max_fetch = TRUE;
+      vsplit->cache.has_max_fetch = true;
    }
    vsplit_add_cache(vsplit, elt_idx);
 }
@@ -154,11 +158,11 @@ vsplit_add_cache_ushort(struct vsplit_frontend *vsplit, const ushort *elts,
 
 /**
  * Add a fetch element and add it to the draw elements.  The fetch element is
- * in full range (uint).
+ * in full range (uint32_t).
  */
 static inline void
-vsplit_add_cache_uint(struct vsplit_frontend *vsplit, const uint *elts,
-                      unsigned start, unsigned fetch, int elt_bias)
+vsplit_add_cache_uint32(struct vsplit_frontend *vsplit, const uint32_t *elts,
+                        unsigned start, unsigned fetch, int elt_bias)
 {
    struct draw_context *draw = vsplit->draw;
    unsigned elt_idx;
@@ -172,7 +176,7 @@ vsplit_add_cache_uint(struct vsplit_frontend *vsplit, const uint *elts,
       unsigned hash = elt_idx % MAP_SIZE;
       /* force update - any value will do except DRAW_MAX_FETCH_IDX */
       vsplit->cache.fetches[hash] = 0;
-      vsplit->cache.has_max_fetch = TRUE;
+      vsplit->cache.has_max_fetch = true;
    }
    vsplit_add_cache(vsplit, elt_idx);
 }
@@ -181,26 +185,27 @@ vsplit_add_cache_uint(struct vsplit_frontend *vsplit, const uint *elts,
 #define FUNC vsplit_run_linear
 #include "draw_pt_vsplit_tmp.h"
 
-#define FUNC vsplit_run_ubyte
-#define ELT_TYPE ubyte
-#define ADD_CACHE(vsplit, ib, start, fetch, bias) vsplit_add_cache_ubyte(vsplit,ib,start,fetch,bias)
+#define FUNC vsplit_run_uint8
+#define ELT_TYPE uint8_t
+#define ADD_CACHE(vsplit, ib, start, fetch, bias) vsplit_add_cache_uint8(vsplit,ib,start,fetch,bias)
 #include "draw_pt_vsplit_tmp.h"
 
-#define FUNC vsplit_run_ushort
-#define ELT_TYPE ushort
-#define ADD_CACHE(vsplit, ib, start, fetch, bias) vsplit_add_cache_ushort(vsplit,ib,start,fetch, bias)
+#define FUNC vsplit_run_uint16
+#define ELT_TYPE uint16_t
+#define ADD_CACHE(vsplit, ib, start, fetch, bias) vsplit_add_cache_uint16(vsplit,ib,start,fetch, bias)
 #include "draw_pt_vsplit_tmp.h"
 
-#define FUNC vsplit_run_uint
-#define ELT_TYPE uint
-#define ADD_CACHE(vsplit, ib, start, fetch, bias) vsplit_add_cache_uint(vsplit, ib, start, fetch, bias)
+#define FUNC vsplit_run_uint32
+#define ELT_TYPE uint32_t
+#define ADD_CACHE(vsplit, ib, start, fetch, bias) vsplit_add_cache_uint32(vsplit, ib, start, fetch, bias)
 #include "draw_pt_vsplit_tmp.h"
 
 
-static void vsplit_prepare(struct draw_pt_front_end *frontend,
-                           unsigned in_prim,
-                           struct draw_pt_middle_end *middle,
-                           unsigned opt)
+static void
+vsplit_prepare(struct draw_pt_front_end *frontend,
+               enum mesa_prim in_prim,
+               struct draw_pt_middle_end *middle,
+               unsigned opt)
 {
    struct vsplit_frontend *vsplit = (struct vsplit_frontend *) frontend;
 
@@ -209,13 +214,13 @@ static void vsplit_prepare(struct draw_pt_front_end *frontend,
       vsplit->base.run = vsplit_run_linear;
       break;
    case 1:
-      vsplit->base.run = vsplit_run_ubyte;
+      vsplit->base.run = vsplit_run_uint8;
       break;
    case 2:
-      vsplit->base.run = vsplit_run_ushort;
+      vsplit->base.run = vsplit_run_uint16;
       break;
    case 4:
-      vsplit->base.run = vsplit_run_uint;
+      vsplit->base.run = vsplit_run_uint32;
       break;
    default:
       assert(0);
@@ -232,7 +237,8 @@ static void vsplit_prepare(struct draw_pt_front_end *frontend,
 }
 
 
-static void vsplit_flush(struct draw_pt_front_end *frontend, unsigned flags)
+static void
+vsplit_flush(struct draw_pt_front_end *frontend, unsigned flags)
 {
    struct vsplit_frontend *vsplit = (struct vsplit_frontend *) frontend;
 
@@ -243,16 +249,17 @@ static void vsplit_flush(struct draw_pt_front_end *frontend, unsigned flags)
 }
 
 
-static void vsplit_destroy(struct draw_pt_front_end *frontend)
+static void
+vsplit_destroy(struct draw_pt_front_end *frontend)
 {
    FREE(frontend);
 }
 
 
-struct draw_pt_front_end *draw_pt_vsplit(struct draw_context *draw)
+struct draw_pt_front_end *
+draw_pt_vsplit(struct draw_context *draw)
 {
    struct vsplit_frontend *vsplit = CALLOC_STRUCT(vsplit_frontend);
-   ushort i;
 
    if (!vsplit)
       return NULL;
@@ -263,7 +270,7 @@ struct draw_pt_front_end *draw_pt_vsplit(struct draw_context *draw)
    vsplit->base.destroy = vsplit_destroy;
    vsplit->draw = draw;
 
-   for (i = 0; i < SEGMENT_SIZE; i++)
+   for (unsigned i = 0; i < SEGMENT_SIZE; i++)
       vsplit->identity_draw_elts[i] = i;
 
    return &vsplit->base;

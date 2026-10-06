@@ -37,50 +37,17 @@
 extern "C" {
 #endif
 
+#include "mesa_interface.h"
+
 struct dri2_screen {
    struct glx_screen base;
 
-   __DRIscreen *driScreen;
-   __GLXDRIscreen vtable;
-   const __DRIdri2Extension *dri2;
-   const __DRIcoreExtension *core;
+   const struct dri_config **driver_configs;
 
-   const __DRI2flushExtension *f;
-   const __DRI2configQueryExtension *config;
-   const __DRItexBufferExtension *texBuffer;
-   const __DRI2throttleExtension *throttle;
-   const __DRI2rendererQueryExtension *rendererQuery;
-   const __DRI2interopExtension *interop;
-   const __DRIconfig **driver_configs;
-
-   void *driver;
    int fd;
 
    int show_fps_interval;
 };
-
-struct dri2_context
-{
-   struct glx_context base;
-   __DRIcontext *driContext;
-};
-
-_X_HIDDEN int
-dri2_query_renderer_integer(struct glx_screen *base, int attribute,
-                            unsigned int *value);
-
-_X_HIDDEN int
-dri2_query_renderer_string(struct glx_screen *base, int attribute,
-                           const char **value);
-
-_X_HIDDEN int
-dri2_interop_query_device_info(struct glx_context *ctx,
-                               struct mesa_glinterop_device_info *out);
-
-_X_HIDDEN int
-dri2_interop_export_object(struct glx_context *ctx,
-                           struct mesa_glinterop_export_in *in,
-                           struct mesa_glinterop_export_out *out);
 
 #ifdef __cplusplus
 }

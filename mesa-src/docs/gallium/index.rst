@@ -14,8 +14,8 @@ Contents:
    format
    context
    cso
+   buffermapping
    distro
-   drivers
    postprocess
    glossary
 
@@ -23,5 +23,4 @@ Indices and tables
 ------------------
 
 * :ref:`genindex`
-* :ref:`modindex`
 * :ref:`search`

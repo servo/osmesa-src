@@ -81,7 +81,6 @@ xa_yuv_bind_samplers(struct xa_context *r, struct xa_surface *yuv[])
     sampler.min_img_filter = PIPE_TEX_FILTER_LINEAR;
     sampler.mag_img_filter = PIPE_TEX_FILTER_LINEAR;
     sampler.min_mip_filter = PIPE_TEX_MIPFILTER_NEAREST;
-    sampler.normalized_coords = 1;
 
     for (i = 0; i < 3; ++i) {
 	samplers[i] = &sampler;
@@ -93,7 +92,7 @@ xa_yuv_bind_samplers(struct xa_context *r, struct xa_surface *yuv[])
     }
     r->num_bound_samplers = 3;
     cso_set_samplers(r->cso, PIPE_SHADER_FRAGMENT, 3, (const struct pipe_sampler_state **)samplers);
-    cso_set_sampler_views(r->cso, PIPE_SHADER_FRAGMENT, 3, r->bound_sampler_views);
+    r->pipe->set_sampler_views(r->pipe, PIPE_SHADER_FRAGMENT, 0, 3, 0, false, r->bound_sampler_views);
 }
 
 static void

@@ -113,15 +113,17 @@ struct sp_sampler_view
    unsigned xpot;
    unsigned ypot;
 
-   boolean need_swizzle;
-   boolean pot2d;
-   boolean need_cube_convert;
+   bool need_swizzle;
+   bool pot2d;
+   bool need_cube_convert;
 
    /* these are different per shader type */
    struct softpipe_tex_tile_cache *cache;
    compute_lambda_func compute_lambda;
    compute_lambda_from_grad_func compute_lambda_from_grad;
    union pipe_color_union border_color;
+   /* Value to use for PIPE_SWIZZLE_1 (integer vs float) */
+   float oneval;
 };
 
 struct sp_filter_funcs {
@@ -132,8 +134,8 @@ struct sp_filter_funcs {
 struct sp_sampler {
    struct pipe_sampler_state base;
 
-   boolean min_mag_equal_repeat_linear;
-   boolean min_mag_equal;
+   bool min_mag_equal_repeat_linear;
+   bool min_mag_equal;
    unsigned min_img_filter;
 
    wrap_nearest_func nearest_texcoord_s;

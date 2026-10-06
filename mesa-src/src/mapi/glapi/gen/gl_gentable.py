@@ -29,8 +29,6 @@
 # Based on code ogiginally by:
 #    Ian Romanick <idr@us.ibm.com>
 
-from __future__ import print_function
-
 import argparse
 
 import license
@@ -44,23 +42,12 @@ header = """/* GLXEXT is the define used in the xserver when the GLX extension i
 #include <dix-config.h>
 #endif
 
-#if (defined(GLXEXT) && defined(HAVE_BACKTRACE)) \\
-	|| (!defined(GLXEXT) && defined(DEBUG) && defined(HAVE_EXECINFO_H))
-#define USE_BACKTRACE
-#endif
-
-#ifdef USE_BACKTRACE
-#include <execinfo.h>
-#endif
-
 #ifndef _WIN32
 #include <dlfcn.h>
 #endif
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-
-#include "main/glheader.h"
 
 #include "glapi.h"
 #include "glapitable.h"
@@ -71,38 +58,16 @@ header = """/* GLXEXT is the define used in the xserver when the GLX extension i
 
 static void
 __glapi_gentable_NoOp(void) {
-    const char *fstr = "Unknown";
-
-    /* Silence potential GCC warning for some #ifdef paths.
-     */
-    (void) fstr;
-#if defined(USE_BACKTRACE)
-#if !defined(GLXEXT)
-    if (getenv("MESA_DEBUG") || getenv("LIBGL_DEBUG"))
-#endif
-    {
-        void *frames[2];
-
-        if(backtrace(frames, 2) == 2) {
-            Dl_info info;
-            dladdr(frames[1], &info);
-            if(info.dli_sname)
-                fstr = info.dli_sname;
-        }
-
-#if !defined(GLXEXT)
-        fprintf(stderr, "Call to unimplemented API: %s\\n", fstr);
-#endif
-    }
-#endif
 #if defined(GLXEXT)
-    LogMessage(X_ERROR, "GLX: Call to unimplemented API: %s\\n", fstr);
+    LogMessage(X_ERROR, "GLX: Call to unimplemented API: Unknown\\n");
+#else
+    fprintf(stderr, "Call to unimplemented API: Unknown\\n");
 #endif
 }
 
 static void
 __glapi_gentable_set_remaining_noop(struct _glapi_table *disp) {
-    GLuint entries = _glapi_get_dispatch_table_size();
+    GLuint entries = _mesa_glapi_get_dispatch_table_size();
     void **dispatch = (void **) disp;
     unsigned i;
 
@@ -118,9 +83,10 @@ __glapi_gentable_set_remaining_noop(struct _glapi_table *disp) {
 """
 
 footer = """
+#if defined(GLX_USE_APPLEGL) || defined(GLX_USE_WINDOWSGL)
 struct _glapi_table *
 _glapi_create_table_from_handle(void *handle, const char *symbol_prefix) {
-    struct _glapi_table *disp = calloc(_glapi_get_dispatch_table_size(), sizeof(_glapi_proc));
+    struct _glapi_table *disp = calloc(_mesa_glapi_get_dispatch_table_size(), sizeof(_glapi_proc));
     char symboln[512];
 
     if(!disp)
@@ -159,7 +125,7 @@ void
    }
    fprintf(stderr, "could not patch %s in dispatch table\\n", name);
 }
-
+#endif
 """
 
 

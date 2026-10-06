@@ -1,27 +1,8 @@
 /*
- * Copyright © 2016 VMware, Inc., Palo Alto, CA., USA
- * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE COPYRIGHT HOLDERS, AUTHORS AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
+ * Copyright (c) 2016-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "util/u_math.h" /* for MAX2/MIN2 */
@@ -61,7 +42,7 @@
 #define HIGH_WORD(X) ((X & 0xFFFF0000) >> 16)
 
 
-#if defined(PIPE_CC_GCC) && (PIPE_CC_GCC_VERSION > 502)
+#if DETECT_CC_GCC && (DETECT_CC_GCC_VERSION > 502) && (DETECT_ARCH_X86 || DETECT_ARCH_X86_64)
 
 /**
  * Hypervisor-specific bi-directional communication channel.  Should never
@@ -124,7 +105,7 @@
  * @si:  [OUT]
  * @di:  [OUT]
  */
-#if defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86_64
 
 typedef uint64_t VMW_REG;
 
@@ -273,7 +254,7 @@ typedef uint32_t VMW_REG;
          (void) ax; (void) bx; (void) cx;         \
          (void) dx; (void) si; (void) di;
 
-#endif /* #if PIPE_CC_GCC */
+#endif /* #if DETECT_CC_GCC */
 
 
 enum rpc_msg_type {
@@ -426,15 +407,10 @@ vmw_send_msg(struct rpc_channel *channel, const char *msg)
 void
 vmw_svga_winsys_host_log(struct svga_winsys_screen *sws, const char *log)
 {
-   struct rpc_channel channel;
    struct vmw_winsys_screen *vws = vmw_winsys_screen(sws);
    char *msg;
    int msg_len;
-   int ret;
-
-#ifdef MSG_NOT_IMPLEMENTED
-   return;
-#endif
+   int ret = 0;
 
    if (!log)
       return;
@@ -459,10 +435,15 @@ vmw_svga_winsys_host_log(struct svga_winsys_screen *sws, const char *log)
                                 &msg_arg, sizeof(msg_arg));
 
    } else {
+#ifdef MSG_NOT_IMPLEMENTED
+      debug_printf("Old vmwgfx doesn't support message passing.\n");
+#else
+      struct rpc_channel channel;
       if (!(ret = vmw_open_channel(&channel, RPCI_PROTOCOL_NUM))) {
          ret = vmw_send_msg(&channel, msg);
          vmw_close_channel(&channel);
       }
+#endif
    }
 
    if (ret)

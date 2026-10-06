@@ -1,5 +1,5 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2009 VMware, Inc.
  * All Rights Reserved.
  *
@@ -32,10 +32,11 @@
  * @author Jose Fonseca <jfonseca@vmware.com>
  */
 
+#include "util/simple_mtx.h"
 #include "util/u_debug.h"
 #include "u_debug_symbol.h"
 #include "u_debug_stack.h"
-#include "pipe/p_config.h"
+#include "util/detect.h"
 
 #if defined(HAVE_LIBUNWIND)
 
@@ -44,11 +45,11 @@
 #endif
 #include <dlfcn.h>
 
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "util/hash_table.h"
 
 static struct hash_table* symbols_hash;
-static mtx_t symbols_mutex = _MTX_INITIALIZER_NP;
+static simple_mtx_t symbols_mutex = SIMPLE_MTX_INITIALIZER;
 
 /* TODO with some refactoring we might be able to re-use debug_symbol_name_cached()
  * instead.. otoh if using libunwind I think u_debug_symbol could just be excluded
@@ -60,7 +61,7 @@ symbol_name_cached(unw_cursor_t *cursor, unw_proc_info_t *pip)
    void *addr = (void *)(uintptr_t)pip->start_ip;
    char *name;
 
-   mtx_lock(&symbols_mutex);
+   simple_mtx_lock(&symbols_mutex);
    if(!symbols_hash)
       symbols_hash = _mesa_pointer_hash_table_create(NULL);
    struct hash_entry *entry = _mesa_hash_table_search(symbols_hash, addr);
@@ -75,11 +76,11 @@ symbol_name_cached(unw_cursor_t *cursor, unw_proc_info_t *pip)
          procname[1] = 0;
       }
 
-      if (asprintf(&name, "%s%s", procname, ret == -UNW_ENOMEM ? "..." : "") == -1) 
+      if (asprintf(&name, "%s%s", procname, ret == -UNW_ENOMEM ? "..." : "") == -1)
          name = "??";
       entry = _mesa_hash_table_insert(symbols_hash, addr, (void*)name);
    }
-   mtx_unlock(&symbols_mutex);
+   simple_mtx_unlock(&symbols_mutex);
 
    return entry->data;
 }
@@ -94,7 +95,7 @@ debug_backtrace_capture(struct debug_stack_frame *backtrace,
    unw_proc_info_t pip;
    unsigned i = 0;
 
-   pip.unwind_info = NULL;
+   pip.unwind_info = 0;
 
    unw_getcontext(&context);
    unw_init_local(&cursor, &context);
@@ -178,14 +179,13 @@ debug_backtrace_print(FILE *f,
             frame_ip(&backtrace[i]));
    }
 }
-#elif defined(ANDROID)
+#elif DETECT_OS_ANDROID
    /* Not implemented here; see u_debug_stack_android.cpp */
 #else /* ! HAVE_LIBUNWIND */
 
-#if defined(PIPE_OS_WINDOWS)
+#if DETECT_OS_WINDOWS
 #include <windows.h>
 #endif
-
 
 /**
  * Capture stack backtrace.
@@ -199,7 +199,6 @@ debug_backtrace_capture(struct debug_stack_frame *backtrace,
                         unsigned start_frame,
                         unsigned nr_frames)
 {
-   const void **frame_pointer = NULL;
    unsigned i = 0;
 
    if (!nr_frames) {
@@ -211,7 +210,7 @@ debug_backtrace_capture(struct debug_stack_frame *backtrace,
     *
     * It works reliably both for x86 for x86_64.
     */
-#if defined(PIPE_OS_WINDOWS)
+#if DETECT_OS_WINDOWS
    {
       typedef USHORT (WINAPI *PFNCAPTURESTACKBACKTRACE)(ULONG, ULONG,
                                                         PVOID *, PULONG);
@@ -250,21 +249,22 @@ debug_backtrace_capture(struct debug_stack_frame *backtrace,
    }
 #endif
 
-#if defined(PIPE_CC_GCC) && (PIPE_CC_GCC_VERSION > 404) || defined(__clang__)
+#if DETECT_ARCH_X86
+#if DETECT_CC_GCC && (DETECT_CC_GCC_VERSION > 404) || defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wframe-address"
-   frame_pointer = ((const void **)__builtin_frame_address(1));
+   const void **frame_pointer = ((const void **)__builtin_frame_address(1));
 #pragma GCC diagnostic pop
-#elif defined(PIPE_CC_MSVC) && defined(PIPE_ARCH_X86)
+#elif DETECT_CC_MSVC
+   const void **frame_pointer;
    __asm {
       mov frame_pointer, ebp
    }
    frame_pointer = (const void **)frame_pointer[0];
 #else
-   frame_pointer = NULL;
+   const void **frame_pointer = NULL;
 #endif
 
-#ifdef PIPE_ARCH_X86
    while (nr_frames) {
       const void **next_frame_pointer;
 
@@ -287,8 +287,6 @@ debug_backtrace_capture(struct debug_stack_frame *backtrace,
 
       frame_pointer = next_frame_pointer;
    }
-#else
-   (void) frame_pointer;
 #endif
 
    while (nr_frames) {
@@ -297,18 +295,20 @@ debug_backtrace_capture(struct debug_stack_frame *backtrace,
    }
 }
 
+static simple_mtx_t backtrace_mutex = SIMPLE_MTX_INITIALIZER;
 
 void
 debug_backtrace_dump(const struct debug_stack_frame *backtrace,
                      unsigned nr_frames)
 {
    unsigned i;
-
+   simple_mtx_lock(&backtrace_mutex);
    for (i = 0; i < nr_frames; ++i) {
       if (!backtrace[i].function)
          break;
       debug_symbol_print(backtrace[i].function);
    }
+   simple_mtx_unlock(&backtrace_mutex);
 }
 
 
@@ -319,6 +319,7 @@ debug_backtrace_print(FILE *f,
 {
    unsigned i;
 
+   simple_mtx_lock(&backtrace_mutex);
    for (i = 0; i < nr_frames; ++i) {
       const char *symbol;
       if (!backtrace[i].function)
@@ -327,6 +328,8 @@ debug_backtrace_print(FILE *f,
       if (symbol)
          fprintf(f, "%s\n", symbol);
    }
+   fflush(f);
+   simple_mtx_unlock(&backtrace_mutex);
 }
 
 #endif /* HAVE_LIBUNWIND */

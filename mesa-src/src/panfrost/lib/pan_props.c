@@ -24,171 +24,199 @@
  *   Alyssa Rosenzweig <alyssa.rosenzweig@collabora.com>
  */
 
-#include <xf86drm.h>
-
-#include "util/u_math.h"
 #include "util/macros.h"
-#include "util/hash_table.h"
-#include "util/u_thread.h"
-#include "drm-uapi/panfrost_drm.h"
-#include "pan_encoder.h"
-#include "pan_device.h"
-#include "panfrost-quirks.h"
-#include "pan_bo.h"
 
-/* Abstraction over the raw drm_panfrost_get_param ioctl for fetching
- * information about devices */
+#include "kmod/pan_kmod.h"
+#include "panfrost/util/pan_ir.h"
+#include "pan_props.h"
 
-static __u64
-panfrost_query_raw(
-                int fd,
-                enum drm_panfrost_param param,
-                bool required,
-                unsigned default_value)
+#include <genxml/gen_macros.h>
+
+/* Fixed "minimum revisions" */
+#define NO_ANISO  (~0)
+#define HAS_ANISO (0)
+
+#define MODEL(gpu_id_, gpu_variant_, shortname, counters_,                     \
+              min_rev_anisotropic_, tib_size_, quirks_)                        \
+   {                                                                           \
+      .gpu_id = gpu_id_, .gpu_variant = gpu_variant_,                          \
+      .name = "Mali-" shortname,                                               \
+      .performance_counters = counters_,                                       \
+      .min_rev_anisotropic = min_rev_anisotropic_,                             \
+      .tilebuffer_size = tib_size_, .quirks = quirks_,                         \
+   }
+
+/* Table of supported Mali GPUs */
+/* clang-format off */
+const struct panfrost_model panfrost_model_list[] = {
+        MODEL(0x600, 0, "T600",    "T60x", NO_ANISO,          8192, {}),
+        MODEL(0x620, 0, "T620",    "T62x", NO_ANISO,          8192, {}),
+        MODEL(0x720, 0, "T720",    "T72x", NO_ANISO,          8192, { .no_hierarchical_tiling = true }),
+        MODEL(0x750, 0, "T760",    "T76x", NO_ANISO,          8192, {}),
+        MODEL(0x820, 0, "T820",    "T82x", NO_ANISO,          8192, { .no_hierarchical_tiling = true }),
+        MODEL(0x830, 0, "T830",    "T83x", NO_ANISO,          8192, { .no_hierarchical_tiling = true }),
+        MODEL(0x860, 0, "T860",    "T86x", NO_ANISO,          8192, {}),
+        MODEL(0x880, 0, "T880",    "T88x", NO_ANISO,          8192, {}),
+
+        MODEL(0x6000, 0, "G71",    "TMIx", NO_ANISO,          8192, {}),
+        MODEL(0x6221, 0, "G72",    "THEx", 0x0030 /* r0p3 */, 16384, {}),
+        MODEL(0x7090, 0, "G51",    "TSIx", 0x1010 /* r1p1 */, 16384, {}),
+        MODEL(0x7093, 0, "G31",    "TDVx", HAS_ANISO,         16384, {}),
+        MODEL(0x7211, 0, "G76",    "TNOx", HAS_ANISO,         16384, {}),
+        MODEL(0x7212, 0, "G52",    "TGOx", HAS_ANISO,         16384, {}),
+        MODEL(0x7402, 0, "G52 r1", "TGOx", HAS_ANISO,         16384, {}),
+        MODEL(0x9091, 0, "G57",    "TNAx", HAS_ANISO,         16384, {}),
+        MODEL(0x9093, 0, "G57",    "TNAx", HAS_ANISO,         16384, {}),
+
+        MODEL(0xa867, 0, "G610",   "TVIx", HAS_ANISO,         32768, {}),
+        MODEL(0xac74, 0, "G310",   "TVAx", HAS_ANISO,         16384, {}),
+        MODEL(0xac74, 1, "G310",   "TVAx", HAS_ANISO,         16384, {}),
+        MODEL(0xac74, 2, "G310",   "TVAx", HAS_ANISO,         16384, {}),
+        MODEL(0xac74, 3, "G310",   "TVAx", HAS_ANISO,         32768, {}),
+        MODEL(0xac74, 4, "G310",   "TVAx", HAS_ANISO,         32768, {}),
+};
+/* clang-format on */
+
+#undef NO_ANISO
+#undef HAS_ANISO
+#undef MODEL
+
+/*
+ * Look up a supported model by its GPU ID, or return NULL if the model is not
+ * supported at this time.
+ */
+const struct panfrost_model *
+panfrost_get_model(uint32_t gpu_id, uint32_t gpu_variant)
 {
-        struct drm_panfrost_get_param get_param = {0,};
-        ASSERTED int ret;
+   for (unsigned i = 0; i < ARRAY_SIZE(panfrost_model_list); ++i) {
+      if (panfrost_model_list[i].gpu_id == gpu_id &&
+          panfrost_model_list[i].gpu_variant == gpu_variant)
+         return &panfrost_model_list[i];
+   }
 
-        get_param.param = param;
-        ret = drmIoctl(fd, DRM_IOCTL_PANFROST_GET_PARAM, &get_param);
-
-        if (ret) {
-                assert(!required);
-                return default_value;
-        }
-
-        return get_param.value;
+   return NULL;
 }
 
 unsigned
-panfrost_query_gpu_version(int fd)
+panfrost_query_l2_slices(const struct pan_kmod_dev_props *props)
 {
-        return panfrost_query_raw(fd, DRM_PANFROST_PARAM_GPU_PROD_ID, true, 0);
+   /* L2_SLICES is MEM_FEATURES[11:8] minus(1) */
+   return ((props->mem_features >> 8) & 0xF) + 1;
+}
+
+struct panfrost_tiler_features
+panfrost_query_tiler_features(const struct pan_kmod_dev_props *props)
+{
+   /* Default value (2^9 bytes and 8 levels) to match old behaviour */
+   uint32_t raw = props->tiler_features;
+
+   /* Bin size is log2 in the first byte, max levels in the second byte */
+   return (struct panfrost_tiler_features){
+      .bin_size = (1 << (raw & BITFIELD_MASK(5))),
+      .max_levels = (raw >> 8) & BITFIELD_MASK(4),
+   };
 }
 
 unsigned
-panfrost_query_core_count(int fd)
+panfrost_query_core_count(const struct pan_kmod_dev_props *props,
+                          unsigned *core_id_range)
 {
-        /* On older kernels, worst-case to 16 cores */
+   /* On older kernels, worst-case to 16 cores */
 
-        unsigned mask = panfrost_query_raw(fd,
-                        DRM_PANFROST_PARAM_SHADER_PRESENT, false, 0xffff);
+   unsigned mask = props->shader_present;
 
-        return util_bitcount(mask);
+   /* Some cores might be absent. In some cases, we care
+    * about the range of core IDs (that is, the greatest core ID + 1). If
+    * the core mask is contiguous, this equals the core count.
+    */
+   *core_id_range = util_last_bit(mask);
+
+   /* The actual core count skips overs the gaps */
+   return util_bitcount(mask);
 }
 
 unsigned
-panfrost_query_thread_tls_alloc(int fd)
+panfrost_query_thread_tls_alloc(const struct pan_kmod_dev_props *props)
 {
-        /* On older kernels, we worst-case to 256 threads, the architectural
-         * maximum for Midgard. On my current kernel/hardware, I'm seeing this
-         * readback as 0, so we'll worst-case there too */
-
-        unsigned tls = panfrost_query_raw(fd,
-                        DRM_PANFROST_PARAM_THREAD_TLS_ALLOC, false, 256);
-
-        if (tls)
-                return tls;
-        else
-                return 256;
+   return props->max_tls_instance_per_core ?: props->max_threads_per_core;
 }
 
-static uint32_t
-panfrost_query_compressed_formats(int fd)
+unsigned
+panfrost_compute_max_thread_count(const struct pan_kmod_dev_props *props,
+                                  unsigned work_reg_count)
 {
-        /* If unspecified, assume ASTC/ETC only. Factory default for Juno, and
-         * should exist on any Mali configuration. All hardware should report
-         * these texture formats but the kernel might not be new enough. */
+   unsigned aligned_reg_count;
 
-        uint32_t default_set =
-                (1 << MALI_ETC2_RGB8) |
-                (1 << MALI_ETC2_R11_UNORM) |
-                (1 << MALI_ETC2_RGBA8) |
-                (1 << MALI_ETC2_RG11_UNORM) |
-                (1 << MALI_ETC2_R11_SNORM) |
-                (1 << MALI_ETC2_RG11_SNORM) |
-                (1 << MALI_ETC2_RGB8A1) |
-                (1 << MALI_ASTC_3D_LDR) |
-                (1 << MALI_ASTC_3D_HDR) |
-                (1 << MALI_ASTC_2D_LDR) |
-                (1 << MALI_ASTC_2D_HDR);
+   /* 4, 8 or 16 registers per shader on Midgard
+    * 32 or 64 registers per shader on Bifrost
+    */
+   if (pan_arch(props->gpu_prod_id) <= 5) {
+      aligned_reg_count = util_next_power_of_two(MAX2(work_reg_count, 4));
+      assert(aligned_reg_count <= 16);
+   } else {
+      aligned_reg_count = work_reg_count <= 32 ? 32 : 64;
+   }
 
-        return panfrost_query_raw(fd, DRM_PANFROST_PARAM_TEXTURE_FEATURES0,
-                        false, default_set);
+   return MIN3(props->max_threads_per_wg, props->max_threads_per_core,
+               props->num_registers_per_core / aligned_reg_count);
 }
 
-/* DRM_PANFROST_PARAM_TEXTURE_FEATURES0 will return a bitmask of supported
- * compressed formats, so we offer a helper to test if a format is supported */
+uint32_t
+panfrost_query_compressed_formats(const struct pan_kmod_dev_props *props)
+{
+   return props->texture_features[0];
+}
+
+/* Check for AFBC hardware support. AFBC is introduced in v5. Implementations
+ * may omit it, signaled as a nonzero value in the AFBC_FEATURES property. */
 
 bool
-panfrost_supports_compressed_format(struct panfrost_device *dev, unsigned fmt)
+panfrost_query_afbc(const struct pan_kmod_dev_props *props)
 {
-        if (MALI_EXTRACT_TYPE(fmt) != MALI_FORMAT_COMPRESSED)
-                return true;
+   unsigned reg = props->afbc_features;
 
-        unsigned idx = fmt & ~MALI_FORMAT_COMPRESSED;
-        assert(idx < 32);
-
-        return dev->compressed_formats & (1 << idx);
+   return (pan_arch(props->gpu_prod_id) >= 5) && (reg == 0);
 }
 
-/* Given a GPU ID like 0x860, return a prettified model name */
+/* Check for AFRC hardware support. AFRC is introduced in v10. Implementations
+ * may omit it, signaled in bit 25 of TEXTURE_FEATURES_0 property. */
 
-const char *
-panfrost_model_name(unsigned gpu_id)
+bool
+panfrost_query_afrc(const struct pan_kmod_dev_props *props)
 {
-        switch (gpu_id) {
-        case 0x600: return "Mali T600 (Panfrost)";
-        case 0x620: return "Mali T620 (Panfrost)";
-        case 0x720: return "Mali T720 (Panfrost)";
-        case 0x820: return "Mali T820 (Panfrost)";
-        case 0x830: return "Mali T830 (Panfrost)";
-        case 0x750: return "Mali T760 (Panfrost)";
-        case 0x860: return "Mali T860 (Panfrost)";
-        case 0x880: return "Mali T880 (Panfrost)";
-        case 0x7093: return "Mali G31 (Panfrost)";
-        case 0x7212: return "Mali G52 (Panfrost)";
-        default:
-                    unreachable("Invalid GPU ID");
-        }
+   return (pan_arch(props->gpu_prod_id) >= 10) &&
+          (props->texture_features[0] & (1 << 25));
 }
 
-void
-panfrost_open_device(void *memctx, int fd, struct panfrost_device *dev)
+/*
+ * To pipeline multiple tiles, a given tile may use at most half of the tile
+ * buffer. This function returns the optimal size (assuming pipelining).
+ *
+ * For Mali-G510 and Mali-G310, we will need extra logic to query the tilebuffer
+ * size for the particular variant. The CORE_FEATURES register might help.
+ */
+unsigned
+panfrost_query_optimal_tib_size(const struct panfrost_model *model)
 {
-        dev->fd = fd;
-        dev->memctx = memctx;
-        dev->gpu_id = panfrost_query_gpu_version(fd);
-        dev->core_count = panfrost_query_core_count(fd);
-        dev->thread_tls_alloc = panfrost_query_thread_tls_alloc(fd);
-        dev->kernel_version = drmGetVersion(fd);
-        dev->quirks = panfrost_get_quirks(dev->gpu_id);
-        dev->compressed_formats = panfrost_query_compressed_formats(fd);
+   /* Preconditions ensure the returned value is a multiple of 1 KiB, the
+    * granularity of the colour buffer allocation field.
+    */
+   assert(model->tilebuffer_size >= 2048);
+   assert(util_is_power_of_two_nonzero(model->tilebuffer_size));
 
-        util_sparse_array_init(&dev->bo_map, sizeof(struct panfrost_bo), 512);
-
-        pthread_mutex_init(&dev->bo_cache.lock, NULL);
-        list_inithead(&dev->bo_cache.lru);
-
-        for (unsigned i = 0; i < ARRAY_SIZE(dev->bo_cache.buckets); ++i)
-                list_inithead(&dev->bo_cache.buckets[i]);
-
-        /* Tiler heap is internally required by the tiler, which can only be
-         * active for a single job chain at once, so a single heap can be
-         * shared across batches/contextes */
-
-        dev->tiler_heap = panfrost_bo_create(dev, 4096 * 4096,
-                        PAN_BO_INVISIBLE | PAN_BO_GROWABLE);
+   return model->tilebuffer_size / 2;
 }
 
-void
-panfrost_close_device(struct panfrost_device *dev)
+uint64_t
+panfrost_clamp_to_usable_va_range(const struct pan_kmod_dev *dev, uint64_t va)
 {
-        panfrost_bo_unreference(dev->blit_shaders.bo);
-        panfrost_bo_unreference(dev->tiler_heap);
-        panfrost_bo_cache_evict_all(dev);
-        pthread_mutex_destroy(&dev->bo_cache.lock);
-        drmFreeVersion(dev->kernel_version);
-        util_sparse_array_finish(&dev->bo_map);
+   struct pan_kmod_va_range user_va_range =
+      pan_kmod_dev_query_user_va_range(dev);
 
+   if (va < user_va_range.start)
+      return user_va_range.start;
+   else if (va > user_va_range.start + user_va_range.size)
+      return user_va_range.start + user_va_range.size;
+
+   return va;
 }

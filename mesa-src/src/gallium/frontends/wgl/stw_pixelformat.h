@@ -34,9 +34,13 @@
 #define PFD_SUPPORT_COMPOSITION 0x00008000
 #endif
 
-#include "pipe/p_compiler.h"
-#include "pipe/p_format.h"
+#include "util/compiler.h"
+#include "util/format/u_formats.h"
 #include "frontend/api.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 struct stw_pixelformat_info
 {
@@ -45,21 +49,29 @@ struct stw_pixelformat_info
    struct st_visual stvis;
 
    /** WGL_ARB_render_texture */
-   boolean bindToTextureRGB;
-   boolean bindToTextureRGBA;
+   bool bindToTextureRGB;
+   bool bindToTextureRGBA;
+
+   int iPixelFormat;
 };
 
 void
 stw_pixelformat_init( void );
 
 uint
-stw_pixelformat_get_count( void );
+stw_pixelformat_get_count( HDC hdc );
 
 uint
-stw_pixelformat_get_extended_count( void );
+stw_pixelformat_get_extended_count( HDC hdc );
 
 const struct stw_pixelformat_info *
 stw_pixelformat_get_info( int iPixelFormat );
+
+const struct stw_pixelformat_info *
+stw_pixelformat_get_info_from_hdc( HDC hdc );
+
+int
+stw_pixelformat_guess( HDC );
 
 int
 stw_pixelformat_choose( HDC hdc,
@@ -67,5 +79,9 @@ stw_pixelformat_choose( HDC hdc,
 
 int
 stw_pixelformat_get(HDC hdc);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* STW_PIXELFORMAT_H */

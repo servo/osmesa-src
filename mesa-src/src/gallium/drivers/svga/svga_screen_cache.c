@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "util/u_math.h"
 #include "util/u_memory.h"
@@ -113,7 +95,7 @@ svga_screen_cache_lookup(struct svga_screen *svgascreen,
    while (curr != &cache->bucket[bucket]) {
       ++tries;
 
-      entry = LIST_ENTRY(struct svga_host_surface_cache_entry, curr, bucket_head);
+      entry = list_entry(curr, struct svga_host_surface_cache_entry, bucket_head);
 
       assert(entry->handle);
 
@@ -159,7 +141,7 @@ svga_screen_cache_lookup(struct svga_screen *svgascreen,
    mtx_unlock(&cache->mutex);
 
    if (SVGA_DEBUG & DEBUG_DMA)
-      debug_printf("%s: cache %s after %u tries (bucket %d)\n", __FUNCTION__,
+      debug_printf("%s: cache %s after %u tries (bucket %d)\n", __func__,
                    handle ? "hit" : "miss", tries, bucket);
 
    return handle;
@@ -212,6 +194,7 @@ svga_screen_cache_shrink(struct svga_screen *svgascreen,
 static void
 svga_screen_cache_add(struct svga_screen *svgascreen,
                       const struct svga_host_surface_cache_key *key,
+                      bool to_invalidate,
                       struct svga_winsys_surface **p_handle)
 {
    struct svga_host_surface_cache *cache = &svgascreen->cache;
@@ -260,16 +243,18 @@ svga_screen_cache_add(struct svga_screen *svgascreen,
       /* An empty entry has no surface associated with it.
        * Use the first empty entry.
        */
-      entry = LIST_ENTRY(struct svga_host_surface_cache_entry,
-                         cache->empty.next, head);
+      entry = list_entry(cache->empty.next,
+                         struct svga_host_surface_cache_entry,
+                         head);
 
       /* Remove from LRU list */
       list_del(&entry->head);
    }
    else if (!list_is_empty(&cache->unused)) {
       /* free the last used buffer and reuse its entry */
-      entry = LIST_ENTRY(struct svga_host_surface_cache_entry,
-                         cache->unused.prev, head);
+      entry = list_entry(cache->unused.prev,
+                         struct svga_host_surface_cache_entry,
+                         head);
       SVGA_DBG(DEBUG_CACHE|DEBUG_DMA,
                "unref sid %p (make space)\n", entry->handle);
 
@@ -293,8 +278,12 @@ svga_screen_cache_add(struct svga_screen *svgascreen,
                "cache sid %p\n", entry->handle);
 
       /* If we don't have gb objects, we don't need to invalidate. */
-      if (sws->have_gb_objects)
-         list_add(&entry->head, &cache->validated);
+      if (sws->have_gb_objects) {
+         if (to_invalidate)
+            list_add(&entry->head, &cache->validated);
+         else
+            list_add(&entry->head, &cache->invalidated);
+      }
       else
          list_add(&entry->head, &cache->invalidated);
 
@@ -335,7 +324,7 @@ svga_screen_cache_flush(struct svga_screen *svgascreen,
    curr = cache->invalidated.next;
    next = curr->next;
    while (curr != &cache->invalidated) {
-      entry = LIST_ENTRY(struct svga_host_surface_cache_entry, curr, head);
+      entry = list_entry(curr, struct svga_host_surface_cache_entry, head);
 
       assert(entry->handle);
 
@@ -361,7 +350,7 @@ svga_screen_cache_flush(struct svga_screen *svgascreen,
    curr = cache->validated.next;
    next = curr->next;
    while (curr != &cache->validated) {
-      entry = LIST_ENTRY(struct svga_host_surface_cache_entry, curr, head);
+      entry = list_entry(curr, struct svga_host_surface_cache_entry, head);
 
       assert(entry->handle);
       assert(svga_have_gb_objects(svga));
@@ -483,16 +472,16 @@ svga_screen_cache_init(struct svga_screen *svgascreen)
 struct svga_winsys_surface *
 svga_screen_surface_create(struct svga_screen *svgascreen,
                            unsigned bind_flags, enum pipe_resource_usage usage,
-                           boolean *validated,
+                           bool *validated,
                            struct svga_host_surface_cache_key *key)
 {
    struct svga_winsys_screen *sws = svgascreen->sws;
    struct svga_winsys_surface *handle = NULL;
-   boolean cachable = SVGA_SURFACE_CACHE_ENABLED && key->cachable;
+   bool cachable = SVGA_SURFACE_CACHE_ENABLED && key->cachable;
 
    SVGA_DBG(DEBUG_CACHE|DEBUG_DMA,
             "%s sz %dx%dx%d mips %d faces %d arraySize %d cachable %d\n",
-            __FUNCTION__,
+            __func__,
             key->size.width,
             key->size.height,
             key->size.depth,
@@ -558,7 +547,7 @@ svga_screen_surface_create(struct svga_screen *svgascreen,
                      key->numMipLevels,
                      key->numFaces,
                      key->arraySize);
-         *validated = TRUE;
+         *validated = true;
       }
    }
 
@@ -566,7 +555,11 @@ svga_screen_surface_create(struct svga_screen *svgascreen,
       /* Unable to recycle surface, allocate a new one */
       unsigned usage = 0;
 
-      if (!key->cachable)
+      /* mark the surface as shareable if the surface is not
+       * cachable or the RENDER_TARGET bind flag is set.
+       */
+      if (!key->cachable ||
+          ((bind_flags & PIPE_BIND_RENDER_TARGET) != 0))
          usage |= SVGA_SURFACE_USAGE_SHARED;
       if (key->scanout)
          usage |= SVGA_SURFACE_USAGE_SCANOUT;
@@ -589,7 +582,7 @@ svga_screen_surface_create(struct svga_screen *svgascreen,
                   key->size.height,
                   key->size.depth);
 
-      *validated = FALSE;
+      *validated = false;
    }
 
    return handle;
@@ -603,6 +596,7 @@ svga_screen_surface_create(struct svga_screen *svgascreen,
 void
 svga_screen_surface_destroy(struct svga_screen *svgascreen,
                             const struct svga_host_surface_cache_key *key,
+                            bool to_invalidate,
                             struct svga_winsys_surface **p_handle)
 {
    struct svga_winsys_screen *sws = svgascreen->sws;
@@ -612,7 +606,7 @@ svga_screen_surface_destroy(struct svga_screen *svgascreen,
     * that case.
     */
    if (SVGA_SURFACE_CACHE_ENABLED && key->cachable) {
-      svga_screen_cache_add(svgascreen, key, p_handle);
+      svga_screen_cache_add(svgascreen, key, to_invalidate, p_handle);
    }
    else {
       SVGA_DBG(DEBUG_DMA,
@@ -638,8 +632,7 @@ svga_screen_cache_dump(const struct svga_screen *svgascreen)
       curr = cache->bucket[bucket].next;
       while (curr && curr != &cache->bucket[bucket]) {
          struct svga_host_surface_cache_entry *entry =
-            LIST_ENTRY(struct svga_host_surface_cache_entry,
-                       curr, bucket_head);
+            list_entry(curr, struct svga_host_surface_cache_entry,bucket_head);
          if (entry->key.format == SVGA3D_BUFFER) {
             debug_printf("  %p: buffer %u bytes\n",
                          entry->handle,

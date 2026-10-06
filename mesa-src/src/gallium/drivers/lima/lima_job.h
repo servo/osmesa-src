@@ -31,6 +31,8 @@
 
 #include <pipe/p_state.h>
 
+#define MAX_DRAWS_PER_JOB 2500
+
 struct lima_context;
 struct lima_bo;
 struct lima_dump;
@@ -80,6 +82,8 @@ struct lima_job {
 
    struct lima_job_fb_info fb;
 
+   int draws;
+
    /* for dump command stream */
    struct lima_dump *dump;
 };
@@ -91,6 +95,9 @@ lima_job_has_draw_pending(struct lima_job *job)
 }
 
 struct lima_job *lima_job_get(struct lima_context *ctx);
+struct lima_job * lima_job_get_with_fb(struct lima_context *ctx,
+                                       struct pipe_surface *cbuf,
+                                       struct pipe_surface *zsbuf);
 
 bool lima_job_add_bo(struct lima_job *job, int pipe,
                      struct lima_bo *bo, uint32_t flags);

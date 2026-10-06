@@ -24,8 +24,6 @@
 # Authors:
 #    Ian Romanick <idr@us.ibm.com>
 
-from __future__ import print_function
-
 from collections import OrderedDict
 from decimal import Decimal
 import xml.etree.ElementTree as ET
@@ -35,24 +33,13 @@ import typeexpr
 import static_data
 
 
-def parse_GL_API( file_name, factory = None ):
+def parse_GL_API(file_name, factory=None, pointer_size=0):
 
     if not factory:
         factory = gl_item_factory()
 
-    api = factory.create_api()
-    api.parse_file( file_name )
-
-    # After the XML has been processed, we need to go back and assign
-    # dispatch offsets to the functions that request that their offsets
-    # be assigned by the scripts.  Typically this means all functions
-    # that are not part of the ABI.
-
-    for func in api.functionIterateByCategory():
-        if func.assign_offset and func.offset < 0:
-            func.offset = api.next_offset;
-            api.next_offset += 1
-
+    api = factory.create_api(pointer_size)
+    api.parse_file(file_name)
     return api
 
 
@@ -432,6 +419,7 @@ class gl_parameter(object):
             self.counter = c
 
         self.marshal_count = element.get("marshal_count")
+        self.marshal_large_count = element.get("marshal_large_count")
         self.count_scale = int(element.get( "count_scale", "1" ))
 
         elements = (count * self.count_scale)
@@ -494,7 +482,8 @@ class gl_parameter(object):
 
 
     def is_variable_length(self):
-        return len(self.count_parameter_list) or self.counter or self.marshal_count
+        return (len(self.count_parameter_list) or self.counter or
+                self.marshal_count or self.marshal_large_count)
 
 
     def is_64_bit(self):
@@ -510,7 +499,10 @@ class gl_parameter(object):
 
 
     def string(self):
-        return self.type_expr.original_string + " " + self.name
+        if self.type_expr.original_string[-1] == '*':
+            return self.type_expr.original_string + self.name
+        else:
+            return self.type_expr.original_string + " " + self.name
 
 
     def type_string(self):
@@ -574,11 +566,14 @@ class gl_parameter(object):
 
         base_size_str += "sizeof(%s)" % ( self.get_base_type_string() )
 
-        if self.counter or self.count_parameter_list or (self.marshal_count and marshal):
+        if (self.counter or self.count_parameter_list or
+            (marshal and (self.marshal_count or self.marshal_large_count))):
             list = [ "compsize" ]
 
-            if self.marshal_count and marshal:
+            if marshal and self.marshal_count:
                 list = [ self.marshal_count ]
+            elif marshal and self.marshal_large_count:
+                list = [ self.marshal_large_count ]
             elif self.counter and self.count_parameter_list:
                 list.append( self.counter )
             elif self.counter:
@@ -587,7 +582,9 @@ class gl_parameter(object):
             if self.size() > 1:
                 list.append( base_size_str )
 
-            if len(list) > 1 and use_parens :
+            # Don't use safe_mul if marshal_count is used, which indicates
+            # a small size.
+            if len(list) > 1 and use_parens and not self.marshal_count:
                 return "safe_mul(%s)" % ", ".join(list)
             else:
                 return " * ".join(list)
@@ -617,6 +614,7 @@ class gl_function( gl_item ):
         self.initialized = 0
         self.images = []
         self.exec_flavor = 'mesa'
+        self.has_hw_select_variant = False
         self.desktop = True
         self.deprecated = None
         self.has_no_error_variant = False
@@ -628,8 +626,6 @@ class gl_function( gl_item ):
         # function, self.api_map == { 'es1':
         # Decimal('1.1') }.
         self.api_map = {}
-
-        self.assign_offset = False
 
         self.static_entry_points = []
 
@@ -652,6 +648,15 @@ class gl_function( gl_item ):
     def process_element(self, element):
         name = element.get( "name" )
         alias = element.get( "alias" )
+
+        # marshal isn't allowed with alias
+        assert not alias or not element.get('marshal')
+        assert not alias or not element.get('marshal_count')
+        assert not alias or not element.get('marshal_large_count')
+        assert not alias or not element.get('marshal_sync')
+        assert not alias or not element.get('marshal_call_before')
+        assert not alias or not element.get('marshal_call_after')
+        assert not alias or not element.get('deprecated')
 
         if name in static_data.functions:
             self.static_entry_points.append(name)
@@ -688,18 +693,16 @@ class gl_function( gl_item ):
         else:
             true_name = name
 
+            self.has_hw_select_variant = exec_flavor == 'beginend' and name[0:6] == 'Vertex'
+
             # Only try to set the offset when a non-alias entry-point
             # is being processed.
 
-            if name in static_data.offsets and static_data.offsets[name] <= static_data.MAX_OFFSETS:
+            if name in static_data.offsets:
                 self.offset = static_data.offsets[name]
-            elif name in static_data.offsets and static_data.offsets[name] > static_data.MAX_OFFSETS:
-                self.offset = static_data.offsets[name]
-                self.assign_offset = True
             else:
                 if self.exec_flavor != "skip":
                     raise RuntimeError("Entry-point %s is missing offset in static_data.py. Add one at the bottom of the list." % (name))
-                self.assign_offset = self.exec_flavor != "skip" or name in static_data.unused_functions
 
         if not self.name:
             self.name = true_name
@@ -809,10 +812,6 @@ class gl_function( gl_item ):
 
         return p_string
 
-
-    def is_abi(self):
-        return (self.offset >= 0 and not self.assign_offset)
-
     def is_static_entry_point(self, name):
         return name in self.static_entry_points
 
@@ -843,12 +842,12 @@ class gl_item_factory(object):
     def create_parameter(self, element, context):
         return gl_parameter(element, context)
 
-    def create_api(self):
-        return gl_api(self)
+    def create_api(self, pointer_size):
+        return gl_api(self, pointer_size)
 
 
 class gl_api(object):
-    def __init__(self, factory):
+    def __init__(self, factory, pointer_size):
         self.functions_by_name = OrderedDict()
         self.enums_by_name = {}
         self.types_by_name = {}
@@ -859,6 +858,7 @@ class gl_api(object):
         self.factory = factory
 
         self.next_offset = 0
+        self.pointer_size = pointer_size
 
         typeexpr.create_initial_types()
         return

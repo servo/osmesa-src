@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2014 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2014-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "util/u_memory.h"
 #include "util/u_bitmask.h"
@@ -61,7 +43,7 @@ svga_define_stream_output(struct svga_context *svga,
 {
    unsigned i;
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s: id=%d\n", __FUNCTION__, soid);
+   SVGA_DBG(DEBUG_STREAMOUT, "%s: id=%d\n", __func__, soid);
    SVGA_DBG(DEBUG_STREAMOUT,
             "numOutputStreamEntires=%d\n", numOutputStreamEntries);
 
@@ -92,7 +74,7 @@ svga_define_stream_output(struct svga_context *svga,
                                           bufSize);
       if (!declBuf)
          return PIPE_ERROR;
-      map = sws->buffer_map(sws, declBuf, PIPE_TRANSFER_WRITE);
+      map = sws->buffer_map(sws, declBuf, PIPE_MAP_WRITE);
       if (!map) {
          sws->buffer_destroy(sws, declBuf);
          return PIPE_ERROR;
@@ -141,7 +123,7 @@ svga_create_stream_output(struct svga_context *svga,
    unsigned i;
    enum pipe_error ret;
    unsigned id;
-   ASSERTED unsigned maxDecls;
+   ASSERTED unsigned maxDecls = 0;
 
    assert(info->num_outputs <= PIPE_MAX_SO_OUTPUTS);
 
@@ -180,14 +162,14 @@ svga_create_stream_output(struct svga_context *svga,
    memset(strides, 0, sizeof(strides));
    memset(dstOffset, 0, sizeof(dstOffset));
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s: num_outputs\n",
-            __FUNCTION__, info->num_outputs);
+   SVGA_DBG(DEBUG_STREAMOUT, "%s: num_outputs=%d\n",
+            __func__, info->num_outputs);
 
    for (i = 0, numDecls = 0; i < info->num_outputs; i++, numDecls++) {
       unsigned reg_idx = info->output[i].register_index;
       unsigned buf_idx = info->output[i].output_buffer;
       const enum tgsi_semantic sem_name =
-         shader->info.output_semantic_name[reg_idx];
+         shader->tgsi_info.output_semantic_name[reg_idx];
 
       assert(buf_idx <= PIPE_MAX_SO_BUFFERS);
 
@@ -238,7 +220,7 @@ svga_create_stream_output(struct svga_context *svga,
           * Check if streaming out POSITION. If so, replace the
           * register index with the index for NON_ADJUSTED POSITION.
           */
-         decls[numDecls].registerIndex = shader->info.num_outputs;
+         decls[numDecls].registerIndex = shader->tgsi_info.num_outputs;
 
          /* Save this output index, so we can tell later if this stream output
           * includes an output of a vertex position
@@ -253,8 +235,8 @@ svga_create_stream_output(struct svga_context *svga,
           * clip planes.
           */
          decls[numDecls].registerIndex =
-            shader->info.num_outputs + 1 +
-            shader->info.output_semantic_index[reg_idx];
+            shader->tgsi_info.num_outputs + 1 +
+            shader->tgsi_info.output_semantic_index[reg_idx];
       }
       else {
          decls[numDecls].registerIndex = reg_idx;
@@ -305,7 +287,7 @@ svga_set_stream_output(struct svga_context *svga,
       return PIPE_OK;
    }
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s streamout=0x%x id=%d\n", __FUNCTION__,
+   SVGA_DBG(DEBUG_STREAMOUT, "%s streamout=0x%x id=%d\n", __func__,
             streamout, id);
 
    if (svga->current_so != streamout) {
@@ -342,7 +324,7 @@ svga_delete_stream_output(struct svga_context *svga,
 {
    struct svga_winsys_screen *sws = svga_screen(svga->pipe.screen)->sws;
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s streamout=0x%x\n", __FUNCTION__, streamout);
+   SVGA_DBG(DEBUG_STREAMOUT, "%s streamout=0x%x\n", __func__, streamout);
 
    assert(svga_have_vgpu10(svga));
    assert(streamout != NULL);
@@ -380,7 +362,7 @@ svga_create_stream_output_target(struct pipe_context *pipe,
    struct svga_context *svga = svga_context(pipe);
    struct svga_stream_output_target *sot;
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s offset=%d size=%d\n", __FUNCTION__,
+   SVGA_DBG(DEBUG_STREAMOUT, "%s offset=%d size=%d\n", __func__,
             buffer_offset, buffer_size);
 
    assert(svga_have_vgpu10(svga));
@@ -406,7 +388,7 @@ svga_destroy_stream_output_target(struct pipe_context *pipe,
 {
    struct svga_stream_output_target *sot = svga_stream_output_target(target);
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s\n", __FUNCTION__);
+   SVGA_DBG(DEBUG_STREAMOUT, "%s\n", __func__);
 
    pipe_resource_reference(&sot->base.buffer, NULL);
    FREE(sot);
@@ -416,15 +398,16 @@ static void
 svga_set_stream_output_targets(struct pipe_context *pipe,
                                unsigned num_targets,
                                struct pipe_stream_output_target **targets,
-                               const unsigned *offsets)
+                               const unsigned *offsets,
+                               enum mesa_prim output_prim)
 {
    struct svga_context *svga = svga_context(pipe);
    struct SVGA3dSoTarget soBindings[SVGA3D_DX_MAX_SOTARGETS];
    unsigned i;
    unsigned num_so_targets;
-   boolean begin_so_queries = num_targets > 0;
+   bool begin_so_queries = num_targets > 0;
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s num_targets=%d\n", __FUNCTION__,
+   SVGA_DBG(DEBUG_STREAMOUT, "%s num_targets=%d\n", __func__,
             num_targets);
 
    assert(svga_have_vgpu10(svga));
@@ -434,7 +417,7 @@ svga_set_stream_output_targets(struct pipe_context *pipe,
     */
    for (i = 0; i < svga->num_so_targets; i++) {
       struct svga_buffer *sbuf = svga_buffer(svga->so_targets[i]->buffer);
-      sbuf->dirty = TRUE;
+      sbuf->dirty = true;
    }
 
    /* Before the currently bound streamout targets are unbound,
@@ -450,6 +433,7 @@ svga_set_stream_output_targets(struct pipe_context *pipe,
    for (i = 0; i < num_targets; i++) {
       struct svga_stream_output_target *sot
          = svga_stream_output_target(targets[i]);
+      struct svga_buffer *sbuf = svga_buffer(sot->base.buffer);
       unsigned size;
 
       svga->so_surfaces[i] = svga_buffer_handle(svga, sot->base.buffer,
@@ -458,6 +442,10 @@ svga_set_stream_output_targets(struct pipe_context *pipe,
       assert(svga_buffer(sot->base.buffer)->key.flags
              & SVGA3D_SURFACE_BIND_STREAM_OUTPUT);
 
+      /* Mark the buffer surface as RENDERED */
+      assert(sbuf->bufsurf);
+      sbuf->bufsurf->surface_state = SVGA_SURFACE_STATE_RENDERED;
+
       svga->so_targets[i] = &sot->base;
       if (offsets[i] == -1) {
          soBindings[i].offset = -1;
@@ -465,7 +453,7 @@ svga_set_stream_output_targets(struct pipe_context *pipe,
          /* The streamout is being resumed. There is no need to restart streamout statistics
           * queries for the draw-auto fallback since those queries are still active.
           */
-         begin_so_queries = FALSE;
+         begin_so_queries = false;
       }
       else
          soBindings[i].offset = sot->base.buffer_offset + offsets[i];
@@ -490,7 +478,7 @@ svga_set_stream_output_targets(struct pipe_context *pipe,
 
    if (svga_have_sm5(svga) && svga->current_so && begin_so_queries) {
 
-      /* If there are aleady active queries and we need to start a new streamout,
+      /* If there are already active queries and we need to start a new streamout,
        * we need to stop the current active queries first.
        */
       if (svga->in_streamout) {
@@ -588,7 +576,7 @@ svga_begin_stream_output_queries(struct svga_context *svga,
       }
       (void) ret;
    }   
-   svga->in_streamout = TRUE;
+   svga->in_streamout = true;
 
    return;
 }
@@ -613,7 +601,7 @@ svga_end_stream_output_queries(struct svga_context *svga,
       }
       (void) ret;
    }   
-   svga->in_streamout = FALSE;
+   svga->in_streamout = false;
 
    return;
 }
@@ -637,7 +625,7 @@ svga_get_primcount_from_stream_output(struct svga_context *svga,
 
    ret = svga->pipe.get_query_result(&svga->pipe,
                                      svga->so_queries[stream],
-                                     TRUE, &result);
+                                     true, &result);
    if (ret)
       primcount = result.so_statistics.num_primitives_written;
 

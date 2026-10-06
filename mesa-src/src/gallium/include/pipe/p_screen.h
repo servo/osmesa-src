@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,12 +22,12 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 /**
  * @file
- * 
+ *
  * Screen, Adapter or GPU
  *
  * These are driver functions/facilities that are context independent.
@@ -38,8 +38,8 @@
 #define P_SCREEN_H
 
 
-#include "pipe/p_compiler.h"
-#include "pipe/p_format.h"
+#include "util/compiler.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_video_enums.h"
 
@@ -58,9 +58,29 @@ struct pipe_surface;
 struct pipe_transfer;
 struct pipe_box;
 struct pipe_memory_info;
+struct pipe_vertex_buffer;
+struct pipe_vertex_element;
+struct pipe_vertex_state;
 struct disk_cache;
 struct driOptionCache;
 struct u_transfer_helper;
+struct pipe_screen;
+struct util_queue_fence;
+struct pipe_video_buffer;
+struct nir_shader;
+
+typedef struct pipe_vertex_state *
+   (*pipe_create_vertex_state_func)(struct pipe_screen *screen,
+                                    struct pipe_vertex_buffer *buffer,
+                                    const struct pipe_vertex_element *elements,
+                                    unsigned num_elements,
+                                    struct pipe_resource *indexbuf,
+                                    uint32_t full_velem_mask);
+typedef void (*pipe_vertex_state_destroy_func)(struct pipe_screen *screen,
+                                               struct pipe_vertex_state *);
+typedef void (*pipe_driver_thread_func)(void *job, void *gdata, int thread_index);
+
+
 
 /**
  * Gallium screen/adapter context.  Basically everything
@@ -68,17 +88,35 @@ struct u_transfer_helper;
  * context.
  */
 struct pipe_screen {
+   int refcnt;
+   void *winsys_priv;
+
+   const struct pipe_caps caps;
+
+   /**
+    * Get the fd associated with the screen
+    * The fd returned is considered read-only, and in particular will not
+    * be close()d. It must remain valid for as long as the screen exists.
+    */
+   int (*get_screen_fd)(struct pipe_screen *);
+
+   /**
+    * Atomically incremented by drivers to track the number of contexts.
+    * If it's 0, it can be assumed that contexts are not tracked.
+    * Used by some places to skip locking if num_contexts == 1.
+    */
+   unsigned num_contexts;
 
    /**
     * For drivers using u_transfer_helper:
     */
    struct u_transfer_helper *transfer_helper;
 
-   void (*destroy)( struct pipe_screen * );
+   void (*destroy)(struct pipe_screen *);
 
-   const char *(*get_name)( struct pipe_screen * );
+   const char *(*get_name)(struct pipe_screen *);
 
-   const char *(*get_vendor)( struct pipe_screen * );
+   const char *(*get_vendor)(struct pipe_screen *);
 
    /**
     * Returns the device vendor.
@@ -86,35 +124,30 @@ struct pipe_screen {
     * The returned value should return the actual device vendor/manufacturer,
     * rather than a potentially generic driver string.
     */
-   const char *(*get_device_vendor)( struct pipe_screen * );
+   const char *(*get_device_vendor)(struct pipe_screen *);
 
    /**
-    * Query an integer-valued capability/parameter/limit
-    * \param param  one of PIPE_CAP_x
+    * Returns the latest OpenCL CTS version passed
+    *
+    * The returned value should be the git tag used when passing conformance.
     */
-   int (*get_param)( struct pipe_screen *, enum pipe_cap param );
-
-   /**
-    * Query a float-valued capability/parameter/limit
-    * \param param  one of PIPE_CAP_x
-    */
-   float (*get_paramf)( struct pipe_screen *, enum pipe_capf param );
+   const char *(*get_cl_cts_version)(struct pipe_screen *);
 
    /**
     * Query a per-shader-stage integer-valued capability/parameter/limit
-    * \param param  one of PIPE_CAP_x
+    * \param param  one of pipe_caps.x
     */
-   int (*get_shader_param)( struct pipe_screen *, enum pipe_shader_type shader,
-                            enum pipe_shader_cap param );
+   int (*get_shader_param)(struct pipe_screen *, enum pipe_shader_type shader,
+                           enum pipe_shader_cap param);
 
    /**
     * Query an integer-valued capability/parameter/limit for a codec/profile
     * \param param  one of PIPE_VIDEO_CAP_x
     */
-   int (*get_video_param)( struct pipe_screen *,
-			   enum pipe_video_profile profile,
-			   enum pipe_video_entrypoint entrypoint,
-			   enum pipe_video_cap param );
+   int (*get_video_param)(struct pipe_screen *,
+                          enum pipe_video_profile profile,
+                          enum pipe_video_entrypoint entrypoint,
+                          enum pipe_video_cap param);
 
    /**
     * Query a compute-specific capability/parameter/limit.
@@ -127,13 +160,13 @@ struct pipe_screen {
     *                returned.
     */
    int (*get_compute_param)(struct pipe_screen *,
-			    enum pipe_shader_ir ir_type,
-			    enum pipe_compute_cap param,
-			    void *ret);
+                            enum pipe_shader_ir ir_type,
+                            enum pipe_compute_cap param,
+                            void *ret);
 
    /**
     * Get the sample pixel grid's size. This function requires
-    * PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS to be callable.
+    * pipe_caps.programmable_sample_locations to be callable.
     *
     * \param sample_count - total number of samples
     * \param out_width - the width of the pixel grid
@@ -150,6 +183,16 @@ struct pipe_screen {
    uint64_t (*get_timestamp)(struct pipe_screen *);
 
    /**
+    * Return an equivalent canonical format which has the same component sizes
+    * and swizzles as the original, and it is supported by the driver. Gallium
+    * already does a first canonicalization step (see get_canonical_format()
+    * on st_cb_copyimage.c) and it calls this function (if defined) to get an
+    * alternative format if the picked is not supported by the driver.
+    */
+   enum pipe_format (*get_canonical_format)(struct pipe_screen *,
+                                            enum pipe_format format);
+
+   /**
     * Create a context.
     *
     * \param screen      pipe screen
@@ -157,28 +200,42 @@ struct pipe_screen {
     * \param flags       a mask of PIPE_CONTEXT_* flags
     */
    struct pipe_context * (*context_create)(struct pipe_screen *screen,
-					   void *priv, unsigned flags);
+                                           void *priv, unsigned flags);
+
+   /**
+    * Check if the given image copy will be faster on compute
+    * \param cpu If true, this is checking against CPU fallback,
+    *            otherwise the copy will be on GFX
+    */
+   bool (*is_compute_copy_faster)(struct pipe_screen *,
+                                  enum pipe_format src_format,
+                                  enum pipe_format dst_format,
+                                  unsigned width,
+                                  unsigned height,
+                                  unsigned depth,
+                                  bool cpu);
 
    /**
     * Check if the given pipe_format is supported as a texture or
     * drawing surface.
     * \param bindings  bitmask of PIPE_BIND_*
     */
-   bool (*is_format_supported)( struct pipe_screen *,
-                                enum pipe_format format,
-                                enum pipe_texture_target target,
-                                unsigned sample_count,
-                                unsigned storage_sample_count,
-                                unsigned bindings );
+   bool (*is_format_supported)(struct pipe_screen *,
+                               enum pipe_format format,
+                               enum pipe_texture_target target,
+                               unsigned sample_count,
+                               unsigned storage_sample_count,
+                               unsigned bindings);
 
    /**
-    * Check if the given pipe_format is supported as output for this codec/profile.
+    * Check if the given pipe_format is supported as output for this
+    * codec/profile.
     * \param profile  profile to check, may also be PIPE_VIDEO_PROFILE_UNKNOWN
     */
-   bool (*is_video_format_supported)( struct pipe_screen *,
-                                      enum pipe_format format,
-                                      enum pipe_video_profile profile,
-                                      enum pipe_video_entrypoint entrypoint );
+   bool (*is_video_format_supported)(struct pipe_screen *,
+                                     enum pipe_format format,
+                                     enum pipe_video_profile profile,
+                                     enum pipe_video_entrypoint entrypoint);
 
    /**
     * Check if we can actually create the given resource (test the dimension,
@@ -192,7 +249,11 @@ struct pipe_screen {
     * Create a new texture object, using the given template info.
     */
    struct pipe_resource * (*resource_create)(struct pipe_screen *,
-					     const struct pipe_resource *templat);
+                                             const struct pipe_resource *templat);
+
+   struct pipe_resource * (*resource_create_drawable)(struct pipe_screen *,
+                                                      const struct pipe_resource *tmpl,
+                                                      const void *loader_private);
 
    struct pipe_resource * (*resource_create_front)(struct pipe_screen *,
                                                    const struct pipe_resource *templat,
@@ -210,9 +271,9 @@ struct pipe_screen {
     * \param usage  A combination of PIPE_HANDLE_USAGE_* flags.
     */
    struct pipe_resource * (*resource_from_handle)(struct pipe_screen *,
-						  const struct pipe_resource *templat,
-						  struct winsys_handle *handle,
-						  unsigned usage);
+                                                  const struct pipe_resource *templat,
+                                                  struct winsys_handle *handle,
+                                                  unsigned usage);
 
    /**
     * Create a resource from user memory. This maps the user memory into
@@ -250,6 +311,12 @@ struct pipe_screen {
     * the resource into a format compatible for sharing. The use case is
     * OpenGL-OpenCL interop. The context parameter is allowed to be NULL.
     *
+    * NOTE: for multi-planar resources (which may or may not have the planes
+    * chained through the pipe_resource next pointer) the frontend will
+    * always call this function with the first resource of the chain. It is
+    * the pipe drivers responsibility to walk the resources as needed when
+    * called with handle->plane != 0.
+    *
     * NOTE: in the case of WINSYS_HANDLE_TYPE_FD handles, the caller
     * takes ownership of the FD.  (This is consistent with
     * EGL_MESA_image_dma_buf_export)
@@ -277,6 +344,7 @@ struct pipe_screen {
                               struct pipe_resource *resource,
                               unsigned plane,
                               unsigned layer,
+                              unsigned level,
                               enum pipe_resource_param param,
                               unsigned handle_usage,
                               uint64_t *value);
@@ -300,7 +368,7 @@ struct pipe_screen {
    void (*resource_changed)(struct pipe_screen *, struct pipe_resource *pt);
 
    void (*resource_destroy)(struct pipe_screen *,
-			    struct pipe_resource *pt);
+                            struct pipe_resource *pt);
 
 
    /**
@@ -308,18 +376,21 @@ struct pipe_screen {
     * displayed, eg copy fake frontbuffer.
     * \param winsys_drawable_handle  an opaque handle that the calling context
     *                                gets out-of-band
-    * \param subbox an optional sub region to flush
+    * \param nboxes the number of sub regions to flush
+    * \param subbox an array of optional sub regions to flush
     */
-   void (*flush_frontbuffer)( struct pipe_screen *screen,
-                              struct pipe_resource *resource,
-                              unsigned level, unsigned layer,
-                              void *winsys_drawable_handle,
-                              struct pipe_box *subbox );
+   void (*flush_frontbuffer)(struct pipe_screen *screen,
+                             struct pipe_context *ctx,
+                             struct pipe_resource *resource,
+                             unsigned level, unsigned layer,
+                             void *winsys_drawable_handle,
+                             unsigned nboxes,
+                             struct pipe_box *subbox);
 
    /** Set ptr = fence, with reference counting */
-   void (*fence_reference)( struct pipe_screen *screen,
-                            struct pipe_fence_handle **ptr,
-                            struct pipe_fence_handle *fence );
+   void (*fence_reference)(struct pipe_screen *screen,
+                           struct pipe_fence_handle **ptr,
+                           struct pipe_fence_handle *fence);
 
    /**
     * Wait for the fence to finish.
@@ -331,7 +402,7 @@ struct pipe_screen {
     *
     * In all other cases, the ctx parameter has no effect.
     *
-    * \param timeout  in nanoseconds (may be PIPE_TIMEOUT_INFINITE).
+    * \param timeout  in nanoseconds (may be OS_TIMEOUT_INFINITE).
     */
    bool (*fence_finish)(struct pipe_screen *screen,
                         struct pipe_context *ctx,
@@ -347,6 +418,31 @@ struct pipe_screen {
     */
    int (*fence_get_fd)(struct pipe_screen *screen,
                        struct pipe_fence_handle *fence);
+
+   /**
+    * Retrieves the Win32 shared handle from the fence.
+    * Note that Windows fences are pretty much all timeline semaphores,
+    * so a value is needed to denote the specific point on the timeline.
+    */
+   void* (*fence_get_win32_handle)(struct pipe_screen *screen,
+                                   struct pipe_fence_handle *fence,
+                                   uint64_t *fence_value);
+
+   /**
+    * Create a fence from an Win32 handle.
+    *
+    * This is used for importing a foreign/external fence handle.
+    *
+    * \param fence  if not NULL, an old fence to unref and transfer a
+    *    new fence reference to
+    * \param handle opaque handle representing the fence object
+    * \param type   indicates which fence types backs the handle
+    */
+   void (*create_fence_win32)(struct pipe_screen *screen,
+                              struct pipe_fence_handle **fence,
+                              void *handle,
+                              const void *name,
+                              enum pipe_fd_type type);
 
    /**
     * Returns a driver-specific query.
@@ -472,6 +568,24 @@ struct pipe_screen {
    void (*get_device_uuid)(struct pipe_screen *screen, char *uuid);
 
    /**
+    * Fill @luid with the locally unique identifier of the context
+    * The LUID returned, paired together with the contexts node mask,
+    * allows matching the context to an IDXGIAdapter1 object
+    *
+    * \param luid    pointer to a memory region of PIPE_LUID_SIZE bytes
+    */
+   void (*get_device_luid)(struct pipe_screen *screen, char *luid);
+
+   /**
+    * Return the device node mask identifying the context
+    * Together with the contexts LUID, this allows matching
+    * the context to an IDXGIAdapter1 object.
+    *
+    * within a linked device adapter
+    */
+   uint32_t (*get_device_node_mask)(struct pipe_screen *screen);
+
+   /**
     * Set the maximum number of parallel shader compiler threads.
     */
    void (*set_max_shader_compiler_threads)(struct pipe_screen *screen,
@@ -482,7 +596,14 @@ struct pipe_screen {
     */
    bool (*is_parallel_shader_compilation_finished)(struct pipe_screen *screen,
                                                    void *shader,
-                                                   unsigned shader_type);
+                                                   enum pipe_shader_type shader_type);
+
+   void (*driver_thread_add_job)(struct pipe_screen *screen,
+                                 void *job,
+                                 struct util_queue_fence *fence,
+                                 pipe_driver_thread_func execute,
+                                 pipe_driver_thread_func cleanup,
+                                 const size_t job_size);
 
    /**
     * Set the damage region (called when KHR_partial_update() is invoked).
@@ -507,16 +628,16 @@ struct pipe_screen {
     * gallium frontends should call this before passing shaders to drivers,
     * and ideally also before shader caching.
     *
-    * \param optimize  Whether the input shader hasn't been optimized and
-    *                  should be.
+    * The driver may return a non-NULL string to trigger GLSL link failure
+    * and logging of that message in the GLSL linker log.
     */
-   void (*finalize_nir)(struct pipe_screen *screen, void *nir, bool optimize);
+   char *(*finalize_nir)(struct pipe_screen *screen, struct nir_shader *nir);
 
    /*Separated memory/resource allocations interfaces for Vulkan */
 
    /**
-    * Create a resource, and retrieve the required size for it but don't allocate
-    * any backing memory.
+    * Create a resource, and retrieve the required size for it but don't
+    * allocate any backing memory.
     */
    struct pipe_resource * (*resource_create_unbacked)(struct pipe_screen *,
                                                       const struct pipe_resource *templat,
@@ -534,11 +655,36 @@ struct pipe_screen {
                        struct pipe_memory_allocation *);
 
    /**
+    * Allocate fd-based memory to be bound to resources.
+    */
+   struct pipe_memory_allocation *(*allocate_memory_fd)(struct pipe_screen *screen,
+                                                        uint64_t size,
+                                                        int *fd,
+                                                        bool dmabuf);
+
+   /**
+    * Import memory from an fd-handle.
+    */
+   bool (*import_memory_fd)(struct pipe_screen *screen,
+                            int fd,
+                            struct pipe_memory_allocation **pmem,
+                            uint64_t *size,
+                            bool dmabuf);
+
+   /**
+    * Free previously allocated fd-based memory.
+    */
+   void (*free_memory_fd)(struct pipe_screen *screen,
+                          struct pipe_memory_allocation *pmem);
+
+   /**
     * Bind memory to a resource.
     */
-   void (*resource_bind_backing)(struct pipe_screen *screen,
+   bool (*resource_bind_backing)(struct pipe_screen *screen,
                                  struct pipe_resource *pt,
                                  struct pipe_memory_allocation *pmem,
+                                 uint64_t fd_offset,
+                                 uint64_t size,
                                  uint64_t offset);
 
    /**
@@ -552,6 +698,154 @@ struct pipe_screen {
     */
    void (*unmap_memory)(struct pipe_screen *screen,
                         struct pipe_memory_allocation *pmem);
+
+   /**
+    * Determine whether the screen supports the specified modifier
+    *
+    * Query whether the driver supports a \p modifier in combination with
+    * \p format.  If \p external_only is not NULL, the value it points to will
+    * be set to 0 or a non-zero value to indicate whether the modifier and
+    * format combination is supported only with external, or also with non-
+    * external texture targets respectively.  The \p external_only parameter is
+    * not used when the function returns false.
+    *
+    * \return true if the format+modifier pair is supported on \p screen, false
+    *         otherwise.
+    */
+   bool (*is_dmabuf_modifier_supported)(struct pipe_screen *screen,
+                                        uint64_t modifier, enum pipe_format,
+                                        bool *external_only);
+
+   /**
+    * Get the number of planes required for a given modifier/format pair.
+    *
+    * If not NULL, this function returns the number of planes needed to
+    * represent \p format in the layout specified by \p modifier, including
+    * any driver-specific auxiliary data planes.
+    *
+    * Must only be called on a modifier supported by the screen for the
+    * specified format.
+    *
+    * If NULL, no auxiliary planes are required for any modifier+format pairs
+    * supported by \p screen.  Hence, the plane count can be derived directly
+    * from \p format.
+    *
+    * \return Number of planes needed to store image data in the layout defined
+    *         by \p format and \p modifier.
+    */
+   unsigned int (*get_dmabuf_modifier_planes)(struct pipe_screen *screen,
+                                              uint64_t modifier,
+                                              enum pipe_format format);
+
+   /**
+    * Get supported page sizes for sparse texture.
+    *
+    * \p size is the array size of \p x, \p y and \p z.
+    *
+    * \p offset sets an offset into the possible format page size array,
+    *  used to pick a specific xyz size combination.
+    *
+    * \return Number of supported page sizes, 0 means not support.
+    */
+   int (*get_sparse_texture_virtual_page_size)(struct pipe_screen *screen,
+                                               enum pipe_texture_target target,
+                                               bool multi_sample,
+                                               enum pipe_format format,
+                                               unsigned offset, unsigned size,
+                                               int *x, int *y, int *z);
+
+   /**
+    * Vertex state CSO functions for precomputing vertex and index buffer
+    * states for display lists.
+    */
+   pipe_create_vertex_state_func create_vertex_state;
+   pipe_vertex_state_destroy_func vertex_state_destroy;
+
+   /**
+    * Update a timeline semaphore value stored within a driver fence object.
+    * Future waits and signals will use the new value.
+    */
+   void (*set_fence_timeline_value)(struct pipe_screen *screen,
+                                    struct pipe_fence_handle *fence,
+                                    uint64_t value);
+
+   /**
+    * Get additional data for interop_query_device_info
+    *
+    * \p in_data_size is how much data was allocated by the caller
+    * \p data is the buffer to fill
+    *
+    * \return how much data was written
+    */
+   uint32_t (*interop_query_device_info)(struct pipe_screen *screen,
+                                         uint32_t in_data_size,
+                                         void *data);
+
+   /**
+    * Get additional data for interop_export_object
+    *
+    * \p in_data_size is how much data was allocated by the caller
+    * \p data is the buffer to fill
+    * \p need_export_dmabuf can be set to false to prevent
+    *    a following call to resource_get_handle, if the private
+    *    data contains the exported data
+    *
+    * \return how much data was written
+    */
+   uint32_t (*interop_export_object)(struct pipe_screen *screen,
+                                     struct pipe_resource *res,
+                                     uint32_t in_data_size,
+                                     void *data,
+                                     bool *need_export_dmabuf);
+
+   /**
+    * Get supported compression fixed rates (bits per component) for a format.
+    * If \p max is 0, the total number of supported rates for the supplied
+    * format is returned in \p count, with no modification to \p rates.
+    * Otherwise, \p rates is filled with upto \p max supported compression
+    * rates, and \p count with the number of values copied.
+    */
+   void (*query_compression_rates)(struct pipe_screen *screen,
+                                   enum pipe_format format, int max,
+                                   uint32_t *rates, int *count);
+
+   /**
+    * Get modifiers associated with a given compression fixed rate.
+    * If \p rate is PIPE_COMPRESSION_FIXED_RATE_DEFAULT, supported compression
+    * modifiers are returned in order of priority.
+    * If \p max is 0, the total number of supported modifiers for the supplied
+    * compression rate is returned in \p count, with no modification to \p
+    * modifiers. Otherwise, \p modifiers is filled with upto \p max supported
+    * modifiers, and \p count with the number of values copied.
+    */
+   void (*query_compression_modifiers)(struct pipe_screen *screen,
+                                       enum pipe_format format, uint32_t rate,
+                                       int max, uint64_t *modifiers, int *count);
+
+   /**
+    * Check if the given \p target buffer is supported as output (or input for
+    * encode) for this \p profile and \p entrypoint.
+    *
+    * If \p format is different from target->buffer_format this function
+    * checks if the \p target buffer can be converted to \p format as part
+    * of the given operation (eg. encoder accepts RGB input and converts
+    * it to YUV).
+    *
+    * \return true if the buffer is supported for given operation, false
+    *         otherwise.
+    */
+   bool (*is_video_target_buffer_supported)(struct pipe_screen *screen,
+                                            enum pipe_format format,
+                                            struct pipe_video_buffer *target,
+                                            enum pipe_video_profile profile,
+                                            enum pipe_video_entrypoint entrypoint);
+
+   /**
+    * pipe_screen is inherited by driver's screen but a simple cast to convert
+    * from the generic interface to the driver version won't work if dd_pipe
+    * is used.
+    */
+   struct pipe_screen* (*get_driver_pipe_screen)(struct pipe_screen *screen);
 };
 
 
@@ -559,7 +853,9 @@ struct pipe_screen {
  * Global configuration options for screen creation.
  */
 struct pipe_screen_config {
-   const struct driOptionCache *options;
+   bool driver_name_is_inferred;
+   struct driOptionCache *options;
+   const struct driOptionCache *options_info;
 };
 
 

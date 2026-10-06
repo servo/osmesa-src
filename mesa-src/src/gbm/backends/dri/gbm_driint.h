@@ -34,70 +34,47 @@
 #include "gbmint.h"
 #include "c11/threads.h"
 
-#include <GL/gl.h> /* dri_interface needs GL types */
-#include "GL/internal/dri_interface.h"
+#include <GL/gl.h> /* mesa_interface needs GL types */
+#include "mesa_interface.h"
+#include "kopper_interface.h"
 
 struct gbm_dri_surface;
 struct gbm_dri_bo;
 
 struct gbm_dri_visual {
    uint32_t gbm_format;
-   int dri_image_format;
-   struct {
-      int red;
-      int green;
-      int blue;
-      int alpha;
-   } rgba_shifts;
-   struct {
-      unsigned int red;
-      unsigned int green;
-      unsigned int blue;
-      unsigned int alpha;
-   } rgba_sizes;
-   bool is_float;
+   int pipe_format;
 };
 
 struct gbm_dri_device {
    struct gbm_device base;
 
-   void *driver;
    char *driver_name; /* Name of the DRI module, without the _dri suffix */
+   bool software; /* A software driver was loaded */
+   bool swrast; /* this is swrast */
+   bool has_dmabuf_import;
+   bool has_dmabuf_export;
+   bool has_compression_modifiers;
 
-   __DRIscreen *screen;
-   __DRIcontext *context;
+   struct dri_screen *screen;
+   struct dri_context *context;
    mtx_t mutex;
 
-   const __DRIcoreExtension   *core;
-   const __DRIdri2Extension   *dri2;
-   const __DRI2fenceExtension *fence;
-   const __DRIimageExtension  *image;
-   const __DRIswrastExtension *swrast;
-   const __DRI2flushExtension *flush;
-
-   const __DRIconfig   **driver_configs;
+   const struct dri_config   **driver_configs;
    const __DRIextension **loader_extensions;
-   const __DRIextension **driver_extensions;
 
-   __DRIimage *(*lookup_image)(__DRIscreen *screen, void *image, void *data);
+   GLboolean (*validate_image)(void *image, void *data);
+   struct dri_image *(*lookup_image_validated)(void *image, void *data);
    void *lookup_user_data;
 
-   __DRIbuffer *(*get_buffers)(__DRIdrawable * driDrawable,
-                               int *width, int *height,
-                               unsigned int *attachments, int count,
-                               int *out_count, void *data);
-   void (*flush_front_buffer)(__DRIdrawable * driDrawable, void *data);
-   __DRIbuffer *(*get_buffers_with_format)(__DRIdrawable * driDrawable,
-			     int *width, int *height,
-			     unsigned int *attachments, int count,
-			     int *out_count, void *data);
-   int (*image_get_buffers)(__DRIdrawable *driDrawable,
+   void (*flush_front_buffer)(struct dri_drawable * driDrawable, void *data);
+   int (*image_get_buffers)(struct dri_drawable *driDrawable,
                             unsigned int format,
                             uint32_t *stamp,
                             void *loaderPrivate,
                             uint32_t buffer_mask,
                             struct __DRIimageList *buffers);
-   void (*swrast_put_image2)(__DRIdrawable *driDrawable,
+   void (*swrast_put_image2)(struct dri_drawable *driDrawable,
                              int            op,
                              int            x,
                              int            y,
@@ -106,7 +83,7 @@ struct gbm_dri_device {
                              int            stride,
                              char          *data,
                              void          *loaderPrivate);
-   void (*swrast_get_image)(__DRIdrawable *driDrawable,
+   void (*swrast_get_image)(struct dri_drawable *driDrawable,
                             int            x,
                             int            y,
                             int            width,
@@ -123,7 +100,7 @@ struct gbm_dri_device {
 struct gbm_dri_bo {
    struct gbm_bo base;
 
-   __DRIimage *image;
+   struct dri_image *image;
 
    /* Used for cursors and the swrast front BO */
    uint32_t handle, size;
@@ -169,12 +146,12 @@ gbm_dri_bo_map_dumb(struct gbm_dri_bo *bo)
    memset(&map_arg, 0, sizeof(map_arg));
    map_arg.handle = bo->handle;
 
-   ret = drmIoctl(bo->base.gbm->fd, DRM_IOCTL_MODE_MAP_DUMB, &map_arg);
+   ret = drmIoctl(bo->base.gbm->v0.fd, DRM_IOCTL_MODE_MAP_DUMB, &map_arg);
    if (ret)
       return NULL;
 
-   bo->map = mmap(0, bo->size, PROT_WRITE,
-                  MAP_SHARED, bo->base.gbm->fd, map_arg.offset);
+   bo->map = mmap(NULL, bo->size, PROT_WRITE,
+                  MAP_SHARED, bo->base.gbm->v0.fd, map_arg.offset);
    if (bo->map == MAP_FAILED) {
       bo->map = NULL;
       return NULL;

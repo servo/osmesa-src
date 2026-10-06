@@ -28,6 +28,18 @@
 #define _HGL_SOFTWAREWINSYS_H
 
 #ifdef __cplusplus
+class BBitmap;
+class BRect;
+
+class BitmapHook {
+public:
+	virtual ~BitmapHook() {};
+	virtual void GetSize(uint32_t &width, uint32_t &height) = 0;
+	virtual BBitmap *SetBitmap(BBitmap *bmp) = 0;
+};
+#endif
+
+#ifdef __cplusplus
 extern "C" {
 #endif
 

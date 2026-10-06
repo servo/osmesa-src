@@ -45,8 +45,9 @@
 #define PB_SLAB_H
 
 #include "pb_buffer.h"
+#include "util/simple_mtx.h"
 #include "util/list.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 
 struct pb_slab;
 struct pb_slabs;
@@ -61,7 +62,6 @@ struct pb_slab_entry
 {
    struct list_head head;
    struct pb_slab *slab; /* the slab that contains this buffer */
-   unsigned group_index; /* index into pb_slabs::groups */
 };
 
 /* Descriptor of a slab from which many entries are carved out.
@@ -76,6 +76,8 @@ struct pb_slab
    struct list_head free; /* list of free pb_slab_entry structures */
    unsigned num_free; /* number of entries in free list */
    unsigned num_entries; /* total number of entries */
+   unsigned group_index; /* index into pb_slabs::groups */
+   unsigned entry_size;
 };
 
 /* Callback function that is called when a new slab needs to be allocated
@@ -110,13 +112,14 @@ typedef bool (slab_can_reclaim_fn)(void *priv, struct pb_slab_entry *);
  */
 struct pb_slabs
 {
-   mtx_t mutex;
+   simple_mtx_t mutex;
 
    unsigned min_order;
    unsigned num_orders;
    unsigned num_heaps;
+   bool allow_three_fourths_allocations;
 
-   /* One group per (heap, order) pair. */
+   /* One group per (heap, order, three_fourth_allocations). */
    struct pb_slab_group *groups;
 
    /* List of entries waiting to be reclaimed, i.e. they have been passed to
@@ -132,18 +135,21 @@ struct pb_slabs
 };
 
 struct pb_slab_entry *
+pb_slab_alloc_reclaimed(struct pb_slabs *slabs, unsigned size, unsigned heap, bool reclaim_all);
+
+struct pb_slab_entry *
 pb_slab_alloc(struct pb_slabs *slabs, unsigned size, unsigned heap);
 
 void
 pb_slab_free(struct pb_slabs* slabs, struct pb_slab_entry *entry);
 
-void
+unsigned
 pb_slabs_reclaim(struct pb_slabs *slabs);
 
 bool
 pb_slabs_init(struct pb_slabs *slabs,
               unsigned min_order, unsigned max_order,
-              unsigned num_heaps,
+              unsigned num_heaps, bool allow_three_fourth_allocations,
               void *priv,
               slab_can_reclaim_fn *can_reclaim,
               slab_alloc_fn *slab_alloc,

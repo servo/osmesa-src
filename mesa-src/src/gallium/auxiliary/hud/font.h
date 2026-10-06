@@ -28,7 +28,7 @@
 #ifndef FONT_H
 #define FONT_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 struct pipe_resource;
 struct pipe_context;
@@ -37,7 +37,7 @@ enum util_font_name {
    UTIL_FONT_FIXED_8X13
 };
 
-/* The font is stored in a RECT texture. There are 256 glyphs
+/* The font is stored in a 2D texture. There are 256 glyphs
  * drawn in a 16x16 matrix. The texture coordinates of a glyph
  * within the matrix should be calculated as follows:
  *
@@ -52,7 +52,7 @@ struct util_font {
    unsigned glyph_height;
 };
 
-boolean
+bool
 util_font_create(struct pipe_context *pipe, enum util_font_name name,
                          struct util_font *out_font);
 

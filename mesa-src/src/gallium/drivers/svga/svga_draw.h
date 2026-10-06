@@ -1,32 +1,14 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef SVGA_DRAW_H
 #define SVGA_DRAW_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 #include "svga_hw_reg.h"
 
@@ -42,7 +24,7 @@ struct svga_hwtnl *svga_hwtnl_create(struct svga_context *svga);
 void svga_hwtnl_destroy(struct svga_hwtnl *hwtnl);
 
 void svga_hwtnl_set_flatshade(struct svga_hwtnl *hwtnl,
-                              boolean flatshade, boolean flatshade_first);
+                              bool flatshade, bool flatshade_first);
 
 void svga_hwtnl_set_fillmode(struct svga_hwtnl *hwtnl, unsigned mode);
 
@@ -59,16 +41,17 @@ svga_hwtnl_vertex_buffers(struct svga_hwtnl *hwtnl,
 
 enum pipe_error
 svga_hwtnl_draw_arrays(struct svga_hwtnl *hwtnl,
-                       enum pipe_prim_type prim, unsigned start, unsigned count,
+                       enum mesa_prim prim, unsigned start, unsigned count,
                        unsigned start_instance, unsigned instance_count,
-                       ubyte vertices_per_patch);
+                       uint8_t vertices_per_patch);
 
 enum pipe_error
 svga_hwtnl_draw_range_elements(struct svga_hwtnl *hwtnl,
                                const struct pipe_draw_info *info,
+                               const struct pipe_draw_start_count_bias *draw,
                                unsigned count);
 
-boolean
+bool
 svga_hwtnl_is_buffer_referred(struct svga_hwtnl *hwtnl,
                               struct pipe_resource *buffer);
 

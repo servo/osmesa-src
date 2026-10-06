@@ -51,10 +51,10 @@
  * Conventional allocation path for non-display textures:
  * Use a simple, maximally packed layout.
  */
-static boolean
+static bool
 softpipe_resource_layout(struct pipe_screen *screen,
                          struct softpipe_resource *spr,
-                         boolean allocate)
+                         bool allocate)
 {
    struct pipe_resource *pt = &spr->base;
    unsigned level;
@@ -83,7 +83,7 @@ softpipe_resource_layout(struct pipe_screen *screen,
       /* if row_stride * height > SP_MAX_TEXTURE_SIZE */
       if ((uint64_t)spr->stride[level] * nblocksy > SP_MAX_TEXTURE_SIZE) {
          /* image too large */
-         return FALSE;
+         return false;
       }
 
       spr->img_stride[level] = spr->stride[level] * nblocksy;
@@ -96,14 +96,14 @@ softpipe_resource_layout(struct pipe_screen *screen,
    }
 
    if (buffer_size > SP_MAX_TEXTURE_SIZE)
-      return FALSE;
+      return false;
 
    if (allocate) {
       spr->data = align_malloc(buffer_size, 64);
       return spr->data != NULL;
    }
    else {
-      return TRUE;
+      return true;
    }
 }
 
@@ -119,14 +119,14 @@ softpipe_can_create_resource(struct pipe_screen *screen,
    struct softpipe_resource spr;
    memset(&spr, 0, sizeof(spr));
    spr.base = *res;
-   return softpipe_resource_layout(screen, &spr, FALSE);
+   return softpipe_resource_layout(screen, &spr, false);
 }
 
 
 /**
  * Texture layout for simple color buffers.
  */
-static boolean
+static bool
 softpipe_displaytarget_layout(struct pipe_screen *screen,
                               struct softpipe_resource *spr,
                               const void *map_front_private)
@@ -177,7 +177,7 @@ softpipe_resource_create_front(struct pipe_screen *screen,
          goto fail;
    }
    else {
-      if (!softpipe_resource_layout(screen, spr, TRUE))
+      if (!softpipe_resource_layout(screen, spr, true))
          goto fail;
    }
     
@@ -348,7 +348,7 @@ softpipe_surface_destroy(struct pipe_context *pipe,
  * \param pipe  rendering context
  * \param resource  the resource to transfer in/out of
  * \param level  which mipmap level
- * \param usage  bitmask of PIPE_TRANSFER_x flags
+ * \param usage  bitmask of PIPE_MAP_x flags
  * \param box  the 1D/2D/3D region of interest
  */
 static void *
@@ -394,14 +394,14 @@ softpipe_transfer_map(struct pipe_context *pipe,
     * Transfers, like other pipe operations, must happen in order, so flush the
     * context if necessary.
     */
-   if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
-      boolean read_only = !(usage & PIPE_TRANSFER_WRITE);
-      boolean do_not_block = !!(usage & PIPE_TRANSFER_DONTBLOCK);
+   if (!(usage & PIPE_MAP_UNSYNCHRONIZED)) {
+      bool read_only = !(usage & PIPE_MAP_WRITE);
+      bool do_not_block = !!(usage & PIPE_MAP_DONTBLOCK);
       if (!softpipe_flush_resource(pipe, resource,
                                    level, box->depth > 1 ? -1 : box->z,
                                    0, /* flush_flags */
                                    read_only,
-                                   TRUE, /* cpu_access */
+                                   true, /* cpu_access */
                                    do_not_block)) {
          /*
           * It would have blocked, but state tracker requested no to.
@@ -468,7 +468,7 @@ softpipe_transfer_unmap(struct pipe_context *pipe,
       winsys->displaytarget_unmap(winsys, spr->dt);
    }
 
-   if (transfer->usage & PIPE_TRANSFER_WRITE) {
+   if (transfer->usage & PIPE_MAP_WRITE) {
       /* Mark the texture as dirty to expire the tile caches. */
       spr->timestamp++;
    }
@@ -502,7 +502,7 @@ softpipe_user_buffer_create(struct pipe_screen *screen,
    spr->base.height0 = 1;
    spr->base.depth0 = 1;
    spr->base.array_size = 1;
-   spr->userBuffer = TRUE;
+   spr->userBuffer = true;
    spr->data = ptr;
 
    return &spr->base;
@@ -512,8 +512,10 @@ softpipe_user_buffer_create(struct pipe_screen *screen,
 void
 softpipe_init_texture_funcs(struct pipe_context *pipe)
 {
-   pipe->transfer_map = softpipe_transfer_map;
-   pipe->transfer_unmap = softpipe_transfer_unmap;
+   pipe->buffer_map = softpipe_transfer_map;
+   pipe->buffer_unmap = softpipe_transfer_unmap;
+   pipe->texture_map = softpipe_transfer_map;
+   pipe->texture_unmap = softpipe_transfer_unmap;
 
    pipe->transfer_flush_region = u_default_transfer_flush_region;
    pipe->buffer_subdata = u_default_buffer_subdata;
@@ -521,7 +523,7 @@ softpipe_init_texture_funcs(struct pipe_context *pipe)
 
    pipe->create_surface = softpipe_create_surface;
    pipe->surface_destroy = softpipe_surface_destroy;
-   pipe->clear_texture = util_clear_texture;
+   pipe->clear_texture = util_clear_texture_sw;
 }
 
 

@@ -30,13 +30,14 @@
 #include <stdio.h>
 #include <float.h>
 
-#include "util/u_half.h"
+#include "util/half_float.h"
+#include "util/u_math.h"
 #include "util/format/u_format.h"
 #include "util/format/u_format_tests.h"
 #include "util/format/u_format_s3tc.h"
 
 
-static boolean
+static bool
 compare_float(float x, float y)
 {
    float error = y - x;
@@ -45,10 +46,10 @@ compare_float(float x, float y)
       error = -error;
 
    if (error > FLT_EPSILON) {
-      return FALSE;
+      return false;
    }
 
-   return TRUE;
+   return true;
 }
 
 
@@ -200,7 +201,7 @@ print_unpacked_s_8uint(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_fetch_rgba(const struct util_format_description *format_desc,
                              const struct util_format_test_case *test)
 {
@@ -208,15 +209,15 @@ test_format_fetch_rgba(const struct util_format_description *format_desc,
       util_format_fetch_rgba_func(format_desc->format);
    float unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH][4] = { { { 0 } } };
    unsigned i, j, k;
-   boolean success;
+   bool success;
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          fetch_rgba(unpacked[i][j], test->packed, j, i);
          for (k = 0; k < 4; ++k) {
             if (!compare_float(test->unpacked[i][j][k], unpacked[i][j][k])) {
-               success = FALSE;
+               success = false;
             }
          }
       }
@@ -224,7 +225,7 @@ test_format_fetch_rgba(const struct util_format_description *format_desc,
 
    /* Ignore S3TC errors */
    if (format_desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
-      success = TRUE;
+      success = true;
    }
 
    if (!success) {
@@ -236,26 +237,24 @@ test_format_fetch_rgba(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_unpack_rgba(const struct util_format_description *format_desc,
                         const struct util_format_test_case *test)
 {
-   const struct util_format_unpack_description *unpack =
-      util_format_unpack_description(format_desc->format);
    float unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH][4] = { { { 0 } } };
    unsigned i, j, k;
-   boolean success;
+   bool success;
 
-   unpack->unpack_rgba(&unpacked[0][0][0], sizeof unpacked[0],
+   util_format_unpack_rgba_rect(format_desc->format, &unpacked[0][0][0], sizeof unpacked[0],
                        test->packed, 0,
                        format_desc->block.width, format_desc->block.height);
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          for (k = 0; k < 4; ++k) {
             if (!compare_float(test->unpacked[i][j][k], unpacked[i][j][k])) {
-               success = FALSE;
+               success = false;
             }
          }
       }
@@ -263,7 +262,7 @@ test_format_unpack_rgba(const struct util_format_description *format_desc,
 
    /* Ignore S3TC errors */
    if (format_desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
-      success = TRUE;
+      success = true;
    }
 
    if (!success) {
@@ -275,7 +274,7 @@ test_format_unpack_rgba(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_pack_rgba_float(const struct util_format_description *format_desc,
                             const struct util_format_test_case *test)
 {
@@ -284,7 +283,7 @@ test_format_pack_rgba_float(const struct util_format_description *format_desc,
    float unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH][4];
    uint8_t packed[UTIL_FORMAT_MAX_PACKED_BYTES];
    unsigned i, j, k;
-   boolean success;
+   bool success;
 
    if (test->format == PIPE_FORMAT_DXT1_RGBA) {
       /*
@@ -292,7 +291,7 @@ test_format_pack_rgba_float(const struct util_format_description *format_desc,
        *
        * TODO: Do a round trip conversion.
        */
-      return TRUE;
+      return true;
    }
 
    memset(packed, 0, sizeof packed);
@@ -308,19 +307,19 @@ test_format_pack_rgba_float(const struct util_format_description *format_desc,
                            &unpacked[0][0][0], sizeof unpacked[0],
                            format_desc->block.width, format_desc->block.height);
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.bits/8; ++i) {
       if ((test->packed[i] & test->mask[i]) != (packed[i] & test->mask[i]))
-         success = FALSE;
+         success = false;
    }
 
    /* Ignore NaN */
    if (util_is_double_nan(test->unpacked[0][0][0]))
-      success = TRUE;
+      success = true;
 
    /* Ignore S3TC errors */
    if (format_desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
-      success = TRUE;
+      success = true;
    }
 
    if (!success) {
@@ -332,19 +331,19 @@ test_format_pack_rgba_float(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 convert_float_to_8unorm(uint8_t *dst, const double *src)
 {
    unsigned i;
-   boolean accurate = TRUE;
+   bool accurate = true;
 
    for (i = 0; i < UTIL_FORMAT_MAX_UNPACKED_HEIGHT*UTIL_FORMAT_MAX_UNPACKED_WIDTH*4; ++i) {
       if (src[i] < 0.0) {
-         accurate = FALSE;
+         accurate = false;
          dst[i] = 0;
       }
       else if (src[i] > 1.0) {
-         accurate = FALSE;
+         accurate = false;
          dst[i] = 255;
       }
       else {
@@ -356,32 +355,30 @@ convert_float_to_8unorm(uint8_t *dst, const double *src)
 }
 
 
-static boolean
+static bool
 test_format_unpack_rgba_8unorm(const struct util_format_description *format_desc,
                                const struct util_format_test_case *test)
 {
-   const struct util_format_unpack_description *unpack =
-      util_format_unpack_description(format_desc->format);
    uint8_t unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH][4] = { { { 0 } } };
    uint8_t expected[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH][4] = { { { 0 } } };
    unsigned i, j, k;
-   boolean success;
+   bool success;
 
    if (util_format_is_pure_integer(format_desc->format))
-      return FALSE;
+      return false;
 
-   unpack->unpack_rgba_8unorm(&unpacked[0][0][0], sizeof unpacked[0],
+   util_format_unpack_rgba_8unorm_rect(format_desc->format, &unpacked[0][0][0], sizeof unpacked[0],
                               test->packed, 0,
                               format_desc->block.width, format_desc->block.height);
 
    convert_float_to_8unorm(&expected[0][0][0], &test->unpacked[0][0][0]);
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          for (k = 0; k < 4; ++k) {
             if (expected[i][j][k] != unpacked[i][j][k]) {
-               success = FALSE;
+               success = false;
             }
          }
       }
@@ -389,7 +386,7 @@ test_format_unpack_rgba_8unorm(const struct util_format_description *format_desc
 
    /* Ignore NaN */
    if (util_is_double_nan(test->unpacked[0][0][0]))
-      success = TRUE;
+      success = true;
 
    if (!success) {
       print_unpacked_rgba_8unorm(format_desc, "FAILED: ", unpacked, " obtained\n");
@@ -400,7 +397,7 @@ test_format_unpack_rgba_8unorm(const struct util_format_description *format_desc
 }
 
 
-static boolean
+static bool
 test_format_pack_rgba_8unorm(const struct util_format_description *format_desc,
                              const struct util_format_test_case *test)
 {
@@ -409,7 +406,7 @@ test_format_pack_rgba_8unorm(const struct util_format_description *format_desc,
    uint8_t unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH][4];
    uint8_t packed[UTIL_FORMAT_MAX_PACKED_BYTES];
    unsigned i;
-   boolean success;
+   bool success;
 
    if (test->format == PIPE_FORMAT_DXT1_RGBA) {
       /*
@@ -417,14 +414,14 @@ test_format_pack_rgba_8unorm(const struct util_format_description *format_desc,
        *
        * TODO: Do a round trip conversion.
        */
-      return TRUE;
+      return true;
    }
 
    if (!convert_float_to_8unorm(&unpacked[0][0][0], &test->unpacked[0][0][0])) {
       /*
        * Skip test cases which cannot be represented by four unorm bytes.
        */
-      return TRUE;
+      return true;
    }
 
    memset(packed, 0, sizeof packed);
@@ -433,26 +430,26 @@ test_format_pack_rgba_8unorm(const struct util_format_description *format_desc,
                           &unpacked[0][0][0], sizeof unpacked[0],
                           format_desc->block.width, format_desc->block.height);
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.bits/8; ++i)
       if ((test->packed[i] & test->mask[i]) != (packed[i] & test->mask[i]))
-         success = FALSE;
+         success = false;
 
    /* Ignore NaN */
    if (util_is_double_nan(test->unpacked[0][0][0]))
-      success = TRUE;
+      success = true;
 
    /* Ignore failure cases due to unorm8 format */
    if (test->unpacked[0][0][0] > 1.0f || test->unpacked[0][0][0] < 0.0f)
-      success = TRUE;
+      success = true;
 
    /* Multiple of 255 */
    if ((test->unpacked[0][0][0] * 255.0) != (int)(test->unpacked[0][0][0] * 255.0))
-      success = TRUE;
+      success = true;
 
    /* Ignore S3TC errors */
    if (format_desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
-      success = TRUE;
+      success = true;
    }
 
    if (!success) {
@@ -464,7 +461,7 @@ test_format_pack_rgba_8unorm(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_unpack_z_float(const struct util_format_description *format_desc,
                               const struct util_format_test_case *test)
 {
@@ -472,17 +469,17 @@ test_format_unpack_z_float(const struct util_format_description *format_desc,
       util_format_unpack_description(format_desc->format);
    float unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH] = { { 0 } };
    unsigned i, j;
-   boolean success;
+   bool success;
 
    unpack->unpack_z_float(&unpacked[0][0], sizeof unpacked[0],
                           test->packed, 0,
                           format_desc->block.width, format_desc->block.height);
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          if (!compare_float(test->unpacked[i][j][0], unpacked[i][j])) {
-            success = FALSE;
+            success = false;
          }
       }
    }
@@ -496,7 +493,7 @@ test_format_unpack_z_float(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_pack_z_float(const struct util_format_description *format_desc,
                             const struct util_format_test_case *test)
 {
@@ -505,14 +502,14 @@ test_format_pack_z_float(const struct util_format_description *format_desc,
    float unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH];
    uint8_t packed[UTIL_FORMAT_MAX_PACKED_BYTES];
    unsigned i, j;
-   boolean success;
+   bool success;
 
    memset(packed, 0, sizeof packed);
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          unpacked[i][j] = (float) test->unpacked[i][j][0];
          if (test->unpacked[i][j][1]) {
-            return TRUE;
+            return true;
          }
       }
    }
@@ -521,10 +518,10 @@ test_format_pack_z_float(const struct util_format_description *format_desc,
                       &unpacked[0][0], sizeof unpacked[0],
                       format_desc->block.width, format_desc->block.height);
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.bits/8; ++i)
       if ((test->packed[i] & test->mask[i]) != (packed[i] & test->mask[i]))
-         success = FALSE;
+         success = false;
 
    if (!success) {
       print_packed(format_desc, "FAILED: ", packed, " obtained\n");
@@ -535,7 +532,7 @@ test_format_pack_z_float(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_unpack_z_32unorm(const struct util_format_description *format_desc,
                                const struct util_format_test_case *test)
 {
@@ -544,7 +541,7 @@ test_format_unpack_z_32unorm(const struct util_format_description *format_desc,
    uint32_t unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH] = { { 0 } };
    uint32_t expected[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH] = { { 0 } };
    unsigned i, j;
-   boolean success;
+   bool success;
 
    unpack->unpack_z_32unorm(&unpacked[0][0], sizeof unpacked[0],
                             test->packed, 0,
@@ -556,11 +553,11 @@ test_format_unpack_z_32unorm(const struct util_format_description *format_desc,
       }
    }
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          if (expected[i][j] != unpacked[i][j]) {
-            success = FALSE;
+            success = false;
          }
       }
    }
@@ -574,7 +571,7 @@ test_format_unpack_z_32unorm(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_pack_z_32unorm(const struct util_format_description *format_desc,
                              const struct util_format_test_case *test)
 {
@@ -583,13 +580,13 @@ test_format_pack_z_32unorm(const struct util_format_description *format_desc,
    uint32_t unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH];
    uint8_t packed[UTIL_FORMAT_MAX_PACKED_BYTES];
    unsigned i, j;
-   boolean success;
+   bool success;
 
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          unpacked[i][j] = test->unpacked[i][j][0] * 0xffffffff;
          if (test->unpacked[i][j][1]) {
-            return TRUE;
+            return true;
          }
       }
    }
@@ -600,10 +597,10 @@ test_format_pack_z_32unorm(const struct util_format_description *format_desc,
                         &unpacked[0][0], sizeof unpacked[0],
                         format_desc->block.width, format_desc->block.height);
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.bits/8; ++i)
       if ((test->packed[i] & test->mask[i]) != (packed[i] & test->mask[i]))
-         success = FALSE;
+         success = false;
 
    if (!success) {
       print_packed(format_desc, "FAILED: ", packed, " obtained\n");
@@ -614,7 +611,7 @@ test_format_pack_z_32unorm(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_unpack_s_8uint(const struct util_format_description *format_desc,
                                const struct util_format_test_case *test)
 {
@@ -623,7 +620,7 @@ test_format_unpack_s_8uint(const struct util_format_description *format_desc,
    uint8_t unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH] = { { 0 } };
    uint8_t expected[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH] = { { 0 } };
    unsigned i, j;
-   boolean success;
+   bool success;
 
    unpack->unpack_s_8uint(&unpacked[0][0], sizeof unpacked[0],
                           test->packed, 0,
@@ -635,11 +632,11 @@ test_format_unpack_s_8uint(const struct util_format_description *format_desc,
       }
    }
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          if (expected[i][j] != unpacked[i][j]) {
-            success = FALSE;
+            success = false;
          }
       }
    }
@@ -653,7 +650,7 @@ test_format_unpack_s_8uint(const struct util_format_description *format_desc,
 }
 
 
-static boolean
+static bool
 test_format_pack_s_8uint(const struct util_format_description *format_desc,
                              const struct util_format_test_case *test)
 {
@@ -662,13 +659,13 @@ test_format_pack_s_8uint(const struct util_format_description *format_desc,
    uint8_t unpacked[UTIL_FORMAT_MAX_UNPACKED_HEIGHT][UTIL_FORMAT_MAX_UNPACKED_WIDTH];
    uint8_t packed[UTIL_FORMAT_MAX_PACKED_BYTES];
    unsigned i, j;
-   boolean success;
+   bool success;
 
    for (i = 0; i < format_desc->block.height; ++i) {
       for (j = 0; j < format_desc->block.width; ++j) {
          unpacked[i][j] = test->unpacked[i][j][1];
          if (test->unpacked[i][j][0]) {
-            return TRUE;
+            return true;
          }
       }
    }
@@ -679,10 +676,10 @@ test_format_pack_s_8uint(const struct util_format_description *format_desc,
                       &unpacked[0][0], sizeof unpacked[0],
                       format_desc->block.width, format_desc->block.height);
 
-   success = TRUE;
+   success = true;
    for (i = 0; i < format_desc->block.bits/8; ++i)
       if ((test->packed[i] & test->mask[i]) != (packed[i] & test->mask[i]))
-         success = FALSE;
+         success = false;
 
    if (!success) {
       print_packed(format_desc, "FAILED: ", packed, " obtained\n");
@@ -694,10 +691,10 @@ test_format_pack_s_8uint(const struct util_format_description *format_desc,
 
 
 /* Touch-test that the unorm/snorm flags are set up right by codegen. */
-static boolean
+static bool
 test_format_norm_flags(const struct util_format_description *format_desc)
 {
-   boolean success = TRUE;
+   bool success = true;
 
 #define FORMAT_CASE(format, unorm, snorm) \
    case format: \
@@ -706,18 +703,18 @@ test_format_norm_flags(const struct util_format_description *format_desc)
       break
 
    switch (format_desc->format) {
-      FORMAT_CASE(PIPE_FORMAT_R8G8B8A8_UNORM, TRUE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_R8G8B8A8_SRGB, TRUE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_R8G8B8A8_SNORM, FALSE, TRUE);
-      FORMAT_CASE(PIPE_FORMAT_R32_FLOAT, FALSE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_X8Z24_UNORM, TRUE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_S8X24_UINT, FALSE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_DXT1_RGB, TRUE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_ETC2_RGB8, TRUE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_ETC2_R11_SNORM, FALSE, TRUE);
-      FORMAT_CASE(PIPE_FORMAT_ASTC_4x4, TRUE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_BPTC_RGBA_UNORM, TRUE, FALSE);
-      FORMAT_CASE(PIPE_FORMAT_BPTC_RGB_FLOAT, FALSE, FALSE);
+      FORMAT_CASE(PIPE_FORMAT_R8G8B8A8_UNORM, true, false);
+      FORMAT_CASE(PIPE_FORMAT_R8G8B8A8_SRGB, true, false);
+      FORMAT_CASE(PIPE_FORMAT_R8G8B8A8_SNORM, false, true);
+      FORMAT_CASE(PIPE_FORMAT_R32_FLOAT, false, false);
+      FORMAT_CASE(PIPE_FORMAT_X8Z24_UNORM, true, false);
+      FORMAT_CASE(PIPE_FORMAT_S8X24_UINT, false, false);
+      FORMAT_CASE(PIPE_FORMAT_DXT1_RGB, true, false);
+      FORMAT_CASE(PIPE_FORMAT_ETC2_RGB8, true, false);
+      FORMAT_CASE(PIPE_FORMAT_ETC2_R11_SNORM, false, true);
+      FORMAT_CASE(PIPE_FORMAT_ASTC_4x4, true, false);
+      FORMAT_CASE(PIPE_FORMAT_BPTC_RGBA_UNORM, true, false);
+      FORMAT_CASE(PIPE_FORMAT_BPTC_RGB_FLOAT, false, false);
    default:
       success = !(format_desc->is_unorm && format_desc->is_snorm);
       break;
@@ -734,18 +731,18 @@ test_format_norm_flags(const struct util_format_description *format_desc)
    return success;
 }
 
-typedef boolean
+typedef bool
 (*test_func_t)(const struct util_format_description *format_desc,
                const struct util_format_test_case *test);
 
 
-static boolean
+static bool
 test_one_func(const struct util_format_description *format_desc,
               test_func_t func,
               const char *suffix)
 {
    unsigned i;
-   boolean success = TRUE;
+   bool success = true;
 
    printf("Testing util_format_%s_%s ...\n",
           format_desc->short_name, suffix);
@@ -756,7 +753,7 @@ test_one_func(const struct util_format_description *format_desc,
 
       if (test->format == format_desc->format) {
          if (!func(format_desc, &util_format_test_cases[i])) {
-           success = FALSE;
+           success = false;
          }
       }
    }
@@ -764,28 +761,28 @@ test_one_func(const struct util_format_description *format_desc,
    return success;
 }
 
-static boolean
+static bool
 test_format_metadata(const struct util_format_description *format_desc,
-                     boolean (*func)(const struct util_format_description *format_desc),
+                     bool (*func)(const struct util_format_description *format_desc),
                      const char *suffix)
 {
-   boolean success = TRUE;
+   bool success = true;
 
    printf("Testing util_format_%s_%s ...\n", format_desc->short_name, suffix);
    fflush(stdout);
 
    if (!func(format_desc)) {
-      success = FALSE;
+      success = false;
    }
 
    return success;
 }
 
-static boolean
+static bool
 test_all(void)
 {
    enum pipe_format format;
-   boolean success = TRUE;
+   bool success = true;
 
    for (format = 1; format < PIPE_FORMAT_COUNT; ++format) {
       const struct util_format_description *format_desc;
@@ -802,31 +799,54 @@ test_all(void)
 #     define TEST_ONE_PACK_FUNC(name) \
       if (util_format_pack_description(format)->name) {                 \
          if (!test_one_func(format_desc, &test_format_##name, #name)) { \
-           success = FALSE; \
+           success = false; \
          } \
       }
 
 #     define TEST_ONE_UNPACK_FUNC(name) \
       if (util_format_unpack_description(format)->name) {               \
          if (!test_one_func(format_desc, &test_format_##name, #name)) { \
-           success = FALSE; \
+           success = false; \
+         } \
+      }
+
+#     define TEST_ONE_UNPACK_RECT_FUNC(name) \
+      if (util_format_unpack_description(format)->name || util_format_unpack_description(format)->name##_rect) {               \
+         if (!test_one_func(format_desc, &test_format_##name, #name)) { \
+           success = false; \
          } \
       }
 
 #     define TEST_FORMAT_METADATA(name) \
       if (!test_format_metadata(format_desc, &test_format_##name, #name)) { \
-         success = FALSE; \
+         success = false; \
       } \
 
       if (util_format_fetch_rgba_func(format)) {
          if (!test_one_func(format_desc, test_format_fetch_rgba, "fetch_rgba"))
-            success = FALSE;
+            success = false;
+      }
+
+      if (util_format_is_snorm(format)) {
+         enum pipe_format unorm = util_format_snorm_to_unorm(format);
+
+         if (format == PIPE_FORMAT_R8G8Bx_SNORM) {
+            /* no unorm equivalent for this one */
+         } else if (unorm == format) {
+            fprintf(stderr, "%s missing from util_format_snorm_to_unorm().\n",
+                    util_format_name(format));
+            success = false;
+         } else if (!util_format_is_unorm(unorm)) {
+            fprintf(stderr, "util_format_snorm_to_unorm(%s) returned non-unorm %s.\n",
+                    util_format_name(format), util_format_name(unorm));
+            success = false;
+         }
       }
 
       TEST_ONE_PACK_FUNC(pack_rgba_float);
-      TEST_ONE_UNPACK_FUNC(unpack_rgba);
+      TEST_ONE_UNPACK_RECT_FUNC(unpack_rgba);
       TEST_ONE_PACK_FUNC(pack_rgba_8unorm);
-      TEST_ONE_UNPACK_FUNC(unpack_rgba_8unorm);
+      TEST_ONE_UNPACK_RECT_FUNC(unpack_rgba_8unorm);
 
       TEST_ONE_UNPACK_FUNC(unpack_z_32unorm);
       TEST_ONE_PACK_FUNC(pack_z_32unorm);
@@ -847,7 +867,7 @@ test_all(void)
 
 int main(int argc, char **argv)
 {
-   boolean success;
+   bool success;
 
    success = test_all();
 

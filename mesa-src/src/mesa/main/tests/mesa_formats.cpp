@@ -33,13 +33,19 @@
 
 #include "main/formats.h"
 #include "main/glformats.h"
+#include "main/format_unpack.h"
+#include "main/format_pack.h"
+
+// Test fixture for Format tests.
+class MesaFormatsTest : public ::testing::Test {
+};
 
 /**
  * Debug/test: check that all uncompressed formats are handled in the
  * _mesa_uncompressed_format_to_type_and_comps() function. When new pixel
  * formats are added to Mesa, that function needs to be updated.
  */
-TEST(MesaFormatsTest, FormatTypeAndComps)
+TEST_F(MesaFormatsTest, FormatTypeAndComps)
 {
    for (int fi = MESA_FORMAT_NONE + 1; fi < MESA_FORMAT_COUNT; ++fi) {
       mesa_format f = (mesa_format) fi;
@@ -52,11 +58,8 @@ TEST(MesaFormatsTest, FormatTypeAndComps)
        * not handled.
        */
       if (!_mesa_is_format_compressed(f)) {
-         GLenum datatype = 0;
-         GLuint comps = 0;
-
          /* If the datatype is zero, the format was not handled */
-         _mesa_uncompressed_format_to_type_and_comps(f, &datatype, &comps);
+          GLenum datatype = _mesa_uncompressed_format_to_type(f);
          EXPECT_NE(datatype, (GLenum)0);
       }
 
@@ -66,7 +69,7 @@ TEST(MesaFormatsTest, FormatTypeAndComps)
 /**
  * Do sanity checking of the format info table.
  */
-TEST(MesaFormatsTest, FormatSanity)
+TEST_F(MesaFormatsTest, FormatSanity)
 {
    for (int fi = 0; fi < MESA_FORMAT_COUNT; ++fi) {
       mesa_format f = (mesa_format) fi;
@@ -137,7 +140,7 @@ TEST(MesaFormatsTest, FormatSanity)
    }
 }
 
-TEST(MesaFormatsTest, IntensityToRed)
+TEST_F(MesaFormatsTest, IntensityToRed)
 {
    EXPECT_EQ(_mesa_get_intensity_format_red(MESA_FORMAT_I_UNORM8),
              MESA_FORMAT_R_UNORM8);
@@ -155,7 +158,7 @@ static mesa_format fffat_wrap(GLenum format, GLenum type)
    return (mesa_format)f;
 }
 
-TEST(MesaFormatsTest, FormatFromFormatAndType)
+TEST_F(MesaFormatsTest, FormatFromFormatAndType)
 {
    EXPECT_EQ(fffat_wrap(GL_RGBA, GL_SHORT),
              MESA_FORMAT_RGBA_SNORM16);
@@ -169,7 +172,7 @@ TEST(MesaFormatsTest, FormatFromFormatAndType)
                                                                                    GL_BYTE)));
 }
 
-TEST(MesaFormatsTest, FormatMatchesFormatAndType)
+TEST_F(MesaFormatsTest, FormatMatchesFormatAndType)
 {
    EXPECT_TRUE(_mesa_format_matches_format_and_type(MESA_FORMAT_RGBA_UNORM16,
                                                     GL_RGBA,
@@ -183,4 +186,100 @@ TEST(MesaFormatsTest, FormatMatchesFormatAndType)
                                                     GL_DEPTH_COMPONENT,
                                                     GL_UNSIGNED_SHORT, false,
                                                     NULL));
+}
+
+static uint32_t
+test_unpack_r8i(int8_t val)
+{
+   uint32_t result[4];
+   _mesa_unpack_uint_rgba_row(MESA_FORMAT_R_SINT8, 1, &val, &result);
+   return result[0];
+}
+
+static uint32_t
+test_unpack_r32ui(uint32_t val)
+{
+   uint32_t result[4];
+   _mesa_unpack_uint_rgba_row(MESA_FORMAT_R_UINT32, 1, &val, &result);
+   return result[0];
+}
+
+TEST_F(MesaFormatsTest, UnpackRGBAUintRow)
+{
+   EXPECT_EQ(test_unpack_r8i(0), 0);
+   EXPECT_EQ(test_unpack_r8i(1), 1);
+   EXPECT_EQ(test_unpack_r8i(0xff), 0xffffffff);
+   EXPECT_EQ(test_unpack_r32ui(0), 0);
+   EXPECT_EQ(test_unpack_r32ui(0xffffffff), 0xffffffff);
+}
+
+TEST_F(MesaFormatsTest, UnpackRGBAUbyteRowRGBA32F)
+{
+   float val[4] = {0, 0.5, -1, 2};
+   uint8_t result[4];
+   _mesa_unpack_ubyte_rgba_row(MESA_FORMAT_RGBA_FLOAT32, 1, &val, &result);
+   EXPECT_EQ(result[0], 0);
+   EXPECT_EQ(result[1], 0x80);
+   EXPECT_EQ(result[2], 0);
+   EXPECT_EQ(result[3], 0xff);
+}
+
+TEST_F(MesaFormatsTest, UnpackRGBAUbyteRowRGBA4)
+{
+   uint16_t val = (1 << 0) | (0x3f << 5) | (0x10 << 11);
+   uint8_t result[4];
+   _mesa_unpack_ubyte_rgba_row(MESA_FORMAT_R5G6B5_UNORM, 1, &val, &result);
+   EXPECT_EQ(result[0], 0x08);
+   EXPECT_EQ(result[1], 0xff);
+   EXPECT_EQ(result[2], 0x84);
+   EXPECT_EQ(result[3], 0xff);
+}
+
+static float
+test_unpack_floatz_z32f(float val)
+{
+   float result;
+   _mesa_unpack_float_z_row(MESA_FORMAT_Z_FLOAT32, 1, &val, &result);
+   return result;
+}
+
+TEST_F(MesaFormatsTest, UnpackFloatZRow)
+{
+   EXPECT_EQ(test_unpack_floatz_z32f(0.5), 0.5);
+   EXPECT_EQ(test_unpack_floatz_z32f(-1.0), -1.0);
+   EXPECT_EQ(test_unpack_floatz_z32f(2.0), 2.0);
+}
+
+static uint32_t
+test_unpack_uintz_z32f(float val)
+{
+   uint32_t result;
+   _mesa_unpack_uint_z_row(MESA_FORMAT_Z_FLOAT32, 1, &val, &result);
+   return result;
+}
+
+TEST_F(MesaFormatsTest, UnpackUintZRow)
+{
+   EXPECT_EQ(test_unpack_uintz_z32f(0.5), 0x7fffffff);
+   EXPECT_EQ(test_unpack_uintz_z32f(-1.0), 0);
+   EXPECT_EQ(test_unpack_uintz_z32f(2.0), 0xffffffff);
+}
+
+/* It's easy to have precision issues packing 32-bit floats to unorm. */
+TEST_F(MesaFormatsTest, PackFloatZ)
+{
+   float val = 0.571428597f;
+   uint32_t result;
+   _mesa_pack_float_z_row(MESA_FORMAT_Z_UNORM32, 1, &val, &result);
+   EXPECT_EQ(result, 0x924924ff);
+}
+
+TEST_F(MesaFormatsTest, PackUbyteRGBARounding)
+{
+   for (int i = 0; i <= 255; i++) {
+      uint8_t val[4] = {(uint8_t)i, 0, 0, 0};
+      uint16_t result;
+      _mesa_pack_ubyte_rgba_row(MESA_FORMAT_R5G6B5_UNORM, 1, val, &result);
+      EXPECT_EQ(result, (i * 31 + 127) / 255);
+   }
 }

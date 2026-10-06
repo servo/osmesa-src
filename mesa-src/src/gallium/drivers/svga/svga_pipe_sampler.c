@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "pipe/p_defines.h"
 #include "util/u_bitmask.h"
@@ -29,7 +11,6 @@
 #include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-#include "tgsi/tgsi_parse.h"
 
 #include "svga_context.h"
 #include "svga_cmd.h"
@@ -133,8 +114,8 @@ static SVGA3dFilter
 translate_filter_mode(unsigned img_filter,
                       unsigned min_filter,
                       unsigned mag_filter,
-                      boolean anisotropic,
-                      boolean compare)
+                      bool anisotropic,
+                      bool compare)
 {
    SVGA3dFilter mode = 0;
 
@@ -162,7 +143,7 @@ define_sampler_state_object(struct svga_context *svga,
                             const struct pipe_sampler_state *ps)
 {
    uint8_t max_aniso = (uint8_t) 255; /* XXX fix me */
-   boolean anisotropic;
+   bool anisotropic;
    uint8 compare_func;
    SVGA3dFilter filter;
    SVGA3dRGBAFloat bcolor;
@@ -246,7 +227,7 @@ svga_create_sampler_state(struct pipe_context *pipe,
    cso->addressu = translate_wrap_mode(sampler->wrap_s);
    cso->addressv = translate_wrap_mode(sampler->wrap_t);
    cso->addressw = translate_wrap_mode(sampler->wrap_r);
-   cso->normalized_coords = sampler->normalized_coords;
+   cso->normalized_coords = !sampler->unnormalized_coords;
    cso->compare_mode = sampler->compare_mode;
    cso->compare_func = sampler->compare_func;
 
@@ -302,7 +283,7 @@ svga_bind_sampler_states(struct pipe_context *pipe,
 {
    struct svga_context *svga = svga_context(pipe);
    unsigned i;
-   boolean any_change = FALSE;
+   bool any_change = false;
 
    assert(shader < PIPE_SHADER_TYPES);
    assert(start + num <= PIPE_MAX_SAMPLERS);
@@ -313,7 +294,7 @@ svga_bind_sampler_states(struct pipe_context *pipe,
 
    for (i = 0; i < num; i++) {
       if (svga->curr.sampler[shader][start + i] != samplers[i])
-         any_change = TRUE;
+         any_change = true;
       svga->curr.sampler[shader][start + i] = samplers[i];
    }
 
@@ -341,7 +322,7 @@ svga_delete_sampler_state(struct pipe_context *pipe, void *sampler)
 
    if (svga_have_vgpu10(svga)) {
       unsigned i;
-      for (i = 0; i < 2; i++) {
+      for (i = 0; i < ARRAY_SIZE(ss->id); i++) {
          if (ss->id[i] != SVGA3D_INVALID_ID) {
             svga_hwtnl_flush_retry(svga);
 
@@ -414,20 +395,27 @@ svga_set_sampler_views(struct pipe_context *pipe,
                        enum pipe_shader_type shader,
                        unsigned start,
                        unsigned num,
+                       unsigned unbind_num_trailing_slots,
+                       bool take_ownership,
                        struct pipe_sampler_view **views)
 {
    struct svga_context *svga = svga_context(pipe);
    unsigned flag_1d = 0;
    unsigned flag_srgb = 0;
    uint i;
-   boolean any_change = FALSE;
+   bool any_change = false;
 
    assert(shader < PIPE_SHADER_TYPES);
    assert(start + num <= ARRAY_SIZE(svga->curr.sampler_views[shader]));
 
    /* Pre-VGPU10 only supports FS textures */
-   if (!svga_have_vgpu10(svga) && shader != PIPE_SHADER_FRAGMENT)
+   if (!svga_have_vgpu10(svga) && shader != PIPE_SHADER_FRAGMENT) {
+      for (unsigned i = 0; i < num; i++) {
+         struct pipe_sampler_view *view = views[i];
+         pipe_sampler_view_reference(&view, NULL);
+      }
       return;
+   }
 
    SVGA_STATS_TIME_PUSH(svga_sws(svga), SVGA_STATS_TIME_SETSAMPLERVIEWS);
 
@@ -441,16 +429,21 @@ svga_set_sampler_views(struct pipe_context *pipe,
          pipe_sampler_view_reference(&svga->curr.sampler_views[shader][i],
                                      NULL);
       }
-      any_change = TRUE;
+      any_change = true;
    }
 
    for (i = 0; i < num; i++) {
       enum pipe_texture_target target;
 
-      if (svga->curr.sampler_views[shader][start + i] != views[i]) {
+      any_change |= svga->curr.sampler_views[shader][start + i] != views[i];
+
+      if (take_ownership) {
+         pipe_sampler_view_reference(&svga->curr.sampler_views[shader][start + i],
+               NULL);
+         svga->curr.sampler_views[shader][start + i] = views[i];
+      } else if (svga->curr.sampler_views[shader][start + i] != views[i]) {
          pipe_sampler_view_reference(&svga->curr.sampler_views[shader][start + i],
                                      views[i]);
-         any_change = TRUE;
       }
 
       if (!views[i])
@@ -472,6 +465,14 @@ svga_set_sampler_views(struct pipe_context *pipe,
           * const buffer values.
           */
          svga->dirty |= SVGA_NEW_TEXTURE_CONSTS;
+      }
+   }
+
+   for (; i < num + unbind_num_trailing_slots; i++) {
+      if (svga->curr.sampler_views[shader][start + i]) {
+         pipe_sampler_view_reference(&svga->curr.sampler_views[shader][start + i],
+                                     NULL);
+         any_change = true;
       }
    }
 
@@ -517,7 +518,7 @@ svga_cleanup_sampler_state(struct svga_context *svga)
 {
    enum pipe_shader_type shader;
 
-   for (shader = 0; shader <= PIPE_SHADER_TESS_EVAL; shader++) {
+   for (shader = 0; shader <= PIPE_SHADER_COMPUTE; shader++) {
       unsigned i;
 
       for (i = 0; i < svga->state.hw_draw.num_sampler_views[shader]; i++) {

@@ -25,7 +25,7 @@
 #define TEXCOMPRESS_BPTC_H
 
 #include <inttypes.h>
-#include "glheader.h"
+#include "util/glheader.h"
 #include "texcompress.h"
 #include "texstore.h"
 
@@ -40,5 +40,14 @@ _mesa_texstore_bptc_rgb_unsigned_float(TEXSTORE_PARAMS);
 
 compressed_fetch_func
 _mesa_get_bptc_fetch_func(mesa_format format);
+
+void
+_mesa_unpack_bptc(uint8_t *dst_row,
+                  unsigned dst_stride,
+                  const uint8_t *src_row,
+                  unsigned src_stride,
+                  unsigned src_width,
+                  unsigned src_height,
+                  mesa_format format);
 
 #endif

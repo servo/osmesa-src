@@ -356,11 +356,13 @@ _mesa_format_convert(void *void_dst, uint32_t dst_format, size_t dst_stride,
                dst += dst_stride;
             }
             return;
+#if UTIL_ARCH_LITTLE_ENDIAN
          } else if (dst_array_format == BGRA8_UBYTE &&
                     src_format == MESA_FORMAT_R8G8B8A8_UNORM) {
              convert_ubyte_rgba_to_bgra(width, height, src, src_stride,
                                         dst, dst_stride);
              return;
+#endif
          } else if (dst_array_format == RGBA32_UINT &&
                     _mesa_is_format_unsigned(src_format)) {
             assert(_mesa_is_format_integer_color(src_format));
@@ -387,14 +389,16 @@ _mesa_format_convert(void *void_dst, uint32_t dst_format, size_t dst_stride,
          } else if (src_array_format == RGBA8_UBYTE) {
             assert(!_mesa_is_format_integer_color(dst_format));
 
+#if UTIL_ARCH_LITTLE_ENDIAN
             if (dst_format == MESA_FORMAT_B8G8R8A8_UNORM) {
                convert_ubyte_rgba_to_bgra(width, height, src, src_stride,
                                           dst, dst_stride);
             }
-            else {
+            else
+#endif
+            {
                for (row = 0; row < height; ++row) {
-                  _mesa_pack_ubyte_rgba_row(dst_format, width,
-                                            (const uint8_t (*)[4])src, dst);
+                  _mesa_pack_ubyte_rgba_row(dst_format, width, src, dst);
                   src += src_stride;
                   dst += dst_stride;
                }
@@ -653,133 +657,12 @@ _mesa_format_convert(void *void_dst, uint32_t dst_format, size_t dst_stride,
       } else {
          for (row = 0; row < height; ++row) {
             _mesa_pack_ubyte_rgba_row(dst_format, width,
-                                      (const uint8_t (*)[4])tmp_ubyte + row * width, dst);
+                                      (const uint8_t *)(tmp_ubyte + row * width), dst);
             dst += dst_stride;
          }
       }
 
       free(tmp_ubyte);
-   }
-}
-
-static const uint8_t map_identity[7] = { 0, 1, 2, 3, 4, 5, 6 };
-#if UTIL_ARCH_BIG_ENDIAN
-static const uint8_t map_3210[7] = { 3, 2, 1, 0, 4, 5, 6 };
-static const uint8_t map_1032[7] = { 1, 0, 3, 2, 4, 5, 6 };
-#endif
-
-/**
- * Describes a format as an array format, if possible
- *
- * A helper function for figuring out if a (possibly packed) format is
- * actually an array format and, if so, what the array parameters are.
- *
- * \param[in]  format         the mesa format
- * \param[out] type           the GL type of the array (GL_BYTE, etc.)
- * \param[out] num_components the number of components in the array
- * \param[out] swizzle        a swizzle describing how to get from the
- *                            given format to RGBA
- * \param[out] normalized     for integer formats, this represents whether
- *                            the format is a normalized integer or a
- *                            regular integer
- * \return  true if this format is an array format, false otherwise
- */
-bool
-_mesa_format_to_array(mesa_format format, GLenum *type, int *num_components,
-                      uint8_t swizzle[4], bool *normalized)
-{
-   int i;
-   GLuint format_components;
-   uint8_t packed_swizzle[4];
-   const uint8_t *endian;
-
-   if (_mesa_is_format_compressed(format))
-      return false;
-
-   *normalized = !_mesa_is_format_integer(format);
-
-   _mesa_uncompressed_format_to_type_and_comps(format, type, &format_components);
-
-   switch (_mesa_get_format_layout(format)) {
-   case MESA_FORMAT_LAYOUT_ARRAY:
-      *num_components = format_components;
-      _mesa_get_format_swizzle(format, swizzle);
-      return true;
-   case MESA_FORMAT_LAYOUT_PACKED:
-      switch (*type) {
-      case GL_UNSIGNED_BYTE:
-      case GL_BYTE:
-         if (_mesa_get_format_max_bits(format) != 8)
-            return false;
-         *num_components = _mesa_get_format_bytes(format);
-         switch (*num_components) {
-         case 1:
-            endian = map_identity;
-            break;
-         case 2:
-#if UTIL_ARCH_LITTLE_ENDIAN
-            endian = map_identity;
-#else
-            endian = map_1032;
-#endif
-            break;
-         case 4:
-#if UTIL_ARCH_LITTLE_ENDIAN
-            endian = map_identity;
-#else
-            endian = map_3210;
-#endif
-            break;
-         default:
-            endian = map_identity;
-            assert(!"Invalid number of components");
-         }
-         break;
-      case GL_UNSIGNED_SHORT:
-      case GL_SHORT:
-      case GL_HALF_FLOAT:
-         if (_mesa_get_format_max_bits(format) != 16)
-            return false;
-         *num_components = _mesa_get_format_bytes(format) / 2;
-         switch (*num_components) {
-         case 1:
-            endian = map_identity;
-            break;
-         case 2:
-#if UTIL_ARCH_LITTLE_ENDIAN
-            endian = map_identity;
-#else
-            endian = map_1032;
-#endif
-            break;
-         default:
-            endian = map_identity;
-            assert(!"Invalid number of components");
-         }
-         break;
-      case GL_UNSIGNED_INT:
-      case GL_INT:
-      case GL_FLOAT:
-         /* This isn't packed.  At least not really. */
-         assert(format_components == 1);
-         if (_mesa_get_format_max_bits(format) != 32)
-            return false;
-         *num_components = format_components;
-         endian = map_identity;
-         break;
-      default:
-         return false;
-      }
-
-      _mesa_get_format_swizzle(format, packed_swizzle);
-
-      for (i = 0; i < 4; ++i)
-         swizzle[i] = endian[packed_swizzle[i]];
-
-      return true;
-   case MESA_FORMAT_LAYOUT_OTHER:
-   default:
-      return false;
    }
 }
 

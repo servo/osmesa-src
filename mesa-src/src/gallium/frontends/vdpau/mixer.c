@@ -70,7 +70,7 @@ vlVdpVideoMixerCreate(VdpDevice device,
    }
 
    vl_csc_get_matrix(VL_CSC_COLOR_STANDARD_BT_601, NULL, true, &vmixer->csc);
-   if (!debug_get_bool_option("G3DVL_NO_CSC", FALSE)) {
+   if (!debug_get_bool_option("G3DVL_NO_CSC", false)) {
       if (!vl_compositor_set_csc_matrix(&vmixer->cstate, (const vl_csc_matrix *)&vmixer->csc, 1.0f, 0.0f)) {
          ret = VDP_STATUS_ERROR;
          goto err_csc_matrix;
@@ -143,11 +143,11 @@ vlVdpVideoMixerCreate(VdpDevice device,
    }
    ret = VDP_STATUS_INVALID_VALUE;
    if (vmixer->max_layers > 4) {
-      VDPAU_MSG(VDPAU_WARN, "[VDPAU] Max layers > 4 not supported\n", vmixer->max_layers);
+      VDPAU_MSG(VDPAU_WARN, "[VDPAU] Max layers %u > 4 not supported\n", vmixer->max_layers);
       goto no_params;
    }
 
-   max_size = screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_2D_SIZE);
+   max_size = screen->caps.max_texture_2d_size;
    if (vmixer->video_width < 48 || vmixer->video_width > max_size) {
       VDPAU_MSG(VDPAU_WARN, "[VDPAU] 48 < %u < %u not valid for width\n",
                 vmixer->video_width, max_size);
@@ -475,12 +475,17 @@ vlVdpVideoMixerUpdateDeinterlaceFilter(vlVdpVideoMixer *vmixer)
 
    /* create a new filter if requested */
    if (vmixer->deint.enabled && vmixer->chroma_format == PIPE_VIDEO_CHROMA_FORMAT_420) {
+      bool interlaced = pipe->screen->get_video_param(pipe->screen,
+                                                      PIPE_VIDEO_PROFILE_UNKNOWN,
+                                                      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+                                                      PIPE_VIDEO_CAP_PREFERS_INTERLACED);
       vmixer->deint.filter = MALLOC(sizeof(struct vl_deint_filter));
       vmixer->deint.enabled = vl_deint_filter_init(vmixer->deint.filter, pipe,
             vmixer->video_width, vmixer->video_height,
-            vmixer->skip_chroma_deint, vmixer->deint.spatial);
+            vmixer->skip_chroma_deint, vmixer->deint.spatial, !interlaced);
       if (!vmixer->deint.enabled) {
          FREE(vmixer->deint.filter);
+         vmixer->deint.filter = NULL;
       }
    }
 }
@@ -692,7 +697,7 @@ vlVdpVideoMixerSetFeatureEnables(VdpVideoMixer mixer,
 
       case VDP_VIDEO_MIXER_FEATURE_LUMA_KEY:
          vmixer->luma_key.enabled = feature_enables[i];
-         if (!debug_get_bool_option("G3DVL_NO_CSC", FALSE))
+         if (!debug_get_bool_option("G3DVL_NO_CSC", false))
             if (!vl_compositor_set_csc_matrix(&vmixer->cstate, (const vl_csc_matrix *)&vmixer->csc,
                         vmixer->luma_key.luma_min, vmixer->luma_key.luma_max)) {
                mtx_unlock(&vmixer->device->mutex);
@@ -815,7 +820,7 @@ vlVdpVideoMixerSetAttributeValues(VdpVideoMixer mixer,
             vl_csc_get_matrix(VL_CSC_COLOR_STANDARD_BT_601, NULL, 1, &vmixer->csc);
          else
             memcpy(vmixer->csc, vdp_csc, sizeof(vl_csc_matrix));
-         if (!debug_get_bool_option("G3DVL_NO_CSC", FALSE))
+         if (!debug_get_bool_option("G3DVL_NO_CSC", false))
             if (!vl_compositor_set_csc_matrix(&vmixer->cstate, (const vl_csc_matrix *)&vmixer->csc,
                                          vmixer->luma_key.luma_min, vmixer->luma_key.luma_max)) {
                ret = VDP_STATUS_ERROR;
@@ -842,7 +847,7 @@ vlVdpVideoMixerSetAttributeValues(VdpVideoMixer mixer,
             goto fail;
          }
          vmixer->luma_key.luma_min = val;
-         if (!debug_get_bool_option("G3DVL_NO_CSC", FALSE))
+         if (!debug_get_bool_option("G3DVL_NO_CSC", false))
             if (!vl_compositor_set_csc_matrix(&vmixer->cstate, (const vl_csc_matrix *)&vmixer->csc,
                         vmixer->luma_key.luma_min, vmixer->luma_key.luma_max)) {
                ret = VDP_STATUS_ERROR;
@@ -857,7 +862,7 @@ vlVdpVideoMixerSetAttributeValues(VdpVideoMixer mixer,
             goto fail;
          }
          vmixer->luma_key.luma_max = val;
-         if (!debug_get_bool_option("G3DVL_NO_CSC", FALSE))
+         if (!debug_get_bool_option("G3DVL_NO_CSC", false))
             if (!vl_compositor_set_csc_matrix(&vmixer->cstate, (const vl_csc_matrix *)&vmixer->csc,
                         vmixer->luma_key.luma_min, vmixer->luma_key.luma_max)) {
                ret = VDP_STATUS_ERROR;

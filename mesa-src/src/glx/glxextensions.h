@@ -51,19 +51,20 @@ enum
    EXT_fbconfig_packed_float_bit,
    EXT_framebuffer_sRGB_bit,
    EXT_import_context_bit,
+   EXT_no_config_context_bit,
+   EXT_swap_control_bit,
+   EXT_swap_control_tear_bit,
    EXT_texture_from_pixmap_bit,
    EXT_visual_info_bit,
    EXT_visual_rating_bit,
    ATI_pixel_format_float_bit,
    INTEL_swap_event_bit,
    MESA_copy_sub_buffer_bit,
-   MESA_depth_float_bit,
-   MESA_multithread_makecurrent_bit,
+   MESA_gl_interop_bit,
    MESA_query_renderer_bit,
    MESA_swap_control_bit,
    MESA_swap_frame_usage_bit,
    NV_float_buffer_bit,
-   OML_swap_method_bit,
    OML_sync_control_bit,
    SGIS_multisample_bit,
    SGIX_fbconfig_bit,
@@ -72,7 +73,11 @@ enum
    SGI_make_current_read_bit,
    SGI_swap_control_bit,
    SGI_video_sync_bit,
+
+   __NUM_GLX_EXTS,
 };
+
+#define __GLX_EXT_BYTES   ((__NUM_GLX_EXTS + 7) / 8)
 
 /* From the GLX perspective, the ARB and EXT extensions are identical.  Use a
  * single bit for both.
@@ -155,7 +160,6 @@ enum
    GL_EXT_texture_lod_bit,
    GL_EXT_texture_lod_bias_bit,
    GL_EXT_texture_mirror_clamp_bit,
-   GL_EXT_texture_object_bit,
    GL_EXT_vertex_array_bit,
    GL_3DFX_texture_compression_FXT1_bit,
    GL_APPLE_packed_pixels_bit,
@@ -253,18 +257,18 @@ struct glx_context;
 
 extern GLboolean __glXExtensionBitIsEnabled(struct glx_screen *psc,
                                             unsigned bit);
-extern const char *__glXGetClientExtensions(void);
+extern const char *__glXGetClientExtensions(Display *dpy);
 extern void __glXCalculateUsableExtensions(struct glx_screen *psc,
                                            GLboolean
-                                           display_is_direct_capable,
-                                           int server_minor_version);
+                                           display_is_direct_capable);
 
+extern void __glXParseExtensionOverride(struct glx_screen *psc,
+                                        const char *override);
+extern void __IndirectGlParseExtensionOverride(struct glx_screen *psc,
+                                               const char *override);
 extern void __glXCalculateUsableGLExtensions(struct glx_context *gc,
-                                             const char *server_string,
-                                             int major_version,
-                                             int minor_version);
-extern void __glXGetGLVersion(int *major_version, int *minor_version);
-extern char *__glXGetClientGLExtensionString(void);
+                                             const char *server_string);
+extern char *__glXGetClientGLExtensionString(int screen);
 
 extern GLboolean __glExtensionBitIsEnabled(struct glx_context *gc,
                                            unsigned bit);
@@ -272,27 +276,15 @@ extern GLboolean __glExtensionBitIsEnabled(struct glx_context *gc,
 extern void
 __glXEnableDirectExtension(struct glx_screen *psc, const char *name);
 
-/* Source-level backwards compatibility with old drivers. They won't
- * find the respective functions, though. 
- */
-typedef void (*PFNGLXENABLEEXTENSIONPROC) (const char *name,
-                                           GLboolean force_client);
-typedef void (*PFNGLXDISABLEEXTENSIONPROC) (const char *name);
 
 /* GLX_ALIAS should be used for functions with a non-void return type.
    GLX_ALIAS_VOID is for functions with a void return type. */
 # ifdef HAVE_FUNC_ATTRIBUTE_ALIAS
-/* GLX_ALIAS and GLX_ALIAS_VOID both expand to the macro GLX_ALIAS2. Using the
- * extra expansion means that the name mangling macros in glx_mangle.h will
- * apply before stringification, so the alias attribute will have a string like
- * "mglXFoo" instead of "glXFoo". */
-#  define GLX_ALIAS2(return_type, real_func, proto_args, args, aliased_func) \
+#  define GLX_ALIAS(return_type, real_func, proto_args, args, aliased_func) \
    return_type  real_func  proto_args                                   \
    __attribute__ ((alias( # aliased_func ) ));
-#  define GLX_ALIAS(return_type, real_func, proto_args, args, aliased_func) \
-   GLX_ALIAS2(return_type, real_func, proto_args, args, aliased_func)
 #  define GLX_ALIAS_VOID(real_func, proto_args, args, aliased_func) \
-   GLX_ALIAS2(void, real_func, proto_args, args, aliased_func)
+   GLX_ALIAS(void, real_func, proto_args, args, aliased_func)
 # else
 #  define GLX_ALIAS(return_type, real_func, proto_args, args, aliased_func) \
    return_type  real_func  proto_args                                   \

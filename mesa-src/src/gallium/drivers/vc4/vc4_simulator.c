@@ -53,6 +53,7 @@
 #include "util/u_memory.h"
 #include "util/u_mm.h"
 #include "util/ralloc.h"
+#include "util/simple_mtx.h"
 
 #include "vc4_screen.h"
 #include "vc4_cl_dump.h"
@@ -61,9 +62,12 @@
 #include "vc4_simulator_validate.h"
 #include "simpenrose/simpenrose.h"
 
+#include "drm-uapi/amdgpu_drm.h"
+#include "drm-uapi/i915_drm.h"
+
 /** Global (across GEM fds) state for the simulator */
 static struct vc4_simulator_state {
-        mtx_t mutex;
+        simple_mtx_t mutex;
 
         void *mem;
         ssize_t mem_size;
@@ -75,7 +79,13 @@ static struct vc4_simulator_state {
 
         int refcount;
 } sim_state = {
-        .mutex = _MTX_INITIALIZER_NP,
+        .mutex = SIMPLE_MTX_INITIALIZER,
+};
+
+enum gem_type {
+        GEM_I915,
+        GEM_AMDGPU,
+        GEM_DUMB
 };
 
 /** Per-GEM-fd state for the simulator. */
@@ -90,6 +100,9 @@ struct vc4_simulator_file {
 
         /** Mapping from GEM handle to struct vc4_simulator_bo * */
         struct hash_table *bo_map;
+
+        /** for specific gpus, use their create ioctl. Otherwise use dumb bo. */
+        enum gem_type gem_type;
 };
 
 /** Wrapper for drm_vc4_bo tracking the simulator-specific state. */
@@ -129,6 +142,87 @@ vc4_get_simulator_file_for_fd(int fd)
 
 #define PAGE_ALIGN2		12
 
+static int
+vc4_gem_mmap(int fd, uint32_t handle, uint64_t *offset)
+{
+        struct vc4_simulator_file *file = vc4_get_simulator_file_for_fd(fd);
+        int ret;
+
+        assert(offset);
+
+        switch (file->gem_type) {
+        case GEM_I915:
+        {
+                struct drm_i915_gem_mmap_gtt map = {
+                        .handle = handle,
+                };
+                ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_MMAP_GTT, &map);
+                *offset = map.offset;
+                break;
+        }
+        case GEM_AMDGPU:
+        {
+                union drm_amdgpu_gem_mmap map = { 0 };
+                map.in.handle = handle;
+                ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_GEM_MMAP, &map);
+                *offset = map.out.addr_ptr;
+                break;
+        }
+        default:
+        {
+                struct drm_mode_map_dumb map = {
+                        .handle = handle,
+                };
+                ret = drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+                *offset = map.offset;
+        }
+        }
+
+        return ret;
+}
+
+static int
+vc4_gem_create(int fd, uint64_t size, uint32_t *handle)
+{
+        struct vc4_simulator_file *file = vc4_get_simulator_file_for_fd(fd);
+        int ret;
+
+        assert(handle);
+
+        switch (file->gem_type) {
+        case GEM_I915:
+        {
+                struct drm_i915_gem_create create = {
+                        .size = size,
+                };
+                ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create);
+                *handle = create.handle;
+                break;
+        }
+        case GEM_AMDGPU:
+        {
+                union drm_amdgpu_gem_create create = { 0 };
+                create.in.bo_size = size;
+                ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_GEM_CREATE, &create);
+                *handle = create.out.handle;
+                break;
+        }
+        default:
+        {
+                struct drm_mode_create_dumb create = {
+                        .width = 128,
+                        .bpp = 8,
+                        .height = (size + 127) / 128,
+                };
+                ret = drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create);
+                assert(create.size >= size);
+                *handle = create.handle;
+        }
+        }
+
+        return ret;
+}
+
 /**
  * Allocates space in simulator memory and returns a tracking struct for it
  * that also contains the drm_gem_cma_object struct.
@@ -147,9 +241,9 @@ vc4_create_simulator_bo(int fd, int handle, unsigned size)
         sim_bo->handle = handle;
 
         /* Allocate space for the buffer in simulator memory. */
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         sim_bo->block = u_mmAllocMem(sim_state.heap, size + 4, PAGE_ALIGN2, 0);
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
         assert(sim_bo->block);
 
         obj->base.size = size;
@@ -163,15 +257,14 @@ vc4_create_simulator_bo(int fd, int handle, unsigned size)
          * don't need to go in the lookup table.
          */
         if (handle != 0) {
-                mtx_lock(&sim_state.mutex);
+                simple_mtx_lock(&sim_state.mutex);
                 _mesa_hash_table_insert(file->bo_map, int_to_key(handle), bo);
-                mtx_unlock(&sim_state.mutex);
+                simple_mtx_unlock(&sim_state.mutex);
 
                 /* Map the GEM buffer for copy in/out to the simulator. */
-                struct drm_mode_map_dumb map = {
-                        .handle = handle,
-                };
-                int ret = drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+                uint64_t mmap_offset;
+                int ret = vc4_gem_mmap(fd, handle, &mmap_offset);
+
                 if (ret) {
                         fprintf(stderr, "Failed to get MMAP offset: %d\n",
                                 errno);
@@ -179,10 +272,10 @@ vc4_create_simulator_bo(int fd, int handle, unsigned size)
                 }
                 sim_bo->gem_vaddr = mmap(NULL, obj->base.size,
                                          PROT_READ | PROT_WRITE, MAP_SHARED,
-                                         fd, map.offset);
+                                         fd, mmap_offset);
                 if (sim_bo->gem_vaddr == MAP_FAILED) {
                         fprintf(stderr, "mmap of bo %d (offset 0x%016llx, size %d) failed\n",
-                                handle, (long long)map.offset, (int)obj->base.size);
+                                handle, (long long)mmap_offset, (int)obj->base.size);
                         abort();
                 }
         }
@@ -205,23 +298,23 @@ vc4_free_simulator_bo(struct vc4_simulator_bo *sim_bo)
         if (sim_bo->gem_vaddr)
                 munmap(sim_bo->gem_vaddr, obj->base.size);
 
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         u_mmFreeMem(sim_bo->block);
         if (sim_bo->handle) {
                 _mesa_hash_table_remove_key(sim_file->bo_map,
                                             int_to_key(sim_bo->handle));
         }
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
         ralloc_free(sim_bo);
 }
 
 static struct vc4_simulator_bo *
 vc4_get_simulator_bo(struct vc4_simulator_file *file, int gem_handle)
 {
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         struct hash_entry *entry =
                 _mesa_hash_table_search(file->bo_map, int_to_key(gem_handle));
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
 
         return entry ? entry->data : NULL;
 }
@@ -285,7 +378,7 @@ vc4_dump_to_file(struct vc4_exec_info *exec)
         struct drm_vc4_get_hang_state_bo *bo_state;
         unsigned int dump_version = 0;
 
-        if (!(vc4_debug & VC4_DEBUG_DUMP))
+        if (!VC4_DBG(DUMP))
                 return;
 
         state = calloc(1, sizeof(*state));
@@ -385,7 +478,7 @@ vc4_simulator_submit_cl_ioctl(int fd, struct drm_vc4_submit_cl *args)
         if (ret)
                 return ret;
 
-        if (vc4_debug & VC4_DEBUG_CL) {
+        if (VC4_DBG(CL)) {
                 fprintf(stderr, "RCL:\n");
                 vc4_dump_cl(sim_state.mem + exec.ct1ca,
                             exec.ct1ea - exec.ct1ca, true);
@@ -421,7 +514,7 @@ vc4_simulator_submit_cl_ioctl(int fd, struct drm_vc4_submit_cl *args)
         list_for_each_entry_safe(struct drm_vc4_bo, bo, &exec.unref_list,
                                  unref_head) {
                 struct vc4_simulator_bo *sim_bo = (struct vc4_simulator_bo *)bo;
-                struct drm_gem_cma_object *obj = &sim_bo->base.base;
+                ASSERTED struct drm_gem_cma_object *obj = &sim_bo->base.base;
 		list_del(&bo->unref_head);
                 assert(*(uint32_t *)(obj->vaddr + obj->base.size) ==
                        BO_SENTINEL);
@@ -451,19 +544,9 @@ void vc4_simulator_open_from_handle(int fd, int handle, uint32_t size)
 static int
 vc4_simulator_create_bo_ioctl(int fd, struct drm_vc4_create_bo *args)
 {
-        int ret;
-        struct drm_mode_create_dumb create = {
-                .width = 128,
-                .bpp = 8,
-                .height = (args->size + 127) / 128,
-        };
+        int ret = vc4_gem_create(fd, args->size, &(args->handle));
 
-        ret = drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create);
-        assert(create.size >= args->size);
-
-        args->handle = create.handle;
-
-        vc4_create_simulator_bo(fd, create.handle, args->size);
+        vc4_create_simulator_bo(fd, args->handle, args->size);
 
         return ret;
 }
@@ -478,22 +561,13 @@ static int
 vc4_simulator_create_shader_bo_ioctl(int fd,
                                      struct drm_vc4_create_shader_bo *args)
 {
-        int ret;
-        struct drm_mode_create_dumb create = {
-                .width = 128,
-                .bpp = 8,
-                .height = (args->size + 127) / 128,
-        };
+        int ret = vc4_gem_create(fd, args->size, &(args->handle));
 
-        ret = drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create);
         if (ret)
                 return ret;
-        assert(create.size >= args->size);
-
-        args->handle = create.handle;
 
         struct vc4_simulator_bo *sim_bo =
-                vc4_create_simulator_bo(fd, create.handle, args->size);
+                vc4_create_simulator_bo(fd, args->handle, args->size);
         struct drm_vc4_bo *drm_bo = &sim_bo->base;
         struct drm_gem_cma_object *obj = &drm_bo->base;
 
@@ -520,13 +594,9 @@ vc4_simulator_create_shader_bo_ioctl(int fd,
 static int
 vc4_simulator_mmap_bo_ioctl(int fd, struct drm_vc4_mmap_bo *args)
 {
-        int ret;
-        struct drm_mode_map_dumb map = {
-                .handle = args->handle,
-        };
-
-        ret = drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
-        args->offset = map.offset;
+        uint64_t mmap_offset;
+        int ret = vc4_gem_mmap(fd, args->handle, &mmap_offset);
+        args->offset = mmap_offset;
 
         return ret;
 }
@@ -628,9 +698,9 @@ vc4_simulator_ioctl(int fd, unsigned long request, void *args)
 static void
 vc4_simulator_init_global(void)
 {
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         if (sim_state.refcount++) {
-                mtx_unlock(&sim_state.mutex);
+                simple_mtx_unlock(&sim_state.mutex);
                 return;
         }
 
@@ -657,7 +727,7 @@ vc4_simulator_init_global(void)
         simpenrose_supply_overflow_mem(sim_state.overflow->ofs,
                                        sim_state.overflow->size);
 
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
 
         sim_state.fd_map =
                 _mesa_hash_table_create(NULL,
@@ -677,10 +747,18 @@ vc4_simulator_init(struct vc4_screen *screen)
                                         _mesa_hash_pointer,
                                         _mesa_key_pointer_equal);
 
-        mtx_lock(&sim_state.mutex);
+        drmVersionPtr version = drmGetVersion(screen->fd);
+        if (version && strncmp(version->name, "i915", version->name_len) == 0)
+                screen->sim_file->gem_type = GEM_I915;
+        else if (version && strncmp(version->name, "amdgpu", version->name_len) == 0)
+                screen->sim_file->gem_type = GEM_AMDGPU;
+        else
+                screen->sim_file->gem_type = GEM_DUMB;
+        drmFreeVersion(version);
+        simple_mtx_lock(&sim_state.mutex);
         _mesa_hash_table_insert(sim_state.fd_map, int_to_key(screen->fd + 1),
                                 screen->sim_file);
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
 
         screen->sim_file->dev.screen = screen;
 }
@@ -688,14 +766,14 @@ vc4_simulator_init(struct vc4_screen *screen)
 void
 vc4_simulator_destroy(struct vc4_screen *screen)
 {
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         if (!--sim_state.refcount) {
                 _mesa_hash_table_destroy(sim_state.fd_map, NULL);
                 u_mmDestroy(sim_state.heap);
                 free(sim_state.mem);
                 /* No memsetting it, because it contains the mutex. */
         }
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
 }
 
 #endif /* USE_VC4_SIMULATOR */

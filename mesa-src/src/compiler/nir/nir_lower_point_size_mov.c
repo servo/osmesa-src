@@ -31,50 +31,62 @@
  * OpenGL ES level hardware that lack constant point-size hardware state.
  */
 
-static bool
-lower_impl(nir_function_impl *impl,
-           const gl_state_index16 *pointsize_state_tokens,
-           nir_variable *out)
+static void
+lower_point_size_mov_after(nir_builder *b, nir_variable *in)
 {
-   nir_shader *shader = impl->function->shader;
-   nir_builder b;
-   nir_variable *in;
+   nir_def *load = nir_load_var(b, in);
+   load = nir_fclamp(b, nir_channel(b, load, 0), nir_channel(b, load, 1), nir_channel(b, load, 2));
+   nir_store_output(b, load, nir_imm_int(b, 0),
+                    .io_semantics.location = VARYING_SLOT_PSIZ);
+}
 
-   nir_builder_init(&b, impl);
-   b.cursor = nir_before_cf_list(&impl->body);
-
-   in = nir_variable_create(shader, nir_var_uniform,
-                            glsl_float_type(), "gl_PointSizeClampedMESA");
-   in->num_state_slots = 1;
-   in->state_slots = ralloc_array(in, nir_state_slot, 1);
-   memcpy(in->state_slots[0].tokens,
-         pointsize_state_tokens,
-         sizeof(in->state_slots[0].tokens));
-
-   if (!out) {
-      out = nir_variable_create(shader, nir_var_shader_out,
-                                glsl_float_type(), "gl_PointSize");
-      out->data.location = VARYING_SLOT_PSIZ;
+static bool
+lower_point_size_mov(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   nir_variable *var = NULL;
+   switch (intr->intrinsic) {
+   case nir_intrinsic_store_output:
+   case nir_intrinsic_store_per_vertex_output:
+   case nir_intrinsic_store_per_view_output:
+   case nir_intrinsic_store_per_primitive_output: {
+      nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
+      if (sem.location != VARYING_SLOT_PSIZ)
+         return false;
+      break;
    }
-
-   nir_copy_var(&b, out, in);
-
-   nir_metadata_preserve(impl, nir_metadata_block_index |
-                               nir_metadata_dominance);
+   default:
+      return false;
+   }
+   b->cursor = nir_after_instr(&intr->instr);
+   lower_point_size_mov_after(b, data);
+   if (var && !var->data.explicit_location)
+      nir_instr_remove(&intr->instr);
    return true;
 }
 
-void
+bool
 nir_lower_point_size_mov(nir_shader *shader,
                          const gl_state_index16 *pointsize_state_tokens)
 {
    assert(shader->info.stage != MESA_SHADER_FRAGMENT &&
           shader->info.stage != MESA_SHADER_COMPUTE);
+   assert(shader->info.io_lowered);
 
-   nir_variable *out =
-      nir_find_variable_with_location(shader, nir_var_shader_out,
-                                      VARYING_SLOT_PSIZ);
+   bool progress = false;
+   nir_metadata preserved = nir_metadata_control_flow;
+   nir_variable *in = nir_state_variable_create(shader, glsl_vec4_type(),
+                                                "gl_PointSizeClampedMESA",
+                                                pointsize_state_tokens);
+   if (shader->info.outputs_written & VARYING_BIT_PSIZ) {
+      progress = nir_shader_intrinsics_pass(shader, lower_point_size_mov, preserved, in);
+   } else {
+      nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+      nir_builder b = nir_builder_at(nir_before_impl(impl));
 
-   lower_impl(nir_shader_get_entrypoint(shader), pointsize_state_tokens,
-              out);
+      lower_point_size_mov_after(&b, in);
+      shader->info.outputs_written |= VARYING_BIT_PSIZ;
+      progress = true;
+      nir_metadata_preserve(impl, preserved);
+   }
+   return progress;
 }

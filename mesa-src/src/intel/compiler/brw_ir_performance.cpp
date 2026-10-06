@@ -23,7 +23,6 @@
 
 #include "brw_eu.h"
 #include "brw_fs.h"
-#include "brw_vec4.h"
 #include "brw_cfg.h"
 
 using namespace brw;
@@ -33,58 +32,56 @@ namespace {
     * Enumeration representing the various asynchronous units that can run
     * computations in parallel on behalf of a shader thread.
     */
-   enum unit {
+   enum intel_eu_unit {
       /** EU front-end. */
-      unit_fe,
+      EU_UNIT_FE,
       /** EU FPU0 (Note that co-issue to FPU1 is currently not modeled here). */
-      unit_fpu,
-      /** Extended Math unit (AKA FPU1 on Gen8-11, part of the EU on Gen6+). */
-      unit_em,
+      EU_UNIT_FPU,
+      /** Extended Math unit (AKA FPU1 on Gfx8-11, part of the EU on Gfx6+). */
+      EU_UNIT_EM,
       /** Sampler shared function. */
-      unit_sampler,
+      EU_UNIT_SAMPLER,
       /** Pixel Interpolator shared function. */
-      unit_pi,
+      EU_UNIT_PI,
       /** Unified Return Buffer shared function. */
-      unit_urb,
+      EU_UNIT_URB,
       /** Data Port Data Cache shared function. */
-      unit_dp_dc,
+      EU_UNIT_DP_DC,
       /** Data Port Render Cache shared function. */
-      unit_dp_rc,
+      EU_UNIT_DP_RC,
       /** Data Port Constant Cache shared function. */
-      unit_dp_cc,
+      EU_UNIT_DP_CC,
       /** Message Gateway shared function. */
-      unit_gateway,
+      EU_UNIT_GATEWAY,
       /** Thread Spawner shared function. */
-      unit_spawner,
-      /* unit_vme, */
-      /* unit_cre, */
+      EU_UNIT_SPAWNER,
+      /* EU_UNIT_VME, */
+      /* EU_UNIT_CRE, */
       /** Number of asynchronous units currently tracked. */
-      num_units,
+      EU_NUM_UNITS,
       /** Dummy unit for instructions that don't consume runtime from the above. */
-      unit_null = num_units
+      EU_UNIT_NULL = EU_NUM_UNITS
    };
 
    /**
     * Enumeration representing a computation result another computation can
     * potentially depend on.
     */
-   enum dependency_id {
+   enum intel_eu_dependency_id {
       /* Register part of the GRF. */
-      dependency_id_grf0 = 0,
-      /* Register part of the MRF.  Only used on Gen4-6. */
-      dependency_id_mrf0 = dependency_id_grf0 + BRW_MAX_GRF,
+      EU_DEPENDENCY_ID_GRF0 = 0,
       /* Address register part of the ARF. */
-      dependency_id_addr0 = dependency_id_mrf0 + 24,
+      EU_DEPENDENCY_ID_ADDR0 = EU_DEPENDENCY_ID_GRF0 + XE3_MAX_GRF,
       /* Accumulator register part of the ARF. */
-      dependency_id_accum0 = dependency_id_addr0 + 1,
+      EU_DEPENDENCY_ID_ACCUM0 = EU_DEPENDENCY_ID_ADDR0 + 1,
       /* Flag register part of the ARF. */
-      dependency_id_flag0 = dependency_id_accum0 + 12,
-      /* SBID token write completion.  Only used on Gen12+. */
-      dependency_id_sbid_wr0 = dependency_id_flag0 + 8,
-      /* SBID token read completion.  Only used on Gen12+. */
-      dependency_id_sbid_rd0 = dependency_id_sbid_wr0 + 16,
+      EU_DEPENDENCY_ID_FLAG0 = EU_DEPENDENCY_ID_ACCUM0 + 12,
+      /* SBID token write completion.  Only used on Gfx12+. */
+      EU_DEPENDENCY_ID_SBID_WR0 = EU_DEPENDENCY_ID_FLAG0 + 8,
+      /* SBID token read completion.  Only used on Gfx12+. */
+      EU_DEPENDENCY_ID_SBID_RD0 = EU_DEPENDENCY_ID_SBID_WR0 + 32,
       /* Number of computation dependencies currently tracked. */
-      num_dependency_ids = dependency_id_sbid_rd0 + 16
+      EU_NUM_DEPENDENCY_IDS = EU_DEPENDENCY_ID_SBID_RD0 + 32
    };
 
    /**
@@ -96,17 +93,17 @@ namespace {
        * Time at which a given unit will be ready to execute the next
        * computation, in clock units.
        */
-      unsigned unit_ready[num_units];
+      unsigned unit_ready[EU_NUM_UNITS];
       /**
        * Time at which an instruction dependent on a given dependency ID will
        * be ready to execute, in clock units.
        */
-      unsigned dep_ready[num_dependency_ids];
+      unsigned dep_ready[EU_NUM_DEPENDENCY_IDS];
       /**
        * Aggregated utilization of a given unit excluding idle cycles,
        * in clock units.
        */
-      float unit_busy[num_units];
+      float unit_busy[EU_NUM_UNITS];
       /**
        * Factor of the overhead of a computation accounted for in the
        * aggregated utilization calculation.
@@ -120,61 +117,49 @@ namespace {
     * instructions.
     */
    struct instruction_info {
-      instruction_info(const gen_device_info *devinfo, const fs_inst *inst) :
-         devinfo(devinfo), op(inst->opcode),
+      instruction_info(const struct brw_isa_info *isa, const fs_inst *inst) :
+         isa(isa), devinfo(isa->devinfo), op(inst->opcode),
          td(inst->dst.type), sd(DIV_ROUND_UP(inst->size_written, REG_SIZE)),
          tx(get_exec_type(inst)), sx(0), ss(0),
-         sc(has_bank_conflict(devinfo, inst) ? sd : 0),
+         sc(has_bank_conflict(isa, inst) ? sd : 0),
          desc(inst->desc), sfid(inst->sfid)
       {
          /* We typically want the maximum source size, except for split send
           * messages which require the total size.
           */
          if (inst->opcode == SHADER_OPCODE_SEND) {
-            ss = DIV_ROUND_UP(inst->size_read(2), REG_SIZE) +
-                 DIV_ROUND_UP(inst->size_read(3), REG_SIZE);
+            ss = DIV_ROUND_UP(inst->size_read(devinfo, 2), REG_SIZE) +
+                 DIV_ROUND_UP(inst->size_read(devinfo, 3), REG_SIZE);
+         } else if (inst->opcode == SHADER_OPCODE_SEND_GATHER) {
+            ss = inst->mlen;
+            /* If haven't lowered yet, count the sources. */
+            if (!ss) {
+               for (int i = 3; i < inst->sources; i++)
+                  ss += DIV_ROUND_UP(inst->size_read(devinfo, i), REG_SIZE);
+            }
          } else {
             for (unsigned i = 0; i < inst->sources; i++)
-               ss = MAX2(ss, DIV_ROUND_UP(inst->size_read(i), REG_SIZE));
+               ss = MAX2(ss, DIV_ROUND_UP(inst->size_read(devinfo, i), REG_SIZE));
          }
 
          /* Convert the execution size to GRF units. */
-         sx = DIV_ROUND_UP(inst->exec_size * type_sz(tx), REG_SIZE);
+         sx = DIV_ROUND_UP(inst->exec_size * brw_type_size_bytes(tx), REG_SIZE);
 
          /* 32x32 integer multiplication has half the usual ALU throughput.
           * Treat it as double-precision.
           */
          if ((inst->opcode == BRW_OPCODE_MUL || inst->opcode == BRW_OPCODE_MAD) &&
-             !brw_reg_type_is_floating_point(tx) && type_sz(tx) == 4 &&
-             type_sz(inst->src[0].type) == type_sz(inst->src[1].type))
-            tx = brw_int_type(8, tx == BRW_REGISTER_TYPE_D);
+             !brw_type_is_float(tx) && brw_type_size_bytes(tx) == 4 &&
+             brw_type_size_bytes(inst->src[0].type) == brw_type_size_bytes(inst->src[1].type))
+            tx = brw_int_type(8, tx == BRW_TYPE_D);
+
+         rcount = inst->opcode == BRW_OPCODE_DPAS ? inst->rcount : 0;
       }
 
-      instruction_info(const gen_device_info *devinfo,
-                       const vec4_instruction *inst) :
-         devinfo(devinfo), op(inst->opcode),
-         td(inst->dst.type), sd(DIV_ROUND_UP(inst->size_written, REG_SIZE)),
-         tx(get_exec_type(inst)), sx(0), ss(0), sc(0),
-         desc(inst->desc), sfid(inst->sfid)
-      {
-         /* Compute the maximum source size. */
-         for (unsigned i = 0; i < ARRAY_SIZE(inst->src); i++)
-            ss = MAX2(ss, DIV_ROUND_UP(inst->size_read(i), REG_SIZE));
-
-         /* Convert the execution size to GRF units. */
-         sx = DIV_ROUND_UP(inst->exec_size * type_sz(tx), REG_SIZE);
-
-         /* 32x32 integer multiplication has half the usual ALU throughput.
-          * Treat it as double-precision.
-          */
-         if ((inst->opcode == BRW_OPCODE_MUL || inst->opcode == BRW_OPCODE_MAD) &&
-             !brw_reg_type_is_floating_point(tx) && type_sz(tx) == 4 &&
-             type_sz(inst->src[0].type) == type_sz(inst->src[1].type))
-            tx = brw_int_type(8, tx == BRW_REGISTER_TYPE_D);
-      }
-
+      /** ISA encoding information */
+      const struct brw_isa_info *isa;
       /** Device information. */
-      const struct gen_device_info *devinfo;
+      const struct intel_device_info *devinfo;
       /** Instruction opcode. */
       opcode op;
       /** Destination type. */
@@ -193,6 +178,8 @@ namespace {
       uint32_t desc;
       /** Send message shared function ID. */
       uint8_t sfid;
+      /** Repeat count for DPAS instructions. */
+      uint8_t rcount;
    };
 
    /**
@@ -200,14 +187,15 @@ namespace {
     * the program.
     */
    struct perf_desc {
-      perf_desc(unit u, int df, int db, int ls, int ld, int la, int lf) :
+      perf_desc(enum intel_eu_unit u, int df, int db,
+                int ls, int ld, int la, int lf) :
          u(u), df(df), db(db), ls(ls), ld(ld), la(la), lf(lf) {}
 
       /**
        * Back-end unit its runtime shall be accounted to, in addition to the
        * EU front-end which is always assumed to be involved.
        */
-      unit u;
+      enum intel_eu_unit u;
       /**
        * Overhead cycles from the time that the EU front-end starts executing
        * the instruction until it's ready to execute the next instruction.
@@ -259,7 +247,7 @@ namespace {
     * the approximation of timing X.
     */
    perf_desc
-   calculate_desc(const instruction_info &info, unit u,
+   calculate_desc(const instruction_info &info, enum intel_eu_unit u,
                   int df_1, int df_sd, int df_sc,
                   int db_1, int db_sx,
                   int ls_1, int ld_1, int la_1, int lf_1,
@@ -280,7 +268,7 @@ namespace {
     * Most timing parameters are obtained from the multivariate linear
     * regression of a sample of empirical timings measured using the tm0
     * register (as can be done today by using the shader_time debugging
-    * option).  The Gen4-5 math timings are obtained from BSpec Volume 5c.3
+    * option).  The Gfx4-5 math timings are obtained from BSpec Volume 5c.3
     * "Shared Functions - Extended Math", Section 3.2 "Performance".
     * Parameters marked XXX shall be considered low-quality, they're possibly
     * high variance or completely guessed in cases where experimental data was
@@ -289,7 +277,7 @@ namespace {
    const perf_desc
    instruction_desc(const instruction_info &info)
    {
-      const struct gen_device_info *devinfo = info.devinfo;
+      const struct intel_device_info *devinfo = info.devinfo;
 
       switch (info.op) {
       case BRW_OPCODE_SYNC:
@@ -300,10 +288,8 @@ namespace {
       case BRW_OPCODE_XOR:
       case BRW_OPCODE_SHR:
       case BRW_OPCODE_SHL:
-      case BRW_OPCODE_DIM:
       case BRW_OPCODE_ASR:
       case BRW_OPCODE_CMPN:
-      case BRW_OPCODE_F16TO32:
       case BRW_OPCODE_BFREV:
       case BRW_OPCODE_BFI1:
       case BRW_OPCODE_AVG:
@@ -322,172 +308,107 @@ namespace {
       case BRW_OPCODE_ROR:
       case BRW_OPCODE_ROL:
       case BRW_OPCODE_SUBB:
-      case BRW_OPCODE_SAD2:
-      case BRW_OPCODE_SADA2:
       case BRW_OPCODE_LINE:
       case BRW_OPCODE_NOP:
       case SHADER_OPCODE_CLUSTER_BROADCAST:
+      case SHADER_OPCODE_SCRATCH_HEADER:
       case FS_OPCODE_DDX_COARSE:
       case FS_OPCODE_DDX_FINE:
       case FS_OPCODE_DDY_COARSE:
       case FS_OPCODE_PIXEL_X:
       case FS_OPCODE_PIXEL_Y:
-      case FS_OPCODE_SET_SAMPLE_ID:
-      case VEC4_OPCODE_MOV_BYTES:
-      case VEC4_OPCODE_UNPACK_UNIFORM:
-      case VEC4_OPCODE_DOUBLE_TO_F32:
-      case VEC4_OPCODE_DOUBLE_TO_D32:
-      case VEC4_OPCODE_DOUBLE_TO_U32:
-      case VEC4_OPCODE_TO_DOUBLE:
-      case VEC4_OPCODE_PICK_LOW_32BIT:
-      case VEC4_OPCODE_PICK_HIGH_32BIT:
-      case VEC4_OPCODE_SET_LOW_32BIT:
-      case VEC4_OPCODE_SET_HIGH_32BIT:
-      case GS_OPCODE_SET_DWORD_2:
-      case GS_OPCODE_SET_WRITE_OFFSET:
-      case GS_OPCODE_SET_VERTEX_COUNT:
-      case GS_OPCODE_PREPARE_CHANNEL_MASKS:
-      case GS_OPCODE_SET_CHANNEL_MASKS:
-      case GS_OPCODE_GET_INSTANCE_ID:
-      case GS_OPCODE_SET_PRIMITIVE_ID:
-      case GS_OPCODE_SVB_SET_DST_INDEX:
-      case TCS_OPCODE_SRC0_010_IS_ZERO:
-      case TCS_OPCODE_GET_PRIMITIVE_ID:
-      case TES_OPCODE_GET_PRIMITIVE_ID:
-         if (devinfo->gen >= 11) {
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
+         if (devinfo->ver >= 11) {
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 0, 0, 2,
                                   0, 10, 6 /* XXX */, 14, 0, 0);
-         } else if (devinfo->gen >= 8) {
-            if (type_sz(info.tx) > 4)
-               return calculate_desc(info, unit_fpu, 0, 4, 0, 0, 4,
+         } else {
+            if (brw_type_size_bytes(info.tx) > 4)
+               return calculate_desc(info, EU_UNIT_FPU, 0, 4, 0, 0, 4,
                                      0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
             else
-               return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
+               return calculate_desc(info, EU_UNIT_FPU, 0, 2, 0, 0, 2,
                                      0, 8, 4, 12, 0, 0);
-         } else if (devinfo->is_haswell) {
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 10, 6 /* XXX */, 16, 0, 0);
-         } else {
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 12, 8 /* XXX */, 18, 0, 0);
          }
 
       case BRW_OPCODE_MOV:
       case BRW_OPCODE_CMP:
       case BRW_OPCODE_ADD:
+      case BRW_OPCODE_ADD3:
       case BRW_OPCODE_MUL:
-         if (devinfo->gen >= 11) {
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
+      case SHADER_OPCODE_MOV_RELOC_IMM:
+         if (devinfo->ver >= 11) {
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 0, 0, 2,
                                   0, 10, 6, 14, 0, 0);
-         } else if (devinfo->gen >= 8) {
-            if (type_sz(info.tx) > 4)
-               return calculate_desc(info, unit_fpu, 0, 4, 0, 0, 4,
+         } else {
+            if (brw_type_size_bytes(info.tx) > 4)
+               return calculate_desc(info, EU_UNIT_FPU, 0, 4, 0, 0, 4,
                                      0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
             else
-               return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
+               return calculate_desc(info, EU_UNIT_FPU, 0, 2, 0, 0, 2,
                                      0, 8, 4, 12, 0, 0);
-         } else if (devinfo->is_haswell) {
-            if (info.tx == BRW_REGISTER_TYPE_F)
-               return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                     0, 12, 8 /* XXX */, 18, 0, 0);
-            else
-               return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                     0, 10, 6 /* XXX */, 16, 0, 0);
-         } else if (devinfo->gen >= 7) {
-            if (info.tx == BRW_REGISTER_TYPE_F)
-               return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                     0, 14, 10 /* XXX */, 20, 0, 0);
-            else
-               return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                     0, 12, 8 /* XXX */, 18, 0, 0);
-         } else {
-            return calculate_desc(info, unit_fpu, 0, 2 /* XXX */, 0,
-                                  0, 2 /* XXX */,
-                                  0, 12 /* XXX */, 8 /* XXX */, 18 /* XXX */,
-                                  0, 0);
          }
 
       case BRW_OPCODE_BFE:
       case BRW_OPCODE_BFI2:
       case BRW_OPCODE_CSEL:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 1, 0, 2,
                                   0, 10, 6 /* XXX */, 14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                  0, 10, 6 /* XXX */, 16 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                  0, 12, 8 /* XXX */, 18 /* XXX */, 0, 0);
          else
-            abort();
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 1, 0, 2,
+                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
 
       case BRW_OPCODE_MAD:
-         if (devinfo->gen >= 11) {
-            return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
+         if (devinfo->ver >= 11) {
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 1, 0, 2,
                                   0, 10, 6 /* XXX */, 14 /* XXX */, 0, 0);
-         } else if (devinfo->gen >= 8) {
-            if (type_sz(info.tx) > 4)
-               return calculate_desc(info, unit_fpu, 0, 4, 1, 0, 4,
+         } else {
+            if (brw_type_size_bytes(info.tx) > 4)
+               return calculate_desc(info, EU_UNIT_FPU, 0, 4, 1, 0, 4,
                                      0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
             else
-               return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
+               return calculate_desc(info, EU_UNIT_FPU, 0, 2, 1, 0, 2,
                                      0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
-         } else if (devinfo->is_haswell) {
-            if (info.tx == BRW_REGISTER_TYPE_F)
-               return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                     0, 12, 8 /* XXX */, 18, 0, 0);
-            else
-               return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                     0, 10, 6 /* XXX */, 16, 0, 0);
-         } else if (devinfo->gen >= 7) {
-            if (info.tx == BRW_REGISTER_TYPE_F)
-               return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                     0, 14, 10 /* XXX */, 20, 0, 0);
-            else
-               return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                     0, 12, 8 /* XXX */, 18, 0, 0);
-         } else if (devinfo->gen >= 6) {
-            return calculate_desc(info, unit_fpu, 0, 2 /* XXX */, 1 /* XXX */,
-                                  0, 2 /* XXX */,
-                                  0, 12 /* XXX */, 8 /* XXX */, 18 /* XXX */,
-                                  0, 0);
-         } else {
-            abort();
          }
-
-      case BRW_OPCODE_F32TO16:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 0, 4, 0, 0, 4,
-                                  0, 10, 6 /* XXX */, 14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 0, 4, 0, 0, 4,
-                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 0, 4, 0, 0, 4,
-                                  0, 10, 6 /* XXX */, 16 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_fpu, 0, 4, 0, 0, 4,
-                                  0, 12, 8 /* XXX */, 18 /* XXX */, 0, 0);
-         else
-            abort();
 
       case BRW_OPCODE_DP4:
       case BRW_OPCODE_DPH:
       case BRW_OPCODE_DP3:
       case BRW_OPCODE_DP2:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 10, 6 /* XXX */, 16 /* XXX */, 0, 0);
+         return calculate_desc(info, EU_UNIT_FPU, 0, 2, 0, 0, 2,
+                               0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
+
+      case BRW_OPCODE_DP4A:
+         if (devinfo->ver >= 12)
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 1, 0, 2,
+                                  0, 10, 6 /* XXX */, 14 /* XXX */, 0, 0);
          else
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 12, 8 /* XXX */, 18 /* XXX */, 0, 0);
+            abort();
+
+      case BRW_OPCODE_DPAS: {
+         unsigned ld;
+
+         switch (info.rcount) {
+         case 1:
+            ld = 21;
+            break;
+         case 2:
+            ld = 22;
+            break;
+         case 8:
+         default:
+            ld = 32;
+            break;
+         }
+
+         /* DPAS cannot write the accumulator or the flags, so pass UINT_MAX
+          * for la and lf.
+          */
+         if (devinfo->verx10 >= 125)
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 1, 0, 2,
+                                  0, ld, UINT_MAX, UINT_MAX, 0, 0);
+         else
+            abort();
+      }
 
       case SHADER_OPCODE_RCP:
       case SHADER_OPCODE_RSQ:
@@ -496,89 +417,21 @@ namespace {
       case SHADER_OPCODE_LOG2:
       case SHADER_OPCODE_SIN:
       case SHADER_OPCODE_COS:
+         return calculate_desc(info, EU_UNIT_EM, -2, 4, 0, 0, 4,
+                               0, 16, 0, 0, 0, 0);
+
       case SHADER_OPCODE_POW:
+         return calculate_desc(info, EU_UNIT_EM, -2, 4, 0, 0, 8,
+                               0, 24, 0, 0, 0, 0);
+
       case SHADER_OPCODE_INT_QUOTIENT:
       case SHADER_OPCODE_INT_REMAINDER:
-         if (devinfo->gen >= 6) {
-            switch (info.op) {
-            case SHADER_OPCODE_RCP:
-            case SHADER_OPCODE_RSQ:
-            case SHADER_OPCODE_SQRT:
-            case SHADER_OPCODE_EXP2:
-            case SHADER_OPCODE_LOG2:
-            case SHADER_OPCODE_SIN:
-            case SHADER_OPCODE_COS:
-               if (devinfo->gen >= 8)
-                  return calculate_desc(info, unit_em, -2, 4, 0, 0, 4,
-                                        0, 16, 0, 0, 0, 0);
-               else if (devinfo->is_haswell)
-                  return calculate_desc(info, unit_em, 0, 2, 0, 0, 2,
-                                        0, 12, 0, 0, 0, 0);
-               else
-                  return calculate_desc(info, unit_em, 0, 2, 0, 0, 2,
-                                        0, 14, 0, 0, 0, 0);
-
-            case SHADER_OPCODE_POW:
-               if (devinfo->gen >= 8)
-                  return calculate_desc(info, unit_em, -2, 4, 0, 0, 8,
-                                        0, 24, 0, 0, 0, 0);
-               else if (devinfo->is_haswell)
-                  return calculate_desc(info, unit_em, 0, 2, 0, 0, 4,
-                                        0, 20, 0, 0, 0, 0);
-               else
-                  return calculate_desc(info, unit_em, 0, 2, 0, 0, 4,
-                                        0, 22, 0, 0, 0, 0);
-
-            case SHADER_OPCODE_INT_QUOTIENT:
-            case SHADER_OPCODE_INT_REMAINDER:
-               return calculate_desc(info, unit_em, 2, 0, 0, 26, 0,
-                                     0, 28 /* XXX */, 0, 0, 0, 0);
-
-            default:
-               abort();
-            }
-         } else {
-            switch (info.op) {
-            case SHADER_OPCODE_RCP:
-               return calculate_desc(info, unit_em, 2, 0, 0, 0, 8,
-                                     0, 22, 0, 0, 0, 8);
-
-            case SHADER_OPCODE_RSQ:
-               return calculate_desc(info, unit_em, 2, 0, 0, 0, 16,
-                                     0, 44, 0, 0, 0, 8);
-
-            case SHADER_OPCODE_INT_QUOTIENT:
-            case SHADER_OPCODE_SQRT:
-            case SHADER_OPCODE_LOG2:
-               return calculate_desc(info, unit_em, 2, 0, 0, 0, 24,
-                                     0, 66, 0, 0, 0, 8);
-
-            case SHADER_OPCODE_INT_REMAINDER:
-            case SHADER_OPCODE_EXP2:
-               return calculate_desc(info, unit_em, 2, 0, 0, 0, 32,
-                                     0, 88, 0, 0, 0, 8);
-
-            case SHADER_OPCODE_SIN:
-            case SHADER_OPCODE_COS:
-               return calculate_desc(info, unit_em, 2, 0, 0, 0, 48,
-                                     0, 132, 0, 0, 0, 8);
-
-            case SHADER_OPCODE_POW:
-               return calculate_desc(info, unit_em, 2, 0, 0, 0, 64,
-                                     0, 176, 0, 0, 0, 8);
-
-            default:
-               abort();
-            }
-         }
+         return calculate_desc(info, EU_UNIT_EM, 2, 0, 0, 26, 0,
+                               0, 28 /* XXX */, 0, 0, 0, 0);
 
       case BRW_OPCODE_DO:
-         if (devinfo->gen >= 6)
-            return calculate_desc(info, unit_null, 0, 0, 0, 0, 0,
-                                  0, 0, 0, 0, 0, 0);
-         else
-            return calculate_desc(info, unit_null, 2 /* XXX */, 0, 0, 0, 0,
-                                  0, 0, 0, 0, 0, 0);
+         return calculate_desc(info, EU_UNIT_NULL, 0, 0, 0, 0, 0,
+                               0, 0, 0, 0, 0, 0);
 
       case BRW_OPCODE_IF:
       case BRW_OPCODE_ELSE:
@@ -586,521 +439,276 @@ namespace {
       case BRW_OPCODE_WHILE:
       case BRW_OPCODE_BREAK:
       case BRW_OPCODE_CONTINUE:
-      case FS_OPCODE_DISCARD_JUMP:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_null, 8, 0, 0, 0, 0,
-                                  0, 0, 0, 0, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_null, 6, 0, 0, 0, 0,
-                                  0, 0, 0, 0, 0, 0);
-         else
-            return calculate_desc(info, unit_null, 2, 0, 0, 0, 0,
-                                  0, 0, 0, 0, 0, 0);
+      case BRW_OPCODE_HALT:
+         return calculate_desc(info, EU_UNIT_NULL, 8, 0, 0, 0, 0,
+                               0, 0, 0, 0, 0, 0);
 
-      case FS_OPCODE_LINTERP:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 0, 4, 0, 0, 4,
-                                  0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 10, 6 /* XXX */, 16 /* XXX */, 0, 0);
-         else
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 12, 8 /* XXX */, 18 /* XXX */, 0, 0);
+      case BRW_OPCODE_PLN:
+         return calculate_desc(info, EU_UNIT_FPU, 0, 4, 0, 0, 4,
+                               0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
 
       case BRW_OPCODE_LRP:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 0, 4, 1, 0, 4,
-                                  0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                  0, 10, 6 /* XXX */, 16 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 6)
-            return calculate_desc(info, unit_fpu, 0, 2, 1, 0, 2,
-                                  0, 12, 8 /* XXX */, 18 /* XXX */, 0, 0);
-         else
-            abort();
+         return calculate_desc(info, EU_UNIT_FPU, 0, 4, 1, 0, 4,
+                               0, 12, 8 /* XXX */, 16 /* XXX */, 0, 0);
 
       case FS_OPCODE_PACK_HALF_2x16_SPLIT:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 20, 6, 0, 0, 6,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 20, 6, 0, 0, 6,
                                   0, 10 /* XXX */, 6 /* XXX */,
                                   14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 16, 6, 0, 0, 6,
+         else
+            return calculate_desc(info, EU_UNIT_FPU, 16, 6, 0, 0, 6,
                                   0, 8 /* XXX */, 4 /* XXX */,
                                   12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 20, 6, 0, 0, 6,
-                                  0, 10 /* XXX */, 6 /* XXX */,
-                                  16 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_fpu, 24, 6, 0, 0, 6,
-                                  0, 12 /* XXX */, 8 /* XXX */,
-                                  18 /* XXX */, 0, 0);
-         else
-            abort();
+
+      case SHADER_OPCODE_READ_ARCH_REG:
+         if (devinfo->ver >= 12) {
+            return calculate_desc(info, EU_UNIT_FPU, 20, 6, 0, 0, 6,
+                                  0, 10, 6 /* XXX */, 14, 0, 0);
+         } else {
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 0, 0, 2,
+                                  0, 8, 4, 12, 0, 0);
+         }
 
       case SHADER_OPCODE_MOV_INDIRECT:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 34, 0, 0, 34, 0,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 34, 0, 0, 34, 0,
                                   0, 10 /* XXX */, 6 /* XXX */,
                                   14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 34, 0, 0, 34, 0,
+         else
+            return calculate_desc(info, EU_UNIT_FPU, 34, 0, 0, 34, 0,
                                   0, 8 /* XXX */, 4 /* XXX */,
                                   12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 34, 0, 0, 34, 0,
-                                  0, 10 /* XXX */, 6 /* XXX */,
-                                  16 /* XXX */, 0, 0);
-         else
-            return calculate_desc(info, unit_fpu, 34, 0, 0, 34, 0,
-                                  0, 12 /* XXX */, 8 /* XXX */,
-                                  18 /* XXX */, 0, 0);
 
       case SHADER_OPCODE_BROADCAST:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 20 /* XXX */, 0, 0, 4, 0,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 20 /* XXX */, 0, 0, 4, 0,
                                   0, 10, 6 /* XXX */, 14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 18, 0, 0, 4, 0,
-                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 18, 0, 0, 4, 0,
-                                  0, 10, 6 /* XXX */, 16 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_fpu, 20, 0, 0, 4, 0,
-                                  0, 12, 8 /* XXX */, 18 /* XXX */, 0, 0);
          else
-            abort();
+            return calculate_desc(info, EU_UNIT_FPU, 18, 0, 0, 4, 0,
+                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
 
       case SHADER_OPCODE_FIND_LIVE_CHANNEL:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 2, 0, 0, 2, 0,
+      case SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL:
+      case SHADER_OPCODE_LOAD_LIVE_CHANNELS:
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 2, 0, 0, 2, 0,
                                   0, 10, 6 /* XXX */, 14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 2, 0, 0, 2, 0,
-                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 36, 0, 0, 6, 0,
-                                  0, 10, 6 /* XXX */, 16 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_fpu, 40, 0, 0, 6, 0,
-                                  0, 12, 8 /* XXX */, 18 /* XXX */, 0, 0);
          else
-            abort();
+            return calculate_desc(info, EU_UNIT_FPU, 2, 0, 0, 2, 0,
+                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
 
       case SHADER_OPCODE_RND_MODE:
       case SHADER_OPCODE_FLOAT_CONTROL_MODE:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 24 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 0, 0, 0, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 20 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 0, 0, 0, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 24 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 0, 0, 0, 0, 0);
-         else if (devinfo->gen >= 6)
-            return calculate_desc(info, unit_fpu, 28 /* XXX */, 0, 0,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 24 /* XXX */, 0, 0,
                                   4 /* XXX */, 0,
                                   0, 0, 0, 0, 0, 0);
          else
-            abort();
+            return calculate_desc(info, EU_UNIT_FPU, 20 /* XXX */, 0, 0,
+                                  4 /* XXX */, 0,
+                                  0, 0, 0, 0, 0, 0);
 
       case SHADER_OPCODE_SHUFFLE:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 44 /* XXX */, 0, 0,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 44 /* XXX */, 0, 0,
                                   44 /* XXX */, 0,
                                   0, 10 /* XXX */, 6 /* XXX */,
                                   14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 42 /* XXX */, 0, 0,
+         else
+            return calculate_desc(info, EU_UNIT_FPU, 42 /* XXX */, 0, 0,
                                   42 /* XXX */, 0,
                                   0, 8 /* XXX */, 4 /* XXX */,
                                   12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 0, 44 /* XXX */, 0,
-                                  0, 44 /* XXX */,
-                                  0, 10 /* XXX */, 6 /* XXX */,
-                                  16 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 6)
-            return calculate_desc(info, unit_fpu, 0, 46 /* XXX */, 0,
-                                  0, 46 /* XXX */,
-                                  0, 12 /* XXX */, 8 /* XXX */,
-                                  18 /* XXX */, 0, 0);
-         else
-            abort();
 
       case SHADER_OPCODE_SEL_EXEC:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 10 /* XXX */, 4 /* XXX */, 0,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 10 /* XXX */, 4 /* XXX */, 0,
                                   0, 4 /* XXX */,
                                   0, 10 /* XXX */, 6 /* XXX */,
                                   14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 8 /* XXX */, 4 /* XXX */, 0,
+         else
+            return calculate_desc(info, EU_UNIT_FPU, 8 /* XXX */, 4 /* XXX */, 0,
                                   0, 4 /* XXX */,
                                   0, 8 /* XXX */, 4 /* XXX */,
                                   12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 10 /* XXX */, 4 /* XXX */, 0,
-                                  0, 4 /* XXX */,
-                                  0, 10 /* XXX */, 6 /* XXX */,
-                                  16 /* XXX */, 0, 0);
-         else
-            return calculate_desc(info, unit_fpu, 12 /* XXX */, 4 /* XXX */, 0,
-                                  0, 4 /* XXX */,
-                                  0, 12 /* XXX */, 8 /* XXX */,
-                                  18 /* XXX */, 0, 0);
 
       case SHADER_OPCODE_QUAD_SWIZZLE:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 0 /* XXX */, 8 /* XXX */, 0,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 0 /* XXX */, 8 /* XXX */, 0,
                                   0, 8 /* XXX */,
                                   0, 10 /* XXX */, 6 /* XXX */,
                                   14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 0 /* XXX */, 8 /* XXX */, 0,
+         else
+            return calculate_desc(info, EU_UNIT_FPU, 0 /* XXX */, 8 /* XXX */, 0,
                                   0, 8 /* XXX */,
                                   0, 8 /* XXX */, 4 /* XXX */,
                                   12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 0 /* XXX */, 8 /* XXX */, 0,
-                                  0, 8 /* XXX */,
-                                  0, 10 /* XXX */, 6 /* XXX */,
-                                  16 /* XXX */, 0, 0);
-         else
-            return calculate_desc(info, unit_fpu, 0 /* XXX */, 8 /* XXX */, 0,
-                                  0, 8 /* XXX */,
-                                  0, 12 /* XXX */, 8 /* XXX */,
-                                  18 /* XXX */, 0, 0);
 
       case FS_OPCODE_DDY_FINE:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 0, 14, 0, 0, 4,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 0, 14, 0, 0, 4,
                                   0, 10, 6 /* XXX */, 14 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 12, 8 /* XXX */, 18 /* XXX */, 0, 0);
          else
-            return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
-                                  0, 14, 10 /* XXX */, 20 /* XXX */, 0, 0);
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2, 0, 0, 2,
+                                  0, 8, 4 /* XXX */, 12 /* XXX */, 0, 0);
 
       case FS_OPCODE_LOAD_LIVE_CHANNELS:
-         if (devinfo->gen >= 11)
-            return calculate_desc(info, unit_fpu, 2 /* XXX */, 0, 0,
+         if (devinfo->ver >= 11)
+            return calculate_desc(info, EU_UNIT_FPU, 2 /* XXX */, 0, 0,
                                   2 /* XXX */, 0,
                                   0, 0, 0, 10 /* XXX */, 0, 0);
-         else if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 0, 2 /* XXX */, 0,
+         else
+            return calculate_desc(info, EU_UNIT_FPU, 0, 2 /* XXX */, 0,
                                   0, 2 /* XXX */,
                                   0, 0, 0, 8 /* XXX */, 0, 0);
-         else
-            abort();
 
-      case VEC4_OPCODE_PACK_BYTES:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 4 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 8 /* XXX */, 4 /* XXX */, 12 /* XXX */,
-                                  0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 4 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 10 /* XXX */, 6 /* XXX */, 16 /* XXX */,
-                                  0, 0);
-         else
-            return calculate_desc(info, unit_fpu, 4 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 12 /* XXX */, 8 /* XXX */, 18 /* XXX */,
-                                  0, 0);
-
-      case VS_OPCODE_SET_SIMD4X2_HEADER_GEN9:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 12 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 8 /* XXX */, 4 /* XXX */, 12 /* XXX */,
-                                  0, 0);
-         else
-            abort();
-
-      case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
-      case TCS_OPCODE_GET_INSTANCE_ID:
-      case TCS_OPCODE_SET_INPUT_URB_OFFSETS:
-      case TCS_OPCODE_SET_OUTPUT_URB_OFFSETS:
-      case TES_OPCODE_CREATE_INPUT_READ_HEADER:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 22 /* XXX */, 0, 0,
-                                  6 /* XXX */, 0,
-                                  0, 8 /* XXX */, 4 /* XXX */, 12 /* XXX */,
-                                  0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 26 /* XXX */, 0, 0,
-                                  6 /* XXX */, 0,
-                                  0, 10 /* XXX */, 6 /* XXX */, 16 /* XXX */,
-                                  0, 0);
-         else
-            return calculate_desc(info, unit_fpu, 30 /* XXX */, 0, 0,
-                                  6 /* XXX */, 0,
-                                  0, 12 /* XXX */, 8 /* XXX */, 18 /* XXX */,
-                                  0, 0);
-
-      case GS_OPCODE_FF_SYNC_SET_PRIMITIVES:
-      case TCS_OPCODE_CREATE_BARRIER_HEADER:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 32 /* XXX */, 0, 0,
-                                  8 /* XXX */, 0,
-                                  0, 8 /* XXX */, 4 /* XXX */, 12 /* XXX */,
-                                  0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 38 /* XXX */, 0, 0,
-                                  8 /* XXX */, 0,
-                                  0, 10 /* XXX */, 6 /* XXX */, 16 /* XXX */,
-                                  0, 0);
-         else if (devinfo->gen >= 6)
-            return calculate_desc(info, unit_fpu, 44 /* XXX */, 0, 0,
-                                  8 /* XXX */, 0,
-                                  0, 12 /* XXX */, 8 /* XXX */, 18 /* XXX */,
-                                  0, 0);
-         else
-            abort();
-
-      case TES_OPCODE_ADD_INDIRECT_URB_OFFSET:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 12 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 8 /* XXX */, 4 /* XXX */, 12 /* XXX */,
-                                  0, 0);
-         else if (devinfo->is_haswell)
-            return calculate_desc(info, unit_fpu, 14 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 10 /* XXX */, 6 /* XXX */, 16 /* XXX */,
-                                  0, 0);
-         else if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_fpu, 16 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 12 /* XXX */, 8 /* XXX */, 18 /* XXX */,
-                                  0, 0);
-         else
-            abort();
-
-      case SHADER_OPCODE_TEX:
-      case FS_OPCODE_TXB:
-      case SHADER_OPCODE_TXD:
-      case SHADER_OPCODE_TXF:
-      case SHADER_OPCODE_TXF_LZ:
-      case SHADER_OPCODE_TXL:
-      case SHADER_OPCODE_TXL_LZ:
-      case SHADER_OPCODE_TXF_CMS:
-      case SHADER_OPCODE_TXF_CMS_W:
-      case SHADER_OPCODE_TXF_UMS:
-      case SHADER_OPCODE_TXF_MCS:
-      case SHADER_OPCODE_TXS:
-      case SHADER_OPCODE_LOD:
       case SHADER_OPCODE_GET_BUFFER_SIZE:
-      case SHADER_OPCODE_TG4:
-      case SHADER_OPCODE_TG4_OFFSET:
-      case SHADER_OPCODE_SAMPLEINFO:
-      case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN4:
-         return calculate_desc(info, unit_sampler, 2, 0, 0, 0, 16 /* XXX */,
+         return calculate_desc(info, EU_UNIT_SAMPLER, 2, 0, 0, 0, 16 /* XXX */,
                                8 /* XXX */, 750 /* XXX */, 0, 0,
                                2 /* XXX */, 0);
-
-      case SHADER_OPCODE_URB_READ_SIMD8:
-      case SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT:
-      case SHADER_OPCODE_URB_WRITE_SIMD8:
-      case SHADER_OPCODE_URB_WRITE_SIMD8_PER_SLOT:
-      case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED:
-      case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT:
-      case VEC4_OPCODE_URB_READ:
-      case VS_OPCODE_URB_WRITE:
-      case GS_OPCODE_URB_WRITE:
-      case GS_OPCODE_URB_WRITE_ALLOCATE:
-      case GS_OPCODE_THREAD_END:
-      case GS_OPCODE_FF_SYNC:
-      case TCS_OPCODE_URB_WRITE:
-      case TCS_OPCODE_RELEASE_INPUT:
-      case TCS_OPCODE_THREAD_END:
-         return calculate_desc(info, unit_urb, 2, 0, 0, 0, 6 /* XXX */,
-                               32 /* XXX */, 200 /* XXX */, 0, 0, 0, 0);
 
       case SHADER_OPCODE_MEMORY_FENCE:
       case SHADER_OPCODE_INTERLOCK:
          switch (info.sfid) {
-         case GEN6_SFID_DATAPORT_RENDER_CACHE:
-            if (devinfo->gen >= 7)
-               return calculate_desc(info, unit_dp_rc, 2, 0, 0, 30 /* XXX */, 0,
-                                     10 /* XXX */, 300 /* XXX */, 0, 0, 0, 0);
-            else
-               abort();
+         case GFX6_SFID_DATAPORT_RENDER_CACHE:
+            return calculate_desc(info, EU_UNIT_DP_RC, 2, 0, 0, 30 /* XXX */, 0,
+                                  10 /* XXX */, 300 /* XXX */, 0, 0, 0, 0);
 
-         case GEN7_SFID_DATAPORT_DATA_CACHE:
+         case BRW_SFID_URB:
+         case GFX7_SFID_DATAPORT_DATA_CACHE:
+         case GFX12_SFID_SLM:
+         case GFX12_SFID_TGM:
+         case GFX12_SFID_UGM:
          case HSW_SFID_DATAPORT_DATA_CACHE_1:
-            if (devinfo->gen >= 7)
-               return calculate_desc(info, unit_dp_dc, 2, 0, 0, 30 /* XXX */, 0,
-                                     10 /* XXX */, 100 /* XXX */, 0, 0, 0, 0);
-            else
-               abort();
+            return calculate_desc(info, EU_UNIT_DP_DC, 2, 0, 0, 30 /* XXX */, 0,
+                                  10 /* XXX */, 100 /* XXX */, 0, 0, 0, 0);
 
          default:
             abort();
          }
 
-      case SHADER_OPCODE_GEN4_SCRATCH_READ:
-      case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
-      case SHADER_OPCODE_GEN7_SCRATCH_READ:
-         return calculate_desc(info, unit_dp_dc, 2, 0, 0, 0, 8 /* XXX */,
-                               10 /* XXX */, 100 /* XXX */, 0, 0, 0, 0);
-
-      case VEC4_OPCODE_UNTYPED_ATOMIC:
-         if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_dp_dc, 2, 0, 0,
-                                  30 /* XXX */, 400 /* XXX */,
-                                  10 /* XXX */, 100 /* XXX */, 0, 0,
-                                  0, 400 /* XXX */);
-         else
-            abort();
-
-      case VEC4_OPCODE_UNTYPED_SURFACE_READ:
-      case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
-         if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_dp_dc, 2, 0, 0,
-                                  0, 20 /* XXX */,
-                                  10 /* XXX */, 100 /* XXX */, 0, 0,
-                                  0, 0);
-         else
-            abort();
-
-      case FS_OPCODE_FB_WRITE:
-      case FS_OPCODE_FB_READ:
-      case FS_OPCODE_REP_FB_WRITE:
-         return calculate_desc(info, unit_dp_rc, 2, 0, 0, 0, 450 /* XXX */,
-                               10 /* XXX */, 300 /* XXX */, 0, 0, 0, 0);
-
-      case GS_OPCODE_SVB_WRITE:
-         if (devinfo->gen >= 6)
-            return calculate_desc(info, unit_dp_rc, 2 /* XXX */, 0, 0,
-                                  0, 450 /* XXX */,
-                                  10 /* XXX */, 300 /* XXX */, 0, 0,
-                                  0, 0);
-         else
-            abort();
-
       case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
-      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7:
-         return calculate_desc(info, unit_dp_cc, 2, 0, 0, 0, 16 /* XXX */,
+         return calculate_desc(info, EU_UNIT_DP_CC, 2, 0, 0, 0, 16 /* XXX */,
                                10 /* XXX */, 100 /* XXX */, 0, 0, 0, 0);
-
-      case VS_OPCODE_PULL_CONSTANT_LOAD:
-      case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
-         return calculate_desc(info, unit_sampler, 2, 0, 0, 0, 16,
-                               8, 750, 0, 0, 2, 0);
 
       case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
       case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
       case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
-         if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_pi, 2, 0, 0, 14 /* XXX */, 0,
-                                  0, 90 /* XXX */, 0, 0, 0, 0);
-         else
-            abort();
+         return calculate_desc(info, EU_UNIT_PI, 2, 0, 0, 14 /* XXX */, 0,
+                               0, 90 /* XXX */, 0, 0, 0, 0);
 
       case SHADER_OPCODE_BARRIER:
-         if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_gateway, 90 /* XXX */, 0, 0,
-                                  0 /* XXX */, 0,
-                                  0, 0, 0, 0, 0, 0);
-         else
-            abort();
-
-      case CS_OPCODE_CS_TERMINATE:
-         if (devinfo->gen >= 7)
-            return calculate_desc(info, unit_spawner, 2, 0, 0, 0 /* XXX */, 0,
-                                  10 /* XXX */, 0, 0, 0, 0, 0);
-         else
-            abort();
+         return calculate_desc(info, EU_UNIT_GATEWAY, 90 /* XXX */, 0, 0,
+                               0 /* XXX */, 0,
+                               0, 0, 0, 0, 0, 0);
 
       case SHADER_OPCODE_SEND:
+      case SHADER_OPCODE_SEND_GATHER:
          switch (info.sfid) {
-         case GEN6_SFID_DATAPORT_RENDER_CACHE:
-            if (devinfo->gen >= 7) {
-               switch (brw_dp_desc_msg_type(devinfo, info.desc)) {
-               case GEN7_DATAPORT_RC_TYPED_ATOMIC_OP:
-                  return calculate_desc(info, unit_dp_rc, 2, 0, 0,
-                                        30 /* XXX */, 450 /* XXX */,
-                                        10 /* XXX */, 100 /* XXX */,
-                                        0, 0, 0, 400 /* XXX */);
-               default:
-                  return calculate_desc(info, unit_dp_rc, 2, 0, 0,
-                                        0, 450 /* XXX */,
-                                        10 /* XXX */, 300 /* XXX */, 0, 0,
-                                        0, 0);
-               }
-            } else if (devinfo->gen >= 6)  {
-               return calculate_desc(info, unit_dp_rc, 2 /* XXX */, 0, 0,
+         case GFX6_SFID_DATAPORT_CONSTANT_CACHE:
+            /* See FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD */
+            return calculate_desc(info, EU_UNIT_DP_CC, 2, 0, 0, 0, 16 /* XXX */,
+                                  10 /* XXX */, 100 /* XXX */, 0, 0, 0, 0);
+         case GFX6_SFID_DATAPORT_RENDER_CACHE:
+            switch (brw_dp_desc_msg_type(devinfo, info.desc)) {
+            case GFX7_DATAPORT_RC_TYPED_ATOMIC_OP:
+               return calculate_desc(info, EU_UNIT_DP_RC, 2, 0, 0,
+                                     30 /* XXX */, 450 /* XXX */,
+                                     10 /* XXX */, 100 /* XXX */,
+                                     0, 0, 0, 400 /* XXX */);
+            default:
+               return calculate_desc(info, EU_UNIT_DP_RC, 2, 0, 0,
                                      0, 450 /* XXX */,
-                                     10 /* XXX */, 300 /* XXX */, 0, 0, 0, 0);
-            } else {
-               abort();
+                                     10 /* XXX */, 300 /* XXX */, 0, 0,
+                                     0, 0);
             }
          case BRW_SFID_SAMPLER: {
-            if (devinfo->gen >= 6)
-               return calculate_desc(info, unit_sampler, 2, 0, 0, 0, 16,
-                                     8, 750, 0, 0, 2, 0);
-            else
-               abort();
+            return calculate_desc(info, EU_UNIT_SAMPLER, 2, 0, 0, 0, 16,
+                                  8, 750, 0, 0, 2, 0);
          }
-         case GEN7_SFID_DATAPORT_DATA_CACHE:
+         case GFX7_SFID_DATAPORT_DATA_CACHE:
          case HSW_SFID_DATAPORT_DATA_CACHE_1:
-            if (devinfo->gen >= 8 || devinfo->is_haswell) {
-               switch (brw_dp_desc_msg_type(devinfo, info.desc)) {
-               case HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP:
-               case HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP_SIMD4X2:
-               case HSW_DATAPORT_DC_PORT1_TYPED_ATOMIC_OP_SIMD4X2:
-               case HSW_DATAPORT_DC_PORT1_TYPED_ATOMIC_OP:
-                  return calculate_desc(info, unit_dp_dc, 2, 0, 0,
-                                        30 /* XXX */, 400 /* XXX */,
-                                        10 /* XXX */, 100 /* XXX */, 0, 0,
-                                        0, 400 /* XXX */);
+            switch (brw_dp_desc_msg_type(devinfo, info.desc)) {
+            case HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP:
+            case HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP_SIMD4X2:
+            case HSW_DATAPORT_DC_PORT1_TYPED_ATOMIC_OP_SIMD4X2:
+            case HSW_DATAPORT_DC_PORT1_TYPED_ATOMIC_OP:
+               return calculate_desc(info, EU_UNIT_DP_DC, 2, 0, 0,
+                                     30 /* XXX */, 400 /* XXX */,
+                                     10 /* XXX */, 100 /* XXX */, 0, 0,
+                                     0, 400 /* XXX */);
 
-               default:
-                  return calculate_desc(info, unit_dp_dc, 2, 0, 0,
-                                        0, 20 /* XXX */,
-                                        10 /* XXX */, 100 /* XXX */, 0, 0,
-                                        0, 0);
-               }
-            } else if (devinfo->gen >= 7) {
-               switch (brw_dp_desc_msg_type(devinfo, info.desc)) {
-               case GEN7_DATAPORT_DC_UNTYPED_ATOMIC_OP:
-                  return calculate_desc(info, unit_dp_dc, 2, 0, 0,
-                                        30 /* XXX */, 400 /* XXX */,
-                                        10 /* XXX */, 100 /* XXX */,
-                                        0, 0, 0, 400 /* XXX */);
-               default:
-                  return calculate_desc(info, unit_dp_dc, 2, 0, 0,
-                                        0, 20 /* XXX */,
-                                        10 /* XXX */, 100 /* XXX */, 0, 0,
-                                        0, 0);
-               }
-            } else {
+            default:
+               return calculate_desc(info, EU_UNIT_DP_DC, 2, 0, 0,
+                                     0, 20 /* XXX */,
+                                     10 /* XXX */, 100 /* XXX */, 0, 0,
+                                     0, 0);
+            }
+
+         case GFX7_SFID_PIXEL_INTERPOLATOR:
+            return calculate_desc(info, EU_UNIT_PI, 2, 0, 0, 14 /* XXX */, 0,
+                                  0, 90 /* XXX */, 0, 0, 0, 0);
+
+         case GFX12_SFID_UGM:
+         case GFX12_SFID_TGM:
+         case GFX12_SFID_SLM:
+            switch (lsc_msg_desc_opcode(devinfo, info.desc)) {
+            case LSC_OP_LOAD:
+            case LSC_OP_STORE:
+            case LSC_OP_LOAD_CMASK:
+            case LSC_OP_STORE_CMASK:
+               return calculate_desc(info, EU_UNIT_DP_DC, 2, 0, 0,
+                                     0, 20 /* XXX */,
+                                     10 /* XXX */, 100 /* XXX */, 0, 0,
+                                     0, 0);
+
+            case LSC_OP_FENCE:
+            case LSC_OP_ATOMIC_INC:
+            case LSC_OP_ATOMIC_DEC:
+            case LSC_OP_ATOMIC_LOAD:
+            case LSC_OP_ATOMIC_STORE:
+            case LSC_OP_ATOMIC_ADD:
+            case LSC_OP_ATOMIC_SUB:
+            case LSC_OP_ATOMIC_MIN:
+            case LSC_OP_ATOMIC_MAX:
+            case LSC_OP_ATOMIC_UMIN:
+            case LSC_OP_ATOMIC_UMAX:
+            case LSC_OP_ATOMIC_CMPXCHG:
+            case LSC_OP_ATOMIC_FADD:
+            case LSC_OP_ATOMIC_FSUB:
+            case LSC_OP_ATOMIC_FMIN:
+            case LSC_OP_ATOMIC_FMAX:
+            case LSC_OP_ATOMIC_FCMPXCHG:
+            case LSC_OP_ATOMIC_AND:
+            case LSC_OP_ATOMIC_OR:
+            case LSC_OP_ATOMIC_XOR:
+               return calculate_desc(info, EU_UNIT_DP_DC, 2, 0, 0,
+                                     30 /* XXX */, 400 /* XXX */,
+                                     10 /* XXX */, 100 /* XXX */, 0, 0,
+                                     0, 400 /* XXX */);
+            default:
                abort();
             }
+
+         case BRW_SFID_MESSAGE_GATEWAY:
+         case GEN_RT_SFID_BINDLESS_THREAD_DISPATCH: /* or THREAD_SPAWNER */
+         case GEN_RT_SFID_RAY_TRACE_ACCELERATOR:
+            return calculate_desc(info, EU_UNIT_SPAWNER, 2, 0, 0, 0 /* XXX */, 0,
+                                  10 /* XXX */, 0, 0, 0, 0, 0);
+
+         case BRW_SFID_URB:
+            return calculate_desc(info, EU_UNIT_URB, 2, 0, 0, 0, 6 /* XXX */,
+                                  32 /* XXX */, 200 /* XXX */, 0, 0, 0, 0);
+
          default:
             abort();
          }
 
       case SHADER_OPCODE_UNDEF:
-      case FS_OPCODE_PLACEHOLDER_HALT:
+      case SHADER_OPCODE_HALT_TARGET:
       case FS_OPCODE_SCHEDULING_FENCE:
-         return calculate_desc(info, unit_null, 0, 0, 0, 0, 0,
+         return calculate_desc(info, EU_UNIT_NULL, 0, 0, 0, 0, 0,
                                0, 0, 0, 0, 0, 0);
 
       default:
@@ -1113,10 +721,10 @@ namespace {
     * ID.
     */
    void
-   stall_on_dependency(state &st, dependency_id id)
+   stall_on_dependency(state &st, enum intel_eu_dependency_id id)
    {
       if (id < ARRAY_SIZE(st.dep_ready))
-         st.unit_ready[unit_fe] = MAX2(st.unit_ready[unit_fe],
+         st.unit_ready[EU_UNIT_FE] = MAX2(st.unit_ready[EU_UNIT_FE],
                                        st.dep_ready[id]);
    }
 
@@ -1131,17 +739,17 @@ namespace {
       /* Compute the time at which the front-end will be ready to execute the
        * next instruction.
        */
-      st.unit_ready[unit_fe] += perf.df;
+      st.unit_ready[EU_UNIT_FE] += perf.df;
 
-      if (perf.u < num_units) {
+      if (perf.u < EU_NUM_UNITS) {
          /* Wait for the back-end to be ready to execute this instruction. */
-         st.unit_ready[unit_fe] = MAX2(st.unit_ready[unit_fe],
+         st.unit_ready[EU_UNIT_FE] = MAX2(st.unit_ready[EU_UNIT_FE],
                                        st.unit_ready[perf.u]);
 
          /* Compute the time at which the back-end will be ready to execute
           * the next instruction, and update the back-end utilization.
           */
-         st.unit_ready[perf.u] = st.unit_ready[unit_fe] + perf.db;
+         st.unit_ready[perf.u] = st.unit_ready[EU_UNIT_FE] + perf.db;
          st.unit_busy[perf.u] += perf.db * st.weight;
       }
    }
@@ -1151,10 +759,11 @@ namespace {
     * instruction.
     */
    void
-   mark_read_dependency(state &st, const perf_desc &perf, dependency_id id)
+   mark_read_dependency(state &st, const perf_desc &perf,
+                        enum intel_eu_dependency_id id)
    {
       if (id < ARRAY_SIZE(st.dep_ready))
-         st.dep_ready[id] = st.unit_ready[unit_fe] + perf.ls;
+         st.dep_ready[id] = st.unit_ready[EU_UNIT_FE] + perf.ls;
    }
 
    /**
@@ -1162,98 +771,89 @@ namespace {
     * instruction.
     */
    void
-   mark_write_dependency(state &st, const perf_desc &perf, dependency_id id)
+   mark_write_dependency(state &st, const perf_desc &perf,
+                         enum intel_eu_dependency_id id)
    {
-      if (id >= dependency_id_accum0 && id < dependency_id_flag0)
-         st.dep_ready[id] = st.unit_ready[unit_fe] + perf.la;
-      else if (id >= dependency_id_flag0 && id < dependency_id_sbid_wr0)
-         st.dep_ready[id] = st.unit_ready[unit_fe] + perf.lf;
+      if (id >= EU_DEPENDENCY_ID_ACCUM0 && id < EU_DEPENDENCY_ID_FLAG0)
+         st.dep_ready[id] = st.unit_ready[EU_UNIT_FE] + perf.la;
+      else if (id >= EU_DEPENDENCY_ID_FLAG0 && id < EU_DEPENDENCY_ID_SBID_WR0)
+         st.dep_ready[id] = st.unit_ready[EU_UNIT_FE] + perf.lf;
       else if (id < ARRAY_SIZE(st.dep_ready))
-         st.dep_ready[id] = st.unit_ready[unit_fe] + perf.ld;
+         st.dep_ready[id] = st.unit_ready[EU_UNIT_FE] + perf.ld;
    }
 
    /**
     * Return the dependency ID of a backend_reg, offset by \p delta GRFs.
     */
-   dependency_id
-   reg_dependency_id(const gen_device_info *devinfo, const backend_reg &r,
+   enum intel_eu_dependency_id
+   reg_dependency_id(const intel_device_info *devinfo, const brw_reg &r,
                      const int delta)
    {
       if (r.file == VGRF) {
          const unsigned i = r.nr + r.offset / REG_SIZE + delta;
-         assert(i < dependency_id_mrf0 - dependency_id_grf0);
-         return dependency_id(dependency_id_grf0 + i);
+         assert(i < EU_DEPENDENCY_ID_ADDR0 - EU_DEPENDENCY_ID_GRF0);
+         return intel_eu_dependency_id(EU_DEPENDENCY_ID_GRF0 + i);
 
       } else if (r.file == FIXED_GRF) {
          const unsigned i = r.nr + delta;
-         assert(i < dependency_id_mrf0 - dependency_id_grf0);
-         return dependency_id(dependency_id_grf0 + i);
-
-      } else if (r.file == MRF && devinfo->gen >= 7) {
-         const unsigned i = GEN7_MRF_HACK_START +
-                            r.nr + r.offset / REG_SIZE + delta;
-         assert(i < dependency_id_mrf0 - dependency_id_grf0);
-         return dependency_id(dependency_id_grf0 + i);
-
-      } else if (r.file == MRF && devinfo->gen < 7) {
-         const unsigned i = (r.nr & ~BRW_MRF_COMPR4) +
-                            r.offset / REG_SIZE + delta;
-         assert(i < dependency_id_addr0 - dependency_id_mrf0);
-         return dependency_id(dependency_id_mrf0 + i);
+         assert(i < EU_DEPENDENCY_ID_ADDR0 - EU_DEPENDENCY_ID_GRF0);
+         return intel_eu_dependency_id(EU_DEPENDENCY_ID_GRF0 + i);
 
       } else if (r.file == ARF && r.nr >= BRW_ARF_ADDRESS &&
                  r.nr < BRW_ARF_ACCUMULATOR) {
          assert(delta == 0);
-         return dependency_id_addr0;
+         return EU_DEPENDENCY_ID_ADDR0;
 
       } else if (r.file == ARF && r.nr >= BRW_ARF_ACCUMULATOR &&
                  r.nr < BRW_ARF_FLAG) {
          const unsigned i = r.nr - BRW_ARF_ACCUMULATOR + delta;
-         assert(i < dependency_id_flag0 - dependency_id_accum0);
-         return dependency_id(dependency_id_accum0 + i);
+         assert(i < EU_DEPENDENCY_ID_FLAG0 - EU_DEPENDENCY_ID_ACCUM0);
+         return intel_eu_dependency_id(EU_DEPENDENCY_ID_ACCUM0 + i);
 
       } else {
-         return num_dependency_ids;
+         return EU_NUM_DEPENDENCY_IDS;
       }
    }
 
    /**
     * Return the dependency ID of flag register starting at offset \p i.
     */
-   dependency_id
+   enum intel_eu_dependency_id
    flag_dependency_id(unsigned i)
    {
-      assert(i < dependency_id_sbid_wr0 - dependency_id_flag0);
-      return dependency_id(dependency_id_flag0 + i);
+      assert(i < EU_DEPENDENCY_ID_SBID_WR0 - EU_DEPENDENCY_ID_FLAG0);
+      return intel_eu_dependency_id(EU_DEPENDENCY_ID_FLAG0 + i);
    }
 
    /**
     * Return the dependency ID corresponding to the SBID read completion
-    * condition of a Gen12+ SWSB.
+    * condition of a Gfx12+ SWSB.
     */
-   dependency_id
+   enum intel_eu_dependency_id
    tgl_swsb_rd_dependency_id(tgl_swsb swsb)
    {
       if (swsb.mode) {
-         assert(swsb.sbid < num_dependency_ids - dependency_id_sbid_rd0);
-         return dependency_id(dependency_id_sbid_rd0 + swsb.sbid);
+         assert(swsb.sbid <
+                EU_NUM_DEPENDENCY_IDS - EU_DEPENDENCY_ID_SBID_RD0);
+         return intel_eu_dependency_id(EU_DEPENDENCY_ID_SBID_RD0 + swsb.sbid);
       } else {
-         return num_dependency_ids;
+         return EU_NUM_DEPENDENCY_IDS;
       }
    }
 
    /**
     * Return the dependency ID corresponding to the SBID write completion
-    * condition of a Gen12+ SWSB.
+    * condition of a Gfx12+ SWSB.
     */
-   dependency_id
+   enum intel_eu_dependency_id
    tgl_swsb_wr_dependency_id(tgl_swsb swsb)
    {
       if (swsb.mode) {
-         assert(swsb.sbid < dependency_id_sbid_rd0 - dependency_id_sbid_wr0);
-         return dependency_id(dependency_id_sbid_wr0 + swsb.sbid);
+         assert(swsb.sbid <
+                EU_DEPENDENCY_ID_SBID_RD0 - EU_DEPENDENCY_ID_SBID_WR0);
+         return intel_eu_dependency_id(EU_DEPENDENCY_ID_SBID_WR0 + swsb.sbid);
       } else {
-         return num_dependency_ids;
+         return EU_NUM_DEPENDENCY_IDS;
       }
    }
 
@@ -1262,31 +862,31 @@ namespace {
     * instruction.
     */
    unsigned
-   accum_reg_of_channel(const gen_device_info *devinfo,
-                        const backend_instruction *inst,
+   accum_reg_of_channel(const intel_device_info *devinfo,
+                        const fs_inst *inst,
                         brw_reg_type tx, unsigned i)
    {
       assert(inst->reads_accumulator_implicitly() ||
              inst->writes_accumulator_implicitly(devinfo));
-      const unsigned offset = (inst->group + i) * type_sz(tx) *
-         (devinfo->gen < 7 || brw_reg_type_is_floating_point(tx) ? 1 : 2);
-      return offset / REG_SIZE % 2;
+      const unsigned offset = (inst->group + i) * brw_type_size_bytes(tx) *
+         (brw_type_is_float(tx) ? 1 : 2);
+      return offset / (reg_unit(devinfo) * REG_SIZE) % 2;
    }
 
    /**
     * Model the performance behavior of an FS back-end instruction.
     */
    void
-   issue_fs_inst(state &st, const gen_device_info *devinfo,
-                 const backend_instruction *be_inst)
+   issue_inst(state &st, const struct brw_isa_info *isa,
+              const fs_inst *inst)
    {
-      const fs_inst *inst = static_cast<const fs_inst *>(be_inst);
-      const instruction_info info(devinfo, inst);
+      const struct intel_device_info *devinfo = isa->devinfo;
+      const instruction_info info(isa, inst);
       const perf_desc perf = instruction_desc(info);
 
       /* Stall on any source dependencies. */
       for (unsigned i = 0; i < inst->sources; i++) {
-         for (unsigned j = 0; j < regs_read(inst, i); j++)
+         for (unsigned j = 0; j < regs_read(devinfo, inst, i); j++)
             stall_on_dependency(
                st, reg_dependency_id(devinfo, inst->src[i], j));
       }
@@ -1297,13 +897,6 @@ namespace {
                                         inst->exec_size - 1); j++)
             stall_on_dependency(
                st, reg_dependency_id(devinfo, brw_acc_reg(8), j));
-      }
-
-      if (is_send(inst) && inst->base_mrf != -1) {
-         for (unsigned j = 0; j < inst->mlen; j++)
-            stall_on_dependency(
-               st, reg_dependency_id(
-                  devinfo, brw_uvec_mrf(8, inst->base_mrf, 0), j));
       }
 
       if (const unsigned mask = inst->flags_read(devinfo)) {
@@ -1329,7 +922,7 @@ namespace {
                   st, reg_dependency_id(devinfo, brw_acc_reg(8), j));
          }
 
-         if (const unsigned mask = inst->flags_written()) {
+         if (const unsigned mask = inst->flags_written(devinfo)) {
             for (unsigned i = 0; i < sizeof(mask) * CHAR_BIT; i++) {
                if (mask & (1 << i))
                   stall_on_dependency(st, flag_dependency_id(i));
@@ -1350,17 +943,11 @@ namespace {
       if (inst->is_send_from_grf()) {
          for (unsigned i = 0; i < inst->sources; i++) {
             if (inst->is_payload(i)) {
-               for (unsigned j = 0; j < regs_read(inst, i); j++)
+               for (unsigned j = 0; j < regs_read(devinfo, inst, i); j++)
                   mark_read_dependency(
                      st, perf, reg_dependency_id(devinfo, inst->src[i], j));
             }
          }
-      }
-
-      if (is_send(inst) && inst->base_mrf != -1) {
-         for (unsigned j = 0; j < inst->mlen; j++)
-            mark_read_dependency(st, perf,
-               reg_dependency_id(devinfo, brw_uvec_mrf(8, inst->base_mrf, 0), j));
       }
 
       /* Mark any destination dependencies. */
@@ -1379,7 +966,7 @@ namespace {
                                   reg_dependency_id(devinfo, brw_acc_reg(8), j));
       }
 
-      if (const unsigned mask = inst->flags_written()) {
+      if (const unsigned mask = inst->flags_written(devinfo)) {
          for (unsigned i = 0; i < sizeof(mask) * CHAR_BIT; i++) {
             if (mask & (1 << i))
                mark_write_dependency(st, perf, flag_dependency_id(i));
@@ -1394,101 +981,6 @@ namespace {
    }
 
    /**
-    * Model the performance behavior of a VEC4 back-end instruction.
-    */
-   void
-   issue_vec4_instruction(state &st, const gen_device_info *devinfo,
-                          const backend_instruction *be_inst)
-   {
-      const vec4_instruction *inst =
-         static_cast<const vec4_instruction *>(be_inst);
-      const instruction_info info(devinfo, inst);
-      const perf_desc perf = instruction_desc(info);
-
-      /* Stall on any source dependencies. */
-      for (unsigned i = 0; i < ARRAY_SIZE(inst->src); i++) {
-         for (unsigned j = 0; j < regs_read(inst, i); j++)
-            stall_on_dependency(
-               st, reg_dependency_id(devinfo, inst->src[i], j));
-      }
-
-      if (inst->reads_accumulator_implicitly()) {
-         for (unsigned j = accum_reg_of_channel(devinfo, inst, info.tx, 0);
-              j <= accum_reg_of_channel(devinfo, inst, info.tx,
-                                        inst->exec_size - 1); j++)
-            stall_on_dependency(
-               st, reg_dependency_id(devinfo, brw_acc_reg(8), j));
-      }
-
-      if (inst->base_mrf != -1) {
-         for (unsigned j = 0; j < inst->mlen; j++)
-            stall_on_dependency(
-               st, reg_dependency_id(
-                  devinfo, brw_uvec_mrf(8, inst->base_mrf, 0), j));
-      }
-
-      if (inst->reads_flag())
-         stall_on_dependency(st, dependency_id_flag0);
-
-      /* Stall on any write dependencies. */
-      if (!inst->no_dd_check) {
-         if (inst->dst.file != BAD_FILE && !inst->dst.is_null()) {
-            for (unsigned j = 0; j < regs_written(inst); j++)
-               stall_on_dependency(
-                  st, reg_dependency_id(devinfo, inst->dst, j));
-         }
-
-         if (inst->writes_accumulator_implicitly(devinfo)) {
-            for (unsigned j = accum_reg_of_channel(devinfo, inst, info.tx, 0);
-                 j <= accum_reg_of_channel(devinfo, inst, info.tx,
-                                           inst->exec_size - 1); j++)
-               stall_on_dependency(
-                  st, reg_dependency_id(devinfo, brw_acc_reg(8), j));
-         }
-
-         if (inst->writes_flag())
-            stall_on_dependency(st, dependency_id_flag0);
-      }
-
-      /* Execute the instruction. */
-      execute_instruction(st, perf);
-
-      /* Mark any source dependencies. */
-      if (inst->is_send_from_grf()) {
-         for (unsigned i = 0; i < ARRAY_SIZE(inst->src); i++) {
-            for (unsigned j = 0; j < regs_read(inst, i); j++)
-               mark_read_dependency(
-                  st, perf, reg_dependency_id(devinfo, inst->src[i], j));
-         }
-      }
-
-      if (inst->base_mrf != -1) {
-         for (unsigned j = 0; j < inst->mlen; j++)
-            mark_read_dependency(st, perf,
-               reg_dependency_id(devinfo, brw_uvec_mrf(8, inst->base_mrf, 0), j));
-      }
-
-      /* Mark any destination dependencies. */
-      if (inst->dst.file != BAD_FILE && !inst->dst.is_null()) {
-         for (unsigned j = 0; j < regs_written(inst); j++) {
-            mark_write_dependency(st, perf,
-                                  reg_dependency_id(devinfo, inst->dst, j));
-         }
-      }
-
-      if (inst->writes_accumulator_implicitly(devinfo)) {
-         for (unsigned j = accum_reg_of_channel(devinfo, inst, info.tx, 0);
-              j <= accum_reg_of_channel(devinfo, inst, info.tx,
-                                        inst->exec_size - 1); j++)
-            mark_write_dependency(st, perf,
-                                  reg_dependency_id(devinfo, brw_acc_reg(8), j));
-      }
-
-      if (inst->writes_flag())
-         mark_write_dependency(st, perf, dependency_id_flag0);
-   }
-
-   /**
     * Calculate the maximum possible throughput of the program compatible with
     * the cycle-count utilization estimated for each asynchronous unit, in
     * threads-per-cycle units.
@@ -1496,7 +988,7 @@ namespace {
    float
    calculate_thread_throughput(const state &st, float busy)
    {
-      for (unsigned i = 0; i < num_units; i++)
+      for (unsigned i = 0; i < EU_NUM_UNITS; i++)
          busy = MAX2(busy, st.unit_busy[i]);
 
       return 1.0 / busy;
@@ -1506,60 +998,61 @@ namespace {
     * Estimate the performance of the specified shader.
     */
    void
-   calculate_performance(performance &p, const backend_shader *s,
-                         void (*issue_instruction)(
-                            state &, const gen_device_info *,
-                            const backend_instruction *),
+   calculate_performance(performance &p, const fs_visitor *s,
                          unsigned dispatch_width)
    {
-      /* XXX - Plumbing the trip counts from NIR loop analysis would allow us
-       *       to do a better job regarding the loop weights.  And some branch
-       *       divergence analysis would allow us to do a better job with
-       *       branching weights.
+      /* XXX - Note that the previous version of this code used worst-case
+       *       scenario estimation of branching divergence for SIMD32 shaders,
+       *       but this heuristic was removed to improve performance in common
+       *       scenarios. Wider shader variants are less optimal when divergence
+       *       is high, e.g. when application renders complex scene on a small
+       *       surface. It is assumed that such renders are short, so their
+       *       time doesn't matter and when it comes to the overall performance,
+       *       they are dominated by more optimal larger renders.
+       *
+       *       It's possible that we could do better with divergence analysis
+       *       by isolating branches which are 100% uniform.
+       *
+       *       Plumbing the trip counts from NIR loop analysis would allow us
+       *       to do a better job regarding the loop weights.
        *
        *       In the meantime use values that roughly match the control flow
-       *       weights used elsewhere in the compiler back-end -- Main
-       *       difference is the worst-case scenario branch_weight used for
-       *       SIMD32 which accounts for the possibility of a dynamically
-       *       uniform branch becoming divergent in SIMD32.
+       *       weights used elsewhere in the compiler back-end.
        *
        *       Note that we provide slightly more pessimistic weights on
-       *       Gen12+ for SIMD32, since the effective warp size on that
+       *       Gfx12.x for SIMD32, since the effective warp size on that
        *       platform is 2x the SIMD width due to EU fusion, which increases
        *       the likelihood of divergent control flow in comparison to
        *       previous generations, giving narrower SIMD modes a performance
        *       advantage in several test-cases with non-uniform discard jumps.
+       *       EU fusion has been removed on Xe2+ so its divergence behavior is
+       *       expected to be closer to pre-Gfx12 platforms.
        */
-      const float branch_weight = (dispatch_width > 16 ? 1.0 : 0.5);
-      const float discard_weight = (dispatch_width > 16 || s->devinfo->gen < 12 ?
+      const float discard_weight = (dispatch_width > 16 || s->devinfo->ver != 12 ?
                                     1.0 : 0.5);
       const float loop_weight = 10;
-      unsigned discard_count = 0;
+      unsigned halt_count = 0;
       unsigned elapsed = 0;
       state st;
 
       foreach_block(block, s->cfg) {
          const unsigned elapsed0 = elapsed;
 
-         foreach_inst_in_block(backend_instruction, inst, block) {
-            const unsigned clock0 = st.unit_ready[unit_fe];
+         foreach_inst_in_block(fs_inst, inst, block) {
+            const unsigned clock0 = st.unit_ready[EU_UNIT_FE];
 
-            issue_instruction(st, s->devinfo, inst);
+            issue_inst(st, &s->compiler->isa, inst);
 
-            if (inst->opcode == BRW_OPCODE_ENDIF)
-               st.weight /= branch_weight;
-            else if (inst->opcode == FS_OPCODE_PLACEHOLDER_HALT && discard_count)
+            if (inst->opcode == SHADER_OPCODE_HALT_TARGET && halt_count)
                st.weight /= discard_weight;
 
-            elapsed += (st.unit_ready[unit_fe] - clock0) * st.weight;
+            elapsed += (st.unit_ready[EU_UNIT_FE] - clock0) * st.weight;
 
-            if (inst->opcode == BRW_OPCODE_IF)
-               st.weight *= branch_weight;
-            else if (inst->opcode == BRW_OPCODE_DO)
+            if (inst->opcode == BRW_OPCODE_DO)
                st.weight *= loop_weight;
             else if (inst->opcode == BRW_OPCODE_WHILE)
                st.weight /= loop_weight;
-            else if (inst->opcode == FS_OPCODE_DISCARD_JUMP && !discard_count++)
+            else if (inst->opcode == BRW_OPCODE_HALT && !halt_count++)
                st.weight *= discard_weight;
          }
 
@@ -1574,13 +1067,7 @@ namespace {
 brw::performance::performance(const fs_visitor *v) :
    block_latency(new unsigned[v->cfg->num_blocks])
 {
-   calculate_performance(*this, v, issue_fs_inst, v->dispatch_width);
-}
-
-brw::performance::performance(const vec4_visitor *v) :
-   block_latency(new unsigned[v->cfg->num_blocks])
-{
-   calculate_performance(*this, v, issue_vec4_instruction, 8);
+   calculate_performance(*this, v, v->dispatch_width);
 }
 
 brw::performance::~performance()

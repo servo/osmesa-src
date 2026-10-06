@@ -20,18 +20,12 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-
-"""The maximum entries of actual static data required by indirect GLX."""
-
-
-MAX_OFFSETS = 407
-
 """Table of functions that have ABI-mandated offsets in the dispatch table.
 
-The first MAX_OFFSETS entries are required by indirect GLX. The rest are
-required to preserve the glapi <> GL/GLES ABI. This is to be addressed shortly.
+The first 407 entries are required by indirect GLX. The rest can use any
+numbers and don't need this table at all, but that removal is TODO.
 
-This list will never change."""
+The first 407 entries will never change."""
 offsets = {
     "NewList": 0,
     "EndList": 1,
@@ -692,8 +686,8 @@ offsets = {
     "GetInfoLogARB": 656,
     "GetObjectParameterfvARB": 657,
     "GetObjectParameterivARB": 658,
-    "DrawArraysInstancedARB": 659,
-    "DrawElementsInstancedARB": 660,
+    "DrawArraysInstanced": 659,
+    "DrawElementsInstanced": 660,
     "BindFramebuffer": 661,
     "BindRenderbuffer": 662,
     "BlitFramebuffer": 663,
@@ -1206,7 +1200,7 @@ offsets = {
     "PushDebugGroup": 1170,
     "SecondaryColor3fEXT": 1171,
     "SecondaryColor3fvEXT": 1172,
-    "MultiDrawElementsEXT": 1173,
+    "MultiDrawElements": 1173,
     "FogCoordfEXT": 1174,
     "FogCoordfvEXT": 1175,
     "ResizeBuffersMESA": 1176,
@@ -1676,6 +1670,41 @@ offsets = {
     "FogCoordhvNV": 1640,
     "SecondaryColor3hNV": 1641,
     "SecondaryColor3hvNV": 1642,
+    "InternalSetError": 1643,
+    "VertexAttrib1hNV": 1644,
+    "VertexAttrib1hvNV": 1645,
+    "VertexAttrib2hNV": 1646,
+    "VertexAttrib2hvNV": 1647,
+    "VertexAttrib3hNV": 1648,
+    "VertexAttrib3hvNV": 1649,
+    "VertexAttrib4hNV": 1650,
+    "VertexAttrib4hvNV": 1651,
+    "VertexAttribs1hvNV": 1652,
+    "VertexAttribs2hvNV": 1653,
+    "VertexAttribs3hvNV": 1654,
+    "VertexAttribs4hvNV": 1655,
+    "TexPageCommitmentARB": 1656,
+    "TexturePageCommitmentEXT": 1657,
+    "ImportMemoryWin32HandleEXT": 1658,
+    "ImportSemaphoreWin32HandleEXT": 1659,
+    "ImportMemoryWin32NameEXT": 1660,
+    "ImportSemaphoreWin32NameEXT": 1661,
+    "GetObjectLabelEXT": 1662,
+    "LabelObjectEXT": 1663,
+    "DrawArraysUserBuf": 1664,
+    "DrawElementsUserBuf": 1665,
+    "MultiDrawArraysUserBuf": 1666,
+    "MultiDrawElementsUserBuf": 1667,
+    "DrawArraysInstancedBaseInstanceDrawID": 1668,
+    "DrawElementsInstancedBaseVertexBaseInstanceDrawID": 1669,
+    "InternalInvalidateFramebufferAncillaryMESA": 1670,
+    "DrawElementsPacked": 1671,
+    "DrawElementsUserBufPacked": 1672,
+    "TexStorageAttribs2DEXT": 1673,
+    "TexStorageAttribs3DEXT": 1674,
+    "FramebufferTextureMultiviewOVR": 1675,
+    "NamedFramebufferTextureMultiviewOVR": 1676,
+    "FramebufferTextureMultisampleMultiviewOVR": 1677,
 }
 
 functions = [
@@ -2003,6 +2032,8 @@ functions = [
     "FramebufferTextureLayer",
     "FramebufferTextureLayerARB",
     "FramebufferTextureLayerEXT",
+    "FramebufferTextureMultisampleMultiviewOVR",
+    "FramebufferTextureMultiviewOVR",
     "FrontFace",
     "Frustum",
     "Frustumf",
@@ -2120,6 +2151,7 @@ functions = [
     "GetnUniformuiv",
     "GetnUniformuivARB",
     "GetObjectLabel",
+    "GetObjectLabelEXT",
     "GetObjectParameterfvARB",
     "GetObjectParameterivARB",
     "GetObjectPtrLabel",
@@ -2251,6 +2283,7 @@ functions = [
     "IsTextureEXT",
     "IsTransformFeedback",
     "IsVertexArray",
+    "LabelObjectEXT",
     "Lightf",
     "Lightfv",
     "Lighti",
@@ -2693,6 +2726,8 @@ functions = [
     "TexStorage2DMultisample",
     "TexStorage3D",
     "TexStorage3DMultisample",
+    "TexStorageAttribs2DEXT",
+    "TexStorageAttribs3DEXT",
     "TexSubImage1D",
     "TexSubImage2D",
     "TexSubImage3D",
@@ -2976,60 +3011,4 @@ functions = [
     "WindowPos3sARB",
     "WindowPos3sv",
     "WindowPos3svARB",
-]
-
-"""Functions that need dispatch slots but are not used
-
-Some of these functions may have GLX protocol support (for
-indirect-rendering).  Other were used in previous versions of Mesa.  They keep
-slots in the dispatch table so that newer versions of libGL can still be used
-with older drivers."""
-unused_functions = [
-    # SGIS_multisample
-    "SampleMaskSGIS",
-    "SamplePatternSGIS",
-
-    # NV_vertex_program
-    "AreProgramsResidentNV",
-    "ExecuteProgramNV",
-    "GetProgramParameterdvNV",
-    "GetProgramParameterfvNV",
-    "GetProgramivNV",
-    "GetProgramStringNV",
-    "GetTrackMatrixivNV",
-    "GetVertexAttribdvNV",
-    "GetVertexAttribfvNV",
-    "GetVertexAttribivNV",
-    "LoadProgramNV",
-    "ProgramParameters4dvNV",
-    "ProgramParameters4fvNV",
-    "RequestResidentProgramsNV",
-    "TrackMatrixNV",
-    "VertexAttribPointerNV",
-
-    # MESA_resize_buffers
-    "ResizeBuffersMESA",
-
-    # ATI_envmap_bumpmap
-    "TexBumpParameterfvATI",
-    "TexBumpParameterivATI",
-    "GetTexBumpParameterfvATI",
-    "GetTexBumpParameterivATI",
-
-    # NV_fragment_program
-    "ProgramNamedParameter4fNV",
-    "ProgramNamedParameter4dNV",
-    "ProgramNamedParameter4fvNV",
-    "ProgramNamedParameter4dvNV",
-    "GetProgramNamedParameterfvNV",
-    "GetProgramNamedParameterdvNV",
-
-    # APPLE_flush_buffer_range
-    "BufferParameteriAPPLE",
-    "FlushMappedBufferRangeAPPLE",
-
-    # EXT_separate_shader_objects
-    "UseShaderProgramEXT",
-    "ActiveProgramEXT",
-    "CreateShaderProgramEXT",
 ]

@@ -1,30 +1,11 @@
-/**********************************************************
- * Copyright 2009-2015 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2009-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
-
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/format/u_format.h"
@@ -34,7 +15,7 @@
 #include "vmw_surface.h"
 #include "vmw_buffer.h"
 #include "svga_drm_public.h"
-#include "svga3d_surfacedefs.h"
+#include "vmw_surf_defs.h"
 
 #include "frontend/drm_driver.h"
 
@@ -59,7 +40,7 @@ static struct svga_winsys_surface *
 vmw_drm_gb_surface_from_handle(struct svga_winsys_screen *sws,
                                struct winsys_handle *whandle,
                                SVGA3dSurfaceFormat *format);
-static boolean
+static bool
 vmw_drm_surface_get_handle(struct svga_winsys_screen *sws,
 			   struct svga_winsys_surface *surface,
 			   unsigned stride,
@@ -68,16 +49,16 @@ vmw_drm_surface_get_handle(struct svga_winsys_screen *sws,
 static struct dri1_api_version drm_required = { 2, 1, 0 };
 static struct dri1_api_version drm_compat = { 2, 0, 0 };
 
-static boolean
+static bool
 vmw_dri1_check_version(const struct dri1_api_version *cur,
 		       const struct dri1_api_version *required,
 		       const struct dri1_api_version *compat,
 		       const char component[])
 {
    if (cur->major > required->major && cur->major <= compat->major)
-      return TRUE;
+      return true;
    if (cur->major == required->major && cur->minor >= required->minor)
-      return TRUE;
+      return true;
 
    vmw_error("%s version failure.\n", component);
    vmw_error("%s version is %d.%d.%d and this driver can only work\n"
@@ -85,7 +66,7 @@ vmw_dri1_check_version(const struct dri1_api_version *cur,
              component,
              cur->major, cur->minor, cur->patch_level,
              required->major, required->minor, compat->major);
-   return FALSE;
+   return false;
 }
 
 /* This is actually the entrypoint to the entire driver,
@@ -149,7 +130,7 @@ vmw_drm_gb_surface_from_handle(struct svga_winsys_screen *sws,
     SVGA3dSurfaceAllFlags flags;
     uint32_t mip_levels;
     struct vmw_buffer_desc desc;
-    struct pb_manager *provider = vws->pools.gmr;
+    struct pb_manager *provider = vws->pools.dma_base;
     struct pb_buffer *pb_buf;
     uint32_t handle;
     int ret;
@@ -309,9 +290,9 @@ vmw_drm_surface_from_handle(struct svga_winsys_screen *sws,
     base_size.width = size.width;
     base_size.height = size.height;
     base_size.depth = size.depth;
-    vsrf->size = svga3dsurface_get_serialized_size(rep->format, base_size,
-                                                   rep->mip_levels[0],
-                                                   FALSE);
+    vsrf->size = vmw_surf_get_serialized_size(rep->format, base_size,
+                                              rep->mip_levels[0],
+                                              false);
 
     return ssrf;
 
@@ -321,7 +302,7 @@ out_mip:
     return NULL;
 }
 
-static boolean
+static bool
 vmw_drm_surface_get_handle(struct svga_winsys_screen *sws,
 			   struct svga_winsys_surface *surface,
 			   unsigned stride,
@@ -332,7 +313,7 @@ vmw_drm_surface_get_handle(struct svga_winsys_screen *sws,
     int ret;
 
     if (!surface)
-	return FALSE;
+	return false;
 
     vsrf = vmw_svga_winsys_surface(surface);
     whandle->handle = vsrf->sid;
@@ -349,14 +330,14 @@ vmw_drm_surface_get_handle(struct svga_winsys_screen *sws,
 				(int *)&whandle->handle);
        if (ret) {
 	  vmw_error("Failed to get file descriptor from prime.\n");
-	  return FALSE;
+	  return false;
        }
        break;
     default:
        vmw_error("Attempt to export unsupported handle type %d.\n",
 		 whandle->type);
-       return FALSE;
+       return false;
     }
 
-    return TRUE;
+    return true;
 }

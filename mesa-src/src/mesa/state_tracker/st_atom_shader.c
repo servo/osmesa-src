@@ -40,12 +40,12 @@
 #include "main/framebuffer.h"
 #include "main/state.h"
 #include "main/texobj.h"
+#include "main/teximage.h"
 #include "main/texstate.h"
 #include "program/program.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_shader_tokens.h"
-#include "util/u_simple_shaders.h"
 #include "cso_cache/cso_context.h"
 #include "util/u_debug.h"
 
@@ -57,7 +57,7 @@
 
 
 static unsigned
-get_texture_target(struct gl_context *ctx, const unsigned unit)
+get_texture_index(struct gl_context *ctx, const unsigned unit)
 {
    struct gl_texture_object *texObj = _mesa_get_tex_unit(ctx, unit)->_Current;
    gl_texture_index index;
@@ -69,27 +69,43 @@ get_texture_target(struct gl_context *ctx, const unsigned unit)
       index = TEXTURE_2D_INDEX;
    }
 
-   /* Map mesa texture target to TGSI texture target.
-    * Copied from st_mesa_to_tgsi.c, the shadow part is omitted */
-   switch(index) {
-   case TEXTURE_2D_MULTISAMPLE_INDEX: return TGSI_TEXTURE_2D_MSAA;
-   case TEXTURE_2D_MULTISAMPLE_ARRAY_INDEX: return TGSI_TEXTURE_2D_ARRAY_MSAA;
-   case TEXTURE_BUFFER_INDEX: return TGSI_TEXTURE_BUFFER;
-   case TEXTURE_1D_INDEX:   return TGSI_TEXTURE_1D;
-   case TEXTURE_2D_INDEX:   return TGSI_TEXTURE_2D;
-   case TEXTURE_3D_INDEX:   return TGSI_TEXTURE_3D;
-   case TEXTURE_CUBE_INDEX: return TGSI_TEXTURE_CUBE;
-   case TEXTURE_CUBE_ARRAY_INDEX: return TGSI_TEXTURE_CUBE_ARRAY;
-   case TEXTURE_RECT_INDEX: return TGSI_TEXTURE_RECT;
-   case TEXTURE_1D_ARRAY_INDEX:   return TGSI_TEXTURE_1D_ARRAY;
-   case TEXTURE_2D_ARRAY_INDEX:   return TGSI_TEXTURE_2D_ARRAY;
-   case TEXTURE_EXTERNAL_INDEX:   return TGSI_TEXTURE_2D;
-   default:
-      debug_assert(0);
-      return TGSI_TEXTURE_1D;
-   }
+   return index;
 }
 
+static void
+update_gl_clamp(struct st_context *st, struct gl_program *prog, uint32_t *gl_clamp)
+{
+   if (!st->emulate_gl_clamp)
+      return;
+
+   if (!st->ctx->Texture.NumSamplersWithClamp)
+      return;
+
+   gl_clamp[0] = gl_clamp[1] = gl_clamp[2] = 0;
+   GLbitfield samplers_used = prog->SamplersUsed;
+   unsigned unit;
+   /* same as st_atom_sampler.c */
+   for (unit = 0; samplers_used; unit++, samplers_used >>= 1) {
+      unsigned tex_unit = prog->SamplerUnits[unit];
+      if (samplers_used & 1 &&
+          (st->ctx->Texture.Unit[tex_unit]._Current->Target != GL_TEXTURE_BUFFER)) {
+         ASSERTED const struct gl_texture_object *texobj;
+         struct gl_context *ctx = st->ctx;
+         const struct gl_sampler_object *msamp;
+
+         texobj = ctx->Texture.Unit[tex_unit]._Current;
+         assert(texobj);
+
+         msamp = _mesa_get_samplerobj(ctx, tex_unit);
+         if (is_wrap_gl_clamp(msamp->Attrib.WrapS))
+            gl_clamp[0] |= BITFIELD64_BIT(unit);
+         if (is_wrap_gl_clamp(msamp->Attrib.WrapT))
+            gl_clamp[1] |= BITFIELD64_BIT(unit);
+         if (is_wrap_gl_clamp(msamp->Attrib.WrapR))
+            gl_clamp[2] |= BITFIELD64_BIT(unit);
+      }
+   }
+}
 
 /**
  * Update fragment program state/atom.  This involves translating the
@@ -98,21 +114,19 @@ get_texture_target(struct gl_context *ctx, const unsigned unit)
 void
 st_update_fp( struct st_context *st )
 {
-   struct st_program *stfp;
+   struct gl_program *fp;
 
    assert(st->ctx->FragmentProgram._Current);
-   stfp = st_program(st->ctx->FragmentProgram._Current);
-   assert(stfp->Base.Target == GL_FRAGMENT_PROGRAM_ARB);
+   fp = st->ctx->FragmentProgram._Current;
+   assert(fp->Target == GL_FRAGMENT_PROGRAM_ARB);
 
    void *shader;
 
    if (st->shader_has_one_variant[MESA_SHADER_FRAGMENT] &&
-       !stfp->ati_fs && /* ATI_fragment_shader always has multiple variants */
-       !stfp->Base.ExternalSamplersUsed && /* external samplers need variants */
-       stfp->variants &&
-       !st_fp_variant(stfp->variants)->key.drawpixels &&
-       !st_fp_variant(stfp->variants)->key.bitmap) {
-      shader = stfp->variants->driver_shader;
+       !fp->ati_fs && /* ATI_fragment_shader always has multiple variants */
+       !fp->ExternalSamplersUsed && /* external samplers need variants */
+       !(!fp->shader_program && fp->ShadowSamplers)) {
+      shader = fp->variants->driver_shader;
    } else {
       struct st_fp_variant_key key;
 
@@ -125,11 +139,11 @@ st_update_fp( struct st_context *st )
                             st->ctx->Light.ShadeModel == GL_FLAT;
 
       /* _NEW_COLOR */
-      key.lower_alpha_func = COMPARE_FUNC_NEVER;
+      key.lower_alpha_func = COMPARE_FUNC_ALWAYS;
       if (st->lower_alpha_test && _mesa_is_alpha_test_enabled(st->ctx))
          key.lower_alpha_func = st->ctx->Color.AlphaFunc;
 
-      /* _NEW_LIGHT | _NEW_PROGRAM */
+      /* _NEW_LIGHT_STATE | _NEW_PROGRAM */
       key.lower_two_sided_color = st->lower_two_sided_color &&
          _mesa_vertex_program_two_side_enabled(st->ctx);
 
@@ -145,25 +159,35 @@ st_update_fp( struct st_context *st )
          st->ctx->Multisample.MinSampleShadingValue *
          _mesa_geometric_samples(st->ctx->DrawBuffer) > 1;
 
-      key.lower_depth_clamp =
-         st->clamp_frag_depth_in_shader &&
-         (st->ctx->Transform.DepthClampNear ||
-          st->ctx->Transform.DepthClampFar);
-
-      if (stfp->ati_fs) {
+      if (fp->ati_fs) {
          key.fog = st->ctx->Fog._PackedEnabledMode;
 
          for (unsigned u = 0; u < MAX_NUM_FRAGMENT_REGISTERS_ATI; u++) {
-            key.texture_targets[u] = get_texture_target(st->ctx, u);
+            key.texture_index[u] = get_texture_index(st->ctx, u);
          }
       }
 
-      key.external = st_get_external_sampler_key(st, &stfp->Base);
+      if (!fp->shader_program && fp->ShadowSamplers) {
+         u_foreach_bit(i, fp->ShadowSamplers) {
+            struct gl_texture_object *tex_obj =
+                _mesa_get_tex_unit(st->ctx, fp->SamplerUnits[i])->_Current;
+            GLenum16 baseFormat = _mesa_base_tex_image(tex_obj)->_BaseFormat;
 
-      shader = st_get_fp_variant(st, stfp, &key)->base.driver_shader;
+            if (baseFormat == GL_DEPTH_COMPONENT ||
+                baseFormat == GL_DEPTH_STENCIL)
+               key.depth_textures |= BITFIELD_BIT(i);
+         }
+      }
+
+      key.external = st_get_external_sampler_key(st, fp);
+      update_gl_clamp(st, st->ctx->FragmentProgram._Current, key.gl_clamp);
+
+      simple_mtx_lock(&st->ctx->Shared->Mutex);
+      shader = st_get_fp_variant(st, fp, &key, false, NULL)->base.driver_shader;
+      simple_mtx_unlock(&st->ctx->Shared->Mutex);
    }
 
-   st_reference_prog(st, &st->fp, stfp);
+   _mesa_reference_program(st->ctx, &st->fp, fp);
 
    cso_set_fragment_shader_handle(st->cso_context, shader);
 }
@@ -176,20 +200,18 @@ st_update_fp( struct st_context *st )
 void
 st_update_vp( struct st_context *st )
 {
-   struct st_program *stvp;
+   struct gl_program *vp;
 
    /* find active shader and params -- Should be covered by
     * ST_NEW_VERTEX_PROGRAM
     */
    assert(st->ctx->VertexProgram._Current);
-   stvp = st_program(st->ctx->VertexProgram._Current);
-   assert(stvp->Base.Target == GL_VERTEX_PROGRAM_ARB);
+   vp = st->ctx->VertexProgram._Current;
+   assert(vp->Target == GL_VERTEX_PROGRAM_ARB);
 
    if (st->shader_has_one_variant[MESA_SHADER_VERTEX] &&
-       stvp->variants &&
-       st_common_variant(stvp->variants)->key.passthrough_edgeflags == st->vertdata_edgeflags &&
-       !st_common_variant(stvp->variants)->key.is_draw_shader) {
-      st->vp_variant = st_common_variant(stvp->variants);
+       !st->ctx->Array._PerVertexEdgeFlagsEnabled) {
+      st->vp_variant = st_common_variant(vp->variants);
    } else {
       struct st_common_variant_key key;
 
@@ -203,39 +225,34 @@ st_update_vp( struct st_context *st )
        * the input to the output.  We'll need to use similar logic to set
        * up the extra vertex_element input for edgeflags.
        */
-      key.passthrough_edgeflags = st->vertdata_edgeflags;
+      key.passthrough_edgeflags = st->ctx->Array._PerVertexEdgeFlagsEnabled;
 
       key.clamp_color = st->clamp_vert_color_in_shader &&
                         st->ctx->Light._ClampVertexColor &&
-                        (stvp->Base.info.outputs_written &
+                        (vp->info.outputs_written &
                          (VARYING_SLOT_COL0 |
                           VARYING_SLOT_COL1 |
                           VARYING_SLOT_BFC0 |
                           VARYING_SLOT_BFC1));
 
-      key.lower_depth_clamp =
-            !st->gp && !st->tep &&
-            st->clamp_frag_depth_in_shader &&
-            (st->ctx->Transform.DepthClampNear ||
-             st->ctx->Transform.DepthClampFar);
+      if (!st->ctx->GeometryProgram._Current &&
+          !st->ctx->TessEvalProgram._Current) {
+         /* _NEW_POINT */
+         if (st->lower_point_size)
+            key.export_point_size = !st->ctx->VertexProgram.PointSizeEnabled && !st->ctx->PointSizeIsSet;
+         /* _NEW_TRANSFORM */
+         if (st->lower_ucp && st_user_clip_planes_enabled(st->ctx))
+            key.lower_ucp = st->ctx->Transform.ClipPlanesEnabled;
+      }
 
-      if (key.lower_depth_clamp)
-         key.clip_negative_one_to_one =
-               st->ctx->Transform.ClipDepthMode == GL_NEGATIVE_ONE_TO_ONE;
+      update_gl_clamp(st, st->ctx->VertexProgram._Current, key.gl_clamp);
 
-      /* _NEW_POINT */
-      key.lower_point_size = st->lower_point_size &&
-                             !st_point_size_per_vertex(st->ctx);
-
-      /* _NEW_TRANSFORM */
-      if (st->lower_ucp && st_user_clip_planes_enabled(st->ctx) &&
-          !st->ctx->GeometryProgram._Current)
-         key.lower_ucp = st->ctx->Transform.ClipPlanesEnabled;
-
-      st->vp_variant = st_get_vp_variant(st, stvp, &key);
+      simple_mtx_lock(&st->ctx->Shared->Mutex);
+      st->vp_variant = st_get_common_variant(st, vp, &key, false, NULL);
+      simple_mtx_unlock(&st->ctx->Shared->Mutex);
    }
 
-   st_reference_prog(st, &st->vp, stvp);
+   _mesa_reference_program(st->ctx, &st->vp, vp);
 
    cso_set_vertex_shader_handle(st->cso_context,
                                 st->vp_variant->base.driver_shader);
@@ -244,20 +261,17 @@ st_update_vp( struct st_context *st )
 
 static void *
 st_update_common_program(struct st_context *st, struct gl_program *prog,
-                         unsigned pipe_shader, struct st_program **dst)
+                         unsigned pipe_shader, struct gl_program **dst)
 {
-   struct st_program *stp;
-
    if (!prog) {
-      st_reference_prog(st, dst, NULL);
+      _mesa_reference_program(st->ctx, dst, NULL);
       return NULL;
    }
 
-   stp = st_program(prog);
-   st_reference_prog(st, dst, stp);
+   _mesa_reference_program(st->ctx, dst, prog);
 
-   if (st->shader_has_one_variant[prog->info.stage] && stp->variants)
-      return stp->variants->driver_shader;
+   if (st->shader_has_one_variant[prog->info.stage])
+      return prog->variants->driver_shader;
 
    struct st_common_variant_key key;
 
@@ -270,28 +284,28 @@ st_update_common_program(struct st_context *st, struct gl_program *prog,
        pipe_shader == PIPE_SHADER_TESS_EVAL) {
       key.clamp_color = st->clamp_vert_color_in_shader &&
                         st->ctx->Light._ClampVertexColor &&
-                        (stp->Base.info.outputs_written &
+                        (prog->info.outputs_written &
                          (VARYING_SLOT_COL0 |
                           VARYING_SLOT_COL1 |
                           VARYING_SLOT_BFC0 |
                           VARYING_SLOT_BFC1));
 
-      key.lower_depth_clamp =
-            (pipe_shader == PIPE_SHADER_GEOMETRY || !st->gp) &&
-            st->clamp_frag_depth_in_shader &&
-            (st->ctx->Transform.DepthClampNear ||
-             st->ctx->Transform.DepthClampFar);
-
-      if (key.lower_depth_clamp)
-         key.clip_negative_one_to_one =
-               st->ctx->Transform.ClipDepthMode == GL_NEGATIVE_ONE_TO_ONE;
-
       if (st->lower_ucp && st_user_clip_planes_enabled(st->ctx) &&
-          pipe_shader == PIPE_SHADER_GEOMETRY)
+          (pipe_shader == PIPE_SHADER_GEOMETRY ||
+             !st->ctx->GeometryProgram._Current))
          key.lower_ucp = st->ctx->Transform.ClipPlanesEnabled;
+
+      if (st->lower_point_size)
+         key.export_point_size = !st->ctx->VertexProgram.PointSizeEnabled && !st->ctx->PointSizeIsSet;
    }
 
-   return st_get_common_variant(st, stp, &key)->driver_shader;
+   update_gl_clamp(st, prog, key.gl_clamp);
+
+   simple_mtx_lock(&st->ctx->Shared->Mutex);
+   void *result = st_get_common_variant(st, prog, &key, false, NULL)->base.driver_shader;
+   simple_mtx_unlock(&st->ctx->Shared->Mutex);
+
+   return result;
 }
 
 

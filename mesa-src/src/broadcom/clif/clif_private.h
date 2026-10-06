@@ -54,11 +54,17 @@ struct clif_dump {
          * output.
          */
         bool pretty;
+
+        /**
+         * Flag to no dump the binary resources.
+         */
+        bool nobin;
 };
 
 enum reloc_worklist_type {
         reloc_cl,
         reloc_gl_shader_state,
+        reloc_gl_including_gs_shader_state,
         reloc_generic_tile_list,
 };
 
@@ -89,11 +95,9 @@ clif_dump_add_address_to_worklist(struct clif_dump *clif,
                                   enum reloc_worklist_type type,
                                   uint32_t addr);
 
-bool v3d33_clif_dump_packet(struct clif_dump *clif, uint32_t offset,
-                            const uint8_t *cl, uint32_t *size, bool reloc_mode);
-bool v3d41_clif_dump_packet(struct clif_dump *clif, uint32_t offset,
-                            const uint8_t *cl, uint32_t *size, bool reloc_mode);
 bool v3d42_clif_dump_packet(struct clif_dump *clif, uint32_t offset,
+                            const uint8_t *cl, uint32_t *size, bool reloc_mode);
+bool v3d71_clif_dump_packet(struct clif_dump *clif, uint32_t offset,
                             const uint8_t *cl, uint32_t *size, bool reloc_mode);
 
 static inline void

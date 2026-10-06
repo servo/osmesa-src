@@ -22,10 +22,13 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef BRW_IR_ALLOCATOR_H
-#define BRW_IR_ALLOCATOR_H
+#pragma once
 
-#include "main/macros.h"
+#include "util/compiler.h"
+#include "util/glheader.h"
+#include "util/macros.h"
+#include "util/rounding.h"
+#include "util/u_math.h"
 
 namespace brw {
    /**
@@ -84,5 +87,3 @@ namespace brw {
       unsigned capacity;
    };
 }
-
-#endif

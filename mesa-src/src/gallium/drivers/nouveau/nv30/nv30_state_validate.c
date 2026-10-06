@@ -25,12 +25,13 @@
 
 #include "util/format/u_format.h"
 #include "util/u_math.h"
-#include "util/u_half.h"
+#include "util/half_float.h"
 
 #include "nv_object.xml.h"
 #include "nv30/nv30-40_3d.xml.h"
 #include "nv30/nv30_context.h"
 #include "nv30/nv30_format.h"
+#include "nv30/nv30_winsys.h"
 
 static void
 nv30_validate_fb(struct nv30_context *nv30)
@@ -80,7 +81,7 @@ nv30_validate_fb(struct nv30_context *nv30)
 
    /* hardware rounds down render target offset to 64 bytes, but surfaces
     * with a size of 2x2 pixel (16bpp) or 1x1 pixel (32bpp) have an
-    * unaligned start aaddress.  For these two important square formats
+    * unaligned start address.  For these two important square formats
     * we can hack around this limitation by adjusting the viewport origin
     */
    if (nv30->state.rt_enable) {
@@ -182,11 +183,11 @@ nv30_validate_blend_colour(struct nv30_context *nv30)
       case PIPE_FORMAT_R16G16B16A16_FLOAT:
       case PIPE_FORMAT_R32G32B32A32_FLOAT:
          BEGIN_NV04(push, NV30_3D(BLEND_COLOR), 1);
-         PUSH_DATA (push, (util_float_to_half(rgba[0]) <<  0) |
-                          (util_float_to_half(rgba[1]) << 16));
+         PUSH_DATA (push, (_mesa_float_to_half(rgba[0]) <<  0) |
+                          (_mesa_float_to_half(rgba[1]) << 16));
          BEGIN_NV04(push, SUBC_3D(0x037c), 1);
-         PUSH_DATA (push, (util_float_to_half(rgba[2]) <<  0) |
-                          (util_float_to_half(rgba[3]) << 16));
+         PUSH_DATA (push, (_mesa_float_to_half(rgba[2]) <<  0) |
+                          (_mesa_float_to_half(rgba[3]) << 16));
          break;
       default:
          break;
@@ -457,13 +458,11 @@ nv30_state_context_switch(struct nv30_context *nv30)
       nv30->dirty &= ~NV30_NEW_ZSA;
 
    nv30->screen->cur_ctx = nv30;
-   nv30->base.pushbuf->user_priv = &nv30->bufctx;
 }
 
 bool
 nv30_state_validate(struct nv30_context *nv30, uint32_t mask, bool hwtnl)
 {
-   struct nouveau_screen *screen = &nv30->screen->base;
    struct nouveau_pushbuf *push = nv30->base.pushbuf;
    struct nouveau_bufctx *bctx = nv30->bufctx;
    struct nouveau_bufref *bref;
@@ -499,7 +498,7 @@ nv30_state_validate(struct nv30_context *nv30, uint32_t mask, bool hwtnl)
    }
 
    nouveau_pushbuf_bufctx(push, bctx);
-   if (nouveau_pushbuf_validate(push)) {
+   if (PUSH_VAL(push)) {
       nouveau_pushbuf_bufctx(push, NULL);
       return false;
    }
@@ -523,13 +522,13 @@ nv30_state_validate(struct nv30_context *nv30, uint32_t mask, bool hwtnl)
    LIST_FOR_EACH_ENTRY(bref, &bctx->current, thead) {
       struct nv04_resource *res = bref->priv;
       if (res && res->mm) {
-         nouveau_fence_ref(screen->fence.current, &res->fence);
+         nouveau_fence_ref(nv30->base.fence, &res->fence);
 
          if (bref->flags & NOUVEAU_BO_RD)
             res->status |= NOUVEAU_BUFFER_STATUS_GPU_READING;
 
          if (bref->flags & NOUVEAU_BO_WR) {
-            nouveau_fence_ref(screen->fence.current, &res->fence_wr);
+            nouveau_fence_ref(nv30->base.fence, &res->fence_wr);
             res->status |= NOUVEAU_BUFFER_STATUS_GPU_WRITING;
          }
       }

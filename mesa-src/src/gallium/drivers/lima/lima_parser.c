@@ -32,6 +32,9 @@
 #include "lima_parser.h"
 #include "lima_texture.h"
 
+#include "lima/ir/gp/codegen.h"
+#include "lima/ir/pp/codegen.h"
+
 typedef struct {
    char *info;
 } render_state_info;
@@ -433,6 +436,35 @@ lima_parse_plbu(FILE *fp, uint32_t *data, int size, uint32_t start)
    fprintf(fp, "\n");
 }
 
+void
+lima_parse_shader(FILE *fp, uint32_t *data, int size, bool is_frag)
+{
+   uint32_t *value = &data[0];
+
+   if (is_frag) {
+      uint32_t *bin = value;
+      uint32_t offt = 0;
+      uint32_t next_instr_length = 0;
+
+      fprintf(fp, "/* ============ FS DISASSEMBLY BEGIN ============== */\n");
+
+      do {
+         ppir_codegen_ctrl *ctrl = (ppir_codegen_ctrl *)bin;
+         fprintf(fp, "@%6d: ", offt);
+         ppir_disassemble_instr(bin, offt, fp);
+         bin += ctrl->count;
+         offt += ctrl->count;
+         next_instr_length = ctrl->next_count;
+      } while (next_instr_length);
+
+      fprintf(fp, "/* ============ FS DISASSEMBLY END ================= */\n");
+   } else {
+      fprintf(fp, "/* ============ VS DISASSEMBLY BEGIN ============== */\n");
+      gpir_disassemble_program((gpir_codegen_instr *)value, size / sizeof(gpir_codegen_instr), fp);
+      fprintf(fp, "/* ============ VS DISASSEMBLY END ================= */\n");
+   }
+}
+
 static void
 parse_rsw(FILE *fp, uint32_t *value, int i, uint32_t *helper)
 {
@@ -489,7 +521,11 @@ parse_rsw(FILE *fp, uint32_t *value, int i, uint32_t *helper)
       if (*value & 0x1000)
          fprintf(fp, ", shader writes stencil");
       fprintf(fp, " */\n\t\t\t\t\t\t/* %s(3)", render_state_infos[i].info);
-      fprintf(fp, ": unknown bits 4-9: 0x%08x", *value & 0x000003f0);
+      if ((*value & 0x00000010) == 0x00000010)
+         fprintf(fp, ": ignore depth clip near");
+      if ((*value & 0x00000020) == 0x00000020)
+         fprintf(fp, ", ignore depth clip far");
+      fprintf(fp, ", register for gl_FragDepth: $%d", (*value & 0x000003c0) >> 6);
       fprintf(fp, ", unknown bits 13-15: 0x%08x */\n", *value & 0x00000e000);
       break;
    case 4: /* DEPTH RANGE */
@@ -537,8 +573,10 @@ parse_rsw(FILE *fp, uint32_t *value, int i, uint32_t *helper)
               (*value & 0x0000ff00) >> 8); /* back writemask */
       /* add a few tabs for alignment */
       fprintf(fp, "\t\t\t\t\t\t/* %s(2)", render_state_infos[i].info);
-      fprintf(fp, ": unknown (bits 16-31) 0x%04x */\n",
-              (*value & 0xffff0000) >> 16); /* unknown, alpha ref_value? */
+      fprintf(fp, ": alpha_ref_value: 0x%02x */\n", (*value & 0x00ff0000) >> 16);
+      fprintf(fp, "\t\t\t\t\t\t/* %s(3)", render_state_infos[i].info);
+      fprintf(fp, ": unknown (bits 24-31) 0x%02x */\n",
+              (*value & 0xff000000) >> 24); /* unknown */
       break;
    case 8: /* MULTI SAMPLE */
       if ((*value & 0x00000f00) == 0x00000000)
@@ -551,11 +589,30 @@ parse_rsw(FILE *fp, uint32_t *value, int i, uint32_t *helper)
          fprintf(fp, ": unknown");
 
       if ((*value & 0x00000078) == 0x00000068)
-         fprintf(fp, ", fb_samples */\n");
+         fprintf(fp, ", msaa */\n");
       else if ((*value & 0x00000078) == 0x00000000)
          fprintf(fp, " */\n");
       else
-         fprintf(fp, ", UNKNOWN\n");
+         fprintf(fp, ", UNKNOWN */\n");
+
+      fprintf(fp, "\t\t\t\t\t\t/* %s(3)", render_state_infos[i].info);
+      fprintf(fp, ": sample_mask: 0x%.x", ((*value & 0xf000) >> 12));
+      if ((*value & (1 << 7)))
+         fprintf(fp, ", alpha_to_coverage");
+      if ((*value & (1 << 8)))
+         fprintf(fp, ", alpha_to_one");
+      fprintf(fp, " */\n");
+
+      fprintf(fp, "\t\t\t\t\t\t/* %s(4)", render_state_infos[i].info);
+      fprintf(fp, ", register for gl_FragColor: $%d $%d $%d $%d */\n",
+              (*value & 0xf0000000) >> 28,
+              (*value & 0x0f000000) >> 24,
+              (*value & 0x00f00000) >> 20,
+              (*value & 0x000f0000) >> 16);
+      fprintf(fp, "\t\t\t\t\t\t/* %s(3)", render_state_infos[i].info);
+      fprintf(fp, ": alpha_test_func: %d (%s) */\n",
+              (*value & 0x00000007),
+              lima_get_compare_func_string((*value & 0x00000007))); /* alpha_test_func */
       break;
    case 9: /* SHADER ADDRESS */
       fprintf(fp, ": fs shader @ 0x%08x, first instr length %d */\n",
@@ -566,18 +623,18 @@ parse_rsw(FILE *fp, uint32_t *value, int i, uint32_t *helper)
       int val, j;
       /* 0 - 5 */
       for (j = 0; j < 6; j++) {
-         val = *value & (0x07 << (j * 3));
+         val = (*value >> (j * 3)) & 0x07;
          fprintf(fp, "val %d-%d, ", j, val);
       }
       /* 6 - 9 */
       /* add a few tabs for alignment */
       fprintf(fp, "\n\t\t\t\t\t\t/* %s(2): ", render_state_infos[i].info);
       for (j = 6; j < 10; j++) {
-         val = *value & (0x07 << (j * 3));
+         val = (*value >> (j * 3)) & 0x07;
          fprintf(fp, "val %d-%d, ", j, val);
       }
       /* 10 */
-      val = ((*value & 0x0c000000) >> 30) | ((*helper & 0x00000001) << 2);
+      val = ((*value & 0xc0000000) >> 30) | ((*helper & 0x00000001) << 2);
       fprintf(fp, "val %d-%d, ", j, val);
       j++;
       /* 11 */
@@ -625,12 +682,23 @@ parse_rsw(FILE *fp, uint32_t *value, int i, uint32_t *helper)
 
       if ((*value & 0x00002000) == 0x00002000) /* bit 13 unknown */
          fprintf(fp, ", bit 13 set");
+
+      fprintf(fp, " */\n");
+      fprintf(fp, "\n\t\t\t\t\t\t/* %s(3):", render_state_infos[i].info);
+      fprintf(fp, " register for gl_SecondaryFragColor: $%d",
+         (*value & 0xf0000000) >> 28);
       fprintf(fp, " */\n");
       break;
    case 14: /* AUX1 */
       fprintf(fp, ": ");
       if ((*value & 0x00002000) == 0x00002000)
          fprintf(fp, "blend->base.dither true, ");
+
+      if ((*value & 0x00001000) == 0x00001000)
+         fprintf(fp, "glFrontFace(GL_CCW), ");
+      else
+         fprintf(fp, "glFrontFace(GL_CW), ");
+
       if ((*value & 0x00010000) == 0x00010000)
          fprintf(fp, "ctx->const_buffer[PIPE_SHADER_FRAGMENT].buffer true ");
       fprintf(fp, "*/\n");
@@ -680,14 +748,16 @@ parse_texture(FILE *fp, uint32_t *data, uint32_t start, uint32_t offset)
    fprintf(fp, "\t stride: 0x%x (%d)\n", desc->stride, desc->stride);
    fprintf(fp, "\t unknown_0_2: 0x%x (%d)\n", desc->unknown_0_2, desc->unknown_0_2);
 
-   /* Word 1 - 3 */
-   fprintf(fp, "/* 0x%08x (0x%08x) */\t0x%08x 0x%08x 0x%08x\n",
-           start + i * 4, i * 4, *(&data[i + offset]), *(&data[i + 1 + offset]), *(&data[i + 2 + offset]));
-   i += 3;
+   /* Word 1 - 5 */
+   fprintf(fp, "/* 0x%08x (0x%08x) */\t0x%08x 0x%08x 0x%08x 0x%08x 0x%08x\n",
+           start + i * 4, i * 4, *(&data[i + offset]), *(&data[i + 1 + offset]),
+           *(&data[i + 2 + offset]), *(&data[i + 3 + offset]), *(&data[i + 4 + offset]));
+   i += 5;
    fprintf(fp, "\t unknown_1_1: 0x%x (%d)\n", desc->unknown_1_1, desc->unknown_1_1);
    fprintf(fp, "\t unnorm_coords: 0x%x (%d)\n", desc->unnorm_coords, desc->unnorm_coords);
    fprintf(fp, "\t unknown_1_2: 0x%x (%d)\n", desc->unknown_1_2, desc->unknown_1_2);
-   fprintf(fp, "\t texture_type: 0x%x (%d)\n", desc->texture_type, desc->texture_type);
+   fprintf(fp, "\t cube_map: 0x%x (%d)\n", desc->cube_map, desc->cube_map);
+   fprintf(fp, "\t sampler_dim: 0x%x (%d)\n", desc->sampler_dim, desc->sampler_dim);
    fprintf(fp, "\t min_lod: 0x%x (%d) (%f)\n", desc->min_lod, desc->min_lod, lima_fixed8_to_float(desc->min_lod));
    fprintf(fp, "\t max_lod: 0x%x (%d) (%f)\n", desc->max_lod, desc->max_lod, lima_fixed8_to_float(desc->max_lod));
    fprintf(fp, "\t lod_bias: 0x%x (%d) (%f)\n", desc->lod_bias, desc->lod_bias, lima_fixed8_to_float(desc->lod_bias));
@@ -696,29 +766,20 @@ parse_texture(FILE *fp, uint32_t *data, uint32_t start, uint32_t offset)
    fprintf(fp, "\t min_mipfilter_2: 0x%x (%d)\n", desc->min_mipfilter_2, desc->min_mipfilter_2);
    fprintf(fp, "\t min_img_filter_nearest: 0x%x (%d)\n", desc->min_img_filter_nearest, desc->min_img_filter_nearest);
    fprintf(fp, "\t mag_img_filter_nearest: 0x%x (%d)\n", desc->mag_img_filter_nearest, desc->mag_img_filter_nearest);
-   fprintf(fp, "\t wrap_s_clamp_to_edge: 0x%x (%d)\n", desc->wrap_s_clamp_to_edge, desc->wrap_s_clamp_to_edge);
-   fprintf(fp, "\t wrap_s_clamp: 0x%x (%d)\n", desc->wrap_s_clamp, desc->wrap_s_clamp);
-   fprintf(fp, "\t wrap_s_mirror_repeat: 0x%x (%d)\n", desc->wrap_s_mirror_repeat, desc->wrap_s_mirror_repeat);
-   fprintf(fp, "\t wrap_t_clamp_to_edge: 0x%x (%d)\n", desc->wrap_t_clamp_to_edge, desc->wrap_t_clamp_to_edge);
-   fprintf(fp, "\t wrap_t_clamp: 0x%x (%d)\n", desc->wrap_t_clamp, desc->wrap_t_clamp);
-   fprintf(fp, "\t wrap_t_mirror_repeat: 0x%x (%d)\n", desc->wrap_t_mirror_repeat, desc->wrap_t_mirror_repeat);
-   fprintf(fp, "\t unknown_2_2: 0x%x (%d)\n", desc->unknown_2_2, desc->unknown_2_2);
+   fprintf(fp, "\t wrap_s: %d (%s)\n", desc->wrap_s,
+           lima_get_wrap_mode_string(desc->wrap_s));
+   fprintf(fp, "\t wrap_t: %d (%s)\n", desc->wrap_t,
+           lima_get_wrap_mode_string(desc->wrap_t));
+   fprintf(fp, "\t wrap_r: %d (%s)\n", desc->wrap_r,
+           lima_get_wrap_mode_string(desc->wrap_r));
    fprintf(fp, "\t width: 0x%x (%d)\n", desc->width, desc->width);
    fprintf(fp, "\t height: 0x%x (%d)\n", desc->height, desc->height);
-   fprintf(fp, "\t unknown_3_1: 0x%x (%d)\n", desc->unknown_3_1, desc->unknown_3_1);
-   fprintf(fp, "\t unknown_3_2: 0x%x (%d)\n", desc->unknown_3_2, desc->unknown_3_2);
-
-   /* Word 4 */
-   fprintf(fp, "/* 0x%08x (0x%08x) */\t0x%08x\n",
-           start + i * 4, i * 4, *(&data[i + offset]));
-   i++;
-   fprintf(fp, "\t unknown_4: 0x%x (%d)\n", desc->unknown_4, desc->unknown_4);
-
-   /* Word 5 */
-   fprintf(fp, "/* 0x%08x (0x%08x) */\t0x%08x\n",
-           start + i * 4, i * 4, *(&data[i + offset]));
-   i++;
-   fprintf(fp, "\t unknown_5: 0x%x (%d)\n", desc->unknown_5, desc->unknown_5);
+   fprintf(fp, "\t depth: 0x%x (%d)\n", desc->depth, desc->depth);
+   fprintf(fp, "\t border_red: 0x%x (%d)\n", desc->border_red, desc->border_red);
+   fprintf(fp, "\t border_green: 0x%x (%d)\n", desc->border_green, desc->border_green);
+   fprintf(fp, "\t border_blue: 0x%x (%d)\n", desc->border_blue, desc->border_blue);
+   fprintf(fp, "\t border_alpha: 0x%x (%d)\n", desc->border_alpha, desc->border_alpha);
+   fprintf(fp, "\t unknown_5_1: 0x%x (%d)\n", desc->unknown_5_1, desc->unknown_5_1);
 
    /* Word 6 - */
    fprintf(fp, "/* 0x%08x (0x%08x) */",

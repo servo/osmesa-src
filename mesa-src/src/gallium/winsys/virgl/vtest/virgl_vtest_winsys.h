@@ -24,11 +24,11 @@
 #define VIRGL_DRM_WINSYS_H
 
 #include <stdint.h>
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_state.h"
 #include "util/list.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 
 #include "virgl/virgl_winsys.h"
 #include "vtest/vtest_protocol.h"
@@ -49,6 +49,7 @@ struct virgl_vtest_winsys {
    struct virgl_resource_cache cache;
    mtx_t mutex;
 
+   int32_t blob_id;
    unsigned protocol_version;
 };
 
@@ -79,9 +80,6 @@ struct virgl_vtest_cmd_buf {
    unsigned cres;
    struct virgl_winsys *ws;
    struct virgl_hw_res **res_bo;
-
-   char                        is_handle_added[512];
-   unsigned                    reloc_indices_hashlist[512];
 };
 
 static inline struct virgl_hw_res *
@@ -123,8 +121,9 @@ int virgl_vtest_send_resource_create(struct virgl_vtest_winsys *vws,
 
 int virgl_vtest_send_resource_unref(struct virgl_vtest_winsys *vws,
                                     uint32_t handle);
-int virgl_vtest_submit_cmd(struct virgl_vtest_winsys *vtws,
-                           struct virgl_vtest_cmd_buf *cbuf);
+
+int virgl_vtest_submit_cmd(struct virgl_vtest_winsys *vws,
+                           uint32_t *buf, uint32_t buf_len);
 
 int virgl_vtest_send_transfer_get(struct virgl_vtest_winsys *vws,
                                   uint32_t handle,
@@ -154,4 +153,8 @@ int virgl_vtest_recv_transfer_get_data(struct virgl_vtest_winsys *vws,
 
 int virgl_vtest_busy_wait(struct virgl_vtest_winsys *vws, int handle,
                           int flags);
+
+int
+virgl_vtest_send_create_blob(struct virgl_vtest_winsys *vws,
+                             uint32_t size, uint32_t blob_id, int *fd);
 #endif

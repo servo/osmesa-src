@@ -25,17 +25,18 @@
 
 using namespace clover;
 
-program::program(clover::context &ctx, const std::string &source) :
-   has_source(true), context(ctx), _devices(ctx.devices()), _source(source),
-   _kernel_ref_counter(0) {
+program::program(clover::context &ctx, std::string &&source,
+                 enum il_type il_type) :
+   context(ctx), _devices(ctx.devices()), _source(std::move(source)),
+   _kernel_ref_counter(0), _il_type(il_type) {
 }
 
 program::program(clover::context &ctx,
                  const ref_vector<device> &devs,
-                 const std::vector<module> &binaries) :
-   has_source(false), context(ctx),
-   _devices(devs), _kernel_ref_counter(0) {
-   for_each([&](device &dev, const module &bin) {
+                 const std::vector<binary> &binaries) :
+   context(ctx), _devices(devs), _kernel_ref_counter(0),
+   _il_type(il_type::none) {
+   for_each([&](device &dev, const binary &bin) {
          _builds[&dev] = { bin };
       },
       devs, binaries);
@@ -44,18 +45,18 @@ program::program(clover::context &ctx,
 void
 program::compile(const ref_vector<device> &devs, const std::string &opts,
                  const header_map &headers) {
-   if (has_source) {
+   if (_il_type != il_type::none) {
       _devices = devs;
 
       for (auto &dev : devs) {
          std::string log;
 
          try {
-            const module m =
-               compiler::compile_program(_source, headers, dev, opts, log);
-            _builds[&dev] = { m, opts, log };
+            const binary b =
+               compiler::compile_program(*this, headers, dev, opts, log);
+            _builds[&dev] = { b, opts, log };
          } catch (...) {
-            _builds[&dev] = { module(), opts, log };
+            _builds[&dev] = { binary(), opts, log };
             throw;
          }
       }
@@ -68,19 +69,24 @@ program::link(const ref_vector<device> &devs, const std::string &opts,
    _devices = devs;
 
    for (auto &dev : devs) {
-      const std::vector<module> ms = map([&](const program &prog) {
-         return prog.build(dev).binary;
+      const std::vector<binary> bs = map([&](const program &prog) {
+         return prog.build(dev).bin;
          }, progs);
       std::string log = _builds[&dev].log;
 
       try {
-         const module m = compiler::link_program(ms, dev, opts, log);
-         _builds[&dev] = { m, opts, log };
+         const binary b = compiler::link_program(bs, dev, opts, log);
+         _builds[&dev] = { b, opts, log };
       } catch (...) {
-         _builds[&dev] = { module(), opts, log };
+         _builds[&dev] = { binary(), opts, log };
          throw;
       }
    }
+}
+
+enum program::il_type
+program::il_type() const {
+   return _il_type;
 }
 
 const std::string &
@@ -95,7 +101,7 @@ program::devices() const {
 
 cl_build_status
 program::build::status() const {
-   if (!binary.secs.empty())
+   if (!bin.secs.empty())
       return CL_BUILD_SUCCESS;
    else if (log.size())
       return CL_BUILD_ERROR;
@@ -105,11 +111,11 @@ program::build::status() const {
 
 cl_program_binary_type
 program::build::binary_type() const {
-   if (any_of(type_equals(module::section::text_intermediate), binary.secs))
+   if (any_of(type_equals(binary::section::text_intermediate), bin.secs))
       return CL_PROGRAM_BINARY_TYPE_COMPILED_OBJECT;
-   else if (any_of(type_equals(module::section::text_library), binary.secs))
+   else if (any_of(type_equals(binary::section::text_library), bin.secs))
       return CL_PROGRAM_BINARY_TYPE_LIBRARY;
-   else if (any_of(type_equals(module::section::text_executable), binary.secs))
+   else if (any_of(type_equals(binary::section::text_executable), bin.secs))
       return CL_PROGRAM_BINARY_TYPE_EXECUTABLE;
    else
       return CL_PROGRAM_BINARY_TYPE_NONE;
@@ -121,12 +127,12 @@ program::build(const device &dev) const {
    return _builds.count(&dev) ? _builds.find(&dev)->second : null;
 }
 
-const std::vector<module::symbol> &
+const std::vector<binary::symbol> &
 program::symbols() const {
    if (_builds.empty())
       throw error(CL_INVALID_PROGRAM_EXECUTABLE);
 
-   return _builds.begin()->second.binary.syms;
+   return _builds.begin()->second.bin.syms;
 }
 
 unsigned

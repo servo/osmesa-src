@@ -114,7 +114,8 @@ remove_dynamic_indexes(struct tgsi_transform_context *ctx,
    int imm_index = dc->orig_num_imm;
    struct tgsi_full_instruction inst;
    unsigned INVALID_INDEX = 99999;
-   unsigned file = TGSI_FILE_NULL, index = INVALID_INDEX;
+   enum tgsi_file_type file = TGSI_FILE_NULL;
+   unsigned index = INVALID_INDEX;
    unsigned imm_swz_index = INVALID_INDEX;
 
    /* calculate dynamic array index store it in tmp_arrayIdx.x */
@@ -159,7 +160,7 @@ remove_dynamic_indexes(struct tgsi_transform_context *ctx,
    ctx->emit_instruction(ctx, &inst);
 
    for (i = 0; i < dc->num_iterations; i++) {
-      boolean out_of_bound_index = FALSE;
+      bool out_of_bound_index = false;
       /**
        * Make sure we are not exceeding index limit of constant buffer
        *
@@ -178,7 +179,7 @@ remove_dynamic_indexes(struct tgsi_transform_context *ctx,
       if ((reg->Register.File == TGSI_FILE_CONSTANT) &&
           (!reg->Register.Indirect &&
            (reg->Register.Index > dc->const_buf_range[i]))) {
-         out_of_bound_index = TRUE;
+         out_of_bound_index = true;
       }
 
       if (!out_of_bound_index) {
@@ -279,7 +280,7 @@ dIndexing_inst(struct tgsi_transform_context *ctx,
                struct tgsi_full_instruction *inst)
 {
    int i;
-   boolean indexing = FALSE;
+   bool indexing = false;
    struct dIndexing_transform_context *dc = dIndexing_transform_context(ctx);
 
    for (i = 0; i < inst->Instruction.NumSrcRegs; i++) {
@@ -300,7 +301,7 @@ dIndexing_inst(struct tgsi_transform_context *ctx,
             dc->num_iterations = dc->num_samplers;
 
          remove_dynamic_indexes(ctx, inst, src);
-         indexing = TRUE;
+         indexing = true;
       }
    }
 
@@ -330,9 +331,8 @@ tgsi_remove_dynamic_indexing(const struct tgsi_token *tokens_in,
                              unsigned imm_count)
 {
    struct dIndexing_transform_context transform;
-   const uint num_new_tokens = 1000; /* should be enough */
-   const uint new_len = tgsi_num_tokens(tokens_in) + num_new_tokens;
-   struct tgsi_token *new_tokens;
+   const unsigned num_new_tokens = 1000; /* should be enough */
+   const unsigned new_len = tgsi_num_tokens(tokens_in) + num_new_tokens;
 
    /* setup transformation context */
    memset(&transform, 0, sizeof(transform));
@@ -347,15 +347,7 @@ tgsi_remove_dynamic_indexing(const struct tgsi_token *tokens_in,
    transform.num_samplers = log2(samplers_declared_bitmask + 1);
    transform.num_iterations = 0;
 
-   /* allocate new tokens buffer */
-   new_tokens = tgsi_alloc_tokens(new_len);
-   if (!new_tokens)
-      return NULL;
-
-   /* transform the shader */
-   tgsi_transform_shader(tokens_in, new_tokens, new_len, &transform.base);
-
-   return new_tokens;
+   return tgsi_transform_shader(tokens_in, new_len, &transform.base);
 }
 
 

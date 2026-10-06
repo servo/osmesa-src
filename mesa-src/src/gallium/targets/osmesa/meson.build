@@ -1,22 +1,5 @@
 # Copyright © 2017 Intel Corporation
-
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# SPDX-License-Identifier: MIT
 
 osmesa_link_with = []
 osmesa_link_args = []
@@ -32,15 +15,16 @@ if with_ld_version_script
   osmesa_link_deps += files('osmesa.sym')
 endif
 
-if cc.get_id() == 'gcc' and host_machine.cpu_family() != 'x86_64'
-  osmesa_def = 'osmesa.mingw.def'
-else
-  osmesa_def = 'osmesa.def'
-endif
+osmesa_def = custom_target(
+  'osmesa.def',
+  input: 'osmesa.def.in',
+  output : 'osmesa.def',
+  command : gen_vs_module_defs_normal_command,
+)
 
 libosmesa = shared_library(
   osmesa_lib_name,
-  'target.c',
+  'osmesa_target.c',
   gnu_symbol_visibility : 'hidden',
   link_args : [ld_args_gc_sections, osmesa_link_args],
   vs_module_defs : osmesa_def,
@@ -51,17 +35,29 @@ libosmesa = shared_library(
   link_depends : osmesa_link_deps,
   link_whole : [libosmesa_st, libglapi_static],
   link_with : [
-    libmesa_gallium, libgallium, libws_null, osmesa_link_with,
+    libmesa, libgallium, libws_null, osmesa_link_with,
   ],
   dependencies : [
-    dep_ws2_32, dep_selinux, dep_thread, dep_clock, dep_unwind,
-    driver_swrast, driver_swr,
+    dep_ws2_32, dep_thread, dep_clock, dep_unwind, driver_swrast, idep_mesautil,
   ],
-  name_prefix : host_machine.system() == 'windows' ? '' : 'lib',  # otherwise mingw will create libosmesa.dll
+  name_prefix : host_machine.system() == 'windows' ? '' : [],  # otherwise mingw will create libosmesa.dll
   soversion : host_machine.system() == 'windows' ? '' : '8',
   version : '8.0.0',
+  darwin_versions : '9.0.0',
   install : true,
 )
+
+if with_symbols_check
+  test('osmesa-symbols-check',
+    symbols_check,
+    args : [
+      '--lib', libosmesa,
+      '--symbols-file', files('osmesa-symbols.txt'),
+      symbols_check_args,
+    ],
+    suite : ['gallium'],
+  )
+endif
 
 pkg.generate(
   name : 'osmesa',
@@ -78,8 +74,9 @@ if with_tests
       'test-render.cpp',
       include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
       link_with: libosmesa,
-      dependencies : [idep_gtest],
+      dependencies : [idep_gtest, idep_mesautil],
     ),
-    suite: 'gallium'
+    suite: 'gallium',
+    protocol : 'gtest',
   )
 endif

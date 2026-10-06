@@ -1,6 +1,7 @@
 /* core functions queryable in the presence of
  * EGL_KHR_get_all_proc_addresses or EGL 1.5
  */
+/* clang-format off */
 /* alphabetical order */
 EGL_ENTRYPOINT(eglBindAPI)
 EGL_ENTRYPOINT(eglBindTexImage)
@@ -36,6 +37,9 @@ EGL_ENTRYPOINT(eglDupNativeFenceFDANDROID)
 EGL_ENTRYPOINT(eglExportDMABUFImageMESA)
 EGL_ENTRYPOINT(eglExportDMABUFImageQueryMESA)
 EGL_ENTRYPOINT(eglExportDRMImageMESA)
+EGL_ENTRYPOINT2(eglGLInteropExportObjectMESA, MesaGLInteropEGLExportObject)
+EGL_ENTRYPOINT2(eglGLInteropFlushObjectsMESA, MesaGLInteropEGLFlushObjects)
+EGL_ENTRYPOINT2(eglGLInteropQueryDeviceInfoMESA, MesaGLInteropEGLQueryDeviceInfo)
 EGL_ENTRYPOINT(eglGetConfigAttrib)
 EGL_ENTRYPOINT(eglGetConfigs)
 EGL_ENTRYPOINT(eglGetCurrentContext)
@@ -45,6 +49,7 @@ EGL_ENTRYPOINT(eglGetDisplay)
 EGL_ENTRYPOINT(eglGetDisplayDriverConfig)
 EGL_ENTRYPOINT(eglGetDisplayDriverName)
 EGL_ENTRYPOINT(eglGetError)
+EGL_ENTRYPOINT(eglGetMscRateANGLE)
 EGL_ENTRYPOINT(eglGetPlatformDisplay)
 EGL_ENTRYPOINT(eglGetPlatformDisplayEXT)
 EGL_ENTRYPOINT(eglGetProcAddress)
@@ -65,6 +70,7 @@ EGL_ENTRYPOINT(eglQueryDisplayAttribEXT)
 EGL_ENTRYPOINT(eglQueryDmaBufFormatsEXT)
 EGL_ENTRYPOINT(eglQueryDmaBufModifiersEXT)
 EGL_ENTRYPOINT(eglQueryString)
+EGL_ENTRYPOINT(eglQuerySupportedCompressionRatesEXT)
 EGL_ENTRYPOINT(eglQuerySurface)
 EGL_ENTRYPOINT(eglQueryWaylandBufferWL)
 EGL_ENTRYPOINT(eglReleaseTexImage)

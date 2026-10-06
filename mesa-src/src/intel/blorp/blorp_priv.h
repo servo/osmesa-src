@@ -26,14 +26,42 @@
 
 #include <stdint.h>
 
+#include "common/intel_measure.h"
 #include "compiler/nir/nir.h"
-#include "compiler/brw_compiler.h"
 
 #include "blorp.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+void blorp_init(struct blorp_context *blorp, void *driver_ctx,
+                struct isl_device *isl_dev, const struct blorp_config *config);
+
+struct blorp_compiler {
+   const struct brw_compiler *brw;
+   const struct elk_compiler *elk;
+
+   const nir_shader_compiler_options *(*nir_options)(struct blorp_context *blorp,
+                                                     gl_shader_stage stage);
+
+   struct blorp_program (*compile_fs)(struct blorp_context *blorp, void *mem_ctx,
+                                      struct nir_shader *nir,
+                                      bool multisample_fbo,
+                                      bool is_fast_clear,
+                                      bool use_repclear);
+   struct blorp_program (*compile_vs)(struct blorp_context *blorp, void *mem_ctx,
+                                      struct nir_shader *nir);
+
+   struct blorp_program (*compile_cs)(struct blorp_context *blorp, void *mem_ctx,
+                                      struct nir_shader *nir);
+
+   bool (*ensure_sf_program)(struct blorp_batch *batch,
+                             struct blorp_params *params);
+
+   bool (*params_get_layer_offset_vs)(struct blorp_batch *batch,
+                                      struct blorp_params *params);
+};
 
 /**
  * Binding table indices used by BLORP.
@@ -44,7 +72,9 @@ enum {
    BLORP_NUM_BT_ENTRIES
 };
 
-struct brw_blorp_surface_info
+#define BLORP_SAMPLER_INDEX 0
+
+struct blorp_surface_info
 {
    bool enabled;
 
@@ -61,53 +91,53 @@ struct brw_blorp_surface_info
    struct isl_view view;
 
    /* Z offset into a 3-D texture or slice of a 2-D array texture. */
-   uint32_t z_offset;
+   float z_offset;
 
    uint32_t tile_x_sa, tile_y_sa;
 };
 
 void
-brw_blorp_surface_info_init(struct blorp_context *blorp,
-                            struct brw_blorp_surface_info *info,
+blorp_surface_info_init(struct blorp_batch *batch,
+                            struct blorp_surface_info *info,
                             const struct blorp_surf *surf,
-                            unsigned int level, unsigned int layer,
-                            enum isl_format format, bool is_render_target);
+                            unsigned int level, float layer,
+                            enum isl_format format, bool is_dest);
 void
 blorp_surf_convert_to_single_slice(const struct isl_device *isl_dev,
-                                   struct brw_blorp_surface_info *info);
+                                   struct blorp_surface_info *info);
 void
 surf_fake_rgb_with_red(const struct isl_device *isl_dev,
-                       struct brw_blorp_surface_info *info);
+                       struct blorp_surface_info *info);
 void
 blorp_surf_convert_to_uncompressed(const struct isl_device *isl_dev,
-                                   struct brw_blorp_surface_info *info,
+                                   struct blorp_surface_info *info,
                                    uint32_t *x, uint32_t *y,
                                    uint32_t *width, uint32_t *height);
 void
 blorp_surf_fake_interleaved_msaa(const struct isl_device *isl_dev,
-                                 struct brw_blorp_surface_info *info);
+                                 struct blorp_surface_info *info);
 void
 blorp_surf_retile_w_to_y(const struct isl_device *isl_dev,
-                         struct brw_blorp_surface_info *info);
+                         struct blorp_surface_info *info);
 
 
-struct brw_blorp_coord_transform
+struct blorp_coord_transform
 {
    float multiplier;
    float offset;
 };
 
 /**
- * Bounding rectangle telling pixel discard which pixels are not to be
- * touched. This is needed in when surfaces are configured as something else
- * what they really are:
+ * Bounding rectangle telling pixel discard which pixels are to be touched.
+ * This is needed in when surfaces are configured as something else what they
+ * really are:
  *
  *    - writing W-tiled stencil as Y-tiled
  *    - writing interleaved multisampled as single sampled.
  *
- * See blorp_nir_discard_if_outside_rect().
+ * See blorp_check_in_bounds().
  */
-struct brw_blorp_discard_rect
+struct blorp_bounds_rect
 {
    uint32_t x0;
    uint32_t x1;
@@ -119,7 +149,7 @@ struct brw_blorp_discard_rect
  * Grid needed for blended and scaled blits of integer formats, see
  * blorp_nir_manual_blend_bilinear().
  */
-struct brw_blorp_rect_grid
+struct blorp_rect_grid
 {
    float x1;
    float y1;
@@ -131,13 +161,13 @@ struct blorp_surf_offset {
    uint32_t y;
 };
 
-struct brw_blorp_wm_inputs
+struct blorp_wm_inputs
 {
    uint32_t clear_color[4];
 
-   struct brw_blorp_discard_rect discard_rect;
-   struct brw_blorp_rect_grid rect_grid;
-   struct brw_blorp_coord_transform coord_transform[2];
+   struct blorp_bounds_rect bounds_rect;
+   struct blorp_rect_grid rect_grid;
+   struct blorp_coord_transform coord_transform[2];
 
    struct blorp_surf_offset src_offset;
    struct blorp_surf_offset dst_offset;
@@ -148,23 +178,39 @@ struct brw_blorp_wm_inputs
    /* Minimum layer setting works for all the textures types but texture_3d
     * for which the setting has no effect. Use the z-coordinate instead.
     */
-   uint32_t src_z;
+   float src_z;
 
-   /* Pad out to an integral number of registers */
-   uint32_t pad[1];
+   /* Note: Pad out to an integral number of registers when extending, but
+    * make sure subgroup_id is the last 32-bit item.
+    */
+   /* uint32_t pad[?]; */
+   uint32_t subgroup_id;
 };
 
-#define BLORP_CREATE_NIR_INPUT(shader, name, type) ({ \
-   nir_variable *input = nir_variable_create((shader), nir_var_shader_in, \
-                                             type, #name); \
-   if ((shader)->info.stage == MESA_SHADER_FRAGMENT) \
-      input->data.interpolation = INTERP_MODE_FLAT; \
-   input->data.location = VARYING_SLOT_VAR0 + \
-      offsetof(struct brw_blorp_wm_inputs, name) / (4 * sizeof(float)); \
-   input->data.location_frac = \
-      (offsetof(struct brw_blorp_wm_inputs, name) / sizeof(float)) % 4; \
-   input; \
-})
+static inline nir_variable *
+blorp_create_nir_input(struct nir_shader *nir,
+                       const char *name,
+                       const struct glsl_type *type,
+                       unsigned int offset)
+{
+   nir_variable *input;
+   if (nir->info.stage == MESA_SHADER_COMPUTE) {
+      input = nir_variable_create(nir, nir_var_uniform, type, name);
+      input->data.driver_location = offset;
+      input->data.location = offset;
+   } else {
+      input = nir_variable_create(nir, nir_var_shader_in, type, name);
+      input->data.location = VARYING_SLOT_VAR0 + offset / (4 * sizeof(float));
+      input->data.location_frac = (offset / sizeof(float)) % 4;
+   }
+   if (nir->info.stage == MESA_SHADER_FRAGMENT)
+      input->data.interpolation = INTERP_MODE_FLAT;
+   return input;
+}
+
+#define BLORP_CREATE_NIR_INPUT(shader, name, type) \
+   blorp_create_nir_input((shader), #name, (type), \
+                          offsetof(struct blorp_wm_inputs, name))
 
 struct blorp_vs_inputs {
    uint32_t base_layer;
@@ -172,21 +218,23 @@ struct blorp_vs_inputs {
    uint32_t pad[2];
 };
 
-static inline unsigned
-brw_blorp_get_urb_length(const struct brw_wm_prog_data *prog_data)
-{
-   if (prog_data == NULL)
-      return 1;
+enum blorp_shader_type {
+   BLORP_SHADER_TYPE_COPY,
+   BLORP_SHADER_TYPE_BLIT,
+   BLORP_SHADER_TYPE_CLEAR,
+   BLORP_SHADER_TYPE_MCS_PARTIAL_RESOLVE,
+   BLORP_SHADER_TYPE_LAYER_OFFSET_VS,
+   BLORP_SHADER_TYPE_GFX4_SF,
+};
 
-   /* From the BSpec: 3D Pipeline - Strips and Fans - 3DSTATE_SBE
-    *
-    * read_length = ceiling((max_source_attr+1)/2)
-    */
-   return MAX2((prog_data->num_varying_inputs + 1) / 2, 1);
-}
+enum blorp_shader_pipeline {
+   BLORP_SHADER_PIPELINE_RENDER,
+   BLORP_SHADER_PIPELINE_COMPUTE,
+};
 
 struct blorp_params
 {
+   enum blorp_op op;
    uint32_t x0;
    uint32_t y0;
    uint32_t x1;
@@ -194,45 +242,60 @@ struct blorp_params
    float z;
    uint8_t stencil_mask;
    uint8_t stencil_ref;
-   struct brw_blorp_surface_info depth;
-   struct brw_blorp_surface_info stencil;
+   struct blorp_surface_info depth;
+   struct blorp_surface_info stencil;
    uint32_t depth_format;
-   struct brw_blorp_surface_info src;
-   struct brw_blorp_surface_info dst;
+   struct blorp_surface_info src;
+   struct blorp_surface_info dst;
    enum isl_aux_op hiz_op;
    bool full_surface_hiz_op;
    enum isl_aux_op fast_clear_op;
-   bool color_write_disable[4];
-   struct brw_blorp_wm_inputs wm_inputs;
+   uint8_t color_write_disable;
+   struct blorp_wm_inputs wm_inputs;
    struct blorp_vs_inputs vs_inputs;
    bool dst_clear_color_as_input;
    unsigned num_samples;
    unsigned num_draw_buffers;
    unsigned num_layers;
    uint32_t vs_prog_kernel;
-   struct brw_vs_prog_data *vs_prog_data;
+   void *vs_prog_data;
    uint32_t sf_prog_kernel;
-   struct brw_sf_prog_data *sf_prog_data;
+   void *sf_prog_data;
    uint32_t wm_prog_kernel;
-   struct brw_wm_prog_data *wm_prog_data;
+   void *wm_prog_data;
+   uint32_t cs_prog_kernel;
+   void *cs_prog_data;
 
    bool use_pre_baked_binding_table;
    uint32_t pre_baked_binding_table_offset;
+   enum blorp_shader_type shader_type;
+   enum blorp_shader_pipeline shader_pipeline;
 };
+
+enum intel_measure_snapshot_type
+blorp_op_to_intel_measure_snapshot(enum blorp_op op);
+
+const char *blorp_op_to_name(enum blorp_op op);
 
 void blorp_params_init(struct blorp_params *params);
 
-enum blorp_shader_type {
-   BLORP_SHADER_TYPE_BLIT,
-   BLORP_SHADER_TYPE_CLEAR,
-   BLORP_SHADER_TYPE_MCS_PARTIAL_RESOLVE,
-   BLORP_SHADER_TYPE_LAYER_OFFSET_VS,
-   BLORP_SHADER_TYPE_GEN4_SF,
+struct blorp_base_key
+{
+   char name[8];
+   enum blorp_shader_type shader_type;
+   enum blorp_shader_pipeline shader_pipeline;
 };
 
-struct brw_blorp_blit_prog_key
+#define BLORP_BASE_KEY_INIT(_type)                      \
+   (struct blorp_base_key) {                            \
+      .name = "blorp",                                  \
+      .shader_type = _type,                             \
+      .shader_pipeline = BLORP_SHADER_PIPELINE_RENDER,  \
+   }
+
+struct blorp_blit_prog_key
 {
-   enum blorp_shader_type shader_type; /* Must be BLORP_SHADER_TYPE_BLIT */
+   struct blorp_base_key base;
 
    /* Number of samples per pixel that have been configured in the surface
     * state for texturing from.
@@ -350,32 +413,98 @@ struct brw_blorp_blit_prog_key
     */
    float x_scale;
    float y_scale;
+
+   /* If a compute shader is used, this is the local size y dimension.
+    */
+   uint8_t local_y;
 };
 
 /**
  * \name BLORP internals
  * \{
  *
- * Used internally by gen6_blorp_exec() and gen7_blorp_exec().
+ * Used internally by gfx6_blorp_exec() and gfx7_blorp_exec().
  */
 
-void brw_blorp_init_wm_prog_key(struct brw_wm_prog_key *wm_key);
+bool blorp_blitter_supports_aux(const struct intel_device_info *devinfo,
+                                enum isl_aux_usage aux_usage);
 
-const unsigned *
+const char *blorp_shader_type_to_name(enum blorp_shader_type type);
+const char *blorp_shader_pipeline_to_name(enum blorp_shader_pipeline pipe);
+
+struct blorp_program {
+   const void *kernel;
+   uint32_t    kernel_size;
+
+   const void *prog_data;
+   uint32_t    prog_data_size;
+};
+
+static inline struct blorp_program
 blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
                  struct nir_shader *nir,
-                 struct brw_wm_prog_key *wm_key,
-                 bool use_repclear,
-                 struct brw_wm_prog_data *wm_prog_data);
+                 bool multisample_fbo,
+                 bool is_fast_clear,
+                 bool use_repclear)
+{
+   return blorp->compiler->compile_fs(blorp, mem_ctx, nir, multisample_fbo,
+                                      is_fast_clear, use_repclear);
+}
 
-const unsigned *
+static inline struct blorp_program
 blorp_compile_vs(struct blorp_context *blorp, void *mem_ctx,
-                 struct nir_shader *nir,
-                 struct brw_vs_prog_data *vs_prog_data);
+                 struct nir_shader *nir)
+{
+   return blorp->compiler->compile_vs(blorp, mem_ctx, nir);
+}
 
-bool
+static inline bool
 blorp_ensure_sf_program(struct blorp_batch *batch,
-                        struct blorp_params *params);
+                        struct blorp_params *params)
+{
+   struct blorp_compiler *c = batch->blorp->compiler;
+   /* Absence of callback indicates it is not needed.  This is the case for
+    * brw, which is Gfx9+.
+    */
+   return !c->ensure_sf_program || c->ensure_sf_program(batch, params);
+}
+
+static inline uint8_t
+blorp_get_cs_local_y(struct blorp_params *params)
+{
+   uint32_t height = params->y1 - params->y0;
+   uint32_t or_ys = params->y0 | params->y1;
+   if (height > 32 || (or_ys & 3) == 0) {
+      return 4;
+   } else if ((or_ys & 1) == 0) {
+      return 2;
+   } else {
+      return 1;
+   }
+}
+
+static inline void
+blorp_set_cs_dims(struct nir_shader *nir, uint8_t local_y)
+{
+   assert(local_y != 0 && (16 % local_y == 0));
+   nir->info.workgroup_size[0] = 16 / local_y;
+   nir->info.workgroup_size[1] = local_y;
+   nir->info.workgroup_size[2] = 1;
+}
+
+static inline struct blorp_program
+blorp_compile_cs(struct blorp_context *blorp, void *mem_ctx,
+                 struct nir_shader *nir)
+{
+   return blorp->compiler->compile_cs(blorp, mem_ctx, nir);
+}
+
+static inline bool
+blorp_params_get_layer_offset_vs(struct blorp_batch *batch,
+                                 struct blorp_params *params)
+{
+   return batch->blorp->compiler->params_get_layer_offset_vs(batch, params);
+}
 
 /** \} */
 

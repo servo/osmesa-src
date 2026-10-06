@@ -28,7 +28,7 @@
 #ifndef TR_PUBLIC_H
 #define TR_PUBLIC_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,7 +37,7 @@ extern "C" {
 struct pipe_screen;
 struct pipe_context;
 
-struct pipe_screen *
+PUBLIC struct pipe_screen *
 trace_screen_create(struct pipe_screen *screen);
 
 bool

@@ -320,7 +320,7 @@
 
     <function name="PointSizePointerOES" es1="1.0" desktop="false"
               no_error="true" marshal="async"
-              marshal_call_after="if (COMPAT) _mesa_glthread_AttribPointer(ctx, VERT_ATTRIB_POINT_SIZE, 1, type, stride, pointer);">
+              marshal_call_after="_mesa_glthread_AttribPointer(ctx, VERT_ATTRIB_POINT_SIZE, MESA_PACK_VFORMAT(type, 1, 0, 0, 0), stride, pointer);">
         <param name="type" type="GLenum"/>
         <param name="stride" type="GLsizei"/>
         <param name="pointer" type="const GLvoid *"/>
@@ -656,21 +656,21 @@
 
 <!-- 71. GL_OES_vertex_array_object -->
 <category name="GL_OES_vertex_array_object" number="71">
-    <function name="BindVertexArrayOES" alias="BindVertexArray" es2="2.0">
+    <function name="BindVertexArrayOES" alias="BindVertexArray" es1="1.0" es2="2.0">
         <param name="array" type="GLuint"/>
     </function>
 
-    <function name="DeleteVertexArraysOES" alias="DeleteVertexArrays" es2="2.0">
+    <function name="DeleteVertexArraysOES" alias="DeleteVertexArrays" es1="1.0" es2="2.0">
         <param name="n" type="GLsizei"/>
         <param name="arrays" type="const GLuint *" count="n"/>
     </function>
 
-    <function name="GenVertexArraysOES" alias="GenVertexArrays" es2="2.0">
+    <function name="GenVertexArraysOES" alias="GenVertexArrays" es1="1.0" es2="2.0">
         <param name="n" type="GLsizei"/>
         <param name="arrays" type="GLuint *" output="true" count="n"/>
     </function>
 
-    <function name="IsVertexArrayOES" alias="IsVertexArray" es2="2.0">
+    <function name="IsVertexArrayOES" alias="IsVertexArray" es1="1.0" es2="2.0">
         <param name="array" type="GLuint"/>
         <return type="GLboolean"/>
     </function>
@@ -819,6 +819,11 @@
 
 <xi:include href="EXT_multisampled_render_to_texture.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
+<!-- 110. GL_ANGLE_pack_reverse_row_order -->
+<category name="GL_ANGLE_pack_reverse_row_order" number="110">
+    <enum name="PACK_REVERSE_ROW_ORDER_ANGLE"           value="0x93A4"/>
+</category>
+
 <!-- 111. GL_ANGLE_texture_compression_dxt -->
 <category name="GL_ANGLE_texture_compression_dxt" number="111">
     <enum name="COMPRESSED_RGBA_S3TC_DXT3_ANGLE"        value="0x83F2"/>
@@ -848,6 +853,90 @@
         <param name="target" type="GLenum"/>
         <param name="offset" type="GLintptr"/>
         <param name="length" type="GLsizeiptr"/>
+    </function>
+</category>
+
+<!-- 124. GL_APPLE_sync -->
+<category name="GL_APPLE_sync" number="124">
+    <type name="int64"   size="8"                  glx_name="CARD64"/>
+    <type name="uint64"  size="8"  unsigned="true" glx_name="CARD64"/>
+    <type name="sync"    size="8"  unsigned="true" glx_name="CARD64"/>
+
+    <enum name="MAX_SERVER_WAIT_TIMEOUT_APPLE" count="1"  value="0x9111">
+        <size name="Get" mode="get"/>
+    </enum>
+    <enum name="OBJECT_TYPE_APPLE"             count="1"  value="0x9112">
+        <size name="GetSyncivAPPLE" mode="get"/>
+    </enum>
+    <enum name="SYNC_CONDITION_APPLE"          count="1"  value="0x9113">
+        <size name="GetSyncivAPPLE" mode="get"/>
+    </enum>
+    <enum name="SYNC_STATUS_APPLE"             count="1"  value="0x9114">
+        <size name="GetSyncivAPPLE" mode="get"/>
+    </enum>
+    <enum name="SYNC_FLAGS_APPLE"              count="1"  value="0x9115">
+        <size name="GetSyncivAPPLE" mode="get"/>
+    </enum>
+
+    <enum name="SYNC_FENCE_APPLE"                         value="0x9116"/>
+    <enum name="SYNC_GPU_COMMANDS_COMPLETE_APPLE"         value="0x9117"/>
+    <enum name="UNSIGNALED_APPLE"                         value="0x9118"/>
+    <enum name="SIGNALED_APPLE"                           value="0x9119"/>
+    <enum name="ALREADY_SIGNALED_APPLE"                   value="0x911A"/>
+    <enum name="TIMEOUT_EXPIRED_APPLE"                    value="0x911B"/>
+    <enum name="CONDITION_SATISFIED_APPLE"                value="0x911C"/>
+    <enum name="WAIT_FAILED_APPLE"                        value="0x911D"/>
+
+    <enum name="SYNC_FLUSH_COMMANDS_BIT_APPLE"            value="0x00000001"/>
+
+    <!-- Not really an enum:
+    <enum name="TIMEOUT_IGNORED_APPLE"            value="0xFFFFFFFFFFFFFFFF"/>
+    -->
+
+    <function name="FenceSyncAPPLE" alias="FenceSync"
+              es1="1.1" es2="2.0" no_error="true">
+        <param name="condition" type="GLenum"/>
+        <param name="flags" type="GLbitfield"/>
+        <return type="GLsync"/>
+    </function>
+
+    <function name="IsSyncAPPLE" alias="IsSync" es1="1.1" es2="2.0">
+        <param name="sync" type="GLsync"/>
+	<return type="GLboolean"/>
+    </function>
+
+    <function name="DeleteSyncAPPLE" alias="DeleteSync"
+              es1="1.1" es2="2.0" no_error="true">
+        <param name="sync" type="GLsync"/>
+    </function>
+
+    <function name="ClientWaitSyncAPPLE" alias="ClientWaitSync"
+              es1="1.1" es2="2.0" no_error="true">
+        <param name="sync" type="GLsync"/>
+        <param name="flags" type="GLbitfield"/>
+	<param name="timeout" type="GLuint64"/>
+        <return type="GLenum"/>
+    </function>
+
+    <function name="WaitSyncAPPLE" alias="WaitSync"
+              es1="1.1" es2="2.0" no_error="true" exec="dlist">
+        <param name="sync" type="GLsync"/>
+        <param name="flags" type="GLbitfield"/>
+	<param name="timeout" type="GLuint64"/>
+    </function>
+
+    <function name="GetInteger64vAPPLE" alias="GetInteger64v"
+              es1="1.1" es2="2.0">
+        <param name="pname" type="GLenum"/>
+        <param name="params" type="GLint64 *" output="true" variable_param="pname"/>
+    </function>
+
+    <function name="GetSyncivAPPLE" alias="GetSynciv" es1="1.1" es2="2.0">
+        <param name="sync" type="GLsync"/>
+        <param name="pname" type="GLenum"/>
+        <param name="bufSize" type="GLsizei"/>
+        <param name="length" type="GLsizei *" output="true"/>
+        <param name="values" type="GLint *" output="true" variable_param="pname"/>
     </function>
 </category>
 
@@ -1071,7 +1160,7 @@
 <category name="GL_EXT_draw_elements_base_vertex" number="204">
 
     <function name="DrawElementsBaseVertexEXT" alias="DrawElementsBaseVertex"
-              es2="2.0" exec="dynamic">
+              es2="2.0">
         <param name="mode" type="GLenum"/>
         <param name="count" type="GLsizei"/>
         <param name="type" type="GLenum"/>
@@ -1080,7 +1169,7 @@
     </function>
 
     <function name="DrawRangeElementsBaseVertexEXT" alias="DrawRangeElementsBaseVertex"
-              es2="3.0" exec="dynamic">
+              es2="3.0">
         <param name="mode" type="GLenum"/>
         <param name="start" type="GLuint"/>
         <param name="end" type="GLuint"/>
@@ -1091,7 +1180,7 @@
     </function>
 
     <function name="MultiDrawElementsBaseVertexEXT" alias="MultiDrawElementsBaseVertex"
-              es2="2.0" exec="dynamic">
+              es2="2.0">
         <param name="mode" type="GLenum"/>
         <param name="count" type="const GLsizei *"/>
         <param name="type" type="GLenum"/>
@@ -1101,7 +1190,7 @@
     </function>
 
     <function name="DrawElementsInstancedBaseVertexEXT" alias="DrawElementsInstancedBaseVertex"
-              es2="3.0">
+              es2="2.0">
         <param name="mode" type="GLenum"/>
         <param name="count" type="GLsizei"/>
         <param name="type" type="GLenum"/>
@@ -1223,7 +1312,7 @@
 <category name="GL_OES_draw_elements_base_vertex" number="219">
 
     <function name="DrawElementsBaseVertexOES" alias="DrawElementsBaseVertex"
-              es2="2.0" exec="dynamic">
+              es2="2.0">
         <param name="mode" type="GLenum"/>
         <param name="count" type="GLsizei"/>
         <param name="type" type="GLenum"/>
@@ -1232,7 +1321,7 @@
     </function>
 
     <function name="DrawRangeElementsBaseVertexOES" alias="DrawRangeElementsBaseVertex"
-              es2="3.0" exec="dynamic">
+              es2="3.0">
         <param name="mode" type="GLenum"/>
         <param name="start" type="GLuint"/>
         <param name="end" type="GLuint"/>
@@ -1243,7 +1332,7 @@
     </function>
 
     <function name="DrawElementsInstancedBaseVertexOES" alias="DrawElementsInstancedBaseVertex"
-              es2="3.0">
+              es2="2.0">
         <param name="mode" type="GLenum"/>
         <param name="count" type="GLsizei"/>
         <param name="type" type="GLenum"/>
@@ -1286,6 +1375,32 @@
         <param name="programInterface" type="GLenum"/>
         <param name="name" type="const GLchar *"/>
         <return type="GLint"/>
+    </function>
+
+</category>
+
+<category name="GL_EXT_clear_texture" number="269">
+
+    <function name ="ClearTexImageEXT" es2="3.1" alias="ClearTexImage">
+        <param name="texture" type="GLuint"/>
+        <param name="level" type="GLint"/>
+        <param name="format" type="GLenum"/>
+        <param name="type" type="GLenum"/>
+        <param name="data" type="const GLvoid *"/>
+    </function>
+
+    <function name ="ClearTexSubImageEXT" es2="3.1" alias="ClearTexSubImage">
+        <param name="texture" type="GLuint"/>
+        <param name="level" type="GLint"/>
+        <param name="xoffset" type="GLint"/>
+        <param name="yoffset" type="GLint"/>
+        <param name="zoffset" type="GLint"/>
+        <param name="width" type="GLsizei"/>
+        <param name="height" type="GLsizei"/>
+        <param name="depth" type="GLsizei"/>
+        <param name="format" type="GLenum"/>
+        <param name="type" type="GLenum"/>
+        <param name="data" type="const GLvoid *"/>
     </function>
 
 </category>
@@ -1520,5 +1635,7 @@
        <param name="params" type="GLint *" output="true" />
    </function>
 </category>
+
+<xi:include href="EXT_texture_storage_compression.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 </OpenGLAPI>

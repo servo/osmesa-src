@@ -39,6 +39,12 @@ struct iris_binder
    struct iris_bo *bo;
    void *map;
 
+   /** Required alignment for each binding table in bytes */
+   uint32_t alignment;
+
+   /** Binding table size in bytes */
+   uint32_t size;
+
    /** Insert new entries at this offset (in bytes) */
    uint32_t insert_point;
 
@@ -53,6 +59,7 @@ void iris_init_binder(struct iris_context *ice);
 void iris_destroy_binder(struct iris_binder *binder);
 uint32_t iris_binder_reserve(struct iris_context *ice, unsigned size);
 void iris_binder_reserve_3d(struct iris_context *ice);
+void iris_binder_reserve_gen(struct iris_context *ice);
 void iris_binder_reserve_compute(struct iris_context *ice);
 
 #endif

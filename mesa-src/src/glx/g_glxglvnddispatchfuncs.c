@@ -5,6 +5,8 @@
 #include "glxglvnddispatchfuncs.h"
 #include "g_glxglvnddispatchindices.h"
 
+#include "GL/mesa_glinterop.h"
+
 const int DI_FUNCTION_COUNT = DI_LAST_INDEX;
 /* Allocate an extra 'dummy' to ease lookup. See FindGLXFunction() */
 int __glXDispatchTableIndices[DI_LAST_INDEX + 1];
@@ -39,6 +41,9 @@ const char * const __glXDispatchTableStrings[DI_LAST_INDEX] = {
     // glXDestroyPixmap implemented by libglvnd
     // glXDestroyWindow implemented by libglvnd
     // glXFreeContextEXT implemented by libglvnd
+    __ATTRIB(GLInteropExportObjectMESA),
+    __ATTRIB(GLInteropFlushObjectsMESA),
+    __ATTRIB(GLInteropQueryDeviceInfoMESA),
     // glXGetClientString implemented by libglvnd
     // glXGetConfig implemented by libglvnd
     __ATTRIB(GetContextIDEXT),
@@ -87,6 +92,7 @@ const char * const __glXDispatchTableStrings[DI_LAST_INDEX] = {
     __ATTRIB(SelectEventSGIX),
     // glXSwapBuffers implemented by libglvnd
     __ATTRIB(SwapBuffersMscOML),
+    __ATTRIB(SwapIntervalEXT),
     __ATTRIB(SwapIntervalMESA),
     __ATTRIB(SwapIntervalSGI),
     // glXUseXFont implemented by libglvnd
@@ -157,10 +163,22 @@ static GLXContext dispatch_CreateContextAttribsARB(Display *dpy,
                                                    const int *attrib_list)
 {
     PFNGLXCREATECONTEXTATTRIBSARBPROC pCreateContextAttribsARB;
-    __GLXvendorInfo *dd;
+    __GLXvendorInfo *dd = NULL;
     GLXContext ret;
 
-    dd = GetDispatchFromFBConfig(dpy, config);
+    if (config) {
+       dd = GetDispatchFromFBConfig(dpy, config);
+    } else if (attrib_list) {
+       int i, screen;
+
+       for (i = 0; attrib_list[i * 2] != None; i++) {
+          if (attrib_list[i * 2] == GLX_SCREEN) {
+             screen = attrib_list[i * 2 + 1];
+             dd = GetDispatchFromDrawable(dpy, RootWindow(dpy, screen));
+             break;
+          }
+       }
+    }
     if (dd == NULL)
         return None;
 
@@ -291,6 +309,63 @@ static void dispatch_DestroyGLXPbufferSGIX(Display *dpy, GLXPbuffer pbuf)
     pDestroyGLXPbufferSGIX(dpy, pbuf);
 }
 
+
+
+static int dispatch_GLInteropExportObjectMESA(Display *dpy, GLXContext ctx,
+                                              struct mesa_glinterop_export_in *in,
+                                              struct mesa_glinterop_export_out *out)
+{
+    PFNMESAGLINTEROPGLXEXPORTOBJECTPROC pGLInteropExportObjectMESA;
+    __GLXvendorInfo *dd;
+
+    dd = GetDispatchFromContext(ctx);
+    if (dd == NULL)
+        return 0;
+
+    __FETCH_FUNCTION_PTR(GLInteropExportObjectMESA);
+    if (pGLInteropExportObjectMESA == NULL)
+        return 0;
+
+    return pGLInteropExportObjectMESA(dpy, ctx, in, out);
+}
+
+
+static int dispatch_GLInteropFlushObjectsMESA(Display *dpy, GLXContext ctx,
+                                              unsigned count,
+                                              struct mesa_glinterop_export_in *resources,
+                                              struct mesa_glinterop_flush_out *out)
+{
+    PFNMESAGLINTEROPGLXFLUSHOBJECTSPROC pGLInteropFlushObjectsMESA;
+    __GLXvendorInfo *dd;
+
+    dd = GetDispatchFromContext(ctx);
+    if (dd == NULL)
+        return 0;
+
+    __FETCH_FUNCTION_PTR(GLInteropFlushObjectsMESA);
+    if (pGLInteropFlushObjectsMESA == NULL)
+        return 0;
+
+    return pGLInteropFlushObjectsMESA(dpy, ctx, count, resources, out);
+}
+
+
+static int dispatch_GLInteropQueryDeviceInfoMESA(Display *dpy, GLXContext ctx,
+                                                 struct mesa_glinterop_device_info *out)
+{
+    PFNMESAGLINTEROPGLXQUERYDEVICEINFOPROC pGLInteropQueryDeviceInfoMESA;
+    __GLXvendorInfo *dd;
+
+    dd = GetDispatchFromContext(ctx);
+    if (dd == NULL)
+        return 0;
+
+    __FETCH_FUNCTION_PTR(GLInteropQueryDeviceInfoMESA);
+    if (pGLInteropQueryDeviceInfoMESA == NULL)
+        return 0;
+
+    return pGLInteropQueryDeviceInfoMESA(dpy, ctx, out);
+}
 
 
 static GLXContextID dispatch_GetContextIDEXT(const GLXContext ctx)
@@ -893,6 +968,24 @@ static int dispatch_SwapIntervalMESA(unsigned int interval)
 
 
 
+static void dispatch_SwapIntervalEXT(Display *dpy, GLXDrawable drawable, int interval)
+{
+    PFNGLXSWAPINTERVALEXTPROC pSwapIntervalEXT;
+    __GLXvendorInfo *dd;
+
+    dd = GetDispatchFromDrawable(dpy, drawable);
+    if (dd == NULL)
+        return;
+
+    __FETCH_FUNCTION_PTR(SwapIntervalEXT);
+    if (pSwapIntervalEXT == NULL)
+        return;
+
+    pSwapIntervalEXT(dpy, drawable, interval);
+}
+
+
+
 static Bool dispatch_WaitForMscOML(Display *dpy, GLXDrawable drawable,
                                       int64_t target_msc, int64_t divisor,
                                       int64_t remainder, int64_t *ust,
@@ -950,6 +1043,9 @@ const void * const __glXDispatchFunctions[DI_LAST_INDEX + 1] = {
     __ATTRIB(CreateGLXPixmapMESA),
     __ATTRIB(CreateGLXPixmapWithConfigSGIX),
     __ATTRIB(DestroyGLXPbufferSGIX),
+    __ATTRIB(GLInteropExportObjectMESA),
+    __ATTRIB(GLInteropFlushObjectsMESA),
+    __ATTRIB(GLInteropQueryDeviceInfoMESA),
     __ATTRIB(GetContextIDEXT),
     __ATTRIB(GetCurrentDisplayEXT),
     __ATTRIB(GetDriverConfig),
@@ -974,6 +1070,7 @@ const void * const __glXDispatchFunctions[DI_LAST_INDEX + 1] = {
     __ATTRIB(ReleaseTexImageEXT),
     __ATTRIB(SelectEventSGIX),
     __ATTRIB(SwapBuffersMscOML),
+    __ATTRIB(SwapIntervalEXT),
     __ATTRIB(SwapIntervalMESA),
     __ATTRIB(SwapIntervalSGI),
     __ATTRIB(WaitForMscOML),

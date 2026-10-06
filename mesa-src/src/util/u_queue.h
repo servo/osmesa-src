@@ -35,6 +35,8 @@
 
 #include <string.h>
 
+#include "cnd_monotonic.h"
+#include "simple_mtx.h"
 #include "util/futex.h"
 #include "util/list.h"
 #include "util/macros.h"
@@ -78,19 +80,19 @@ util_queue_fence_init(struct util_queue_fence *fence)
 static inline void
 util_queue_fence_destroy(struct util_queue_fence *fence)
 {
-   assert(fence->val == 0);
+   assert(p_atomic_read_relaxed(&fence->val) == 0);
    /* no-op */
 }
 
 static inline void
 util_queue_fence_signal(struct util_queue_fence *fence)
 {
-   uint32_t val = p_atomic_xchg(&fence->val, 0);
+   uint32_t val = (uint32_t)p_atomic_xchg(&fence->val, 0);
 
    assert(val != 0);
 
    if (val == 2)
-      futex_wake(&fence->val, INT_MAX);
+      futex_wake(&fence->val, INT32_MAX);
 }
 
 /**
@@ -105,7 +107,7 @@ util_queue_fence_reset(struct util_queue_fence *fence)
 #ifdef NDEBUG
    fence->val = 1;
 #else
-   uint32_t v = p_atomic_xchg(&fence->val, 1);
+   uint32_t v = (uint32_t)p_atomic_xchg(&fence->val, 1);
    assert(v == 0);
 #endif
 }
@@ -113,7 +115,7 @@ util_queue_fence_reset(struct util_queue_fence *fence)
 static inline bool
 util_queue_fence_is_signalled(struct util_queue_fence *fence)
 {
-   return fence->val == 0;
+   return p_atomic_read_relaxed(&fence->val) == 0;
 }
 #endif
 
@@ -123,7 +125,7 @@ util_queue_fence_is_signalled(struct util_queue_fence *fence)
  */
 struct util_queue_fence {
    mtx_t mutex;
-   cnd_t cond;
+   struct u_cnd_monotonic cond;
    int signalled;
 };
 
@@ -137,6 +139,7 @@ void util_queue_fence_signal(struct util_queue_fence *fence);
  * \warning The caller must ensure that no other thread may currently be
  *          waiting (or about to wait) on the fence.
  */
+#if !THREAD_SANITIZER
 static inline void
 util_queue_fence_reset(struct util_queue_fence *fence)
 {
@@ -149,6 +152,23 @@ util_queue_fence_is_signalled(struct util_queue_fence *fence)
 {
    return fence->signalled != 0;
 }
+#else
+static inline void
+util_queue_fence_reset(struct util_queue_fence *fence)
+{
+   assert(fence->signalled);
+   fence->signalled = 0;
+}
+
+static inline bool
+util_queue_fence_is_signalled(struct util_queue_fence *fence)
+{
+   mtx_lock(&fence->mutex);
+   bool signalled = fence->signalled != 0;
+   mtx_unlock(&fence->mutex);
+   return signalled;
+}
+#endif
 #endif
 
 void
@@ -189,10 +209,11 @@ util_queue_fence_wait_timeout(struct util_queue_fence *fence,
    return _util_queue_fence_wait_timeout(fence, abs_timeout);
 }
 
-typedef void (*util_queue_execute_func)(void *job, int thread_index);
+typedef void (*util_queue_execute_func)(void *job, void *gdata, int thread_index);
 
 struct util_queue_job {
    void *job;
+   void *global_data;
    size_t job_size;
    struct util_queue_fence *fence;
    util_queue_execute_func execute;
@@ -202,8 +223,8 @@ struct util_queue_job {
 /* Put this into your context. */
 struct util_queue {
    char name[14]; /* 13 characters = the thread name without the index */
-   mtx_t finish_lock; /* for util_queue_finish and protects threads/num_threads */
    mtx_t lock;
+   bool create_threads_on_demand;
    cnd_t has_queued_cond;
    cnd_t has_space_cond;
    thrd_t *threads;
@@ -215,6 +236,7 @@ struct util_queue {
    int write_idx, read_idx; /* ring buffer pointers */
    size_t total_jobs_size;  /* memory use of all jobs in the queue */
    struct util_queue_job *jobs;
+   void *global_data;
 
    /* for cleanup at exit(), protected by exit_mutex */
    struct list_head head;
@@ -224,7 +246,8 @@ bool util_queue_init(struct util_queue *queue,
                      const char *name,
                      unsigned max_jobs,
                      unsigned num_threads,
-                     unsigned flags);
+                     unsigned flags,
+                     void *global_data);
 void util_queue_destroy(struct util_queue *queue);
 
 /* optional cleanup callback is called after fence is signaled: */
@@ -244,7 +267,8 @@ void util_queue_finish(struct util_queue *queue);
  * and it can't be less than 1.
  */
 void
-util_queue_adjust_num_threads(struct util_queue *queue, unsigned num_threads);
+util_queue_adjust_num_threads(struct util_queue *queue, unsigned num_threads,
+                              bool locked);
 
 int64_t util_queue_get_thread_time_nano(struct util_queue *queue,
                                         unsigned thread_index);
@@ -268,6 +292,7 @@ struct util_queue_monitoring
    unsigned num_offloaded_items;
    unsigned num_direct_items;
    unsigned num_syncs;
+   unsigned num_batches;
 };
 
 #ifdef __cplusplus

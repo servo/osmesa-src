@@ -1,25 +1,8 @@
 /*
  * Copyright 2008 Corbin Simpson <MostAwesomeDude@gmail.com>
  * Copyright 2009 Marek Olšák <maraeo@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 /* r300_emit: Functions for emitting state. */
 
@@ -83,7 +66,7 @@ void r300_emit_dsa_state(struct r300_context* r300, unsigned size, void* state)
     struct r300_dsa_state* dsa = (struct r300_dsa_state*)state;
     struct pipe_framebuffer_state* fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
-    boolean is_r500 = r300->screen->caps.is_r500;
+    bool is_r500 = r300->screen->caps.is_r500;
     CS_LOCALS(r300);
     uint32_t alpha_func = dsa->alpha_function;
 
@@ -142,9 +125,9 @@ static void get_rc_constant_state(
         case RC_STATE_R300_TEXSCALE_FACTOR:
             tex = r300_resource(texstate->sampler_views[constant->u.State[1]]->base.texture);
             /* Add a small number to the texture size to work around rounding errors in hw. */
-            vec[0] = tex->b.b.width0  / (tex->tex.width0  + 0.001f);
-            vec[1] = tex->b.b.height0 / (tex->tex.height0 + 0.001f);
-            vec[2] = tex->b.b.depth0  / (tex->tex.depth0  + 0.001f);
+            vec[0] = tex->b.width0  / (tex->tex.width0  + 0.001f);
+            vec[1] = tex->b.height0 / (tex->tex.height0 + 0.001f);
+            vec[2] = tex->b.depth0  / (tex->tex.depth0  + 0.001f);
             vec[3] = 1;
             break;
 
@@ -229,9 +212,15 @@ void r300_emit_fs_constants(struct r300_context* r300, unsigned size, void *stat
     OUT_CS_REG_SEQ(R300_PFS_PARAM_0_X, count * 4);
     if (buf->remap_table){
         for (i = 0; i < count; i++) {
-            float *data = (float*)&buf->ptr[buf->remap_table[i]*4];
-            for (j = 0; j < 4; j++)
-                OUT_CS(pack_float24(data[j]));
+            for (j = 0; j < 4; j++) {
+                unsigned swz = buf->remap_table[i].swizzle[j];
+                unsigned index = buf->remap_table[i].index[j];
+                if (index == -1)
+                    OUT_CS(pack_float24(0.0f));
+                else {
+                    OUT_CS(pack_float24(*(float*)&buf->ptr[index * 4 + swz]));
+                }
+            }
         }
     } else {
         for (i = 0; i < count; i++)
@@ -294,7 +283,11 @@ void r500_emit_fs_constants(struct r300_context* r300, unsigned size, void *stat
     OUT_CS_ONE_REG(R500_GA_US_VECTOR_DATA, count * 4);
     if (buf->remap_table){
         for (unsigned i = 0; i < count; i++) {
-            uint32_t *data = &buf->ptr[buf->remap_table[i]*4];
+            uint32_t data[4] = {};
+            for (unsigned chan = 0; chan < 4; chan++){
+                if (buf->remap_table[i].swizzle[chan] != RC_SWIZZLE_UNUSED)
+                data[chan] = buf->ptr[buf->remap_table[i].index[chan] * 4 + buf->remap_table[i].swizzle[chan]];
+            }
             OUT_CS_TABLE(data, 4);
         }
     } else {
@@ -435,7 +428,7 @@ void r300_emit_fb_state(struct r300_context* r300, unsigned size, void* state)
             OUT_CS_REG(R300_RB3D_CMASK_OFFSET0, 0);
             OUT_CS_REG(R300_RB3D_CMASK_PITCH0, surf->pitch_cmask);
             OUT_CS_REG(R300_RB3D_COLOR_CLEAR_VALUE, r300->color_clear_value);
-            if (r300->screen->caps.is_r500 && r300->screen->info.drm_minor >= 29) {
+            if (r300->screen->caps.is_r500) {
                 OUT_CS_REG_SEQ(R500_RB3D_COLOR_CLEAR_VALUE_AR, 2);
                 OUT_CS(r300->color_clear_value_ar);
                 OUT_CS(r300->color_clear_value_gb);
@@ -659,7 +652,7 @@ void r300_emit_query_start(struct r300_context *r300, unsigned size, void*state)
     }
     OUT_CS_REG(R300_ZB_ZPASS_DATA, 0);
     END_CS;
-    query->begin_emitted = TRUE;
+    query->begin_emitted = true;
 }
 
 static void r300_emit_query_end_frag_pipes(struct r300_context *r300,
@@ -686,13 +679,13 @@ static void r300_emit_query_end_frag_pipes(struct r300_context *r300,
             OUT_CS_REG(R300_SU_REG_DEST, 1 << 3);
             OUT_CS_REG(R300_ZB_ZPASS_ADDR, (query->num_results + 3) * 4);
             OUT_CS_RELOC(r300->query_current);
-            /* fallthrough */
+            FALLTHROUGH;
         case 3:
             /* pipe 2 only */
             OUT_CS_REG(R300_SU_REG_DEST, 1 << 2);
             OUT_CS_REG(R300_ZB_ZPASS_ADDR, (query->num_results + 2) * 4);
             OUT_CS_RELOC(r300->query_current);
-            /* fallthrough */
+            FALLTHROUGH;
         case 2:
             /* pipe 1 only */
             /* As mentioned above, accommodate RV380 and older. */
@@ -700,7 +693,7 @@ static void r300_emit_query_end_frag_pipes(struct r300_context *r300,
                     1 << (caps->high_second_pipe ? 3 : 1));
             OUT_CS_REG(R300_ZB_ZPASS_ADDR, (query->num_results + 1) * 4);
             OUT_CS_RELOC(r300->query_current);
-            /* fallthrough */
+            FALLTHROUGH;
         case 1:
             /* pipe 0 only */
             OUT_CS_REG(R300_SU_REG_DEST, 1 << 0);
@@ -755,7 +748,7 @@ void r300_emit_query_end(struct r300_context* r300)
     if (!query)
 	return;
 
-    if (query->begin_emitted == FALSE)
+    if (query->begin_emitted == false)
         return;
 
     if (caps->family == CHIP_RV530) {
@@ -766,7 +759,7 @@ void r300_emit_query_end(struct r300_context* r300)
     } else 
         r300_emit_query_end_frag_pipes(r300, query);
 
-    query->begin_emitted = FALSE;
+    query->begin_emitted = false;
     query->num_results += query->num_pipes;
 
     /* XXX grab all the results and reset the counter. */
@@ -895,7 +888,7 @@ void r300_emit_textures_state(struct r300_context *r300,
     struct r300_texture_sampler_state *texstate;
     struct r300_resource *tex;
     unsigned i;
-    boolean has_us_format = r300->screen->caps.has_us_format;
+    bool has_us_format = r300->screen->caps.has_us_format;
     CS_LOCALS(r300);
 
     BEGIN_CS(size);
@@ -928,7 +921,7 @@ void r300_emit_textures_state(struct r300_context *r300,
 }
 
 void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
-                             boolean indexed, int instance_id)
+                             bool indexed, int instance_id)
 {
     struct pipe_vertex_buffer *vbuf = r300->vertex_buffer;
     struct pipe_vertex_element *velem = r300->velems->velem;
@@ -953,18 +946,18 @@ void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
             size1 = hw_format_size[i];
             size2 = hw_format_size[i+1];
 
-            OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(vb1->stride) |
-                   R300_VBPNTR_SIZE1(size2) | R300_VBPNTR_STRIDE1(vb2->stride));
-            OUT_CS(vb1->buffer_offset + velem[i].src_offset   + offset * vb1->stride);
-            OUT_CS(vb2->buffer_offset + velem[i+1].src_offset + offset * vb2->stride);
+            OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(velem[i].src_stride) |
+                   R300_VBPNTR_SIZE1(size2) | R300_VBPNTR_STRIDE1(velem[i+1].src_stride));
+            OUT_CS(vb1->buffer_offset + velem[i].src_offset   + offset * velem[i].src_stride);
+            OUT_CS(vb2->buffer_offset + velem[i+1].src_offset + offset * velem[i+1].src_stride);
         }
 
         if (vertex_array_count & 1) {
             vb1 = &vbuf[velem[i].vertex_buffer_index];
             size1 = hw_format_size[i];
 
-            OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(vb1->stride));
-            OUT_CS(vb1->buffer_offset + velem[i].src_offset + offset * vb1->stride);
+            OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(velem[i].src_stride));
+            OUT_CS(vb1->buffer_offset + velem[i].src_offset + offset * velem[i].src_stride);
         }
 
         for (i = 0; i < vertex_array_count; i++) {
@@ -982,18 +975,18 @@ void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
             if (velem[i].instance_divisor) {
                 stride1 = 0;
                 offset1 = vb1->buffer_offset + velem[i].src_offset +
-                          (instance_id / velem[i].instance_divisor) * vb1->stride;
+                          (instance_id / velem[i].instance_divisor) * velem[i].src_stride;
             } else {
-                stride1 = vb1->stride;
-                offset1 = vb1->buffer_offset + velem[i].src_offset + offset * vb1->stride;
+                stride1 = velem[i].src_stride;
+                offset1 = vb1->buffer_offset + velem[i].src_offset + offset * velem[i].src_stride;
             }
             if (velem[i+1].instance_divisor) {
                 stride2 = 0;
                 offset2 = vb2->buffer_offset + velem[i+1].src_offset +
-                          (instance_id / velem[i+1].instance_divisor) * vb2->stride;
+                          (instance_id / velem[i+1].instance_divisor) * velem[i+1].src_stride;
             } else {
-                stride2 = vb2->stride;
-                offset2 = vb2->buffer_offset + velem[i+1].src_offset + offset * vb2->stride;
+                stride2 = velem[i+1].src_stride;
+                offset2 = vb2->buffer_offset + velem[i+1].src_offset + offset * velem[i+1].src_stride;
             }
 
             OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(stride1) |
@@ -1009,10 +1002,10 @@ void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
             if (velem[i].instance_divisor) {
                 stride1 = 0;
                 offset1 = vb1->buffer_offset + velem[i].src_offset +
-                          (instance_id / velem[i].instance_divisor) * vb1->stride;
+                          (instance_id / velem[i].instance_divisor) * velem[i].src_stride;
             } else {
-                stride1 = vb1->stride;
-                offset1 = vb1->buffer_offset + velem[i].src_offset + offset * vb1->stride;
+                stride1 = velem[i].src_stride;
+                offset1 = vb1->buffer_offset + velem[i].src_offset + offset * velem[i].src_stride;
             }
 
             OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(stride1));
@@ -1027,7 +1020,7 @@ void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
     END_CS;
 }
 
-void r300_emit_vertex_arrays_swtcl(struct r300_context *r300, boolean indexed)
+void r300_emit_vertex_arrays_swtcl(struct r300_context *r300, bool indexed)
 {
     CS_LOCALS(r300);
 
@@ -1051,7 +1044,7 @@ void r300_emit_vertex_arrays_swtcl(struct r300_context *r300, boolean indexed)
 
     assert(r300->vbo);
     OUT_CS(0xc0001000); /* PKT3_NOP */
-    OUT_CS(r300->rws->cs_lookup_buffer(r300->cs, r300->vbo) * 4);
+    OUT_CS(r300->rws->cs_lookup_buffer(&r300->cs, r300->vbo) * 4);
     END_CS;
 }
 
@@ -1103,7 +1096,7 @@ void r300_emit_vap_invariant_state(struct r300_context *r300,
 
 void r300_emit_vs_state(struct r300_context* r300, unsigned size, void* state)
 {
-    struct r300_vertex_shader* vs = (struct r300_vertex_shader*)state;
+    struct r300_vertex_shader_code* vs = ((struct r300_vertex_shader*)state)->shader;
     struct r300_vertex_program_code* code = &vs->code;
     struct r300_screen* r300screen = r300->screen;
     unsigned instruction_count = code->length / 4;
@@ -1126,9 +1119,9 @@ void r300_emit_vs_state(struct r300_context* r300, unsigned size, void* state)
      * R300_VAP_PVS_CODE_CNTL_1
      * See the r5xx docs for instructions on how to use these. */
     OUT_CS_REG(R300_VAP_PVS_CODE_CNTL_0, R300_PVS_FIRST_INST(0) |
-	       R300_PVS_XYZW_VALID_INST(instruction_count - 1) |
+	       R300_PVS_XYZW_VALID_INST(code->last_pos_write) |
 	       R300_PVS_LAST_INST(instruction_count - 1));
-    OUT_CS_REG(R300_VAP_PVS_CODE_CNTL_1, instruction_count - 1);
+    OUT_CS_REG(R300_VAP_PVS_CODE_CNTL_1, code->last_input_read);
 
     OUT_CS_REG(R300_VAP_PVS_VECTOR_INDX_REG, 0);
     OUT_CS_ONE_REG(R300_VAP_PVS_UPLOAD_DATA, code->length);
@@ -1160,10 +1153,9 @@ void r300_emit_vs_state(struct r300_context* r300, unsigned size, void* state)
 void r300_emit_vs_constants(struct r300_context* r300,
                             unsigned size, void *state)
 {
-    unsigned count =
-        ((struct r300_vertex_shader*)r300->vs_state.state)->externals_count;
+    unsigned count = r300_vs(r300)->shader->externals_count;
     struct r300_constant_buffer *buf = (struct r300_constant_buffer*)state;
-    struct r300_vertex_shader *vs = (struct r300_vertex_shader*)r300->vs_state.state;
+    struct r300_vertex_shader_code *vs = r300_vs(r300)->shader;
     unsigned i;
     int imm_first = vs->externals_count;
     int imm_end = vs->code.constants.Count;
@@ -1180,9 +1172,14 @@ void r300_emit_vs_constants(struct r300_context* r300,
                    R500_PVS_CONST_START : R300_PVS_CONST_START) + buf->buffer_base);
         OUT_CS_ONE_REG(R300_VAP_PVS_UPLOAD_DATA, count * 4);
         if (buf->remap_table){
+            uint32_t *data = buf->ptr;
             for (i = 0; i < count; i++) {
-                uint32_t *data = &buf->ptr[buf->remap_table[i]*4];
-                OUT_CS_TABLE(data, 4);
+                uint32_t constant[4];
+                for (unsigned chan = 0; chan < 4; chan++) {
+                    constant[chan] = data[buf->remap_table[i].index[chan] * 4 +
+                                           buf->remap_table[i].swizzle[chan]];
+                }
+                OUT_CS_TABLE(constant, 4);
             }
         } else {
             OUT_CS_TABLE(buf->ptr, count * 4);
@@ -1234,7 +1231,7 @@ void r300_emit_hiz_clear(struct r300_context *r300, unsigned size, void *state)
     END_CS;
 
     /* Mark the current zbuffer's hiz ram as in use. */
-    r300->hiz_in_use = TRUE;
+    r300->hiz_in_use = true;
     r300->hiz_func = HIZ_FUNC_NONE;
     r300_mark_atom_dirty(r300, &r300->hyperz_state);
 }
@@ -1256,7 +1253,7 @@ void r300_emit_zmask_clear(struct r300_context *r300, unsigned size, void *state
     END_CS;
 
     /* Mark the current zbuffer's zmask as in use. */
-    r300->zmask_in_use = TRUE;
+    r300->zmask_in_use = true;
     r300_mark_atom_dirty(r300, &r300->hyperz_state);
 }
 
@@ -1277,7 +1274,7 @@ void r300_emit_cmask_clear(struct r300_context *r300, unsigned size, void *state
     END_CS;
 
     /* Mark the current zbuffer's zmask as in use. */
-    r300->cmask_in_use = TRUE;
+    r300->cmask_in_use = true;
     r300_mark_fb_state_dirty(r300, R300_CHANGED_CMASK_ENABLE);
 }
 
@@ -1301,9 +1298,9 @@ void r300_emit_texture_cache_inval(struct r300_context* r300, unsigned size, voi
     END_CS;
 }
 
-boolean r300_emit_buffer_validate(struct r300_context *r300,
-                                  boolean do_validate_vertex_buffers,
-                                  struct pipe_resource *index_buffer)
+bool r300_emit_buffer_validate(struct r300_context *r300,
+                               bool do_validate_vertex_buffers,
+                               struct pipe_resource *index_buffer)
 {
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
@@ -1312,7 +1309,7 @@ boolean r300_emit_buffer_validate(struct r300_context *r300,
         (struct r300_textures_state*)r300->textures_state.state;
     struct r300_resource *tex;
     unsigned i;
-    boolean flushed = FALSE;
+    bool flushed = false;
 
 validate:
     if (r300->fb_state.dirty) {
@@ -1322,59 +1319,60 @@ validate:
                 continue;
             tex = r300_resource(fb->cbufs[i]->texture);
             assert(tex && tex->buf && "cbuf is marked, but NULL!");
-            r300->rws->cs_add_buffer(r300->cs, tex->buf,
-                                    RADEON_USAGE_READWRITE | RADEON_USAGE_SYNCHRONIZED,
-                                    r300_surface(fb->cbufs[i])->domain,
-                                    tex->b.b.nr_samples > 1 ?
-                                    RADEON_PRIO_COLOR_BUFFER_MSAA :
-                                    RADEON_PRIO_COLOR_BUFFER);
+            r300->rws->cs_add_buffer(&r300->cs, tex->buf,
+                                    RADEON_USAGE_READWRITE | RADEON_USAGE_SYNCHRONIZED |
+                                    (tex->b.nr_samples > 1 ?
+                                        RADEON_PRIO_COLOR_BUFFER_MSAA :
+                                        RADEON_PRIO_COLOR_BUFFER),
+                                    r300_surface(fb->cbufs[i])->domain);
         }
         /* ...depth buffer... */
         if (fb->zsbuf) {
             tex = r300_resource(fb->zsbuf->texture);
             assert(tex && tex->buf && "zsbuf is marked, but NULL!");
-            r300->rws->cs_add_buffer(r300->cs, tex->buf,
-                                    RADEON_USAGE_READWRITE | RADEON_USAGE_SYNCHRONIZED,
-                                    r300_surface(fb->zsbuf)->domain,
-                                    tex->b.b.nr_samples > 1 ?
-                                    RADEON_PRIO_DEPTH_BUFFER_MSAA :
-                                    RADEON_PRIO_DEPTH_BUFFER);
+            r300->rws->cs_add_buffer(&r300->cs, tex->buf,
+                                    RADEON_USAGE_READWRITE | RADEON_USAGE_SYNCHRONIZED |
+                                    (tex->b.nr_samples > 1 ?
+                                        RADEON_PRIO_DEPTH_BUFFER_MSAA :
+                                        RADEON_PRIO_DEPTH_BUFFER),
+                                    r300_surface(fb->zsbuf)->domain);
         }
     }
     /* The AA resolve buffer. */
     if (r300->aa_state.dirty) {
         if (aa->dest) {
-            r300->rws->cs_add_buffer(r300->cs, aa->dest->buf,
-                                    RADEON_USAGE_WRITE | RADEON_USAGE_SYNCHRONIZED,
-                                    aa->dest->domain,
-                                    RADEON_PRIO_COLOR_BUFFER);
+            r300->rws->cs_add_buffer(&r300->cs, aa->dest->buf,
+                                    RADEON_USAGE_WRITE | RADEON_USAGE_SYNCHRONIZED |
+                                    RADEON_PRIO_COLOR_BUFFER,
+                                    aa->dest->domain);
         }
     }
     if (r300->textures_state.dirty) {
         /* ...textures... */
         for (i = 0; i < texstate->count; i++) {
-            if (!(texstate->tx_enable & (1 << i))) {
+            if (!(texstate->tx_enable & (1U << i))) {
                 continue;
             }
 
             tex = r300_resource(texstate->sampler_views[i]->base.texture);
-            r300->rws->cs_add_buffer(r300->cs, tex->buf,
-                                     RADEON_USAGE_READ | RADEON_USAGE_SYNCHRONIZED,
-                                    tex->domain, RADEON_PRIO_SAMPLER_TEXTURE);
+            r300->rws->cs_add_buffer(&r300->cs, tex->buf,
+                                     RADEON_USAGE_READ | RADEON_USAGE_SYNCHRONIZED |
+                                     RADEON_PRIO_SAMPLER_TEXTURE,
+                                    tex->domain);
         }
     }
     /* ...occlusion query buffer... */
     if (r300->query_current)
-        r300->rws->cs_add_buffer(r300->cs, r300->query_current->buf,
-                                 RADEON_USAGE_WRITE | RADEON_USAGE_SYNCHRONIZED,
-                                 RADEON_DOMAIN_GTT,
-                                RADEON_PRIO_QUERY);
+        r300->rws->cs_add_buffer(&r300->cs, r300->query_current->buf,
+                                 RADEON_USAGE_WRITE | RADEON_USAGE_SYNCHRONIZED |
+                                 RADEON_PRIO_QUERY,
+                                 RADEON_DOMAIN_GTT);
     /* ...vertex buffer for SWTCL path... */
     if (r300->vbo)
-        r300->rws->cs_add_buffer(r300->cs, r300->vbo,
-                                 RADEON_USAGE_READ | RADEON_USAGE_SYNCHRONIZED,
-                                 RADEON_DOMAIN_GTT,
-                                RADEON_PRIO_VERTEX_BUFFER);
+        r300->rws->cs_add_buffer(&r300->cs, r300->vbo,
+                                 RADEON_USAGE_READ | RADEON_USAGE_SYNCHRONIZED |
+                                 RADEON_PRIO_VERTEX_BUFFER,
+                                 RADEON_DOMAIN_GTT);
     /* ...vertex buffers for HWTCL path... */
     if (do_validate_vertex_buffers && r300->vertex_arrays_dirty) {
         struct pipe_vertex_buffer *vbuf = r300->vertex_buffer;
@@ -1387,30 +1385,30 @@ validate:
             if (!buf)
                 continue;
 
-            r300->rws->cs_add_buffer(r300->cs, r300_resource(buf)->buf,
-                                    RADEON_USAGE_READ | RADEON_USAGE_SYNCHRONIZED,
-                                    r300_resource(buf)->domain,
-                                    RADEON_PRIO_SAMPLER_BUFFER);
+            r300->rws->cs_add_buffer(&r300->cs, r300_resource(buf)->buf,
+                                    RADEON_USAGE_READ | RADEON_USAGE_SYNCHRONIZED |
+                                    RADEON_PRIO_SAMPLER_BUFFER,
+                                    r300_resource(buf)->domain);
         }
     }
     /* ...and index buffer for HWTCL path. */
     if (index_buffer)
-        r300->rws->cs_add_buffer(r300->cs, r300_resource(index_buffer)->buf,
-                                RADEON_USAGE_READ | RADEON_USAGE_SYNCHRONIZED,
-                                r300_resource(index_buffer)->domain,
-                                RADEON_PRIO_INDEX_BUFFER);
+        r300->rws->cs_add_buffer(&r300->cs, r300_resource(index_buffer)->buf,
+                                RADEON_USAGE_READ | RADEON_USAGE_SYNCHRONIZED |
+                                RADEON_PRIO_INDEX_BUFFER,
+                                r300_resource(index_buffer)->domain);
 
     /* Now do the validation (flush is called inside cs_validate on failure). */
-    if (!r300->rws->cs_validate(r300->cs)) {
+    if (!r300->rws->cs_validate(&r300->cs)) {
         /* Ooops, an infinite loop, give up. */
         if (flushed)
-            return FALSE;
+            return false;
 
-        flushed = TRUE;
+        flushed = true;
         goto validate;
     }
 
-    return TRUE;
+    return true;
 }
 
 unsigned r300_get_num_dirty_dwords(struct r300_context *r300)
@@ -1452,7 +1450,7 @@ void r300_emit_dirty_state(struct r300_context* r300)
     foreach_dirty_atom(r300, atom) {
         if (atom->dirty) {
             atom->emit(r300, atom->size, atom->state);
-            atom->dirty = FALSE;
+            atom->dirty = false;
         }
     }
 

@@ -26,7 +26,7 @@
  **************************************************************************/
 
 #include "util/u_debug.h"
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_shader_tokens.h"
 #include "tgsi_build.h"
 #include "tgsi_parse.h"
@@ -119,7 +119,7 @@ tgsi_default_declaration( void )
 
 static struct tgsi_declaration
 tgsi_build_declaration(
-   unsigned file,
+   enum tgsi_file_type file,
    unsigned usage_mask,
    unsigned interpolate,
    unsigned dimension,
@@ -169,6 +169,7 @@ tgsi_default_declaration_dimension()
    struct tgsi_declaration_dimension dim;
 
    dim.Index2D = 0;
+   dim.Padding = 0;
 
    return dim;
 }
@@ -217,7 +218,6 @@ tgsi_default_declaration_interp( void )
 
    di.Interpolate = TGSI_INTERPOLATE_CONSTANT;
    di.Location = TGSI_INTERPOLATE_LOC_CENTER;
-   di.CylindricalWrap = 0;
    di.Padding = 0;
 
    return di;
@@ -226,7 +226,6 @@ tgsi_default_declaration_interp( void )
 static struct tgsi_declaration_interp
 tgsi_build_declaration_interp(unsigned interpolate,
                               unsigned interpolate_location,
-                              unsigned cylindrical_wrap,
                               struct tgsi_declaration *declaration,
                               struct tgsi_header *header)
 {
@@ -234,7 +233,6 @@ tgsi_build_declaration_interp(unsigned interpolate,
 
    di.Interpolate = interpolate;
    di.Location = interpolate_location;
-   di.CylindricalWrap = cylindrical_wrap;
    di.Padding = 0;
 
    declaration_grow(declaration, header);
@@ -466,7 +464,6 @@ tgsi_build_full_declaration(
 
       *di = tgsi_build_declaration_interp(full_decl->Interp.Interpolate,
                                           full_decl->Interp.Location,
-                                          full_decl->Interp.CylindricalWrap,
                                           declaration,
                                           header);
    }
@@ -812,7 +809,9 @@ tgsi_default_texture_offset( void )
 
 static struct tgsi_texture_offset
 tgsi_build_texture_offset(
-   int index, int file, int swizzle_x, int swizzle_y, int swizzle_z,
+   int index,
+   enum tgsi_file_type file,
+   int swizzle_x, int swizzle_y, int swizzle_z,
    struct tgsi_instruction *instruction,
    struct tgsi_header *header )
 {
@@ -851,7 +850,7 @@ tgsi_default_src_register( void )
 
 static struct tgsi_src_register
 tgsi_build_src_register(
-   unsigned file,
+   enum tgsi_file_type file,
    unsigned swizzle_x,
    unsigned swizzle_y,
    unsigned swizzle_z,
@@ -905,7 +904,7 @@ tgsi_default_ind_register( void )
 
 static struct tgsi_ind_register
 tgsi_build_ind_register(
-   unsigned file,
+   enum tgsi_file_type file,
    unsigned swizzle,
    int index,
    unsigned arrayid,
@@ -990,7 +989,7 @@ tgsi_default_dst_register( void )
 
 static struct tgsi_dst_register
 tgsi_build_dst_register(
-   unsigned file,
+   enum tgsi_file_type file,
    unsigned mask,
    unsigned indirect,
    unsigned dimension,
@@ -1393,19 +1392,4 @@ tgsi_build_full_property(
    }
 
    return size;
-}
-
-struct tgsi_full_src_register
-tgsi_full_src_register_from_dst(const struct tgsi_full_dst_register *dst)
-{
-   struct tgsi_full_src_register src;
-   src.Register = tgsi_default_src_register();
-   src.Register.File = dst->Register.File;
-   src.Register.Indirect = dst->Register.Indirect;
-   src.Register.Dimension = dst->Register.Dimension;
-   src.Register.Index = dst->Register.Index;
-   src.Indirect = dst->Indirect;
-   src.Dimension = dst->Dimension;
-   src.DimIndirect = dst->DimIndirect;
-   return src;
 }

@@ -1,24 +1,7 @@
 /*
  * Copyright 2010 Marek Olšák <maraeo@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * SPDX-License-Identifier: MIT
+ */
 
 /**
  * The two-sided stencil reference value fallback for r3xx-r4xx chips.
@@ -34,15 +17,14 @@
 #include "r300_reg.h"
 
 struct r300_stencilref_context {
-    void (*draw_vbo)(struct pipe_context *pipe,
-                     const struct pipe_draw_info *info);
+    pipe_draw_func draw_vbo;
 
     uint32_t rs_cull_mode;
     uint32_t zb_stencilrefmask;
-    ubyte ref_value_front;
+    uint8_t ref_value_front;
 };
 
-static boolean r300_stencilref_needed(struct r300_context *r300)
+static bool r300_stencilref_needed(struct r300_context *r300)
 {
     struct r300_dsa_state *dsa = (struct r300_dsa_state*)r300->dsa_state.state;
 
@@ -101,18 +83,22 @@ static void r300_stencilref_end(struct r300_context *r300)
 }
 
 static void r300_stencilref_draw_vbo(struct pipe_context *pipe,
-                                     const struct pipe_draw_info *info)
+                                     const struct pipe_draw_info *info,
+                                     unsigned drawid_offset,
+                                     const struct pipe_draw_indirect_info *indirect,
+                                     const struct pipe_draw_start_count_bias *draws,
+                                     unsigned num_draws)
 {
     struct r300_context *r300 = r300_context(pipe);
     struct r300_stencilref_context *sr = r300->stencilref_fallback;
 
     if (!r300_stencilref_needed(r300)) {
-        sr->draw_vbo(pipe, info);
+        sr->draw_vbo(pipe, info, drawid_offset, NULL, draws, num_draws);
     } else {
         r300_stencilref_begin(r300);
-        sr->draw_vbo(pipe, info);
+        sr->draw_vbo(pipe, info, drawid_offset, NULL, draws, num_draws);
         r300_stencilref_switch_side(r300);
-        sr->draw_vbo(pipe, info);
+        sr->draw_vbo(pipe, info, drawid_offset, NULL, draws, num_draws);
         r300_stencilref_end(r300);
     }
 }

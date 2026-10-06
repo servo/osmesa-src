@@ -221,7 +221,7 @@ vlVdpOutputSurfaceGetBitsNative(VdpOutputSurface surface,
 
    res = vlsurface->sampler_view->texture;
    box = RectToPipeBox(source_rect, res);
-   map = pipe->transfer_map(pipe, res, 0, PIPE_TRANSFER_READ, &box, &transfer);
+   map = pipe->texture_map(pipe, res, 0, PIPE_MAP_READ, &box, &transfer);
    if (!map) {
       mtx_unlock(&vlsurface->device->mutex);
       return VDP_STATUS_RESOURCES;
@@ -230,7 +230,7 @@ vlVdpOutputSurfaceGetBitsNative(VdpOutputSurface surface,
    util_copy_rect(*destination_data, res->format, *destination_pitches, 0, 0,
                   box.width, box.height, map, transfer->stride, 0, 0);
 
-   pipe_transfer_unmap(pipe, transfer);
+   pipe_texture_unmap(pipe, transfer);
    mtx_unlock(&vlsurface->device->mutex);
 
    return VDP_STATUS_OK;
@@ -272,7 +272,7 @@ vlVdpOutputSurfacePutBitsNative(VdpOutputSurface surface,
    }
 
    pipe->texture_subdata(pipe, vlsurface->sampler_view->texture, 0,
-                         PIPE_TRANSFER_WRITE, &dst_box, *source_data,
+                         PIPE_MAP_WRITE, &dst_box, *source_data,
                          *source_pitches, 0);
    mtx_unlock(&vlsurface->device->mutex);
 
@@ -334,8 +334,11 @@ vlVdpOutputSurfacePutBitsIndexed(VdpOutputSurface surface,
    res_tmpl.format = index_format;
 
    if (destination_rect) {
-      res_tmpl.width0 = abs(destination_rect->x0-destination_rect->x1);
-      res_tmpl.height0 = abs(destination_rect->y0-destination_rect->y1);
+      if (destination_rect->x1 > destination_rect->x0 &&
+          destination_rect->y1 > destination_rect->y0) {
+         res_tmpl.width0 = destination_rect->x1 - destination_rect->x0;
+         res_tmpl.height0 = destination_rect->y1 - destination_rect->y0;
+      }
    } else {
       res_tmpl.width0 = vlsurface->surface->texture->width0;
       res_tmpl.height0 = vlsurface->surface->texture->height0;
@@ -359,7 +362,7 @@ vlVdpOutputSurfacePutBitsIndexed(VdpOutputSurface surface,
    box.height = res->height0;
    box.depth = res->depth0;
 
-   context->texture_subdata(context, res, 0, PIPE_TRANSFER_WRITE, &box,
+   context->texture_subdata(context, res, 0, PIPE_MAP_WRITE, &box,
                             source_data[0], source_pitch[0],
                             source_pitch[0] * res->height0);
 
@@ -392,7 +395,7 @@ vlVdpOutputSurfacePutBitsIndexed(VdpOutputSurface surface,
    box.height = res->height0;
    box.depth = res->depth0;
 
-   context->texture_subdata(context, res, 0, PIPE_TRANSFER_WRITE, &box, color_table,
+   context->texture_subdata(context, res, 0, PIPE_MAP_WRITE, &box, color_table,
                             util_format_get_stride(colortbl_format, res->width0), 0);
 
    memset(&sv_tmpl, 0, sizeof(sv_tmpl));
@@ -467,8 +470,11 @@ vlVdpOutputSurfacePutBitsYCbCr(VdpOutputSurface surface,
    vtmpl.buffer_format = format;
 
    if (destination_rect) {
-      vtmpl.width = abs(destination_rect->x0-destination_rect->x1);
-      vtmpl.height = abs(destination_rect->y0-destination_rect->y1);
+      if (destination_rect->x1 > destination_rect->x0 &&
+          destination_rect->y1 > destination_rect->y0) {
+         vtmpl.width = destination_rect->x1 - destination_rect->x0;
+         vtmpl.height = destination_rect->y1 - destination_rect->y0;
+      }
    } else {
       vtmpl.width = vlsurface->surface->texture->width0;
       vtmpl.height = vlsurface->surface->texture->height0;
@@ -491,12 +497,11 @@ vlVdpOutputSurfacePutBitsYCbCr(VdpOutputSurface surface,
       struct pipe_sampler_view *sv = sampler_views[i];
       if (!sv) continue;
 
-      struct pipe_box dst_box = {
-         0, 0, 0,
-         sv->texture->width0, sv->texture->height0, 1
-      };
+      struct pipe_box dst_box;
+      u_box_3d(0, 0, 0,
+               sv->texture->width0, sv->texture->height0, 1, &dst_box);
 
-      pipe->texture_subdata(pipe, sv->texture, 0, PIPE_TRANSFER_WRITE, &dst_box,
+      pipe->texture_subdata(pipe, sv->texture, 0, PIPE_MAP_WRITE, &dst_box,
                             source_data[i], source_pitches[i], 0);
    }
 

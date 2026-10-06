@@ -59,10 +59,9 @@
 #include "compiler/nir/nir_builder.h"
 #include "compiler/nir/nir_deref.h"
 #include "gl_nir.h"
-#include "ir_uniform.h"
 
 #include "util/compiler.h"
-#include "main/mtypes.h"
+#include "main/shader_types.h"
 
 struct lower_samplers_as_deref_state {
    nir_shader *shader;
@@ -120,16 +119,27 @@ remove_struct_derefs_prep(nir_deref_instr **p, char **name,
 
 static void
 record_images_used(struct shader_info *info,
-                   nir_deref_instr *deref)
+                   nir_intrinsic_instr *instr)
 {
-   nir_variable *var = nir_deref_instr_get_variable(deref);
+   nir_variable *var = nir_intrinsic_get_var(instr, 0);
 
    /* Structs have been lowered already, so get_aoa_size is sufficient. */
    const unsigned size =
       glsl_type_is_array(var->type) ? glsl_get_aoa_size(var->type) : 1;
-   unsigned mask = ((1ull << MAX2(size, 1)) - 1) << var->data.binding;
 
-   info->images_used |= mask;
+   BITSET_SET_RANGE(info->images_used, var->data.binding,
+                    var->data.binding + (MAX2(size, 1) - 1));
+
+   enum glsl_sampler_dim sampler_dim =
+      glsl_get_sampler_dim(glsl_without_array(var->type));
+   if (sampler_dim == GLSL_SAMPLER_DIM_BUF) {
+      BITSET_SET_RANGE(info->image_buffers, var->data.binding,
+                       var->data.binding + (MAX2(size, 1) - 1));
+   }
+   if (sampler_dim == GLSL_SAMPLER_DIM_MS) {
+      BITSET_SET_RANGE(info->msaa_images, var->data.binding,
+                       var->data.binding + (MAX2(size, 1) - 1));
+   }
 }
 
 
@@ -140,7 +150,8 @@ lower_deref(nir_builder *b, struct lower_samplers_as_deref_state *state,
    nir_variable *var = nir_deref_instr_get_variable(deref);
    gl_shader_stage stage = state->shader->info.stage;
 
-   if (var->data.bindless || var->data.mode != nir_var_uniform)
+   if (!(var->data.mode & (nir_var_uniform | nir_var_image)) ||
+       var->data.bindless)
       return NULL;
 
    nir_deref_path path;
@@ -190,7 +201,7 @@ lower_deref(nir_builder *b, struct lower_samplers_as_deref_state *state,
    if (h) {
       var = (nir_variable *)h->data;
    } else {
-      var = nir_variable_create(state->shader, nir_var_uniform, type, name);
+      var = nir_variable_create(state->shader, var->data.mode, type, name);
       var->data.binding = binding;
 
       /* Don't set var->data.location.  The old structure location could be
@@ -214,7 +225,7 @@ lower_deref(nir_builder *b, struct lower_samplers_as_deref_state *state,
       assert((*p)->deref_type == nir_deref_type_array);
 
       new_deref = nir_build_deref_array(b, new_deref,
-                                        nir_ssa_for_src(b, (*p)->arr.index, 1));
+                                        (*p)->arr.index.ssa);
    }
 
    return new_deref;
@@ -230,14 +241,31 @@ record_textures_used(struct shader_info *info,
    /* Structs have been lowered already, so get_aoa_size is sufficient. */
    const unsigned size =
       glsl_type_is_array(var->type) ? glsl_get_aoa_size(var->type) : 1;
-   unsigned mask = ((1ull << MAX2(size, 1)) - 1) << var->data.binding;
 
-   info->textures_used |= mask;
+   BITSET_SET_RANGE(info->textures_used, var->data.binding,
+                    var->data.binding + (MAX2(size, 1) - 1));
 
    if (op == nir_texop_txf ||
        op == nir_texop_txf_ms ||
-       op == nir_texop_txf_ms_mcs)
-      info->textures_used_by_txf |= mask;
+       op == nir_texop_txf_ms_mcs_intel) {
+      BITSET_SET_RANGE(info->textures_used_by_txf, var->data.binding,
+                       var->data.binding + (MAX2(size, 1) - 1));
+   }
+}
+
+static void
+record_samplers_used(struct shader_info *info,
+                     nir_deref_instr *deref,
+                     nir_texop op)
+{
+   nir_variable *var = nir_deref_instr_get_variable(deref);
+
+   /* Structs have been lowered already, so get_aoa_size is sufficient. */
+   const unsigned size =
+      glsl_type_is_array(var->type) ? glsl_get_aoa_size(var->type) : 1;
+
+   BITSET_SET_RANGE(info->samplers_used, var->data.binding,
+                    var->data.binding + (MAX2(size, 1) - 1));
 }
 
 static bool
@@ -252,26 +280,22 @@ lower_sampler(nir_tex_instr *instr, struct lower_samplers_as_deref_state *state,
    b->cursor = nir_before_instr(&instr->instr);
 
    if (texture_idx >= 0) {
-      assert(instr->src[texture_idx].src.is_ssa);
-
       nir_deref_instr *texture_deref =
          lower_deref(b, state, nir_src_as_deref(instr->src[texture_idx].src));
       /* only lower non-bindless: */
       if (texture_deref) {
-         nir_instr_rewrite_src(&instr->instr, &instr->src[texture_idx].src,
-                               nir_src_for_ssa(&texture_deref->dest.ssa));
+         nir_src_rewrite(&instr->src[texture_idx].src, &texture_deref->def);
          record_textures_used(&b->shader->info, texture_deref, instr->op);
       }
    }
 
    if (sampler_idx >= 0) {
-      assert(instr->src[sampler_idx].src.is_ssa);
       nir_deref_instr *sampler_deref =
          lower_deref(b, state, nir_src_as_deref(instr->src[sampler_idx].src));
       /* only lower non-bindless: */
       if (sampler_deref) {
-         nir_instr_rewrite_src(&instr->instr, &instr->src[sampler_idx].src,
-                               nir_src_for_ssa(&sampler_deref->dest.ssa));
+         nir_src_rewrite(&instr->src[sampler_idx].src, &sampler_deref->def);
+         record_samplers_used(&b->shader->info, sampler_deref, instr->op);
       }
    }
 
@@ -285,67 +309,50 @@ lower_intrinsic(nir_intrinsic_instr *instr,
 {
    if (instr->intrinsic == nir_intrinsic_image_deref_load ||
        instr->intrinsic == nir_intrinsic_image_deref_store ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_add ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_imin ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_umin ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_imax ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_umax ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_and ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_or ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_xor ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_exchange ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_comp_swap ||
-       instr->intrinsic == nir_intrinsic_image_deref_atomic_fadd ||
-       instr->intrinsic == nir_intrinsic_image_deref_size) {
+       instr->intrinsic == nir_intrinsic_image_deref_atomic ||
+       instr->intrinsic == nir_intrinsic_image_deref_atomic_swap ||
+       instr->intrinsic == nir_intrinsic_image_deref_size ||
+       instr->intrinsic == nir_intrinsic_image_deref_samples_identical ||
+       instr->intrinsic == nir_intrinsic_image_deref_descriptor_amd ||
+       instr->intrinsic == nir_intrinsic_image_deref_samples) {
 
       b->cursor = nir_before_instr(&instr->instr);
       nir_deref_instr *deref =
          lower_deref(b, state, nir_src_as_deref(instr->src[0]));
 
-      record_images_used(&state->shader->info, deref);
+      record_images_used(&state->shader->info, instr);
 
       /* don't lower bindless: */
       if (!deref)
          return false;
-      nir_instr_rewrite_src(&instr->instr, &instr->src[0],
-                            nir_src_for_ssa(&deref->dest.ssa));
+      nir_src_rewrite(&instr->src[0], &deref->def);
       return true;
    }
+   if (instr->intrinsic == nir_intrinsic_image_deref_order ||
+       instr->intrinsic == nir_intrinsic_image_deref_format)
+      unreachable("how did you even manage this?");
 
    return false;
 }
 
 static bool
-lower_impl(nir_function_impl *impl, struct lower_samplers_as_deref_state *state)
+lower_instr(nir_builder *b, nir_instr *instr, void *cb_data)
 {
-   nir_builder b;
-   nir_builder_init(&b, impl);
-   bool progress = false;
+   struct lower_samplers_as_deref_state *state = cb_data;
 
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr(instr, block) {
-         if (instr->type == nir_instr_type_tex)
-            progress |= lower_sampler(nir_instr_as_tex(instr), state, &b);
-         else if (instr->type == nir_instr_type_intrinsic)
-            progress |= lower_intrinsic(nir_instr_as_intrinsic(instr), state, &b);
-      }
-   }
+   if (instr->type == nir_instr_type_tex)
+      return lower_sampler(nir_instr_as_tex(instr), state, b);
 
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
-   } else {
-      nir_metadata_preserve(impl, nir_metadata_all);
-   }
+   if (instr->type == nir_instr_type_intrinsic)
+      return lower_intrinsic(nir_instr_as_intrinsic(instr), state, b);
 
-   return progress;
+   return false;
 }
 
 bool
 gl_nir_lower_samplers_as_deref(nir_shader *shader,
                                const struct gl_shader_program *shader_program)
 {
-   bool progress = false;
    struct lower_samplers_as_deref_state state;
 
    state.shader = shader;
@@ -353,16 +360,36 @@ gl_nir_lower_samplers_as_deref(nir_shader *shader,
    state.remap_table = _mesa_hash_table_create(NULL, _mesa_hash_string,
                                                _mesa_key_string_equal);
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= lower_impl(function->impl, &state);
+   bool progress = nir_shader_instructions_pass(shader, lower_instr,
+                                                nir_metadata_control_flow,
+                                                &state);
+
+   if (progress) {
+      nir_remove_dead_derefs(shader);
+      if (!shader->info.internal && shader_program) {
+         /* try to apply bindings for unused samplers to avoid index zero clobbering in backends */
+         nir_foreach_uniform_variable(var, shader) {
+            /* ignore hidden variables */
+            if (!glsl_type_is_sampler(glsl_without_array(var->type)) ||
+                var->data.how_declared == nir_var_hidden)
+               continue;
+            bool found = false;
+            hash_table_foreach(state.remap_table, entry) {
+               if (var == entry->data) {
+                  found = true;
+                  break;
+               }
+            }
+            if (!found) {
+               /* same as lower_deref() */
+               var->data.binding = shader_program->data->UniformStorage[var->data.location].opaque[shader->info.stage].index;
+            }
+         }
+      }
    }
 
    /* keys are freed automatically by ralloc */
    _mesa_hash_table_destroy(state.remap_table, NULL);
-
-   if (progress)
-      nir_remove_dead_derefs(shader);
 
    return progress;
 }

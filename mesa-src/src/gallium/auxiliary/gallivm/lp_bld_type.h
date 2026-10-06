@@ -38,7 +38,7 @@
 
 
 #include "util/format/u_format.h"
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "gallivm/lp_bld.h"
 
 #ifdef __cplusplus
@@ -112,6 +112,12 @@ struct lp_type {
     * clamped to the interval above.
     */
    unsigned norm:1;
+
+   /** Arithmetic operations that use this type can not flust -0 to 0. */
+   unsigned signed_zero_preserve:1;
+
+   /** Arithmetic operations that use this type can not flust nan to 0. */
+   unsigned nan_preserve:1;
 
    /**
     * Element width.
@@ -214,8 +220,8 @@ lp_type_float(unsigned width)
    struct lp_type res_type;
 
    memset(&res_type, 0, sizeof res_type);
-   res_type.floating = TRUE;
-   res_type.sign = TRUE;
+   res_type.floating = true;
+   res_type.sign = true;
    res_type.width = width;
    res_type.length = 1;
 
@@ -230,8 +236,8 @@ lp_type_float_vec(unsigned width, unsigned total_width)
    struct lp_type res_type;
 
    memset(&res_type, 0, sizeof res_type);
-   res_type.floating = TRUE;
-   res_type.sign = TRUE;
+   res_type.floating = true;
+   res_type.sign = true;
    res_type.width = width;
    res_type.length = total_width / width;
 
@@ -246,7 +252,7 @@ lp_type_int(unsigned width)
    struct lp_type res_type;
 
    memset(&res_type, 0, sizeof res_type);
-   res_type.sign = TRUE;
+   res_type.sign = true;
    res_type.width = width;
    res_type.length = 1;
 
@@ -261,7 +267,7 @@ lp_type_int_vec(unsigned width, unsigned total_width)
    struct lp_type res_type;
 
    memset(&res_type, 0, sizeof res_type);
-   res_type.sign = TRUE;
+   res_type.sign = true;
    res_type.width = width;
    res_type.length = total_width / width;
 
@@ -303,7 +309,7 @@ lp_type_unorm(unsigned width, unsigned total_width)
    struct lp_type res_type;
 
    memset(&res_type, 0, sizeof res_type);
-   res_type.norm = TRUE;
+   res_type.norm = true;
    res_type.width = width;
    res_type.length = total_width / width;
 
@@ -317,8 +323,8 @@ lp_type_fixed(unsigned width, unsigned total_width)
    struct lp_type res_type;
 
    memset(&res_type, 0, sizeof res_type);
-   res_type.sign = TRUE;
-   res_type.fixed = TRUE;
+   res_type.sign = true;
+   res_type.fixed = true;
    res_type.width = width;
    res_type.length = total_width / width;
 
@@ -332,7 +338,7 @@ lp_type_ufixed(unsigned width, unsigned total_width)
    struct lp_type res_type;
 
    memset(&res_type, 0, sizeof res_type);
-   res_type.fixed = TRUE;
+   res_type.fixed = true;
    res_type.width = width;
    res_type.length = total_width / width;
 
@@ -341,31 +347,33 @@ lp_type_ufixed(unsigned width, unsigned total_width)
 
 
 LLVMTypeRef
-lp_build_elem_type(struct gallivm_state *gallivm, struct lp_type type);
+lp_build_elem_type(const struct gallivm_state *gallivm, struct lp_type type);
 
 
 LLVMTypeRef
-lp_build_vec_type(struct gallivm_state *gallivm, struct lp_type type);
+lp_build_vec_type(const struct gallivm_state *gallivm, struct lp_type type);
 
 
-boolean
+bool
 lp_check_elem_type(struct lp_type type, LLVMTypeRef elem_type);
 
 
-boolean
+bool
 lp_check_vec_type(struct lp_type type, LLVMTypeRef vec_type);
 
 
-boolean
+bool
 lp_check_value(struct lp_type type, LLVMValueRef val);
 
 
 LLVMTypeRef
-lp_build_int_elem_type(struct gallivm_state *gallivm, struct lp_type type);
+lp_build_int_elem_type(const struct gallivm_state *gallivm,
+                       struct lp_type type);
 
 
 LLVMTypeRef
-lp_build_int_vec_type(struct gallivm_state *gallivm, struct lp_type type);
+lp_build_int_vec_type(const struct gallivm_state *gallivm,
+                      struct lp_type type);
 
 
 static inline struct lp_type
@@ -374,9 +382,9 @@ lp_float32_vec4_type(void)
    struct lp_type type;
 
    memset(&type, 0, sizeof(type));
-   type.floating = TRUE;
-   type.sign = TRUE;
-   type.norm = FALSE;
+   type.floating = true;
+   type.sign = true;
+   type.norm = false;
    type.width = 32;
    type.length = 4;
 
@@ -390,9 +398,9 @@ lp_int32_vec4_type(void)
    struct lp_type type;
 
    memset(&type, 0, sizeof(type));
-   type.floating = FALSE;
-   type.sign = TRUE;
-   type.norm = FALSE;
+   type.floating = false;
+   type.sign = true;
+   type.norm = false;
    type.width = 32;
    type.length = 4;
 
@@ -406,9 +414,9 @@ lp_unorm8_vec4_type(void)
    struct lp_type type;
 
    memset(&type, 0, sizeof(type));
-   type.floating = FALSE;
-   type.sign = FALSE;
-   type.norm = TRUE;
+   type.floating = false;
+   type.sign = false;
+   type.norm = true;
    type.width = 8;
    type.length = 4;
 

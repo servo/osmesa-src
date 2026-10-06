@@ -221,8 +221,8 @@ dd_context_bind_sampler_states(struct pipe_context *_pipe,
    struct dd_context *dctx = dd_context(_pipe);
    struct pipe_context *pipe = dctx->pipe;
 
-   memcpy(&dctx->draw_state.sampler_states[shader][start], states,
-          sizeof(void*) * count);
+   safe_memcpy(&dctx->draw_state.sampler_states[shader][start], states,
+               sizeof(void*) * count);
 
    if (states) {
       void *samp[PIPE_MAX_SAMPLERS];
@@ -350,7 +350,7 @@ DD_SHADER_NOCREATE(COMPUTE, compute)
    }
 
 DD_IMM_STATE(blend_color, const struct pipe_blend_color, *state, state)
-DD_IMM_STATE(stencil_ref, const struct pipe_stencil_ref, *state, state)
+DD_IMM_STATE(stencil_ref, const struct pipe_stencil_ref, state, state)
 DD_IMM_STATE(clip_state, const struct pipe_clip_state, *state, state)
 DD_IMM_STATE(sample_mask, unsigned, sample_mask, sample_mask)
 DD_IMM_STATE(min_samples, unsigned, min_samples, min_samples)
@@ -360,6 +360,7 @@ DD_IMM_STATE(polygon_stipple, const struct pipe_poly_stipple, *state, state)
 static void
 dd_context_set_constant_buffer(struct pipe_context *_pipe,
                                enum pipe_shader_type shader, uint index,
+                               bool take_ownership,
                                const struct pipe_constant_buffer *constant_buffer)
 {
    struct dd_context *dctx = dd_context(_pipe);
@@ -367,7 +368,7 @@ dd_context_set_constant_buffer(struct pipe_context *_pipe,
 
    safe_memcpy(&dctx->draw_state.constant_buffers[shader][index],
                constant_buffer, sizeof(*constant_buffer));
-   pipe->set_constant_buffer(pipe, shader, index, constant_buffer);
+   pipe->set_constant_buffer(pipe, shader, index, take_ownership, constant_buffer);
 }
 
 static void
@@ -408,6 +409,15 @@ static void dd_context_set_tess_state(struct pipe_context *_pipe,
    memcpy(dctx->draw_state.tess_default_levels+4, default_inner_level,
           sizeof(float) * 2);
    pipe->set_tess_state(pipe, default_outer_level, default_inner_level);
+}
+
+static void dd_context_set_patch_vertices(struct pipe_context *_pipe,
+                                          uint8_t patch_vertices)
+{
+   struct dd_context *dctx = dd_context(_pipe);
+   struct pipe_context *pipe = dctx->pipe;
+
+   pipe->set_patch_vertices(pipe, patch_vertices);
 }
 
 static void dd_context_set_window_rectangles(struct pipe_context *_pipe,
@@ -509,6 +519,8 @@ static void
 dd_context_set_sampler_views(struct pipe_context *_pipe,
                              enum pipe_shader_type shader,
                              unsigned start, unsigned num,
+                             unsigned unbind_num_trailing_slots,
+                             bool take_ownership,
                              struct pipe_sampler_view **views)
 {
    struct dd_context *dctx = dd_context(_pipe);
@@ -516,13 +528,17 @@ dd_context_set_sampler_views(struct pipe_context *_pipe,
 
    safe_memcpy(&dctx->draw_state.sampler_views[shader][start], views,
                sizeof(views[0]) * num);
-   pipe->set_sampler_views(pipe, shader, start, num, views);
+   safe_memcpy(&dctx->draw_state.sampler_views[shader][start + num], NULL,
+               sizeof(views[0]) * unbind_num_trailing_slots);
+   pipe->set_sampler_views(pipe, shader, start, num, take_ownership,
+                           unbind_num_trailing_slots, views);
 }
 
 static void
 dd_context_set_shader_images(struct pipe_context *_pipe,
                              enum pipe_shader_type shader,
                              unsigned start, unsigned num,
+                             unsigned unbind_num_trailing_slots,
                              const struct pipe_image_view *views)
 {
    struct dd_context *dctx = dd_context(_pipe);
@@ -530,7 +546,10 @@ dd_context_set_shader_images(struct pipe_context *_pipe,
 
    safe_memcpy(&dctx->draw_state.shader_images[shader][start], views,
                sizeof(views[0]) * num);
-   pipe->set_shader_images(pipe, shader, start, num, views);
+   safe_memcpy(&dctx->draw_state.shader_images[shader][start + num], NULL,
+               sizeof(views[0]) * unbind_num_trailing_slots);
+   pipe->set_shader_images(pipe, shader, start, num,
+                           unbind_num_trailing_slots, views);
 }
 
 static void
@@ -551,22 +570,28 @@ dd_context_set_shader_buffers(struct pipe_context *_pipe,
 
 static void
 dd_context_set_vertex_buffers(struct pipe_context *_pipe,
-                              unsigned start, unsigned num_buffers,
+                              unsigned num_buffers,
                               const struct pipe_vertex_buffer *buffers)
 {
    struct dd_context *dctx = dd_context(_pipe);
    struct pipe_context *pipe = dctx->pipe;
 
-   safe_memcpy(&dctx->draw_state.vertex_buffers[start], buffers,
+   safe_memcpy(&dctx->draw_state.vertex_buffers[0], buffers,
                sizeof(buffers[0]) * num_buffers);
-   pipe->set_vertex_buffers(pipe, start, num_buffers, buffers);
+   if (dctx->num_vertex_buffers > num_buffers) {
+      safe_memcpy(&dctx->draw_state.vertex_buffers[num_buffers], NULL,
+                  sizeof(buffers[0]) * (dctx->num_vertex_buffers - num_buffers));
+   }
+   pipe->set_vertex_buffers(pipe, num_buffers, buffers);
+   dctx->num_vertex_buffers = num_buffers;
 }
 
 static void
 dd_context_set_stream_output_targets(struct pipe_context *_pipe,
                                      unsigned num_targets,
                                      struct pipe_stream_output_target **tgs,
-                                     const unsigned *offsets)
+                                     const unsigned *offsets,
+                                     enum mesa_prim output_prim)
 {
    struct dd_context *dctx = dd_context(_pipe);
    struct pipe_context *pipe = dctx->pipe;
@@ -575,7 +600,7 @@ dd_context_set_stream_output_targets(struct pipe_context *_pipe,
    dstate->num_so_targets = num_targets;
    safe_memcpy(dstate->so_targets, tgs, sizeof(*tgs) * num_targets);
    safe_memcpy(dstate->so_offsets, offsets, sizeof(*offsets) * num_targets);
-   pipe->set_stream_output_targets(pipe, num_targets, tgs, offsets);
+   pipe->set_stream_output_targets(pipe, num_targets, tgs, offsets, output_prim);
 }
 
 
@@ -815,6 +840,16 @@ dd_context_set_context_param(struct pipe_context *_pipe,
    pipe->set_context_param(pipe, param, value);
 }
 
+static void
+dd_context_set_inlinable_constants(struct pipe_context *_pipe,
+                                   enum pipe_shader_type shader,
+                                   uint num_values, uint32_t *values)
+{
+   struct pipe_context *pipe = dd_context(_pipe)->pipe;
+
+   pipe->set_inlinable_constants(pipe, shader, num_values, values);
+}
+
 struct pipe_context *
 dd_context_create(struct dd_screen *dscreen, struct pipe_context *pipe)
 {
@@ -888,6 +923,7 @@ dd_context_create(struct dd_screen *dscreen, struct pipe_context *pipe)
    CTX_INIT(set_viewport_states);
    CTX_INIT(set_sampler_views);
    CTX_INIT(set_tess_state);
+   CTX_INIT(set_patch_vertices);
    CTX_INIT(set_shader_buffers);
    CTX_INIT(set_shader_images);
    CTX_INIT(set_vertex_buffers);
@@ -921,6 +957,7 @@ dd_context_create(struct dd_screen *dscreen, struct pipe_context *pipe)
    CTX_INIT(delete_image_handle);
    CTX_INIT(make_image_handle_resident);
    CTX_INIT(set_context_param);
+   CTX_INIT(set_inlinable_constants);
 
    dd_init_draw_functions(dctx);
 
@@ -933,8 +970,7 @@ dd_context_create(struct dd_screen *dscreen, struct pipe_context *pipe)
    list_inithead(&dctx->records);
    (void) mtx_init(&dctx->mutex, mtx_plain);
    (void) cnd_init(&dctx->cond);
-   dctx->thread = u_thread_create(dd_thread_main, dctx);
-   if (!dctx->thread) {
+   if (thrd_success != u_thread_create(&dctx->thread,dd_thread_main, dctx)) {
       mtx_destroy(&dctx->mutex);
       goto fail;
    }

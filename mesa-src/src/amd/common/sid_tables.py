@@ -1,28 +1,8 @@
-from __future__ import print_function, division, unicode_literals
-
 CopyRight = '''
 /*
  * Copyright 2015-2019 Advanced Micro Devices, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
+ * SPDX-License-Identifier: MIT
  */
 '''
 
@@ -38,6 +18,10 @@ AMD_REGISTERS = os.path.abspath(os.path.join(os.path.dirname(sys.argv[0]), "../r
 sys.path.append(AMD_REGISTERS)
 
 from regdb import Object, RegisterDatabase
+
+
+def string_to_chars(string):
+    return "'" + "', '".join(string) + "', '\\0',"
 
 
 class StringTable:
@@ -70,13 +54,14 @@ class StringTable:
         to filp.
         """
         fragments = [
-            '"%s\\0" /* %s */' % (
+            '%s /* %s (%s) */' % (
+                string_to_chars(te[0].encode('unicode_escape').decode()),
                 te[0].encode('unicode_escape').decode(),
                 ', '.join(str(idx) for idx in sorted(te[2]))
             )
             for te in self.table
         ]
-        filp.write('%sconst char %s[] =\n%s;\n' % (
+        filp.write('%sconst char %s[] = {\n%s\n};\n' % (
             'static ' if static else '',
             name,
             '\n'.join('\t' + fragment for fragment in fragments)
@@ -357,7 +342,7 @@ def main():
                 print('Error reading {}'.format(sys.argv[1]), file=sys.stderr)
                 raise
 
-    # The ac_debug code only distinguishes by chip_class
+    # The ac_debug code only distinguishes by gfx_level
     regdb.merge_chips(['gfx8', 'fiji', 'stoney'], 'gfx8')
 
     # Write it all out

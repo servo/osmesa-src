@@ -25,8 +25,6 @@
 # Authors:
 #    Ian Romanick <idr@us.ibm.com>
 
-from __future__ import print_function
-
 import argparse
 
 import gl_XML
@@ -51,17 +49,14 @@ class PrintGlTable(gl_XML.gl_print_base):
                 f.return_type, f.name, arg_string, f.offset))
 
     def printRealHeader(self):
-        print('#ifndef GLAPIENTRYP')
-        print('# ifndef GLAPIENTRY')
-        print('#  define GLAPIENTRY')
-        print('# endif')
-        print('')
-        print('# define GLAPIENTRYP GLAPIENTRY *')
-        print('#endif')
-        print('')
+        print('#include "util/glheader.h"')
         print('')
         print('#ifdef __cplusplus')
         print('extern "C" {')
+        print('#endif')
+        print('')
+        print('#if defined(_WIN32) && defined(_WINDOWS_)')
+        print('#error "Should not include <windows.h> here"')
         print('#endif')
         print('')
         print('struct _glapi_table')
@@ -101,9 +96,8 @@ class PrintRemapTable(gl_XML.gl_print_base):
  * named function in the specified dispatch table.
  */
 
-#include "main/glheader.h"
+#include "util/glheader.h"
 """)
-        print('#include "main/glheader.h"')
         return
 
 
@@ -125,53 +119,28 @@ class PrintRemapTable(gl_XML.gl_print_base):
         print('    } while(0)')
         print('')
 
-        functions = []
-        abi_functions = []
-        count = 0
-        for f in api.functionIterateByOffset():
-            if not f.is_abi():
-                functions.append([f, count])
-                count += 1
-            else:
-                abi_functions.append([f, -1])
+        abi_functions = [f for f in api.functionIterateByOffset()]
 
         print('/* total number of offsets below */')
-        print('#define _gloffset_COUNT %d' % (len(abi_functions + functions)))
+        print('#define _gloffset_COUNT %d' % (len(abi_functions)))
         print('')
 
-        for f, index in abi_functions:
+        for f in abi_functions:
             print('#define _gloffset_%s %d' % (f.name, f.offset))
 
-        remap_table = "driDispatchRemapTable"
-
-        print('#define %s_size %u' % (remap_table, count))
-        print('extern int %s[ %s_size ];' % (remap_table, remap_table))
         print('')
 
-        for f, index in functions:
-            print('#define %s_remap_index %u' % (f.name, index))
-
-        print('')
-
-        for f, index in functions:
-            print('#define _gloffset_%s %s[%s_remap_index]' % (f.name, remap_table, f.name))
-
-        print('')
-
-        for f, index in abi_functions + functions:
+        for f in abi_functions:
             arg_string = gl_XML.create_parameter_string(f.parameters, 0)
 
             print('typedef %s (GLAPIENTRYP _glptr_%s)(%s);' % (f.return_type, f.name, arg_string))
-            print('#define CALL_%s(disp, parameters) \\' % (f.name))
-            print('    (* GET_%s(disp)) parameters' % (f.name))
-            print('static inline _glptr_%s GET_%s(struct _glapi_table *disp) {' % (f.name, f.name))
-            print('   return (_glptr_%s) (GET_by_offset(disp, _gloffset_%s));' % (f.name, f.name))
-            print('}')
-            print()
-            print('static inline void SET_%s(struct _glapi_table *disp, %s (GLAPIENTRYP fn)(%s)) {' % (f.name, f.return_type, arg_string))
-            print('   SET_by_offset(disp, _gloffset_%s, fn);' % (f.name))
-            print('}')
-            print()
+            print('#define CALL_{0}(disp, parameters) (* GET_{0}(disp)) parameters'.format(f.name))
+            print('#define GET_{0}(disp) ((_glptr_{0})(GET_by_offset((disp), _gloffset_{0})))'.format(f.name))
+            print("""#define SET_{0}(disp, func) do {{ \\
+   {1} (GLAPIENTRYP fn)({2}) = func; \\
+   SET_by_offset(disp, _gloffset_{0}, fn); \\
+}} while (0)
+""".format(f.name, f.return_type, arg_string))
 
         return
 
@@ -185,10 +154,10 @@ def _parser():
                         dest='file_name',
                         help="Path to an XML description of OpenGL API.")
     parser.add_argument('-m', '--mode',
-                        choices=['table', 'remap_table'],
+                        choices=['table', 'dispatch'],
                         default='table',
                         metavar="mode",
-                        help="Generate either a table or a remap_table")
+                        help="Generate either a table or a dispatch")
     return parser.parse_args()
 
 
@@ -200,7 +169,7 @@ def main():
 
     if args.mode == "table":
         printer = PrintGlTable()
-    elif args.mode == "remap_table":
+    elif args.mode == "dispatch":
         printer = PrintRemapTable()
 
     printer.Print(api)

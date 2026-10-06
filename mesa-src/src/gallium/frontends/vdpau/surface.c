@@ -82,14 +82,7 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
 
    mtx_lock(&dev->mutex);
    memset(&p_surf->templat, 0, sizeof(p_surf->templat));
-   /* TODO: buffer_format should be selected to match chroma_type */
-   p_surf->templat.buffer_format = pipe->screen->get_video_param
-   (
-      pipe->screen,
-      PIPE_VIDEO_PROFILE_UNKNOWN,
-      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
-      PIPE_VIDEO_CAP_PREFERED_FORMAT
-   );
+   p_surf->templat.buffer_format = ChromaToPipeFormat(chroma_type);
    p_surf->templat.width = width;
    p_surf->templat.height = height;
    p_surf->templat.interlaced = pipe->screen->get_video_param
@@ -101,9 +94,14 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
    );
    if (p_surf->templat.buffer_format != PIPE_FORMAT_NONE)
       p_surf->video_buffer = pipe->create_video_buffer(pipe, &p_surf->templat);
-
    /* do not mandate early allocation of a video buffer */
-   vlVdpVideoSurfaceClear(p_surf);
+
+   if (!pipe->screen->get_video_param(pipe->screen,
+                                      PIPE_VIDEO_PROFILE_UNKNOWN,
+                                      PIPE_VIDEO_ENTRYPOINT_UNKNOWN,
+                                      PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE))
+      vlVdpVideoSurfaceClear(p_surf);
+
    mtx_unlock(&dev->mutex);
 
    *surface = vlAddDataHTAB(p_surf);
@@ -253,15 +251,13 @@ vlVdpVideoSurfaceGetBitsYCbCr(VdpVideoSurface surface,
       vlVdpVideoSurfaceSize(vlsurface, i, &width, &height);
 
       for (j = 0; j < sv->texture->array_size; ++j) {
-         struct pipe_box box = {
-            0, 0, j,
-            width, height, 1
-         };
+         struct pipe_box box;
+         u_box_3d(0, 0, j, width, height, 1, &box);
          struct pipe_transfer *transfer;
          uint8_t *map;
 
-         map = pipe->transfer_map(pipe, sv->texture, 0,
-                                       PIPE_TRANSFER_READ, &box, &transfer);
+         map = pipe->texture_map(pipe, sv->texture, 0,
+                                       PIPE_MAP_READ, &box, &transfer);
          if (!map) {
             mtx_unlock(&vlsurface->device->mutex);
             return VDP_STATUS_RESOURCES;
@@ -285,7 +281,7 @@ vlVdpVideoSurfaceGetBitsYCbCr(VdpVideoSurface surface,
                            box.width, box.height, map, transfer->stride, 0, 0);
          }
 
-         pipe_transfer_unmap(pipe, transfer);
+         pipe_texture_unmap(pipe, transfer);
       }
    }
    mtx_unlock(&vlsurface->device->mutex);
@@ -308,7 +304,7 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
    struct pipe_context *pipe;
    struct pipe_sampler_view **sampler_views;
    unsigned i, j;
-   unsigned usage = PIPE_TRANSFER_WRITE;
+   unsigned usage = PIPE_MAP_WRITE;
 
    vlVdpSurface *p_surf = vlGetDataHTAB(surface);
    if (!p_surf)
@@ -391,16 +387,14 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
       vlVdpVideoSurfaceSize(p_surf, i, &width, &height);
 
       for (j = 0; j < tex->array_size; ++j) {
-         struct pipe_box dst_box = {
-            0, 0, j,
-            width, height, 1
-         };
+         struct pipe_box dst_box;
+         u_box_3d(0, 0, j, width, height, 1, &dst_box);
 
          if (conversion == CONVERSION_YV12_TO_NV12 && i == 1) {
             struct pipe_transfer *transfer;
             uint8_t *map;
 
-            map = pipe->transfer_map(pipe, tex, 0, usage,
+            map = pipe->texture_map(pipe, tex, 0, usage,
                                      &dst_box, &transfer);
             if (!map) {
                mtx_unlock(&p_surf->device->mutex);
@@ -411,10 +405,10 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
                                   i, j, transfer->stride, tex->array_size,
                                   map, dst_box.width, dst_box.height);
 
-            pipe_transfer_unmap(pipe, transfer);
+            pipe_texture_unmap(pipe, transfer);
          } else {
             pipe->texture_subdata(pipe, tex, 0,
-                                  PIPE_TRANSFER_WRITE, &dst_box,
+                                  PIPE_MAP_WRITE, &dst_box,
                                   source_data[i] + source_pitches[i] * j,
                                   source_pitches[i] * tex->array_size,
                                   0);
@@ -423,7 +417,7 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
           * This surface has already been synced
           * by the first map.
           */
-         usage |= PIPE_TRANSFER_UNSYNCHRONIZED;
+         usage |= PIPE_MAP_UNSYNCHRONIZED;
       }
    }
    mtx_unlock(&p_surf->device->mutex);

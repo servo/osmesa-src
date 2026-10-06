@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import sphinx_rtd_theme
-
 #
 # The Mesa 3D Graphics Library documentation build configuration file, created by
 # sphinx-quickstart on Wed Mar 29 14:08:51 2017.
@@ -23,6 +21,8 @@ import sphinx_rtd_theme
 import os
 import sys
 
+from hawkmoth.util import compiler
+
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
@@ -38,7 +38,15 @@ sys.path.append(os.path.abspath('_exts'))
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinx.ext.graphviz', 'formatting', 'redirects']
+extensions = [
+    'bootstrap',
+    'depfile',
+    'formatting',
+    'hawkmoth',
+    'nir',
+    'redirects',
+    'sphinx.ext.graphviz',
+]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -58,7 +66,7 @@ copyright = '1995-2018, Brian Paul'
 author = 'Brian Paul'
 html_show_copyright = False
 
-html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
+html_theme_path = ['.']
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -74,40 +82,30 @@ release = 'latest'
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = 'en'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = [ "contents.rst" ]
-
-# The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'sphinx'
+exclude_patterns = ['header-stubs']
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = False
 
 # Disable highlighting unless a language is specified, otherwise we'll get
 # python keywords highlit in literal blocks.
-highlight_language = "none"
+highlight_language = 'none'
 
+default_role = 'c:expr'
 
 # -- Options for HTML output ----------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'mesa3d_theme'
 
-html_favicon = "favicon.ico"
-
-# Theme options are theme-specific and customize the look and feel of a theme
-# further.  For a list of options available for each theme, see the
-# documentation.
-#
-html_theme_options = {
-  'display_version': False,
-}
+html_favicon = 'favicon.ico'
 
 html_copy_source = False
 
@@ -123,8 +121,41 @@ html_extra_path = [
   'libGL.txt',
   'README.UVD',
   'README.VCE',
-  'README.WIN32',
 ]
+
+html_redirects = [
+  ('webmaster', 'https://www.mesa3d.org/website/'),
+  ('developers', 'https://www.mesa3d.org/developers/'),
+  ('thanks', 'https://gitlab.freedesktop.org/mesa/mesa/-/blob/amber/docs/thanks.rst'),
+]
+
+
+# -- Options for linkcheck ------------------------------------------------
+
+linkcheck_ignore = [
+  r'specs/.*\.spec', # gets copied during the build process
+  r'news:.*', # seems linkcheck doesn't like the news: URI-scheme...
+  r'http://mesa-ci-results.jf.intel.com', # only available for Intel employees
+  r'https://gitlab.com/.*#.*', # needs JS eval
+  r'https://gitlab.freedesktop.org/.*#.*', # needs JS eval
+  r'https://github.com/.*#.*', # needs JS eval
+  r'https://www.intel.com/.*', # intel.com is blocking the linkcheck user-agent; maybe it can be customized to look like a browser?
+  r'https://cgit.freedesktop.org/.*', # cgit is no more
+]
+linkcheck_exclude_documents = [r'relnotes/.*']
+
+linkcheck_allowed_redirects = {
+    # Pages that forward the front-page to a wiki or some explore-page
+    'https://www.freedesktop.org': 'https://www.freedesktop.org/wiki/',
+    'https://x.org': 'https://x.org/wiki/',
+    'https://dri.freedesktop.org/': 'https://dri.freedesktop.org/wiki/',
+    'https://gitlab.freedesktop.org/': 'https://gitlab.freedesktop.org/explore/groups',
+    'https://www.sphinx-doc.org/': 'https://www.sphinx-doc.org/en/master/',
+
+    # Pages that requires authentication
+    'https://gitlab.freedesktop.org/admin/runners': 'https://gitlab.freedesktop.org/users/sign_in',
+    'https://gitlab.freedesktop.org/profile/personal_access_tokens': 'https://gitlab.freedesktop.org/users/sign_in',
+}
 
 
 # -- Options for HTMLHelp output ------------------------------------------
@@ -186,3 +217,27 @@ texinfo_documents = [
 # -- Options for Graphviz -------------------------------------------------
 
 graphviz_output_format = 'svg'
+
+# -- Options for hawkmoth -------------------------------------------------
+
+hawkmoth_root = os.path.abspath(os.pardir)
+mesa_root = os.path.join(os.path.dirname(__file__), os.pardir)
+hawkmoth_clang = [
+  '-I{}/docs/header-stubs/'.format(mesa_root),
+  '-I{}/include/'.format(mesa_root),
+  '-I{}/src/'.format(mesa_root),
+  '-I{}/src/gallium/include/'.format(mesa_root),
+  '-I{}/src/intel/'.format(mesa_root),
+  '-I{}/src/mesa/'.format(mesa_root),
+  '-DHAVE_STRUCT_TIMESPEC',
+  '-DHAVE_PTHREAD',
+  '-DHAVE_ENDIAN_H',
+]
+hawkmoth_clang.extend(compiler.get_include_args())
+
+# helpers for definining parameter direction
+rst_prolog = '''
+.. |in| replace:: **[in]**
+.. |out| replace:: **[out]**
+.. |inout| replace:: **[inout]**
+'''

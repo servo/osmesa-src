@@ -1,27 +1,8 @@
 /*
  * Copyright 2010 Jerome Glisse <glisse@freedesktop.org>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
  * Authors:
  *      Jerome Glisse
+ * SPDX-License-Identifier: MIT
  */
 #ifndef EG_SQ_H
 #define EG_SQ_H
@@ -162,7 +143,13 @@
 #define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_PIXEL               0x00000000
 #define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_POS                 0x00000001
 #define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_PARAM               0x00000002
+#define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_WRITE               0x00000000
+#define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_WRITE_IND           0x00000001
+#define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_READ                0x00000002
+#define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_WRITE_ACK           0x00000002
+#define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_READ_IND            0x00000003
 #define     V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_WRITE_IND_ACK       0x00000003
+
 #define   S_SQ_CF_ALLOC_EXPORT_WORD0_RW_GPR(x)                       (((unsigned)(x) & 0x7F) << 15)
 #define   G_SQ_CF_ALLOC_EXPORT_WORD0_RW_GPR(x)                       (((x) >> 15) & 0x7F)
 #define   C_SQ_CF_ALLOC_EXPORT_WORD0_RW_GPR                          0xFFC07FFF
@@ -566,6 +553,10 @@
 #define S_SQ_ALU_WORD1_LDS_IDX_OP_IDX_OFFSET_2(x)                    (((unsigned)(x) & 0x1) << 28)
 /* this was clamp */
 #define S_SQ_ALU_WORD1_LDS_IDX_OP_IDX_OFFSET_3(x)                    (((unsigned)(x) & 0x1) << 31)
+
+#define     EG_V_SQ_ALU_SRC_LDS_OQ_A_POP                             0x000000DD
+#define     EG_V_SQ_ALU_SRC_LDS_OQ_B_POP                             0x000000DE
+
 
 #define V_SQ_LDS_INST_ADD                               0x00
 #define V_SQ_LDS_INST_SUB                               0x01

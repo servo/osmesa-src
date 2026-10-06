@@ -40,17 +40,24 @@
 #define _TRANSLATE_H
 
 
-#include "pipe/p_compiler.h"
-#include "pipe/p_format.h"
+#include "util/compiler.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_state.h"
 
 /**
- * Translate has to work on one more attribute because
- * the draw module has to be able to pass the vertex
- * position even if the fragment shader already consumes
- * PIPE_MAX_ATTRIBS inputs.
+ * Translate has to work on two more attributes because
+ * the draw module has to be able to pass a few fixed
+ * function vertex shader outputs even if the fragment
+ * shader already consumes PIPE_MAX_ATTRIBS inputs.
+ *
+ * These vertex shader outputs include:
+ * - position
+ * - bcolor (up to two)
+ * - point-size
+ * - viewport index
+ * - layer
  */
-#define TRANSLATE_MAX_ATTRIBS (PIPE_MAX_ATTRIBS + 1)
+#define TRANSLATE_MAX_ATTRIBS (PIPE_MAX_ATTRIBS + 6)
 
 enum translate_element_type {
    TRANSLATE_ELEMENT_NORMAL,
@@ -79,28 +86,28 @@ struct translate_key {
 struct translate;
 
 
-typedef void (PIPE_CDECL *run_elts_func)(struct translate *,
+typedef void (UTIL_CDECL *run_elts_func)(struct translate *,
                                          const unsigned *elts,
                                          unsigned count,
                                          unsigned start_instance,
                                          unsigned instance_id,
                                          void *output_buffer);
 
-typedef void (PIPE_CDECL *run_elts16_func)(struct translate *,
+typedef void (UTIL_CDECL *run_elts16_func)(struct translate *,
                                            const uint16_t *elts,
                                            unsigned count,
                                            unsigned start_instance,
                                            unsigned instance_id,
                                            void *output_buffer);
 
-typedef void (PIPE_CDECL *run_elts8_func)(struct translate *,
+typedef void (UTIL_CDECL *run_elts8_func)(struct translate *,
                                           const uint8_t *elts,
                                           unsigned count,
                                           unsigned start_instance,
                                           unsigned instance_id,
                                           void *output_buffer);
 
-typedef void (PIPE_CDECL *run_func)(struct translate *,
+typedef void (UTIL_CDECL *run_func)(struct translate *,
                                     unsigned start,
                                     unsigned count,
                                     unsigned start_instance,
@@ -128,10 +135,11 @@ struct translate {
 
 struct translate *translate_create( const struct translate_key *key );
 
-boolean translate_is_output_format_supported(enum pipe_format format);
+bool translate_is_output_format_supported(enum pipe_format format);
 
 static inline int translate_keysize( const struct translate_key *key )
 {
+   assert(key->nr_elements <= TRANSLATE_MAX_ATTRIBS);
    return 2 * sizeof(int) + key->nr_elements * sizeof(struct translate_element);
 }
 
@@ -163,6 +171,6 @@ struct translate *translate_sse2_create( const struct translate_key *key );
 
 struct translate *translate_generic_create( const struct translate_key *key );
 
-boolean translate_generic_is_output_format_supported(enum pipe_format format);
+bool translate_generic_is_output_format_supported(enum pipe_format format);
 
 #endif

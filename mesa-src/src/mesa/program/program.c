@@ -29,12 +29,13 @@
  */
 
 
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/context.h"
 #include "main/framebuffer.h"
 #include "main/hash.h"
 #include "main/macros.h"
 #include "main/shaderobj.h"
+#include "main/state.h"
 #include "program.h"
 #include "prog_cache.h"
 #include "prog_parameter.h"
@@ -43,6 +44,8 @@
 #include "util/ralloc.h"
 #include "util/u_atomic.h"
 
+#include "state_tracker/st_program.h"
+#include "state_tracker/st_context.h"
 
 /**
  * A pointer to this dummy program is put into the hash table when
@@ -86,9 +89,10 @@ _mesa_init_program(struct gl_context *ctx)
    ctx->Program.ErrorPos = -1;
    ctx->Program.ErrorString = strdup("");
 
+   ctx->VertexProgram._VaryingInputs = VERT_BIT_ALL;
    ctx->VertexProgram.Enabled = GL_FALSE;
    ctx->VertexProgram.PointSizeEnabled =
-      (ctx->API == API_OPENGLES2) ? GL_TRUE : GL_FALSE;
+      _mesa_is_gles2(ctx) ? GL_TRUE : GL_FALSE;
    ctx->VertexProgram.TwoSideEnabled = GL_FALSE;
    _mesa_reference_program(ctx, &ctx->VertexProgram.Current,
                            ctx->Shared->DefaultVertexProgram);
@@ -100,7 +104,7 @@ _mesa_init_program(struct gl_context *ctx)
                            ctx->Shared->DefaultFragmentProgram);
    assert(ctx->FragmentProgram.Current);
    ctx->FragmentProgram.Cache = _mesa_new_program_cache();
-   ctx->VertexProgram._VPMode = VP_MODE_FF;
+   _mesa_reset_vertex_processing_mode(ctx);
 
    /* XXX probably move this stuff */
    ctx->ATIFragmentShader.Enabled = GL_FALSE;
@@ -119,7 +123,7 @@ _mesa_free_program_data(struct gl_context *ctx)
    _mesa_reference_program(ctx, &ctx->VertexProgram.Current, NULL);
    _mesa_delete_program_cache(ctx, ctx->VertexProgram.Cache);
    _mesa_reference_program(ctx, &ctx->FragmentProgram.Current, NULL);
-   _mesa_delete_shader_cache(ctx, ctx->FragmentProgram.Cache);
+   _mesa_delete_program_cache(ctx, ctx->FragmentProgram.Cache);
 
    /* XXX probably move this stuff */
    if (ctx->ATIFragmentShader.Current) {
@@ -193,7 +197,7 @@ _mesa_init_gl_program(struct gl_program *prog, gl_shader_stage stage,
    prog->RefCount = 1;
    prog->Format = GL_PROGRAM_FORMAT_ASCII_ARB;
    prog->info.stage = stage;
-   prog->is_arb_asm = is_arb_asm;
+   prog->info.use_legacy_math_rules = is_arb_asm;
 
    /* Uniforms that lack an initializer in the shader code have an initial
     * value of zero.  This includes sampler uniforms.
@@ -215,41 +219,39 @@ _mesa_init_gl_program(struct gl_program *prog, gl_shader_stage stage,
    return prog;
 }
 
-
-/**
- * Allocate and initialize a new fragment/vertex program object but
- * don't put it into the program hash table.  Called via
- * ctx->Driver.NewProgram.  May be overridden (ie. replaced) by a
- * device driver function to implement OO deriviation with additional
- * types not understood by this function.
- *
- * \param ctx  context
- * \param id   program id/number
- * \param stage  shader stage
- * \return  pointer to new program object
- */
 struct gl_program *
 _mesa_new_program(struct gl_context *ctx, gl_shader_stage stage, GLuint id,
                   bool is_arb_asm)
 {
-   struct gl_program *prog = rzalloc(NULL, struct gl_program);
+   struct gl_program *prog;
+
+   switch (stage) {
+   case MESA_SHADER_VERTEX:
+      prog = (struct gl_program*)rzalloc(NULL, struct gl_vertex_program);
+      break;
+   default:
+      prog = rzalloc(NULL, struct gl_program);
+      break;
+   }
 
    return _mesa_init_gl_program(prog, stage, id, is_arb_asm);
 }
 
-
 /**
  * Delete a program and remove it from the hash table, ignoring the
  * reference count.
- * Called via ctx->Driver.DeleteProgram.  May be wrapped (OO deriviation)
- * by a device driver function.
  */
 void
 _mesa_delete_program(struct gl_context *ctx, struct gl_program *prog)
 {
-   (void) ctx;
+   struct st_context *st = st_context(ctx);
    assert(prog);
    assert(prog->RefCount==0);
+
+   st_release_variants(st, prog);
+
+   free(prog->serialized_nir);
+   free(prog->base_serialized_nir);
 
    if (prog == &_mesa_DummyProgram)
       return;
@@ -277,6 +279,14 @@ _mesa_delete_program(struct gl_context *ctx, struct gl_program *prog)
    ralloc_free(prog);
 }
 
+struct gl_program *
+_mesa_lookup_program_locked(struct gl_context *ctx, GLuint id)
+{
+   if (id)
+      return (struct gl_program *) _mesa_HashLookupLocked(&ctx->Shared->Programs, id);
+   else
+      return NULL;
+}
 
 /**
  * Return the gl_program object for a given ID.
@@ -287,7 +297,7 @@ struct gl_program *
 _mesa_lookup_program(struct gl_context *ctx, GLuint id)
 {
    if (id)
-      return (struct gl_program *) _mesa_HashLookup(ctx->Shared->Programs, id);
+      return (struct gl_program *) _mesa_HashLookup(&ctx->Shared->Programs, id);
    else
       return NULL;
 }
@@ -324,8 +334,8 @@ _mesa_reference_program_(struct gl_context *ctx,
 
       if (p_atomic_dec_zero(&oldProg->RefCount)) {
          assert(ctx);
-         _mesa_reference_shader_program_data(ctx, &oldProg->sh.data, NULL);
-         ctx->Driver.DeleteProgram(ctx, oldProg);
+         _mesa_reference_shader_program_data(&oldProg->sh.data, NULL);
+         _mesa_delete_program(ctx, oldProg);
       }
 
       *ptr = NULL;
@@ -338,166 +348,6 @@ _mesa_reference_program_(struct gl_context *ctx,
 
    *ptr = prog;
 }
-
-
-/**
- * Insert 'count' NOP instructions at 'start' in the given program.
- * Adjust branch targets accordingly.
- */
-GLboolean
-_mesa_insert_instructions(struct gl_program *prog, GLuint start, GLuint count)
-{
-   const GLuint origLen = prog->arb.NumInstructions;
-   const GLuint newLen = origLen + count;
-   struct prog_instruction *newInst;
-   GLuint i;
-
-   /* adjust branches */
-   for (i = 0; i < prog->arb.NumInstructions; i++) {
-      struct prog_instruction *inst = prog->arb.Instructions + i;
-      if (inst->BranchTarget > 0) {
-         if ((GLuint)inst->BranchTarget >= start) {
-            inst->BranchTarget += count;
-         }
-      }
-   }
-
-   /* Alloc storage for new instructions */
-   newInst = rzalloc_array(prog, struct prog_instruction, newLen);
-   if (!newInst) {
-      return GL_FALSE;
-   }
-
-   /* Copy 'start' instructions into new instruction buffer */
-   _mesa_copy_instructions(newInst, prog->arb.Instructions, start);
-
-   /* init the new instructions */
-   _mesa_init_instructions(newInst + start, count);
-
-   /* Copy the remaining/tail instructions to new inst buffer */
-   _mesa_copy_instructions(newInst + start + count,
-                           prog->arb.Instructions + start,
-                           origLen - start);
-
-   /* free old instructions */
-   ralloc_free(prog->arb.Instructions);
-
-   /* install new instructions */
-   prog->arb.Instructions = newInst;
-   prog->arb.NumInstructions = newLen;
-
-   return GL_TRUE;
-}
-
-/**
- * Delete 'count' instructions at 'start' in the given program.
- * Adjust branch targets accordingly.
- */
-GLboolean
-_mesa_delete_instructions(struct gl_program *prog, GLuint start, GLuint count,
-                          void *mem_ctx)
-{
-   const GLuint origLen = prog->arb.NumInstructions;
-   const GLuint newLen = origLen - count;
-   struct prog_instruction *newInst;
-   GLuint i;
-
-   /* adjust branches */
-   for (i = 0; i < prog->arb.NumInstructions; i++) {
-      struct prog_instruction *inst = prog->arb.Instructions + i;
-      if (inst->BranchTarget > 0) {
-         if (inst->BranchTarget > (GLint) start) {
-            inst->BranchTarget -= count;
-         }
-      }
-   }
-
-   /* Alloc storage for new instructions */
-   newInst = rzalloc_array(mem_ctx, struct prog_instruction, newLen);
-   if (!newInst) {
-      return GL_FALSE;
-   }
-
-   /* Copy 'start' instructions into new instruction buffer */
-   _mesa_copy_instructions(newInst, prog->arb.Instructions, start);
-
-   /* Copy the remaining/tail instructions to new inst buffer */
-   _mesa_copy_instructions(newInst + start,
-                           prog->arb.Instructions + start + count,
-                           newLen - start);
-
-   /* free old instructions */
-   ralloc_free(prog->arb.Instructions);
-
-   /* install new instructions */
-   prog->arb.Instructions = newInst;
-   prog->arb.NumInstructions = newLen;
-
-   return GL_TRUE;
-}
-
-
-/**
- * Populate the 'used' array with flags indicating which registers (TEMPs,
- * INPUTs, OUTPUTs, etc, are used by the given program.
- * \param file  type of register to scan for
- * \param used  returns true/false flags for in use / free
- * \param usedSize  size of the 'used' array
- */
-void
-_mesa_find_used_registers(const struct gl_program *prog,
-                          gl_register_file file,
-                          GLboolean used[], GLuint usedSize)
-{
-   GLuint i, j;
-
-   memset(used, 0, usedSize);
-
-   for (i = 0; i < prog->arb.NumInstructions; i++) {
-      const struct prog_instruction *inst = prog->arb.Instructions + i;
-      const GLuint n = _mesa_num_inst_src_regs(inst->Opcode);
-
-      if (inst->DstReg.File == file) {
-         assert(inst->DstReg.Index < usedSize);
-         if(inst->DstReg.Index < usedSize)
-            used[inst->DstReg.Index] = GL_TRUE;
-      }
-
-      for (j = 0; j < n; j++) {
-         if (inst->SrcReg[j].File == file) {
-            assert(inst->SrcReg[j].Index < (GLint) usedSize);
-            if (inst->SrcReg[j].Index < (GLint) usedSize)
-               used[inst->SrcReg[j].Index] = GL_TRUE;
-         }
-      }
-   }
-}
-
-
-/**
- * Scan the given 'used' register flag array for the first entry
- * that's >= firstReg.
- * \param used  vector of flags indicating registers in use (as returned
- *              by _mesa_find_used_registers())
- * \param usedSize  size of the 'used' array
- * \param firstReg  first register to start searching at
- * \return index of unused register, or -1 if none.
- */
-GLint
-_mesa_find_free_register(const GLboolean used[],
-                         GLuint usedSize, GLuint firstReg)
-{
-   GLuint i;
-
-   assert(firstReg < usedSize);
-
-   for (i = firstReg; i < usedSize; i++)
-      if (!used[i])
-         return i;
-
-   return -1;
-}
-
 
 /* Gets the minimum number of shader invocations per fragment.
  * This function is useful to determine if we need to do per
@@ -524,8 +374,8 @@ _mesa_get_min_invocations_per_fragment(struct gl_context *ctx,
        *  forces per-sample shading"
        */
       if (prog->info.fs.uses_sample_qualifier ||
-          (prog->info.system_values_read & (SYSTEM_BIT_SAMPLE_ID |
-                                            SYSTEM_BIT_SAMPLE_POS)))
+          BITSET_TEST(prog->info.system_values_read, SYSTEM_VALUE_SAMPLE_ID) ||
+          BITSET_TEST(prog->info.system_values_read, SYSTEM_VALUE_SAMPLE_POS))
          return MAX2(_mesa_geometric_samples(ctx->DrawBuffer), 1);
       else if (ctx->Multisample.SampleShading)
          return MAX2(ceilf(ctx->Multisample.MinSampleShadingValue *
@@ -550,4 +400,72 @@ gl_external_samplers(const struct gl_program *prog)
    }
 
    return external_samplers;
+}
+
+static int compare_state_var(const void *a1, const void *a2)
+{
+   const struct gl_program_parameter *p1 =
+      (const struct gl_program_parameter *)a1;
+   const struct gl_program_parameter *p2 =
+      (const struct gl_program_parameter *)a2;
+
+   for (unsigned i = 0; i < STATE_LENGTH; i++) {
+      if (p1->StateIndexes[i] != p2->StateIndexes[i])
+         return p1->StateIndexes[i] - p2->StateIndexes[i];
+   }
+   return 0;
+}
+
+void
+_mesa_add_separate_state_parameters(struct gl_program *prog,
+                                    struct gl_program_parameter_list *state_params)
+{
+   unsigned num_state_params = state_params->NumParameters;
+
+   if (num_state_params == 0)
+      return;
+
+   /* All state parameters should be vec4s. */
+   for (unsigned i = 0; i < num_state_params; i++) {
+      assert(state_params->Parameters[i].Type == PROGRAM_STATE_VAR);
+      assert(state_params->Parameters[i].Size == 4);
+      assert(state_params->Parameters[i].ValueOffset == i * 4);
+   }
+
+   /* Sort state parameters to facilitate better parameter merging. */
+   qsort(state_params->Parameters, num_state_params,
+         sizeof(state_params->Parameters[0]), compare_state_var);
+   unsigned *remap = malloc(num_state_params * sizeof(unsigned));
+
+   /* Add state parameters to the end of the parameter list. */
+   for (unsigned i = 0; i < num_state_params; i++) {
+      unsigned old_index = state_params->Parameters[i].ValueOffset / 4;
+
+      remap[old_index] =
+         _mesa_add_parameter(prog->Parameters, PROGRAM_STATE_VAR,
+                             state_params->Parameters[i].Name,
+                             state_params->Parameters[i].Size,
+                             GL_NONE, NULL,
+                             state_params->Parameters[i].StateIndexes,
+                             state_params->Parameters[i].Padded);
+
+      prog->Parameters->StateFlags |=
+         _mesa_program_state_flags(state_params->Parameters[i].StateIndexes);
+   }
+
+   /* Fix up state parameter offsets in instructions. */
+   int num_instr = prog->arb.NumInstructions;
+   struct prog_instruction *instrs = prog->arb.Instructions;
+
+   /* Fix src indices after sorting. */
+   for (unsigned i = 0; i < num_instr; i++) {
+      struct prog_instruction *inst = instrs + i;
+      unsigned num_src = _mesa_num_inst_src_regs(inst->Opcode);
+
+      for (unsigned j = 0; j < num_src; j++) {
+         if (inst->SrcReg[j].File == PROGRAM_STATE_VAR)
+            inst->SrcReg[j].Index = remap[inst->SrcReg[j].Index];
+      }
+   }
+   free(remap);
 }

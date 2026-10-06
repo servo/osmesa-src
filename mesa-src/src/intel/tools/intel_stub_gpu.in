@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # -*- mode: sh -*-
 
 function show_help() {
@@ -18,7 +18,8 @@ EOF
     exit 0
 }
 
-gdb=""
+gdb=
+valgrind=
 platform="skl"
 
 while true; do
@@ -31,6 +32,10 @@ while true; do
             gdb=1
             shift
             ;;
+        --valgrind)
+            valgrind=1
+            shift
+            ;;
         -p)
             platform=$2
             shift 2
@@ -40,7 +45,7 @@ while true; do
             shift
             ;;
         --platform=*)
-            platform=${1##-p}
+            platform=${1##--platform=}
             shift
             ;;
         --help)
@@ -65,9 +70,17 @@ done
 
 INTEL_STUB_GPU_PLATFORM=$platform
 
-ld_preload="@install_libdir@/libintel_noop_drm_shim.so${LD_PRELOAD:+:$LD_PRELOAD}"
-if [ -z $gdb ]; then
-    LD_PRELOAD=$ld_preload INTEL_STUB_GPU_PLATFORM=$platform exec "$@"
-else
+drm_shim_dir="@install_libdir@"
+
+if [ -n "$MESON_DEVENV" ]; then
+    drm_shim_dir=$(realpath "$(dirname "$0")")
+fi
+
+ld_preload="$drm_shim_dir/libintel_noop_drm_shim.so${LD_PRELOAD:+:$LD_PRELOAD}"
+if [ -n "$gdb" ]; then
     gdb -iex "set exec-wrapper env LD_PRELOAD=$ld_preload INTEL_STUB_GPU_PLATFORM=$platform" --args "$@"
+elif [ -n "$valgrind" ]; then
+    LD_PRELOAD=$ld_preload INTEL_STUB_GPU_PLATFORM=$platform exec valgrind "$@"
+else
+    LD_PRELOAD=$ld_preload INTEL_STUB_GPU_PLATFORM=$platform exec "$@"
 fi

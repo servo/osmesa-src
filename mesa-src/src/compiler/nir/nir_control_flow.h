@@ -79,7 +79,6 @@ nir_cf_node_insert_end(struct exec_list *list, nir_cf_node *node)
    nir_cf_node_insert(nir_after_cf_list(list), node);
 }
 
-
 /** Control flow motion.
  *
  * These functions let you take a part of a control flow list (basically
@@ -136,9 +135,10 @@ typedef struct {
    nir_function_impl *impl; /* for cleaning up if the list is deleted */
 } nir_cf_list;
 
-void nir_cf_extract(nir_cf_list *extracted, nir_cursor begin, nir_cursor end);
+nir_cursor nir_cf_extract(nir_cf_list *extracted, nir_cursor begin,
+                          nir_cursor end);
 
-void nir_cf_reinsert(nir_cf_list *cf_list, nir_cursor cursor);
+nir_cursor nir_cf_reinsert(nir_cf_list *cf_list, nir_cursor cursor);
 
 void nir_cf_delete(nir_cf_list *cf_list);
 
@@ -170,6 +170,25 @@ nir_cf_node_remove(nir_cf_node *node)
    nir_cf_extract(&list, nir_before_cf_node(node), nir_after_cf_node(node));
    nir_cf_delete(&list);
 }
+
+static inline void
+nir_remove_after_cf_node(nir_cf_node *node)
+{
+   nir_cf_node *end = node;
+   while (!nir_cf_node_is_last(end))
+      end = nir_cf_node_next(end);
+
+   nir_cf_list list;
+   nir_cf_extract(&list, nir_after_cf_node(node), nir_after_cf_node(end));
+   nir_cf_delete(&list);
+}
+
+/** inserts undef phi sources from predcessor into phis of the block */
+void nir_insert_phi_undef(nir_block *block, nir_block *pred);
+
+/** Modify loop continue behavior */
+void nir_loop_add_continue_construct(nir_loop *loop);
+void nir_loop_remove_continue_construct(nir_loop *loop);
 
 #ifdef __cplusplus
 }

@@ -25,15 +25,16 @@
 #include "nir_xfb_info.h"
 #include "gl_nir_linker.h"
 #include "linker_util.h"
-#include "main/context.h"
 #include "util/u_math.h"
+#include "main/shader_types.h"
+#include "main/consts_exts.h"
 
 /**
  * This file does the linking of GLSL transform feedback using NIR.
  */
 
 void
-gl_nir_link_assign_xfb_resources(struct gl_context *ctx,
+gl_nir_link_assign_xfb_resources(const struct gl_constants *consts,
                                  struct gl_shader_program *prog)
 {
    /*
@@ -72,7 +73,8 @@ gl_nir_link_assign_xfb_resources(struct gl_context *ctx,
       struct gl_linked_shader *sh = prog->_LinkedShaders[stage];
 
       if (sh && stage != MESA_SHADER_TESS_CTRL) {
-         xfb_info = nir_gather_xfb_info_with_varyings(sh->Program->nir, NULL, &varyings_info);
+         nir_gather_xfb_info_with_varyings(sh->Program->nir, NULL, &varyings_info);
+         xfb_info = sh->Program->nir->xfb_info;
          break;
       }
    }
@@ -151,7 +153,8 @@ gl_nir_link_assign_xfb_resources(struct gl_context *ctx,
          linked_xfb->Varyings + i;
 
       /* ARB_gl_spirv: see above. */
-      varying->Name = NULL;
+      varying->name.string = NULL;
+      resource_name_updated(&varying->name);
       varying->Type = glsl_get_gl_type(xfb_varying->type);
       varying->BufferIndex = buffer_index;
       varying->Size = glsl_type_is_array(xfb_varying->type) ?
@@ -177,7 +180,7 @@ gl_nir_link_assign_xfb_resources(struct gl_context *ctx,
     * tracking the number of buffers doesn't overflow.
     */
    unsigned buffers = 0;
-   assert(ctx->Const.MaxTransformFeedbackBuffers <= sizeof(buffers) * 8);
+   assert(consts->MaxTransformFeedbackBuffers <= sizeof(buffers) * 8);
 
    for (unsigned buf = 0; buf < MAX_FEEDBACK_BUFFERS; buf++) {
       if (xfb_info->buffers[buf].stride > 0) {
@@ -189,5 +192,37 @@ gl_nir_link_assign_xfb_resources(struct gl_context *ctx,
 
    linked_xfb->ActiveBuffers = buffers;
 
-   ralloc_free(xfb_info);
+   ralloc_free(varyings_info);
+}
+
+struct nir_xfb_info *
+gl_to_nir_xfb_info(struct gl_transform_feedback_info *info, void *mem_ctx)
+{
+   if (info == NULL || info->NumOutputs == 0)
+      return NULL;
+
+   nir_xfb_info *xfb =
+      rzalloc_size(mem_ctx, nir_xfb_info_size(info->NumOutputs));
+
+   xfb->output_count = info->NumOutputs;
+
+   for (unsigned i = 0; i < MAX_FEEDBACK_BUFFERS; i++) {
+      xfb->buffers[i].stride = info->Buffers[i].Stride * 4;
+      xfb->buffers[i].varying_count = info->Buffers[i].NumVaryings;
+      xfb->buffer_to_stream[i] = info->Buffers[i].Stream;
+   }
+
+   for (unsigned i = 0; i < info->NumOutputs; i++) {
+      xfb->outputs[i].buffer = info->Outputs[i].OutputBuffer;
+      xfb->outputs[i].offset = info->Outputs[i].DstOffset * 4;
+      xfb->outputs[i].location = info->Outputs[i].OutputRegister;
+      xfb->outputs[i].component_offset = info->Outputs[i].ComponentOffset;
+      xfb->outputs[i].component_mask =
+         BITFIELD_RANGE(info->Outputs[i].ComponentOffset,
+                        info->Outputs[i].NumComponents);
+      xfb->buffers_written |= BITFIELD_BIT(info->Outputs[i].OutputBuffer);
+      xfb->streams_written |= BITFIELD_BIT(info->Outputs[i].StreamId);
+   }
+
+   return xfb;
 }

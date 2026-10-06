@@ -31,6 +31,8 @@
 /// after linking against other bitcode object files.
 ///
 
+#include <llvm/Support/Allocator.h>
+
 #include "llvm/codegen.hpp"
 #include "llvm/compat.hpp"
 #include "llvm/metadata.hpp"
@@ -39,15 +41,11 @@
 
 #include <map>
 #include <llvm/Config/llvm-config.h>
-#if LLVM_VERSION_MAJOR < 4
-#include <llvm/Bitcode/ReaderWriter.h>
-#else
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
-#endif
 #include <llvm/Support/raw_ostream.h>
 
-using namespace clover;
+using clover::binary;
 using namespace clover::llvm;
 
 namespace {
@@ -55,7 +53,7 @@ namespace {
    emit_code(const ::llvm::Module &mod) {
       ::llvm::SmallVector<char, 1024> data;
       ::llvm::raw_svector_ostream os { data };
-      compat::write_bitcode_to_file(mod, os);
+      ::llvm::WriteBitcodeToFile(mod, os);
       return { os.str().begin(), os.str().end() };
    }
 }
@@ -68,24 +66,26 @@ clover::llvm::print_module_bitcode(const ::llvm::Module &mod) {
    return os.str();
 }
 
-module
+binary
 clover::llvm::build_module_library(const ::llvm::Module &mod,
-                                   enum module::section::type section_type) {
-   module m;
+                                   enum binary::section::type section_type) {
+   binary b;
    const auto code = emit_code(mod);
-   m.secs.emplace_back(0, section_type, code.size(), code);
-   return m;
+   b.secs.emplace_back(0, section_type, code.size(), code);
+   return b;
 }
 
 std::unique_ptr< ::llvm::Module>
-clover::llvm::parse_module_library(const module &m, ::llvm::LLVMContext &ctx,
+clover::llvm::parse_module_library(const binary &b, ::llvm::LLVMContext &ctx,
                                    std::string &r_log) {
    auto mod = ::llvm::parseBitcodeFile(::llvm::MemoryBufferRef(
-                                        as_string(m.secs[0].data), " "), ctx);
+                                        as_string(b.secs[0].data), " "), ctx);
 
-   compat::handle_module_error(mod, [&](const std::string &s) {
-         fail(r_log, error(CL_INVALID_PROGRAM), s);
+   if (::llvm::Error err = mod.takeError()) {
+      ::llvm::handleAllErrors(std::move(err), [&](::llvm::ErrorInfoBase &eib) {
+         fail(r_log, error(CL_INVALID_PROGRAM), eib.message());
       });
+   }
 
    return std::unique_ptr< ::llvm::Module>(std::move(*mod));
 }

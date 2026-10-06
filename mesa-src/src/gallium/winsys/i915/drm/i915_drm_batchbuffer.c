@@ -71,31 +71,33 @@ i915_drm_batchbuffer_create(struct i915_winsys *iws)
    return &batch->base;
 }
 
-static boolean
+static bool
 i915_drm_batchbuffer_validate_buffers(struct i915_winsys_batchbuffer *batch,
 				      struct i915_winsys_buffer **buffer,
 				      int num_of_buffers)
 {
    struct i915_drm_batchbuffer *drm_batch = i915_drm_batchbuffer(batch);
-   drm_intel_bo *bos[num_of_buffers + 1];
+   /* 1 extra for drm_batch->bo */
+   int count = num_of_buffers + 1;
+   drm_intel_bo *bos[count];
    int i, ret;
 
    bos[0] = drm_batch->bo;
    for (i = 0; i < num_of_buffers; i++)
       bos[i+1] = intel_bo(buffer[i]);
 
-   ret = drm_intel_bufmgr_check_aperture_space(bos, num_of_buffers);
+   ret = drm_intel_bufmgr_check_aperture_space(bos, count);
    if (ret != 0)
-      return FALSE;
+      return false;
 
-   return TRUE;
+   return true;
 }
 
 static int
 i915_drm_batchbuffer_reloc(struct i915_winsys_batchbuffer *ibatch,
                             struct i915_winsys_buffer *buffer,
                             enum i915_winsys_buffer_usage usage,
-                            unsigned pre_add, boolean fenced)
+                            unsigned pre_add, bool fenced)
 {
    struct i915_drm_batchbuffer *batch = i915_drm_batchbuffer(ibatch);
    unsigned write_domain = 0;
@@ -227,6 +229,22 @@ i915_drm_batchbuffer_destroy(struct i915_winsys_batchbuffer *ibatch)
    FREE(batch);
 }
 
+static void
+i915_drm_batchbuffer_emit_start(struct i915_winsys_batchbuffer *ibatch)
+{
+   struct i915_drm_batchbuffer *batch = i915_drm_batchbuffer(ibatch);
+   ibatch->ptr_start = ibatch->ptr;
+   ibatch->reloc_count_start = drm_intel_gem_bo_get_reloc_count(batch->bo);
+}
+
+static void
+i915_drm_batchbuffer_emit_restart(struct i915_winsys_batchbuffer *ibatch)
+{
+   struct i915_drm_batchbuffer *batch = i915_drm_batchbuffer(ibatch);
+   drm_intel_gem_bo_clear_relocs(batch->bo, ibatch->reloc_count_start);
+   ibatch->ptr = ibatch->ptr_start;
+}
+
 void i915_drm_winsys_init_batchbuffer_functions(struct i915_drm_winsys *idws)
 {
    idws->base.batchbuffer_create = i915_drm_batchbuffer_create;
@@ -234,4 +252,6 @@ void i915_drm_winsys_init_batchbuffer_functions(struct i915_drm_winsys *idws)
    idws->base.batchbuffer_reloc = i915_drm_batchbuffer_reloc;
    idws->base.batchbuffer_flush = i915_drm_batchbuffer_flush;
    idws->base.batchbuffer_destroy = i915_drm_batchbuffer_destroy;
+   idws->base.emit_start = i915_drm_batchbuffer_emit_start;
+   idws->base.emit_restart = i915_drm_batchbuffer_emit_restart;
 }

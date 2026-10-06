@@ -30,8 +30,8 @@
 
 
 #include "pipe/p_screen.h"
-#include "os/os_thread.h"
-
+#include "util/u_thread.h"
+#include "util/u_threaded_context.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,18 +45,25 @@ extern "C" {
  */
 #define TRACE_FLAG_USER_BUFFER  (1 << 31)
 
+static inline const char *
+tr_util_pipe_shader_type_name(gl_shader_stage stage)
+{
+   return gl_shader_stage_name(stage);
+}
+
 
 struct trace_screen
 {
    struct pipe_screen base;
 
    struct pipe_screen *screen;
+   tc_is_resource_busy is_resource_busy;
+   bool trace_tc;
 };
 
 
 struct trace_screen *
 trace_screen(struct pipe_screen *screen);
-
 
 #ifdef __cplusplus
 }

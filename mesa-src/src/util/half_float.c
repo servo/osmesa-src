@@ -28,10 +28,10 @@
 #include <math.h>
 #include <assert.h>
 #include "half_float.h"
-#include "util/u_half.h"
 #include "rounding.h"
 #include "softfloat.h"
 #include "macros.h"
+#include "u_math.h"
 
 typedef union { float f; int32_t i; uint32_t u; } fi_type;
 
@@ -54,7 +54,7 @@ typedef union { float f; int32_t i; uint32_t u; } fi_type;
  *     result in the same value as if the expression were executed on the GPU.
  */
 uint16_t
-_mesa_float_to_half(float val)
+_mesa_float_to_half_slow(float val)
 {
    const fi_type fi = {val};
    const int flt_m = fi.i & 0x7fffff;
@@ -83,8 +83,12 @@ _mesa_float_to_half(float val)
       e = 31;
    }
    else if ((flt_e == 0xff) && (flt_m != 0)) {
-      /* NaN */
-      m = 1;
+      /* Retain the top bits of a NaN to make sure that the quiet/signaling
+       * status stays the same.
+       */
+      m = flt_m >> 13;
+      if (!m)
+         m = 1;
       e = 31;
    }
    else {
@@ -129,9 +133,9 @@ _mesa_float_to_half(float val)
 }
 
 uint16_t
-_mesa_float_to_float16_rtz(float val)
+_mesa_float_to_float16_rtz_slow(float val)
 {
-    return _mesa_float_to_half_rtz(val);
+    return _mesa_float_to_half_rtz_slow(val);
 }
 
 /**
@@ -140,35 +144,31 @@ _mesa_float_to_float16_rtz(float val)
  * http://www.opengl.org/discussion_boards/ubb/Forum3/HTML/008786.html
  */
 float
-_mesa_half_to_float(uint16_t val)
+_mesa_half_to_float_slow(uint16_t val)
 {
-   return util_half_to_float(val);
-}
+   union fi infnan;
+   union fi magic;
+   union fi f32;
 
-/**
-  * Convert 0.0 to 0x00, 1.0 to 0xff.
-  * Values outside the range [0.0, 1.0] will give undefined results.
-  */
-uint8_t _mesa_half_to_unorm8(uint16_t val)
-{
-   const int m = val & 0x3ff;
-   const int e = (val >> 10) & 0x1f;
-   ASSERTED const int s = (val >> 15) & 0x1;
+   infnan.ui = 0x8f << 23;
+   infnan.f = 65536.0f;
+   magic.ui  = 0xef << 23;
 
-   /* v = round_to_nearest(1.mmmmmmmmmm * 2^(e-15) * 255)
-    *   = round_to_nearest((1.mmmmmmmmmm * 255) * 2^(e-15))
-    *   = round_to_nearest((1mmmmmmmmmm * 255) * 2^(e-25))
-    *   = round_to_zero((1mmmmmmmmmm * 255) * 2^(e-25) + 0.5)
-    *   = round_to_zero(((1mmmmmmmmmm * 255) * 2^(e-24) + 1) / 2)
-    *
-    * This happens to give the correct answer for zero/subnormals too
-    */
-   assert(s == 0 && val <= FP16_ONE); /* check 0 <= this <= 1 */
-   /* (implies e <= 15, which means the bit-shifts below are safe) */
+   /* Exponent / Mantissa */
+   f32.ui = (val & 0x7fff) << 13;
 
-   uint32_t v = ((1 << 10) | m) * 255;
-   v = ((v >> (24 - e)) + 1) >> 1;
-   return v;
+   /* Adjust */
+   f32.f *= magic.f;
+   /* XXX: The magic mul relies on denorms being available */
+
+   /* Inf / NaN */
+   if (f32.f >= infnan.f)
+      f32.ui |= 0xff << 23;
+
+   /* Sign */
+   f32.ui |= (uint32_t)(val & 0x8000) << 16;
+
+   return f32.f;
 }
 
 /**

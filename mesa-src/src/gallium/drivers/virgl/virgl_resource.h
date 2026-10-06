@@ -33,6 +33,10 @@
 #include "virgl_screen.h"
 #define VR_MAX_TEXTURE_2D_LEVELS 15
 
+#define VIRGL_BLOB_MEM_GUEST 1
+#define VIRGL_BLOB_MEM_HOST3D 2
+#define VIRGL_BLOB_MEM_HOST3D_GUEST 3
+
 struct winsys_handle;
 struct virgl_screen;
 struct virgl_context;
@@ -47,8 +51,7 @@ struct virgl_resource_metadata
 };
 
 struct virgl_resource {
-   struct u_resource u;
-   uint16_t clean_mask;
+   struct pipe_resource b;
    struct virgl_hw_res *hw_res;
    struct virgl_resource_metadata metadata;
 
@@ -63,6 +66,11 @@ struct virgl_resource {
     * usable.
     */
    unsigned bind_history;
+   uint32_t blob_mem;
+
+   uint16_t clean_mask;
+   uint16_t use_staging : 1;
+   uint16_t reserved : 15;
 };
 
 struct virgl_transfer {
@@ -81,6 +89,8 @@ struct virgl_transfer {
    struct virgl_hw_res *copy_src_hw_res;
    /* The offset in the copy source resource to copy data from. */
    uint32_t copy_src_offset;
+   /* copy transfers can be performed to and from host */
+   uint32_t direction;
 };
 
 void virgl_resource_destroy(struct pipe_screen *screen,
@@ -102,10 +112,17 @@ static inline struct virgl_transfer *virgl_transfer(struct pipe_transfer *trans)
    return (struct virgl_transfer *)trans;
 }
 
+void virgl_buffer_transfer_flush_region(struct pipe_context *ctx,
+                                        struct pipe_transfer *transfer,
+                                        const struct pipe_box *box);
+
+void virgl_buffer_transfer_unmap(struct pipe_context *ctx,
+                                 struct pipe_transfer *transfer);
+
 void virgl_buffer_init(struct virgl_resource *res);
 
 static inline unsigned pipe_to_virgl_bind(const struct virgl_screen *vs,
-                                          unsigned pbind, unsigned flags)
+                                          unsigned pbind)
 {
    unsigned outbind = 0;
    if (pbind & PIPE_BIND_DEPTH_STENCIL)
@@ -148,6 +165,19 @@ static inline unsigned pipe_to_virgl_bind(const struct virgl_screen *vs,
    return outbind;
 }
 
+static inline unsigned pipe_to_virgl_flags(const struct virgl_screen *vs,
+                                           unsigned pflags)
+{
+   unsigned out_flags = 0;
+   if (pflags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT)
+      out_flags |= VIRGL_RESOURCE_FLAG_MAP_PERSISTENT;
+
+   if (pflags & PIPE_RESOURCE_FLAG_MAP_COHERENT)
+      out_flags |= VIRGL_RESOURCE_FLAG_MAP_COHERENT;
+
+   return out_flags;
+}
+
 void *
 virgl_resource_transfer_map(struct pipe_context *ctx,
                             struct pipe_resource *resource,
@@ -170,9 +200,21 @@ void virgl_resource_destroy(struct pipe_screen *screen,
                             struct pipe_resource *resource);
 
 bool virgl_resource_get_handle(struct pipe_screen *screen,
+                               struct pipe_context *context,
                                struct pipe_resource *resource,
-                               struct winsys_handle *whandle);
+                               struct winsys_handle *whandle,
+                               unsigned usage);
 
 void virgl_resource_dirty(struct virgl_resource *res, uint32_t level);
+
+void *virgl_texture_transfer_map(struct pipe_context *ctx,
+                                 struct pipe_resource *resource,
+                                 unsigned level,
+                                 unsigned usage,
+                                 const struct pipe_box *box,
+                                 struct pipe_transfer **transfer);
+
+void virgl_texture_transfer_unmap(struct pipe_context *ctx,
+                                  struct pipe_transfer *transfer);
 
 #endif

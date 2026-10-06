@@ -27,6 +27,7 @@
  **************************************************************************/
 
 #include "util/u_video.h"
+#include "util/u_handle_table.h"
 #include "va_private.h"
 
 static void resetReferencePictureDesc(struct pipe_h264_picture_desc *h264,
@@ -45,6 +46,7 @@ void vlVaHandlePictureParameterBufferH264(vlVaDriver *drv, vlVaContext *context,
 {
    VAPictureParameterBufferH264 *h264 = buf->data;
    unsigned int top_or_bottom_field;
+   bool is_ref;
    unsigned i;
 
    assert(buf->size >= sizeof(VAPictureParameterBufferH264) && buf->num_elements == 1);
@@ -53,12 +55,12 @@ void vlVaHandlePictureParameterBufferH264(vlVaDriver *drv, vlVaContext *context,
    context->desc.h264.field_order_cnt[0] = h264->CurrPic.TopFieldOrderCnt;
    context->desc.h264.field_order_cnt[1] = h264->CurrPic.BottomFieldOrderCnt;
    /*ReferenceFrames[16]*/
-   /*picture_width_in_mbs_minus1*/
-   /*picture_height_in_mbs_minus1*/
-   /*bit_depth_luma_minus8*/
-   /*bit_depth_chroma_minus8*/
+   context->desc.h264.pps->sps->pic_width_in_mbs_minus1 = h264->picture_width_in_mbs_minus1;
+   context->desc.h264.pps->sps->pic_height_in_mbs_minus1 = h264->picture_height_in_mbs_minus1;
+   context->desc.h264.pps->sps->bit_depth_luma_minus8 = h264->bit_depth_luma_minus8;
+   context->desc.h264.pps->sps->bit_depth_chroma_minus8 = h264->bit_depth_chroma_minus8;
    context->desc.h264.num_ref_frames = h264->num_ref_frames;
-   /*chroma_format_idc*/
+   context->desc.h264.pps->sps->chroma_format_idc = h264->seq_fields.bits.chroma_format_idc;
    /*residual_colour_transform_flag*/
    /*gaps_in_frame_num_value_allowed_flag*/
    context->desc.h264.pps->sps->frame_mbs_only_flag =
@@ -67,7 +69,8 @@ void vlVaHandlePictureParameterBufferH264(vlVaDriver *drv, vlVaContext *context,
       h264->seq_fields.bits.mb_adaptive_frame_field_flag;
    context->desc.h264.pps->sps->direct_8x8_inference_flag =
       h264->seq_fields.bits.direct_8x8_inference_flag;
-   /*MinLumaBiPredSize8x8*/
+   context->desc.h264.pps->sps->MinLumaBiPredSize8x8 =
+      h264->seq_fields.bits.MinLumaBiPredSize8x8;
    context->desc.h264.pps->sps->log2_max_frame_num_minus4 =
       h264->seq_fields.bits.log2_max_frame_num_minus4;
    context->desc.h264.pps->sps->pic_order_cnt_type =
@@ -81,7 +84,8 @@ void vlVaHandlePictureParameterBufferH264(vlVaDriver *drv, vlVaContext *context,
    /*slice_group_change_rate_minus1*/
    context->desc.h264.pps->pic_init_qp_minus26 =
       h264->pic_init_qp_minus26;
-   /*pic_init_qs_minus26*/
+   context->desc.h264.pps->pic_init_qs_minus26 =
+      h264->pic_init_qs_minus26;
    context->desc.h264.pps->chroma_qp_index_offset =
       h264->chroma_qp_index_offset;
    context->desc.h264.pps->second_chroma_qp_index_offset =
@@ -111,7 +115,13 @@ void vlVaHandlePictureParameterBufferH264(vlVaDriver *drv, vlVaContext *context,
       h264->pic_fields.bits.field_pic_flag &&
       (h264->CurrPic.flags & VA_PICTURE_H264_BOTTOM_FIELD) != 0;
 
-   if (!context->decoder && context->desc.h264.num_ref_frames > 0)
+   if (context->decoder && (context->templat.max_references != context->desc.h264.num_ref_frames)) {
+      context->templat.max_references = MIN2(context->desc.h264.num_ref_frames, 16);
+      mtx_lock(&context->mutex);
+      context->decoder->destroy(context->decoder);
+      context->decoder = NULL;
+      mtx_unlock(&context->mutex);
+   } else if (!context->decoder && context->desc.h264.num_ref_frames > 0)
       context->templat.max_references = MIN2(context->desc.h264.num_ref_frames, 16);
 
    for (i = 0; i < context->templat.max_references; ++i) {
@@ -126,16 +136,16 @@ void vlVaHandlePictureParameterBufferH264(vlVaDriver *drv, vlVaContext *context,
 
       top_or_bottom_field = h264->ReferenceFrames[i].flags &
          (VA_PICTURE_H264_TOP_FIELD | VA_PICTURE_H264_BOTTOM_FIELD);
-      context->desc.h264.is_long_term[i] = (h264->ReferenceFrames[i].flags &
-         (VA_PICTURE_H264_SHORT_TERM_REFERENCE |
-         VA_PICTURE_H264_LONG_TERM_REFERENCE)) !=
-         VA_PICTURE_H264_SHORT_TERM_REFERENCE;
+      is_ref = !!(h264->ReferenceFrames[i].flags &
+         (VA_PICTURE_H264_SHORT_TERM_REFERENCE | VA_PICTURE_H264_LONG_TERM_REFERENCE));
+      context->desc.h264.is_long_term[i] = !!(h264->ReferenceFrames[i].flags &
+          VA_PICTURE_H264_LONG_TERM_REFERENCE);
       context->desc.h264.top_is_reference[i] =
-         !context->desc.h264.is_long_term[i] ||
-         !!(h264->ReferenceFrames[i].flags & VA_PICTURE_H264_TOP_FIELD);
+         !!(h264->ReferenceFrames[i].flags & VA_PICTURE_H264_TOP_FIELD) ||
+         ((!top_or_bottom_field) && is_ref);
       context->desc.h264.bottom_is_reference[i] =
-         !context->desc.h264.is_long_term[i] ||
-         !!(h264->ReferenceFrames[i].flags & VA_PICTURE_H264_BOTTOM_FIELD);
+         !!(h264->ReferenceFrames[i].flags & VA_PICTURE_H264_BOTTOM_FIELD) ||
+         ((!top_or_bottom_field) && is_ref);
       context->desc.h264.field_order_cnt_list[i][0] =
          top_or_bottom_field != VA_PICTURE_H264_BOTTOM_FIELD ?
          h264->ReferenceFrames[i].TopFieldOrderCnt: INT_MAX;
@@ -147,6 +157,11 @@ void vlVaHandlePictureParameterBufferH264(vlVaDriver *drv, vlVaContext *context,
    /* Make sure remaining elements are clean */
    for (; i < 16; ++i)
       resetReferencePictureDesc(&context->desc.h264, i);
+
+   context->desc.h264.slice_parameter.slice_info_present = false;
+   memset(context->desc.h264.slice_parameter.slice_data_flag, 0, sizeof(context->desc.h264.slice_parameter.slice_data_flag));
+   memset(context->desc.h264.slice_parameter.slice_data_offset, 0, sizeof(context->desc.h264.slice_parameter.slice_data_offset));
+   memset(context->desc.h264.slice_parameter.slice_data_size, 0, sizeof(context->desc.h264.slice_parameter.slice_data_size));
 }
 
 void vlVaHandleIQMatrixBufferH264(vlVaContext *context, vlVaBuffer *buf)
@@ -162,10 +177,45 @@ void vlVaHandleSliceParameterBufferH264(vlVaContext *context, vlVaBuffer *buf)
 {
    VASliceParameterBufferH264 *h264 = buf->data;
 
-   assert(buf->size >= sizeof(VASliceParameterBufferH264) && buf->num_elements == 1);
+   context->desc.h264.num_ref_idx_l0_active_minus1 = h264->num_ref_idx_l0_active_minus1;
+   context->desc.h264.num_ref_idx_l1_active_minus1 = h264->num_ref_idx_l1_active_minus1;
+
+   for (uint32_t buffer_idx = 0; buffer_idx < buf->num_elements; buffer_idx++, h264++) {
+      uint32_t slice_index = context->desc.h264.slice_count + buffer_idx;
+
+      const size_t max_pipe_h264_slices = ARRAY_SIZE(context->desc.h264.slice_parameter.slice_data_offset);
+      assert(slice_index < max_pipe_h264_slices);
+      if (slice_index >= max_pipe_h264_slices) {
+         static bool warn_once = true;
+         if (warn_once) {
+            fprintf(stderr, "Warning: Number of slices (%d) provided exceed driver's max supported (%d), stop handling remaining slices.\n",
+               slice_index + 1, (int)max_pipe_h264_slices);
+            warn_once = false;
+         }
+         return;
+      }
+
+      context->desc.h264.slice_parameter.slice_info_present = true;
+      context->desc.h264.slice_parameter.slice_type[slice_index] = h264->slice_type;
+      context->desc.h264.slice_parameter.slice_data_size[slice_index] = h264->slice_data_size;
+      context->desc.h264.slice_parameter.slice_data_offset[slice_index] = h264->slice_data_offset;
+
+      switch (h264->slice_data_flag) {
+      case VA_SLICE_DATA_FLAG_ALL:
+         context->desc.h264.slice_parameter.slice_data_flag[slice_index] = PIPE_SLICE_BUFFER_PLACEMENT_TYPE_WHOLE;
+         break;
+      case VA_SLICE_DATA_FLAG_BEGIN:
+         context->desc.h264.slice_parameter.slice_data_flag[slice_index] = PIPE_SLICE_BUFFER_PLACEMENT_TYPE_BEGIN;
+         break;
+      case VA_SLICE_DATA_FLAG_MIDDLE:
+         context->desc.h264.slice_parameter.slice_data_flag[slice_index] = PIPE_SLICE_BUFFER_PLACEMENT_TYPE_MIDDLE;
+         break;
+      case VA_SLICE_DATA_FLAG_END:
+         context->desc.h264.slice_parameter.slice_data_flag[slice_index] = PIPE_SLICE_BUFFER_PLACEMENT_TYPE_END;
+         break;
+      default:
+         break;
+      }
+   }
    context->desc.h264.slice_count += buf->num_elements;
-   context->desc.h264.num_ref_idx_l0_active_minus1 =
-      h264->num_ref_idx_l0_active_minus1;
-   context->desc.h264.num_ref_idx_l1_active_minus1 =
-      h264->num_ref_idx_l1_active_minus1;
 }

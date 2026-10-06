@@ -38,14 +38,14 @@
  * policies, either expressed or implied, of the copyright holders.
  */
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 #include "postprocess/postprocess.h"
 #include "postprocess/pp_mlaa.h"
 #include "postprocess/pp_filters.h"
 #include "postprocess/pp_private.h"
 
-#include "util/u_box.h"
+#include "util/box.h"
 #include "util/u_sampler.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
@@ -85,7 +85,7 @@ pp_jimenezmlaa_run(struct pp_queue_t *ppq, struct pipe_resource *in,
 
    memset(&mstencil, 0, sizeof(mstencil));
 
-   cso_set_stencil_ref(p->cso, &ref);
+   cso_set_stencil_ref(p->cso, ref);
 
    /* Init the pixel size constant */
    if (dimensions[0] != p->framebuffer.width ||
@@ -97,10 +97,15 @@ pp_jimenezmlaa_run(struct pp_queue_t *ppq, struct pipe_resource *in,
       dimensions[1] = p->framebuffer.height;
    }
 
-   cso_set_constant_user_buffer(p->cso, PIPE_SHADER_VERTEX,
-                                0, constants, sizeof(constants));
-   cso_set_constant_user_buffer(p->cso, PIPE_SHADER_FRAGMENT,
-                                0, constants, sizeof(constants));
+   struct pipe_constant_buffer cb;
+   cb.buffer = NULL;
+   cb.buffer_offset = 0;
+   cb.buffer_size = sizeof(constants);
+   cb.user_buffer = constants;
+
+   struct pipe_context *pipe = ppq->p->pipe;
+   pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 0, false, &cb);
+   pipe->set_constant_buffer(pipe, PIPE_SHADER_FRAGMENT, 0, false, &cb);
 
    mstencil.stencil[0].enabled = 1;
    mstencil.stencil[0].valuemask = mstencil.stencil[0].writemask = ~0;
@@ -129,7 +134,7 @@ pp_jimenezmlaa_run(struct pp_queue_t *ppq, struct pipe_resource *in,
       const struct pipe_sampler_state *samplers[] = {&p->sampler_point};
       cso_set_samplers(p->cso, PIPE_SHADER_FRAGMENT, 1, samplers);
    }
-   cso_set_sampler_views(p->cso, PIPE_SHADER_FRAGMENT, 1, &p->view);
+   pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, 1, 0, false, &p->view);
 
    cso_set_vertex_shader_handle(p->cso, ppq->shaders[n][1]);    /* offsetvs */
    cso_set_fragment_shader_handle(p->cso, ppq->shaders[n][2]);
@@ -161,7 +166,7 @@ pp_jimenezmlaa_run(struct pp_queue_t *ppq, struct pipe_resource *in,
    }
 
    arr[0] = p->view;
-   cso_set_sampler_views(p->cso, PIPE_SHADER_FRAGMENT, 3, arr);
+   pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, 3, 0, false, arr);
 
    cso_set_vertex_shader_handle(p->cso, ppq->shaders[n][0]);    /* passvs */
    cso_set_fragment_shader_handle(p->cso, ppq->shaders[n][3]);
@@ -193,7 +198,7 @@ pp_jimenezmlaa_run(struct pp_queue_t *ppq, struct pipe_resource *in,
    }
 
    arr[1] = p->view;
-   cso_set_sampler_views(p->cso, PIPE_SHADER_FRAGMENT, 2, arr);
+   pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, 2, 0, false, arr);
 
    cso_set_vertex_shader_handle(p->cso, ppq->shaders[n][1]);    /* offsetvs */
    cso_set_fragment_shader_handle(p->cso, ppq->shaders[n][4]);
@@ -224,7 +229,7 @@ pp_jimenezmlaa_init_run(struct pp_queue_t *ppq, unsigned int n,
 
    if (!tmp_text) {
       pp_debug("Failed to allocate shader space\n");
-      return FALSE;
+      return false;
    }
 
    pp_debug("mlaa: using %u max search steps\n", val);
@@ -256,7 +261,7 @@ pp_jimenezmlaa_init_run(struct pp_queue_t *ppq, unsigned int n,
    u_box_2d(0, 0, 165, 165, &box);
 
    ppq->p->pipe->texture_subdata(ppq->p->pipe, ppq->areamaptex, 0,
-                                 PIPE_TRANSFER_WRITE, &box,
+                                 PIPE_MAP_WRITE, &box,
                                  areamap, 165 * 2, sizeof(areamap));
 
    ppq->shaders[n][1] = pp_tgsi_to_state(ppq->p->pipe, offsetvs, true,
@@ -274,7 +279,7 @@ pp_jimenezmlaa_init_run(struct pp_queue_t *ppq, unsigned int n,
 
    FREE(tmp_text);
 
-   return TRUE;
+   return true;
 
  fail:
    
@@ -286,7 +291,7 @@ pp_jimenezmlaa_init_run(struct pp_queue_t *ppq, unsigned int n,
     */
    pp_jimenezmlaa_free(ppq, n);
 
-   return FALSE;
+   return false;
 }
 
 /** Short wrapper to init the depth version. */

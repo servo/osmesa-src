@@ -75,24 +75,6 @@ dd_screen_get_disk_shader_cache(struct pipe_screen *_screen)
 }
 
 static int
-dd_screen_get_param(struct pipe_screen *_screen,
-                    enum pipe_cap param)
-{
-   struct pipe_screen *screen = dd_screen(_screen)->screen;
-
-   return screen->get_param(screen, param);
-}
-
-static float
-dd_screen_get_paramf(struct pipe_screen *_screen,
-                     enum pipe_capf param)
-{
-   struct pipe_screen *screen = dd_screen(_screen)->screen;
-
-   return screen->get_paramf(screen, param);
-}
-
-static int
 dd_screen_get_compute_param(struct pipe_screen *_screen,
                             enum pipe_shader_ir ir_type,
                             enum pipe_compute_cap param,
@@ -167,15 +149,18 @@ dd_screen_can_create_resource(struct pipe_screen *_screen,
 
 static void
 dd_screen_flush_frontbuffer(struct pipe_screen *_screen,
+                            struct pipe_context *_pipe,
                             struct pipe_resource *resource,
                             unsigned level, unsigned layer,
                             void *context_private,
+                            unsigned nboxes,
                             struct pipe_box *sub_box)
 {
    struct pipe_screen *screen = dd_screen(_screen)->screen;
+   struct pipe_context *pipe = _pipe ? dd_context(_pipe)->pipe : NULL;
 
-   screen->flush_frontbuffer(screen, resource, level, layer, context_private,
-                             sub_box);
+   screen->flush_frontbuffer(screen, pipe, resource, level, layer, context_private,
+                             nboxes, sub_box);
 }
 
 static int
@@ -249,6 +234,34 @@ dd_screen_resource_from_handle(struct pipe_screen *_screen,
 }
 
 static struct pipe_resource *
+dd_screen_resource_create_with_modifiers(struct pipe_screen *_screen,
+                                         const struct pipe_resource *templat,
+                                         const uint64_t *modifiers, int count)
+{
+   struct pipe_screen *screen = dd_screen(_screen)->screen;
+   struct pipe_resource *res =
+      screen->resource_create_with_modifiers(screen, templat,
+                                             modifiers, count);
+
+   if (!res)
+      return NULL;
+   res->screen = _screen;
+   return res;
+}
+
+static void
+dd_screen_query_dmabuf_modifiers(struct pipe_screen *_screen,
+                                 enum pipe_format format, int max,
+                                 uint64_t *modifiers,
+                                 unsigned int *external_only, int *count)
+{
+   struct pipe_screen *screen = dd_screen(_screen)->screen;
+   screen->query_dmabuf_modifiers(screen, format, max, modifiers,
+                                  external_only, count);
+}
+
+
+static struct pipe_resource *
 dd_screen_resource_from_user_memory(struct pipe_screen *_screen,
                                     const struct pipe_resource *templ,
                                     void *user_memory)
@@ -317,6 +330,7 @@ dd_screen_resource_get_param(struct pipe_screen *_screen,
                              struct pipe_resource *resource,
                              unsigned plane,
                              unsigned layer,
+                             unsigned level,
                              enum pipe_resource_param param,
                              unsigned handle_usage,
                              uint64_t *value)
@@ -325,7 +339,7 @@ dd_screen_resource_get_param(struct pipe_screen *_screen,
    struct pipe_context *pipe = _pipe ? dd_context(_pipe)->pipe : NULL;
 
    return screen->resource_get_param(screen, pipe, resource, plane, layer,
-                                     param, handle_usage, value);
+                                     level, param, handle_usage, value);
 }
 
 static void
@@ -349,6 +363,19 @@ dd_screen_check_resource_capability(struct pipe_screen *_screen,
    return screen->check_resource_capability(screen, resource, bind);
 }
 
+static int
+dd_screen_get_sparse_texture_virtual_page_size(struct pipe_screen *_screen,
+                                               enum pipe_texture_target target,
+                                               bool multi_sample,
+                                               enum pipe_format format,
+                                               unsigned offset, unsigned size,
+                                               int *x, int *y, int *z)
+{
+   struct pipe_screen *screen = dd_screen(_screen)->screen;
+
+   return screen->get_sparse_texture_virtual_page_size(
+      _screen, target, multi_sample, format, offset, size, x, y, z);
+}
 
 /********************************************************************
  * fence
@@ -386,6 +413,38 @@ dd_screen_fence_get_fd(struct pipe_screen *_screen,
 }
 
 /********************************************************************
+ * vertex state
+ */
+
+static struct pipe_vertex_state *
+dd_screen_create_vertex_state(struct pipe_screen *_screen,
+                              struct pipe_vertex_buffer *buffer,
+                              const struct pipe_vertex_element *elements,
+                              unsigned num_elements,
+                              struct pipe_resource *indexbuf,
+                              uint32_t full_velem_mask)
+{
+   struct pipe_screen *screen = dd_screen(_screen)->screen;
+   struct pipe_vertex_state *state =
+      screen->create_vertex_state(screen, buffer, elements, num_elements,
+                                  indexbuf, full_velem_mask);
+
+   if (!state)
+      return NULL;
+   state->screen = _screen;
+   return state;
+}
+
+static void
+dd_screen_vertex_state_destroy(struct pipe_screen *_screen,
+                               struct pipe_vertex_state *state)
+{
+   struct pipe_screen *screen = dd_screen(_screen)->screen;
+
+   screen->vertex_state_destroy(screen, state);
+}
+
+/********************************************************************
  * memobj
  */
 
@@ -411,12 +470,12 @@ dd_screen_memobj_destroy(struct pipe_screen *_screen,
  * screen
  */
 
-static void
-dd_screen_finalize_nir(struct pipe_screen *_screen, void *nir, bool optimize)
+static char *
+dd_screen_finalize_nir(struct pipe_screen *_screen, struct nir_shader *nir)
 {
    struct pipe_screen *screen = dd_screen(_screen)->screen;
 
-   screen->finalize_nir(screen, nir, optimize);
+   return screen->finalize_nir(screen, nir);
 }
 
 static void
@@ -466,6 +525,15 @@ match_uint(const char **cur, unsigned *value)
    *cur = end;
    *value = v;
    return true;
+}
+
+static struct pipe_screen * dd_get_driver_pipe_screen(struct pipe_screen *_screen)
+{
+   struct pipe_screen * screen = dd_screen(_screen)->screen;
+
+   if (screen->get_driver_pipe_screen)
+      return screen->get_driver_pipe_screen(screen);
+   return screen;
 }
 
 struct pipe_screen *
@@ -572,8 +640,6 @@ ddebug_screen_create(struct pipe_screen *screen)
    dscreen->base.get_vendor = dd_screen_get_vendor;
    dscreen->base.get_device_vendor = dd_screen_get_device_vendor;
    SCR_INIT(get_disk_shader_cache);
-   dscreen->base.get_param = dd_screen_get_param;
-   dscreen->base.get_paramf = dd_screen_get_paramf;
    dscreen->base.get_compute_param = dd_screen_get_compute_param;
    dscreen->base.get_shader_param = dd_screen_get_shader_param;
    dscreen->base.query_memory_info = dd_screen_query_memory_info;
@@ -585,6 +651,8 @@ ddebug_screen_create(struct pipe_screen *screen)
    /* is_video_format_supported */
    SCR_INIT(can_create_resource);
    dscreen->base.resource_create = dd_screen_resource_create;
+   dscreen->base.resource_create_with_modifiers = dd_screen_resource_create_with_modifiers;
+   dscreen->base.query_dmabuf_modifiers = dd_screen_query_dmabuf_modifiers;
    dscreen->base.resource_from_handle = dd_screen_resource_from_handle;
    SCR_INIT(resource_from_memobj);
    SCR_INIT(resource_from_user_memory);
@@ -606,6 +674,13 @@ ddebug_screen_create(struct pipe_screen *screen)
    SCR_INIT(get_driver_uuid);
    SCR_INIT(get_device_uuid);
    SCR_INIT(finalize_nir);
+   SCR_INIT(get_sparse_texture_virtual_page_size);
+   SCR_INIT(create_vertex_state);
+   SCR_INIT(vertex_state_destroy);
+   dscreen->base.get_driver_pipe_screen = dd_get_driver_pipe_screen;
+
+   /* copy all caps */
+   *(struct pipe_caps *)&dscreen->base.caps = screen->caps;
 
 #undef SCR_INIT
 

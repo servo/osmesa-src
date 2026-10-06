@@ -1,28 +1,11 @@
 /*
- * Copyright © 2007-2019 Advanced Micro Devices, Inc.
- * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS
- * AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- */
+************************************************************************************************************************
+*
+*  Copyright (C) 2007-2024 Advanced Micro Devices, Inc. All rights reserved.
+*  SPDX-License-Identifier: MIT
+*
+***********************************************************************************************************************/
+
 
 /**
 ****************************************************************************************************
@@ -34,8 +17,17 @@
 #include "addrinterface.h"
 #include "addrobject.h"
 
+#if DEBUG
+#include <stdio.h>
+#endif
+
 namespace Addr
 {
+
+#if DEBUG && ADDR_ALLOW_TLS
+thread_local ADDR_CLIENT_HANDLE g_clientHandle = nullptr;
+thread_local ADDR_DEBUGPRINT    g_pfnDebugPrint = nullptr;
+#endif
 
 /**
 ****************************************************************************************************
@@ -177,7 +169,8 @@ VOID Object::Free(
 */
 VOID* Object::operator new(
     size_t objSize,     ///< [in] Size to allocate
-    VOID*  pMem)        ///< [in] Pre-allocated pointer
+    VOID*  pMem        ///< [in] Pre-allocated pointer
+    ) noexcept
 {
     return pMem;
 }
@@ -197,9 +190,32 @@ VOID Object::operator delete(
     ClientFree(pObjMem, &pObj->m_client);
 }
 
+
+#if DEBUG
 /**
 ****************************************************************************************************
-*   Object::DebugPrint
+*   ApplyDebugPrinters
+*
+*   @brief
+*       Sets the debug printers via TLS
+*
+*   @return
+*       N/A
+****************************************************************************************************
+*/
+VOID ApplyDebugPrinters(
+    ADDR_DEBUGPRINT    pfnDebugPrint,
+    ADDR_CLIENT_HANDLE pClientHandle)
+{
+#if ADDR_ALLOW_TLS
+    g_clientHandle  = pClientHandle;
+    g_pfnDebugPrint = pfnDebugPrint;
+#endif
+}
+
+/**
+****************************************************************************************************
+*   DebugPrint
 *
 *   @brief
 *       Print debug message
@@ -208,30 +224,38 @@ VOID Object::operator delete(
 *       N/A
 ****************************************************************************************************
 */
-VOID Object::DebugPrint(
+VOID DebugPrint(
     const CHAR* pDebugString,     ///< [in] Debug string
     ...
-    ) const
+    )
 {
-#if DEBUG
-    if (m_client.callbacks.debugPrint != NULL)
+    va_list ap;
+    va_start(ap, pDebugString);
+
+#if ADDR_ALLOW_TLS
+    if (g_pfnDebugPrint != NULL)
     {
-        va_list ap;
-
-        va_start(ap, pDebugString);
-
         ADDR_DEBUGPRINT_INPUT debugPrintInput = {0};
 
         debugPrintInput.size         = sizeof(ADDR_DEBUGPRINT_INPUT);
         debugPrintInput.pDebugString = const_cast<CHAR*>(pDebugString);
-        debugPrintInput.hClient      = m_client.handle;
+        debugPrintInput.hClient      = g_clientHandle;
         va_copy(debugPrintInput.ap, ap);
 
-        m_client.callbacks.debugPrint(&debugPrintInput);
+        g_pfnDebugPrint(&debugPrintInput);
 
-        va_end(ap);
+        va_end(debugPrintInput.ap);
     }
+    else
 #endif
+    {
+#if ADDR_ALLOW_STDIO
+        fprintf(stderr, "Warning: Addrlib assert function called without corresponding 'ApplyDebugPrinters'\n");
+        vfprintf(stderr, pDebugString, ap);
+#endif
+    }
+    va_end(ap);
 }
+#endif
 
 } // Addr

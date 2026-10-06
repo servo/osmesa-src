@@ -27,21 +27,20 @@
  *
  **************************************************************************/
 
-
 /**
  * Logging facility for debug/info messages.
  * _EGL_FATAL messages are printed to stderr
  * The EGL_LOG_LEVEL var controls the output of other warning/info/debug msgs.
  */
 
-
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include "c11/threads.h"
 #include "util/macros.h"
+#include "util/os_misc.h"
+#include "util/simple_mtx.h"
 #include "util/u_string.h"
 
 #include "egllog.h"
@@ -56,28 +55,26 @@
 
 #endif /* HAVE_ANDROID_PLATFORM */
 
-#define MAXSTRING 1000
+#define MAXSTRING          1000
 #define FALLBACK_LOG_LEVEL _EGL_WARNING
 
-
 static struct {
-   mtx_t mutex;
+   simple_mtx_t mutex;
 
    EGLBoolean initialized;
    EGLint level;
 } logging = {
-   .mutex = _MTX_INITIALIZER_NP,
+   .mutex = SIMPLE_MTX_INITIALIZER,
    .initialized = EGL_FALSE,
    .level = FALLBACK_LOG_LEVEL,
 };
 
 static const char *level_strings[] = {
    [_EGL_FATAL] = "fatal",
-   [_EGL_WARNING]  = "warning",
+   [_EGL_WARNING] = "warning",
    [_EGL_INFO] = "info",
    [_EGL_DEBUG] = "debug",
 };
-
 
 /**
  * The default logger.  It prints the message to stderr.
@@ -88,7 +85,7 @@ _eglDefaultLogger(EGLint level, const char *msg)
 #ifdef HAVE_ANDROID_PLATFORM
    static const int egl2alog[] = {
       [_EGL_FATAL] = ANDROID_LOG_ERROR,
-      [_EGL_WARNING]  = ANDROID_LOG_WARN,
+      [_EGL_WARNING] = ANDROID_LOG_WARN,
       [_EGL_INFO] = ANDROID_LOG_INFO,
       [_EGL_DEBUG] = ANDROID_LOG_DEBUG,
    };
@@ -97,7 +94,6 @@ _eglDefaultLogger(EGLint level, const char *msg)
    fprintf(stderr, "libEGL %s: %s\n", level_strings[level], msg);
 #endif /* HAVE_ANDROID_PLATFORM */
 }
-
 
 /**
  * Initialize the logging facility.
@@ -111,7 +107,7 @@ _eglInitLogger(void)
    if (logging.initialized)
       return;
 
-   log_env = getenv("EGL_LOG_LEVEL");
+   log_env = os_get_option("EGL_LOG_LEVEL");
    if (log_env) {
       for (i = 0; i < ARRAY_SIZE(level_strings); i++) {
          if (strcasecmp(log_env, level_strings[i]) == 0) {
@@ -134,6 +130,14 @@ _eglInitLogger(void)
    }
 }
 
+/**
+ * Return the log level.
+ */
+EGLint
+_eglGetLogLevel(void)
+{
+   return logging.level;
+}
 
 /**
  * Log a message with message logger.
@@ -152,7 +156,7 @@ _eglLog(EGLint level, const char *fmtStr, ...)
    if (level > logging.level || level < 0)
       return;
 
-   mtx_lock(&logging.mutex);
+   simple_mtx_lock(&logging.mutex);
 
    va_start(args, fmtStr);
    ret = vsnprintf(msg, MAXSTRING, fmtStr, args);
@@ -162,7 +166,7 @@ _eglLog(EGLint level, const char *fmtStr, ...)
 
    _eglDefaultLogger(level, msg);
 
-   mtx_unlock(&logging.mutex);
+   simple_mtx_unlock(&logging.mutex);
 
    if (level == _EGL_FATAL)
       exit(1); /* or abort()? */

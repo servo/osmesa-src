@@ -1,32 +1,14 @@
-/**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef SVGA_DEBUG_H
 #define SVGA_DEBUG_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "util/u_debug.h"
 
 #define DEBUG_DMA          0x1
@@ -46,9 +28,11 @@
 #define DEBUG_CACHE        0x8000
 #define DEBUG_STREAMOUT    0x10000
 #define DEBUG_SAMPLERS     0x20000
+#define DEBUG_IMAGE        0x40000
+#define DEBUG_UAV          0x80000
 #define DEBUG_RETRY        0x100000
 
-#ifdef DEBUG
+#if MESA_DEBUG
 extern int SVGA_DEBUG;
 #define DBSTR(x) x
 #else
@@ -59,7 +43,7 @@ extern int SVGA_DEBUG;
 static inline void
 SVGA_DBG( unsigned flag, const char *fmt, ... )
 {
-#ifdef DEBUG 
+#if MESA_DEBUG 
     if (SVGA_DEBUG & flag)
     {
         va_list args;

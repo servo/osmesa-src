@@ -29,6 +29,9 @@
 #include "ppir.h"
 
 const ppir_op_info ppir_op_infos[] = {
+   [ppir_op_unsupported] = {
+      .name = "unsupported",
+   },
    [ppir_op_mov] = {
       .name = "mov",
       .slots = (int []) {
@@ -45,6 +48,12 @@ const ppir_op_info ppir_op_infos[] = {
    },
    [ppir_op_sat] = {
       .name = "sat",
+   },
+   [ppir_op_clamp_pos] = {
+      .name = "clamp_pos",
+   },
+   [ppir_op_trunc] = {
+      .name = "trunc",
    },
    [ppir_op_mul] = {
       .name = "mul",
@@ -330,12 +339,14 @@ const ppir_op_info ppir_op_infos[] = {
       .name = "undef",
       .type = ppir_node_type_alu,
       .slots = (int []) {
+         PPIR_INSTR_SLOT_END
       },
    },
    [ppir_op_dummy] = {
       .name = "dummy",
       .type = ppir_node_type_alu,
       .slots = (int []) {
+         PPIR_INSTR_SLOT_END
       },
    },
 };
@@ -364,9 +375,9 @@ void *ppir_node_create(ppir_block *block, ppir_op op, int index, unsigned mask)
 
    if (index >= 0) {
       if (mask) {
-         /* reg has 4 slots for each componemt write node */
+         /* reg has 4 slots for each component write node */
          while (mask)
-            comp->var_nodes[(index << 2) + comp->reg_base + u_bit_scan(&mask)] = node;
+            comp->var_nodes[(index << 2) + u_bit_scan(&mask)] = node;
          snprintf(node->name, sizeof(node->name), "reg%d", index);
       } else {
          comp->var_nodes[index] = node;
@@ -618,9 +629,9 @@ static ppir_node *ppir_node_insert_mov_local(ppir_node *node)
    ppir_node_add_dep(move, node, ppir_dep_src);
    list_addtail(&move->list, &node->list);
 
-   if (node->is_end) {
-      node->is_end = false;
-      move->is_end = true;
+   if (node->is_out) {
+      node->is_out = false;
+      move->is_out = true;
    }
 
    return move;

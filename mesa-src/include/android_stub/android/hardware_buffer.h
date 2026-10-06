@@ -158,6 +158,13 @@ enum AHardwareBuffer_Format {
      * cube-maps or multi-layered textures.
      */
     AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420             = 0x23,
+
+    /**
+     * Corresponding formats:
+     *   Vulkan: VK_FORMAT_R8_UNORM
+     *   OpenGL ES: GR_GL_R8
+     */
+    AHARDWAREBUFFER_FORMAT_R8_UNORM                 = 0x38,
 };
 
 /**
@@ -332,8 +339,6 @@ typedef struct AHardwareBuffer_Planes {
  */
 typedef struct AHardwareBuffer AHardwareBuffer;
 
-#if __ANDROID_API__ >= 26
-
 /**
  * Allocates a buffer that matches the passed AHardwareBuffer_Desc.
  *
@@ -501,10 +506,6 @@ int AHardwareBuffer_sendHandleToUnixSocket(const AHardwareBuffer* buffer, int so
  */
 int AHardwareBuffer_recvHandleFromUnixSocket(int socketFd, AHardwareBuffer** outBuffer) __INTRODUCED_IN(26);
 
-#endif // __ANDROID_API__ >= 26
-
-#if __ANDROID_API__ >= 29
-
 /**
  * Test whether the given format and usage flag combination is
  * allocatable.
@@ -540,7 +541,6 @@ int AHardwareBuffer_isSupported(const AHardwareBuffer_Desc* desc) __INTRODUCED_I
 int AHardwareBuffer_lockAndGetInfo(AHardwareBuffer* buffer, uint64_t usage,
         int32_t fence, const ARect* rect, void** outVirtualAddress,
         int32_t* outBytesPerPixel, int32_t* outBytesPerStride) __INTRODUCED_IN(29);
-#endif // __ANDROID_API__ >= 29
 
 __END_DECLS
 

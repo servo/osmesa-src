@@ -219,10 +219,10 @@ create_mismatch_frag_shader(struct vl_idct *idct)
    }
 
    for (i = 0; i < 8; ++i) {
-      struct ureg_src s_addr[2];
-      s_addr[0] = ureg_src(m[i][0]);
-      s_addr[1] = ureg_src(m[i][1]);
-      fetch_four(shader, m[i], s_addr, ureg_DECL_sampler(shader, 0), false);
+      struct ureg_src s_address[2];
+      s_address[0] = ureg_src(m[i][0]);
+      s_address[1] = ureg_src(m[i][1]);
+      fetch_four(shader, m[i], s_address, ureg_DECL_sampler(shader, 0), false);
    }
 
    for (i = 1; i < 8; ++i) {
@@ -355,20 +355,20 @@ create_stage1_frag_shader(struct vl_idct *idct)
    }
 
    for (i = 0; i < 4; ++i) {
-      struct ureg_src s_addr[2];
-      s_addr[0] = ureg_src(l[i][0]);
-      s_addr[1] = ureg_src(l[i][1]);
-      fetch_four(shader, l[i], s_addr, ureg_DECL_sampler(shader, 0), false);
+      struct ureg_src s_address[2];
+      s_address[0] = ureg_src(l[i][0]);
+      s_address[1] = ureg_src(l[i][1]);
+      fetch_four(shader, l[i], s_address, ureg_DECL_sampler(shader, 0), false);
    }
 
    for (i = 0; i < idct->nr_of_render_targets; ++i) {
-      struct ureg_src s_addr[2];
+      struct ureg_src s_address[2];
 
       increment_addr(shader, r, r_addr, true, true, i - (signed)idct->nr_of_render_targets / 2, VL_BLOCK_HEIGHT);
 
-      s_addr[0] = ureg_src(r[0]);
-      s_addr[1] = ureg_src(r[1]);
-      fetch_four(shader, r, s_addr, ureg_DECL_sampler(shader, 1), false);
+      s_address[0] = ureg_src(r[0]);
+      s_address[1] = ureg_src(r[1]);
+      fetch_four(shader, r, s_address, ureg_DECL_sampler(shader, 1), false);
 
       for (j = 0; j < 4; ++j) {
          matrix_mul(shader, ureg_writemask(fragment[i], TGSI_WRITEMASK_X << j), l[j], r);
@@ -552,7 +552,6 @@ init_state(struct vl_idct *idct)
       sampler.mag_img_filter = PIPE_TEX_FILTER_NEAREST;
       sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
       sampler.compare_func = PIPE_FUNC_ALWAYS;
-      sampler.normalized_coords = 1;
       idct->samplers[i] = idct->pipe->create_sampler_state(idct->pipe, &sampler);
       if (!idct->samplers[i])
          goto error_samplers;
@@ -609,6 +608,10 @@ init_source(struct vl_idct *idct, struct vl_idct_buffer *buffer)
    buffer->viewport_mismatch.scale[0] = tex->width0;
    buffer->viewport_mismatch.scale[1] = tex->height0;
    buffer->viewport_mismatch.scale[2] = 1;
+   buffer->viewport_mismatch.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+   buffer->viewport_mismatch.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+   buffer->viewport_mismatch.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+   buffer->viewport_mismatch.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
    return true;
 }
@@ -652,6 +655,10 @@ init_intermediate(struct vl_idct *idct, struct vl_idct_buffer *buffer)
    buffer->viewport.scale[0] = tex->width0;
    buffer->viewport.scale[1] = tex->height0;
    buffer->viewport.scale[2] = 1;
+   buffer->viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+   buffer->viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+   buffer->viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+   buffer->viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
    return true;
 
@@ -710,9 +717,9 @@ vl_idct_upload_matrix(struct pipe_context *pipe, float scale)
    if (!matrix)
       goto error_matrix;
 
-   f = pipe->transfer_map(pipe, matrix, 0,
-                                     PIPE_TRANSFER_WRITE |
-                                     PIPE_TRANSFER_DISCARD_RANGE,
+   f = pipe->texture_map(pipe, matrix, 0,
+                                     PIPE_MAP_WRITE |
+                                     PIPE_MAP_DISCARD_RANGE,
                                      &rect, &buf_transfer);
    if (!f)
       goto error_map;
@@ -724,7 +731,7 @@ vl_idct_upload_matrix(struct pipe_context *pipe, float scale)
          // transpose and scale
          f[i * pitch + j] = ((const float (*)[8])const_matrix)[j][i] * scale;
 
-   pipe->transfer_unmap(pipe, buf_transfer);
+   pipe->texture_unmap(pipe, buf_transfer);
 
    memset(&sv_templ, 0, sizeof(sv_templ));
    u_sampler_view_default_template(&sv_templ, matrix, matrix->format);
@@ -827,22 +834,22 @@ vl_idct_flush(struct vl_idct *idct, struct vl_idct_buffer *buffer, unsigned num_
    idct->pipe->bind_sampler_states(idct->pipe, PIPE_SHADER_FRAGMENT,
                                    0, 2, idct->samplers);
 
-   idct->pipe->set_sampler_views(idct->pipe, PIPE_SHADER_FRAGMENT, 0, 2,
-                                 buffer->sampler_views.stage[0]);
+   idct->pipe->set_sampler_views(idct->pipe, PIPE_SHADER_FRAGMENT, 0, 2, 0,
+                                 false, buffer->sampler_views.stage[0]);
 
    /* mismatch control */
    idct->pipe->set_framebuffer_state(idct->pipe, &buffer->fb_state_mismatch);
    idct->pipe->set_viewport_states(idct->pipe, 0, 1, &buffer->viewport_mismatch);
    idct->pipe->bind_vs_state(idct->pipe, idct->vs_mismatch);
    idct->pipe->bind_fs_state(idct->pipe, idct->fs_mismatch);
-   util_draw_arrays_instanced(idct->pipe, PIPE_PRIM_POINTS, 0, 1, 0, num_instances);
+   util_draw_arrays_instanced(idct->pipe, MESA_PRIM_POINTS, 0, 1, 0, num_instances);
 
    /* first stage */
    idct->pipe->set_framebuffer_state(idct->pipe, &buffer->fb_state);
    idct->pipe->set_viewport_states(idct->pipe, 0, 1, &buffer->viewport);
    idct->pipe->bind_vs_state(idct->pipe, idct->vs);
    idct->pipe->bind_fs_state(idct->pipe, idct->fs);
-   util_draw_arrays_instanced(idct->pipe, PIPE_PRIM_QUADS, 0, 4, 0, num_instances);
+   util_draw_arrays_instanced(idct->pipe, MESA_PRIM_QUADS, 0, 4, 0, num_instances);
 }
 
 void
@@ -855,6 +862,6 @@ vl_idct_prepare_stage2(struct vl_idct *idct, struct vl_idct_buffer *buffer)
    idct->pipe->bind_sampler_states(idct->pipe, PIPE_SHADER_FRAGMENT,
                                    0, 2, idct->samplers);
    idct->pipe->set_sampler_views(idct->pipe, PIPE_SHADER_FRAGMENT,
-                                 0, 2, buffer->sampler_views.stage[1]);
+                                 0, 2, 0, false, buffer->sampler_views.stage[1]);
 }
 

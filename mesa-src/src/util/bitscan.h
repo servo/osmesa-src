@@ -42,7 +42,7 @@
 #include <popcntintrin.h>
 #endif
 
-#include "c99_compat.h"
+#include "macros.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -104,6 +104,11 @@ u_bit_scan(unsigned *mask)
    return i;
 }
 
+#define u_foreach_bit(b, dword)                          \
+   for (uint32_t __dword = (dword), b;                     \
+        ((b) = ffs(__dword) - 1, __dword);      \
+        __dword &= ~(1 << (b)))
+
 static inline int
 u_bit_scan64(uint64_t *mask)
 {
@@ -112,15 +117,20 @@ u_bit_scan64(uint64_t *mask)
    return i;
 }
 
-/* Determine if an unsigned value is a power of two.
+#define u_foreach_bit64(b, dword)                          \
+   for (uint64_t __dword = (dword), b;                     \
+        ((b) = ffsll(__dword) - 1, __dword);      \
+        __dword &= ~(1ull << (b)))
+
+/* Determine if an uint32_t value is a power of two.
  *
  * \note
  * Zero is treated as a power of two.
  */
 static inline bool
-util_is_power_of_two_or_zero(unsigned v)
+util_is_power_of_two_or_zero(uint32_t v)
 {
-   return (v & (v - 1)) == 0;
+   return IS_POT(v);
 }
 
 /* Determine if an uint64_t value is a power of two.
@@ -131,16 +141,16 @@ util_is_power_of_two_or_zero(unsigned v)
 static inline bool
 util_is_power_of_two_or_zero64(uint64_t v)
 {
-   return (v & (v - 1)) == 0;
+   return IS_POT(v);
 }
 
-/* Determine if an unsigned value is a power of two.
+/* Determine if an uint32_t value is a power of two.
  *
  * \note
  * Zero is \b not treated as a power of two.
  */
 static inline bool
-util_is_power_of_two_nonzero(unsigned v)
+util_is_power_of_two_nonzero(uint32_t v)
 {
    /* __POPCNT__ is different from HAVE___BUILTIN_POPCOUNT.  The latter
     * indicates the existence of the __builtin_popcount function.  The former
@@ -154,8 +164,30 @@ util_is_power_of_two_nonzero(unsigned v)
 #ifdef __POPCNT__
    return _mm_popcnt_u32(v) == 1;
 #else
-   return v != 0 && (v & (v - 1)) == 0;
+   return IS_POT_NONZERO(v);
 #endif
+}
+
+/* Determine if an uint64_t value is a power of two.
+ *
+ * \note
+ * Zero is \b not treated as a power of two.
+ */
+static inline bool
+util_is_power_of_two_nonzero64(uint64_t v)
+{
+   return IS_POT_NONZERO(v);
+}
+
+/* Determine if an size_t/uintptr_t/intptr_t value is a power of two.
+ *
+ * \note
+ * Zero is \b not treated as a power of two.
+ */
+static inline bool
+util_is_power_of_two_nonzero_uintptr(uintptr_t v)
+{
+   return IS_POT_NONZERO(v);
 }
 
 /* For looping over a bitmask when you want to loop over consecutive bits
@@ -309,18 +341,80 @@ util_bitcount(unsigned n)
 #endif
 }
 
+/**
+ * Return the number of bits set in n using the native popcnt instruction.
+ * The caller is responsible for ensuring that popcnt is supported by the CPU.
+ *
+ * gcc doesn't use it if -mpopcnt or -march= that has popcnt is missing.
+ *
+ */
+static inline unsigned
+util_popcnt_inline_asm(unsigned n)
+{
+#if defined(USE_X86_64_ASM) || defined(USE_X86_ASM)
+   uint32_t out;
+   __asm volatile("popcnt %1, %0" : "=r"(out) : "r"(n));
+   return out;
+#else
+   /* We should never get here by accident, but I'm sure it'll happen. */
+   return util_bitcount(n);
+#endif
+}
+
 static inline unsigned
 util_bitcount64(uint64_t n)
 {
 #ifdef HAVE___BUILTIN_POPCOUNTLL
    return __builtin_popcountll(n);
 #else
-   return util_bitcount(n) + util_bitcount(n >> 32);
+   return util_bitcount((unsigned)n) + util_bitcount((unsigned)(n >> 32));
 #endif
+}
+
+/**
+ * Widens the given bit mask by a multiplier, meaning that it will
+ * replicate each bit by that amount.
+ *
+ * For example:
+ * 0b101 widened by 2 will become: 0b110011
+ *
+ * This is typically used in shader I/O to transform a 64-bit
+ * writemask to a 32-bit writemask.
+ */
+static inline uint32_t
+util_widen_mask(uint32_t mask, unsigned multiplier)
+{
+   uint32_t new_mask = 0;
+   u_foreach_bit(i, mask)
+      new_mask |= ((1u << multiplier) - 1u) << (i * multiplier);
+   return new_mask;
 }
 
 #ifdef __cplusplus
 }
-#endif
+
+/* util_bitcount has large measurable overhead (~2%), so it's recommended to
+ * use the POPCNT instruction via inline assembly if the CPU supports it.
+ */
+enum util_popcnt {
+   POPCNT_NO,
+   POPCNT_YES,
+   POPCNT_INVALID,
+};
+
+/* Convenient function to select popcnt through a C++ template argument.
+ * This should be used as part of larger functions that are optimized
+ * as a whole.
+ */
+template<util_popcnt POPCNT> inline unsigned
+util_bitcount_fast(unsigned n)
+{
+   if (POPCNT == POPCNT_YES)
+      return util_popcnt_inline_asm(n);
+   else
+      return util_bitcount(n);
+}
+
+#endif /* __cplusplus */
 
 #endif /* BITSCAN_H */

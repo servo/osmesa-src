@@ -1,27 +1,9 @@
-/**********************************************************
- * Copyright 2008-2012 VMware, Inc.  All rights reserved.
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- **********************************************************/
+/*
+ * Copyright (c) 2008-2024 Broadcom. All Rights Reserved.
+ * The term “Broadcom” refers to Broadcom Inc.
+ * and/or its subsidiaries.
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "util/u_bitmask.h"
 #include "util/u_memory.h"
@@ -30,7 +12,13 @@
 #include "svga_cmd.h"
 #include "svga_format.h"
 #include "svga_shader.h"
+#include "svga_tgsi.h"
 #include "svga_resource_texture.h"
+#include "VGPU10ShaderTokens.h"
+
+#include "compiler/nir/nir.h"
+#include "compiler/glsl/gl_nir.h"
+#include "nir/nir_to_tgsi.h"
 
 
 /**
@@ -222,6 +210,45 @@ static const enum pipe_swizzle set_XXXY[PIPE_SWIZZLE_MAX] = {
    PIPE_SWIZZLE_NONE
 };
 
+static const enum pipe_swizzle set_YYYY[PIPE_SWIZZLE_MAX] = {
+   PIPE_SWIZZLE_Y,
+   PIPE_SWIZZLE_Y,
+   PIPE_SWIZZLE_Y,
+   PIPE_SWIZZLE_Y,
+   PIPE_SWIZZLE_0,
+   PIPE_SWIZZLE_1,
+   PIPE_SWIZZLE_NONE
+};
+
+
+static VGPU10_RESOURCE_RETURN_TYPE
+vgpu10_return_type(enum pipe_format format)
+{
+   if (util_format_is_unorm(format))
+      return VGPU10_RETURN_TYPE_UNORM;
+   else if (util_format_is_snorm(format))
+      return VGPU10_RETURN_TYPE_SNORM;
+   else if (util_format_is_pure_uint(format))
+      return VGPU10_RETURN_TYPE_UINT;
+   else if (util_format_is_pure_sint(format))
+      return VGPU10_RETURN_TYPE_SINT;
+   else if (util_format_is_float(format))
+      return VGPU10_RETURN_TYPE_FLOAT;
+   else
+      return VGPU10_RETURN_TYPE_MAX;
+}
+
+
+/**
+ * A helper function to return TRUE if the specified format
+ * is a supported format for sample_c instruction.
+ */
+static bool
+isValidSampleCFormat(enum pipe_format format)
+{
+   return util_format_is_depth_or_stencil(format);
+}
+
 
 /**
  * Initialize the shader-neutral fields of svga_compile_key from context
@@ -234,14 +261,30 @@ svga_init_shader_key_common(const struct svga_context *svga,
                             struct svga_compile_key *key)
 {
    unsigned i, idx = 0;
+   unsigned sampler_slots = 0;
 
    assert(shader_type < ARRAY_SIZE(svga->curr.num_sampler_views));
 
    /* In case the number of samplers and sampler_views doesn't match,
-    * loop over the lower of the two counts.
+    * loop over the upper of the two counts.
     */
    key->num_textures = MAX2(svga->curr.num_sampler_views[shader_type],
                             svga->curr.num_samplers[shader_type]);
+
+   if (!shader->info.uses_samplers)
+      key->num_textures = 0;
+
+   key->num_samplers = 0;
+
+   /* Set sampler_state_mapping only if GL43 is supported and
+    * the number of samplers exceeds SVGA limit or the sampler state
+    * mapping env is set.
+    */
+   bool sampler_state_mapping =
+      svga_use_sampler_state_mapping(svga, svga->curr.num_samplers[shader_type]);
+
+   key->sampler_state_mapping =
+      key->num_textures && sampler_state_mapping ? 1 : 0;
 
    for (i = 0; i < key->num_textures; i++) {
       struct pipe_sampler_view *view = svga->curr.sampler_views[shader_type][i];
@@ -250,7 +293,13 @@ svga_init_shader_key_common(const struct svga_context *svga,
 
       if (view) {
          assert(view->texture);
-         assert(view->texture->target < (1 << 4)); /* texture_target:4 */
+
+         enum pipe_texture_target target = view->target;
+         assert(target < (1 << 4)); /* texture_target:4 */
+
+	 key->tex[i].target = target;
+	 key->tex[i].sampler_return_type = vgpu10_return_type(view->format);
+	 key->tex[i].sampler_view = 1;
 
          /* 1D/2D array textures with one slice and cube map array textures
           * with one cube are treated as non-arrays by the SVGA3D device.
@@ -258,7 +307,7 @@ svga_init_shader_key_common(const struct svga_context *svga,
           * element.  This will be used to select shader instruction/resource
           * types during shader translation.
           */
-         switch (view->texture->target) {
+         switch (target) {
          case PIPE_TEXTURE_1D_ARRAY:
          case PIPE_TEXTURE_2D_ARRAY:
             key->tex[i].is_array = view->texture->array_size > 1;
@@ -274,9 +323,11 @@ svga_init_shader_key_common(const struct svga_context *svga,
          key->tex[i].num_samples = view->texture->nr_samples;
 
          const enum pipe_swizzle *swizzle_tab;
-         if (view->texture->target == PIPE_BUFFER) {
+         if (target == PIPE_BUFFER) {
             SVGA3dSurfaceFormat svga_format;
             unsigned tf_flags;
+
+            assert(view->texture->target == PIPE_BUFFER);
 
             /* Apply any special swizzle mask for the view format if needed */
 
@@ -308,17 +359,33 @@ svga_init_shader_key_common(const struct svga_context *svga,
                 view->texture->format == PIPE_FORMAT_DXT1_SRGB)
                swizzle_tab = set_alpha;
 
+            if (view->format == PIPE_FORMAT_X24S8_UINT ||
+                view->format == PIPE_FORMAT_X32_S8X24_UINT)
+               swizzle_tab = set_YYYY;
+
             /* Save the compare function as we need to handle
              * depth compare in the shader.
              */
             key->tex[i].compare_mode = sampler->compare_mode;
             key->tex[i].compare_func = sampler->compare_func;
+
+            /* Set the compare_in_shader bit if the view format
+             * is not a supported format for shadow compare.
+             * In this case, we'll do the comparison in the shader.
+             */
+            if ((sampler->compare_mode == PIPE_TEX_COMPARE_R_TO_TEXTURE) &&
+                !isValidSampleCFormat(view->format)) {
+               key->tex[i].compare_in_shader = true;
+            }
          }
 
          key->tex[i].swizzle_r = swizzle_tab[view->swizzle_r];
          key->tex[i].swizzle_g = swizzle_tab[view->swizzle_g];
          key->tex[i].swizzle_b = swizzle_tab[view->swizzle_b];
          key->tex[i].swizzle_a = swizzle_tab[view->swizzle_a];
+      }
+      else {
+	 key->tex[i].sampler_view = 0;
       }
 
       if (sampler) {
@@ -327,15 +394,164 @@ svga_init_shader_key_common(const struct svga_context *svga,
                assert(idx < (1 << 5));  /* width_height_idx:5 bitfield */
                key->tex[i].width_height_idx = idx++;
 	    }
-            key->tex[i].unnormalized = TRUE;
+            key->tex[i].unnormalized = true;
             ++key->num_unnormalized_coords;
 
             if (sampler->magfilter == SVGA3D_TEX_FILTER_NEAREST ||
                 sampler->minfilter == SVGA3D_TEX_FILTER_NEAREST) {
-                key->tex[i].texel_bias = TRUE;
+                key->tex[i].texel_bias = true;
+            }
+         }
+
+         if (!sampler_state_mapping) {
+            /* Use the same index if sampler state mapping is not supported */
+            key->tex[i].sampler_index = i;
+            key->num_samplers = i + 1;
+         }
+         else {
+
+            /* The current samplers list can have redundant entries.
+             * In order to allow the number of bound samplers within the
+             * max limit supported by SVGA, we'll recreate the list with
+             * unique sampler state objects only.
+             */
+
+            /* Check to see if this sampler is already on the list.
+             * If so, set the sampler index of this sampler to the
+             * same sampler index.
+             */
+            for (unsigned j = 0; j <= i; j++) {
+               if (svga->curr.sampler[shader_type][j] == sampler) {
+
+                  if (!(sampler_slots & (1 << j))) {
+
+                     /* if this sampler is not added to the new list yet,
+                      * set its sampler index to the next sampler index,
+                      * increment the sampler count, and mark this
+                      * sampler as added to the list.
+                      */
+
+                     unsigned next_index =
+                        MIN2(key->num_samplers, SVGA3D_DX_MAX_SAMPLERS-1);
+
+                     key->tex[i].sampler_index = next_index;
+                     key->num_samplers = next_index + 1;
+
+                     if (sampler->compare_mode == PIPE_TEX_COMPARE_R_TO_TEXTURE) {
+                        /* reserve one slot for the alternate sampler */
+                        key->num_samplers++;
+                     }
+
+                     sampler_slots |= (1 << j);
+                  }
+                  else {
+                     key->tex[i].sampler_index = key->tex[j].sampler_index;
+                  }
+                  break;
+               }
             }
          }
       }
+   }
+
+   if (svga_have_gl43(svga)) {
+
+      /* Save info about which constant buffers are to be viewed
+       * as srv raw buffers in the shader key.
+       */
+      if (shader->info.const_buffers_declared &
+          svga->state.raw_constbufs[shader_type]) {
+         key->raw_constbufs = svga->state.raw_constbufs[shader_type] &
+                              shader->info.const_buffers_declared;
+      }
+
+      /* beginning index for srv for raw constant buffers */
+      key->srv_raw_constbuf_index = PIPE_MAX_SAMPLERS;
+
+      if (shader->info.uses_images || shader->info.uses_hw_atomic ||
+          shader->info.uses_shader_buffers) {
+
+         /* Save the uavSpliceIndex which is the index used for the first uav
+          * in the draw pipeline. For compute, uavSpliceIndex is always 0.
+          */
+         if (shader_type != PIPE_SHADER_COMPUTE)
+            key->uav_splice_index = svga->state.hw_draw.uavSpliceIndex;
+
+         unsigned uav_splice_index = key->uav_splice_index;
+
+         /* Also get the texture data type to be used in the uav declaration */
+         const struct svga_image_view *cur_image_view =
+            &svga->curr.image_views[shader_type][0];
+
+         for (unsigned i = 0; i < ARRAY_SIZE(svga->curr.image_views[shader_type]);
+              i++, cur_image_view++) {
+
+            struct pipe_resource *resource = cur_image_view->desc.resource;
+
+            if (resource) {
+               key->images[i].return_type =
+                  svga_get_texture_datatype(cur_image_view->desc.format);
+
+               key->images[i].is_array = resource->array_size > 1;
+
+               /* Save the image resource target in the shader key because
+                * for single layer image view, the resource target in the
+                * tgsi shader is changed to a different texture target.
+                */
+               key->images[i].resource_target = resource->target;
+               if (resource->target == PIPE_TEXTURE_3D ||
+                   resource->target == PIPE_TEXTURE_1D_ARRAY ||
+                   resource->target == PIPE_TEXTURE_2D_ARRAY ||
+                   resource->target == PIPE_TEXTURE_CUBE ||
+                   resource->target == PIPE_TEXTURE_CUBE_ARRAY) {
+                  key->images[i].is_single_layer =
+                     cur_image_view->desc.u.tex.first_layer ==
+                     cur_image_view->desc.u.tex.last_layer;
+               }
+
+               key->images[i].uav_index = cur_image_view->uav_index + uav_splice_index;
+            }
+            else
+               key->images[i].uav_index = SVGA3D_INVALID_ID;
+         }
+
+         const struct svga_shader_buffer *cur_sbuf =
+            &svga->curr.shader_buffers[shader_type][0];
+
+         /* Save info about which shader buffers are to be viewed
+          * as srv raw buffers in the shader key.
+          */
+         if (shader->info.shader_buffers_declared &
+             svga->state.raw_shaderbufs[shader_type]) {
+            key->raw_shaderbufs = svga->state.raw_shaderbufs[shader_type] &
+                                  shader->info.shader_buffers_declared;
+            key->srv_raw_shaderbuf_index = key->srv_raw_constbuf_index +
+		                           SVGA_MAX_CONST_BUFS;
+         }
+
+         for (unsigned i = 0; i < ARRAY_SIZE(svga->curr.shader_buffers[shader_type]);
+              i++, cur_sbuf++) {
+
+            if (cur_sbuf->resource && (!(key->raw_shaderbufs & (1 << i))))
+               key->shader_buf_uav_index[i] = cur_sbuf->uav_index + uav_splice_index;
+            else
+               key->shader_buf_uav_index[i] = SVGA3D_INVALID_ID;
+         }
+
+         const struct svga_shader_buffer *cur_buf = &svga->curr.atomic_buffers[0];
+
+         for (unsigned i = 0; i < ARRAY_SIZE(svga->curr.atomic_buffers);
+              i++, cur_buf++) {
+
+            if (cur_buf->resource)
+               key->atomic_buf_uav_index[i] = cur_buf->uav_index + uav_splice_index;
+            else
+               key->atomic_buf_uav_index[i] = SVGA3D_INVALID_ID;
+         }
+
+         key->image_size_used = shader->info.uses_image_size;
+      }
+
    }
 
    key->clamp_vertex_color = svga->curr.rast ?
@@ -576,6 +792,9 @@ svga_new_shader_variant(struct svga_context *svga, enum pipe_shader_type type)
    case PIPE_SHADER_TESS_CTRL:
       variant = CALLOC(1, sizeof(struct svga_tcs_variant));
       break;
+   case PIPE_SHADER_COMPUTE:
+      variant = CALLOC(1, sizeof(struct svga_cs_variant));
+      break;
    default:
       return NULL;
    }
@@ -685,6 +904,106 @@ svga_rebind_shaders(struct svga_context *svga)
          return ret;
    }
    svga->rebind.flags.tes = 0;
+
+   return PIPE_OK;
+}
+
+
+/**
+ * Helper function to create a shader object.
+ */
+struct svga_shader *
+svga_create_shader(struct pipe_context *pipe,
+                   const struct pipe_shader_state *templ,
+                   enum pipe_shader_type stage,
+                   unsigned shader_structlen)
+{
+   struct svga_context *svga = svga_context(pipe);
+   struct svga_shader *shader = CALLOC(1, shader_structlen);
+   nir_shader *nir = (nir_shader *)templ->ir.nir;
+
+   if (shader == NULL)
+      return NULL;
+
+   shader->id = svga->debug.shader_id++;
+   shader->stage = stage;
+
+   if (templ->type == PIPE_SHADER_IR_NIR) {
+      /* nir_to_tgsi requires lowered images */
+      NIR_PASS_V(nir, gl_nir_lower_images, false);
+   }
+   shader->tokens = pipe_shader_state_to_tgsi_tokens(pipe->screen, templ);
+   shader->type = PIPE_SHADER_IR_TGSI;
+
+   /* Collect basic info of the shader */
+   svga_tgsi_scan_shader(shader);
+
+   /* check for any stream output declarations */
+   if (templ->stream_output.num_outputs) {
+      shader->stream_output = svga_create_stream_output(svga, shader,
+                                                        &templ->stream_output);
+   }
+
+   return shader;
+}
+
+
+/**
+ * Helper function to compile a shader.
+ * Depending on the shader IR type, it calls the corresponding
+ * compile shader function.
+ */
+enum pipe_error
+svga_compile_shader(struct svga_context *svga,
+                    struct svga_shader *shader,
+                    const struct svga_compile_key *key,
+                    struct svga_shader_variant **out_variant)
+{
+   struct svga_shader_variant *variant = NULL;
+   enum pipe_error ret = PIPE_ERROR;
+
+   if (shader->type == PIPE_SHADER_IR_TGSI) {
+      variant = svga_tgsi_compile_shader(svga, shader, key);
+   } else {
+      debug_printf("Unexpected nir shader\n");
+      assert(0);
+   }
+
+   if (variant == NULL) {
+      if (shader->get_dummy_shader != NULL) {
+         debug_printf("Failed to compile shader, using dummy shader.\n");
+         variant = shader->get_dummy_shader(svga, shader, key);
+      }
+   }
+   else if (svga_shader_too_large(svga, variant)) {
+      /* too big, use shader */
+      if (shader->get_dummy_shader != NULL) {
+         debug_printf("Shader too large (%u bytes), using dummy shader.\n",
+                      (unsigned)(variant->nr_tokens
+                                 * sizeof(variant->tokens[0])));
+
+         /* Free the too-large variant */
+         svga_destroy_shader_variant(svga, variant);
+
+         /* Use simple pass-through shader instead */
+         variant = shader->get_dummy_shader(svga, shader, key);
+      }
+   }
+
+   if (variant == NULL)
+      return PIPE_ERROR;
+
+   ret = svga_define_shader(svga, variant);
+   if (ret != PIPE_OK) {
+      svga_destroy_shader_variant(svga, variant);
+      return ret;
+   }
+
+   *out_variant = variant;
+
+   /* insert variant at head of linked list */
+   variant->next = shader->variants;
+   shader->variants = variant;
 
    return PIPE_OK;
 }

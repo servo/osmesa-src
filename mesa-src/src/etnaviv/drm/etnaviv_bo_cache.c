@@ -27,9 +27,6 @@
 #include "etnaviv_priv.h"
 #include "etnaviv_drmif.h"
 
-void _etna_bo_del(struct etna_bo *bo);
-extern pthread_mutex_t etna_drm_table_lock;
-
 static void add_bucket(struct etna_bo_cache *cache, int size)
 {
 	unsigned i = cache->num_buckets;
@@ -79,7 +76,7 @@ void etna_bo_cache_cleanup(struct etna_bo_cache *cache, time_t time)
 		struct etna_bo *bo;
 
 		while (!list_is_empty(&bucket->list)) {
-			bo = LIST_ENTRY(struct etna_bo, bucket->list.next, list);
+			bo = list_first_entry(&bucket->list, struct etna_bo, list);
 
 			/* keep things in cache for at least 1 second: */
 			if (time && ((time - bo->free_time) <= 1))
@@ -87,7 +84,7 @@ void etna_bo_cache_cleanup(struct etna_bo_cache *cache, time_t time)
 
 			VG_BO_OBTAIN(bo);
 			list_del(&bo->list);
-			_etna_bo_del(bo);
+			etna_bo_free(bo);
 		}
 	}
 
@@ -111,19 +108,11 @@ static struct etna_bo_bucket *get_bucket(struct etna_bo_cache *cache, uint32_t s
 	return NULL;
 }
 
-static int is_idle(struct etna_bo *bo)
-{
-	return etna_bo_cpu_prep(bo,
-			DRM_ETNA_PREP_READ |
-			DRM_ETNA_PREP_WRITE |
-			DRM_ETNA_PREP_NOSYNC) == 0;
-}
-
 static struct etna_bo *find_in_bucket(struct etna_bo_bucket *bucket, uint32_t flags)
 {
 	struct etna_bo *bo = NULL, *tmp;
 
-	pthread_mutex_lock(&etna_drm_table_lock);
+	simple_mtx_lock(&etna_device_lock);
 
 	if (list_is_empty(&bucket->list))
 		goto out_unlock;
@@ -134,8 +123,8 @@ static struct etna_bo *find_in_bucket(struct etna_bo_bucket *bucket, uint32_t fl
 			continue;
 
 		/* check if the first BO with matching flags is idle */
-		if (is_idle(bo)) {
-			list_delinit(&bo->list);
+		if (etna_bo_is_idle(bo)) {
+			list_del(&bo->list);
 			goto out_unlock;
 		}
 
@@ -147,7 +136,7 @@ static struct etna_bo *find_in_bucket(struct etna_bo_bucket *bucket, uint32_t fl
 	bo = NULL;
 
 out_unlock:
-	pthread_mutex_unlock(&etna_drm_table_lock);
+	simple_mtx_unlock(&etna_device_lock);
 
 	return bo;
 }
@@ -182,16 +171,21 @@ struct etna_bo *etna_bo_cache_alloc(struct etna_bo_cache *cache, uint32_t *size,
 
 int etna_bo_cache_free(struct etna_bo_cache *cache, struct etna_bo *bo)
 {
-	struct etna_bo_bucket *bucket = get_bucket(cache, bo->size);
+	struct etna_bo_bucket *bucket;
+
+	simple_mtx_assert_locked(&etna_device_lock);
+
+	bucket = get_bucket(cache, bo->size);
 
 	/* see if we can be green and recycle: */
 	if (bucket) {
 		struct timespec time;
 
-		clock_gettime(CLOCK_MONOTONIC, &time);
+		clock_gettime(CLOCK_MONOTONIC_COARSE, &time);
 
 		bo->free_time = time.tv_sec;
 		VG_BO_RELEASE(bo);
+		assert(!list_is_linked(&bo->list));
 		list_addtail(&bo->list, &bucket->list);
 		etna_bo_cache_cleanup(cache, time.tv_sec);
 

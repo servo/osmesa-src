@@ -29,6 +29,8 @@
 #include "main/arrayobj.h"
 #include "main/bufferobj.h"
 
+#include "util/u_memory.h"
+
 #include "vbo_private.h"
 
 
@@ -39,8 +41,6 @@ void vbo_save_init( struct gl_context *ctx )
 {
    struct vbo_context *vbo = vbo_context(ctx);
    struct vbo_save_context *save = &vbo->save;
-
-   save->ctx = ctx;
 
    vbo_save_api_init( save );
 
@@ -62,14 +62,18 @@ void vbo_save_destroy( struct gl_context *ctx )
       _mesa_reference_vao(ctx, &save->VAO[vpm], NULL);
 
    if (save->prim_store) {
-      if ( --save->prim_store->refcount == 0 ) {
-         free(save->prim_store);
-         save->prim_store = NULL;
-      }
+      free(save->prim_store->prims);
+      FREE(save->prim_store);
+      save->prim_store = NULL;
    }
    if (save->vertex_store) {
-      _mesa_reference_buffer_object(ctx, &save->vertex_store->bufferobj, NULL);
-      free(save->vertex_store);
+      free(save->vertex_store->buffer_in_ram);
+      FREE(save->vertex_store);
       save->vertex_store = NULL;
    }
+
+   if (save->copied.buffer)
+      free(save->copied.buffer);
+
+   _mesa_reference_buffer_object(ctx, &save->current_bo, NULL);
 }

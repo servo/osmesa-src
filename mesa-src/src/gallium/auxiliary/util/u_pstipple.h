@@ -29,7 +29,11 @@
 #ifndef U_PSTIPPLE_H
 #define U_PSTIPPLE_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 struct pipe_context;
 struct pipe_resource;
@@ -58,5 +62,8 @@ util_pstipple_create_fragment_shader(const struct tgsi_token *tokens,
                                      unsigned fixed_unit,
                                      unsigned wincoordFile);
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif

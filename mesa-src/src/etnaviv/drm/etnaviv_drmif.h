@@ -39,6 +39,7 @@ struct etna_cmd_stream;
 struct etna_perfmon;
 struct etna_perfmon_domain;
 struct etna_perfmon_signal;
+struct etna_core_info;
 
 enum etna_pipe_id {
 	ETNA_PIPE_3D = 0,
@@ -58,6 +59,11 @@ enum etna_param_id {
 	ETNA_GPU_FEATURES_5                = 0x8,
 	ETNA_GPU_FEATURES_6                = 0x9,
 	ETNA_GPU_FEATURES_7                = 0xa,
+	ETNA_GPU_FEATURES_8                = 0xb,
+	ETNA_GPU_FEATURES_9                = 0xc,
+	ETNA_GPU_FEATURES_10               = 0xd,
+	ETNA_GPU_FEATURES_11               = 0xe,
+	ETNA_GPU_FEATURES_12               = 0xf,
 
 	ETNA_GPU_STREAM_COUNT              = 0x10,
 	ETNA_GPU_REGISTER_MAX              = 0x11,
@@ -69,7 +75,11 @@ enum etna_param_id {
 	ETNA_GPU_BUFFER_SIZE               = 0x17,
 	ETNA_GPU_INSTRUCTION_COUNT         = 0x18,
 	ETNA_GPU_NUM_CONSTANTS             = 0x19,
-	ETNA_GPU_NUM_VARYINGS              = 0x1a
+	ETNA_GPU_NUM_VARYINGS              = 0x1a,
+	ETNA_SOFTPIN_START_ADDR            = 0x1b,
+	ETNA_GPU_PRODUCT_ID                = 0x1c,
+	ETNA_GPU_CUSTOMER_ID               = 0x1d,
+	ETNA_GPU_ECO_ID                    = 0x1e,
 };
 
 /* bo flags: */
@@ -88,12 +98,15 @@ enum etna_param_id {
 /* device functions:
  */
 
+#define ETNA_DRM_VERSION(major, minor) ((major) << 16 | (minor))
+
 struct etna_device *etna_device_new(int fd);
 struct etna_device *etna_device_new_dup(int fd);
 struct etna_device *etna_device_ref(struct etna_device *dev);
 void etna_device_del(struct etna_device *dev);
 int etna_device_fd(struct etna_device *dev);
 bool etnaviv_device_softpin_capable(struct etna_device *dev);
+uint32_t etnaviv_device_version(struct etna_device *dev);
 
 /* gpu functions:
  */
@@ -102,6 +115,7 @@ struct etna_gpu *etna_gpu_new(struct etna_device *dev, unsigned int core);
 void etna_gpu_del(struct etna_gpu *gpu);
 int etna_gpu_get_param(struct etna_gpu *gpu, enum etna_param_id param,
 		uint64_t *value);
+struct etna_core_info *etna_gpu_get_core_info(struct etna_gpu *gpu);
 
 
 /* pipe functions:
@@ -109,7 +123,6 @@ int etna_gpu_get_param(struct etna_gpu *gpu, enum etna_param_id param,
 
 struct etna_pipe *etna_pipe_new(struct etna_gpu *gpu, enum etna_pipe_id id);
 void etna_pipe_del(struct etna_pipe *pipe);
-int etna_pipe_wait(struct etna_pipe *pipe, uint32_t timestamp, uint32_t ms);
 int etna_pipe_wait_ns(struct etna_pipe *pipe, uint32_t timestamp, uint64_t ns);
 
 
@@ -130,6 +143,7 @@ uint32_t etna_bo_gpu_va(struct etna_bo *bo);
 void * etna_bo_map(struct etna_bo *bo);
 int etna_bo_cpu_prep(struct etna_bo *bo, uint32_t op);
 void etna_bo_cpu_fini(struct etna_bo *bo);
+int etna_bo_is_idle(struct etna_bo *bo);
 
 
 /* cmd stream functions:
@@ -147,7 +161,7 @@ struct etna_cmd_stream *etna_cmd_stream_new(struct etna_pipe *pipe, uint32_t siz
 void etna_cmd_stream_del(struct etna_cmd_stream *stream);
 uint32_t etna_cmd_stream_timestamp(struct etna_cmd_stream *stream);
 void etna_cmd_stream_flush(struct etna_cmd_stream *stream, int in_fence_fd,
-			    int *out_fence_fd);
+			    int *out_fence_fd, bool is_noop);
 void etna_cmd_stream_force_flush(struct etna_cmd_stream *stream);
 
 static inline uint32_t etna_cmd_stream_avail(struct etna_cmd_stream *stream)
@@ -197,6 +211,8 @@ struct etna_reloc {
 void etna_cmd_stream_reloc(struct etna_cmd_stream *stream, const struct etna_reloc *r);
 void etna_cmd_stream_ref_bo(struct etna_cmd_stream *stream,
 		struct etna_bo *bo, uint32_t flags);
+
+void etna_cmd_stream_mark_end_of_context_init(struct etna_cmd_stream *stream);
 
 /* performance monitoring functions:
  */

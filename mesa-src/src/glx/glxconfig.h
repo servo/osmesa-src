@@ -36,11 +36,11 @@ struct glx_config {
     GLuint doubleBufferMode;
     GLuint stereoMode;
 
-    GLint redBits, greenBits, blueBits, alphaBits;	/* bits per comp */
+    GLint redBits, greenBits, blueBits, alphaBits;   /* bits per comp */
     GLuint redMask, greenMask, blueMask, alphaMask;
     GLuint redShift, greenShift, blueShift, alphaShift;
-    GLint rgbBits;		/* total bits for rgb */
-    GLint indexBits;		/* total bits for colorindex */
+    GLint rgbBits;      /* total bits for rgb */
+    GLint indexBits;      /* total bits for colorindex */
 
     GLint accumRedBits, accumGreenBits, accumBlueBits, accumAlphaBits;
     GLint depthBits;
@@ -53,15 +53,15 @@ struct glx_config {
     /* GLX */
     GLint visualID;
     GLint visualType;     /**< One of the GLX X visual types. (i.e., 
-			   * \c GLX_TRUE_COLOR, etc.)
-			   */
+            * \c GLX_TRUE_COLOR, etc.)
+            */
 
     /* EXT_visual_rating / GLX 1.2 */
     GLint visualRating;
 
     /* EXT_visual_info / GLX 1.2 */
     GLint transparentPixel;
-				/*    colors are floats scaled to ints */
+            /*    colors are floats scaled to ints */
     GLint transparentRed, transparentGreen, transparentBlue, transparentAlpha;
     GLint transparentIndex;
 
@@ -85,9 +85,6 @@ struct glx_config {
     /* SGIX_visual_select_group */
     GLint visualSelectGroup;
 
-    /* OML_swap_method */
-    GLint swapMethod;
-
     GLint screen;
 
     /* EXT_texture_from_pixmap */
@@ -99,21 +96,10 @@ struct glx_config {
 
     /* EXT_framebuffer_sRGB */
     GLint sRGBCapable;
+
+    /* NV_float_buffer */
+    GLint floatComponentsNV;
 };
-
-#define __GLX_MIN_CONFIG_PROPS	18
-#define __GLX_MAX_CONFIG_PROPS	500
-#define __GLX_EXT_CONFIG_PROPS	10
-
-/*
-** Since we send all non-core visual properties as token, value pairs,
-** we require 2 words across the wire. In order to maintain backwards
-** compatibility, we need to send the total number of words that the
-** VisualConfigs are sent back in so old libraries can simply "ignore"
-** the new properties.
-*/
-#define __GLX_TOTAL_CONFIG \
-   (__GLX_MIN_CONFIG_PROPS + 2 * __GLX_EXT_CONFIG_PROPS)
 
 extern GLint _gl_convert_from_x_visual_type(int visualType);
 

@@ -30,6 +30,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "util/slab.h"
+#include "util/u_debug_cb.h"
 #include "xf86drm.h"
 
 #define __user
@@ -44,12 +45,6 @@
 #endif
 #ifndef DRM_VC4_PARAM_SUPPORTS_THREADED_FS
 #define DRM_VC4_PARAM_SUPPORTS_THREADED_FS	5
-#endif
-
-#ifdef USE_VC4_SIMULATOR
-#define using_vc4_simulator true
-#else
-#define using_vc4_simulator false
 #endif
 
 #define VC4_DIRTY_BLEND         (1 <<  0)
@@ -328,20 +323,18 @@ struct vc4_context {
         /** bitfield of VC4_DIRTY_* */
         uint32_t dirty;
 
-        struct primconvert_context *primconvert;
-
         struct hash_table *fs_cache, *vs_cache;
         struct set *fs_inputs_set;
         uint32_t next_uncompiled_program_id;
         uint64_t next_compiled_program_id;
 
         struct ra_regs *regs;
-        unsigned int reg_class_any[2];
-        unsigned int reg_class_a_or_b[2];
-        unsigned int reg_class_a_or_b_or_acc[2];
-        unsigned int reg_class_r0_r3;
-        unsigned int reg_class_r4_or_a[2];
-        unsigned int reg_class_a[2];
+        struct ra_class *reg_class_any[2];
+        struct ra_class *reg_class_a_or_b[2];
+        struct ra_class *reg_class_a_or_b_or_acc[2];
+        struct ra_class *reg_class_r0_r3;
+        struct ra_class *reg_class_r4_or_a[2];
+        struct ra_class *reg_class_a[2];
 
         uint8_t prim_mode;
 
@@ -383,7 +376,6 @@ struct vc4_context {
         struct pipe_viewport_state viewport;
         struct vc4_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
         struct vc4_vertexbuf_stateobj vertexbuf;
-        struct pipe_debug_callback debug;
 
         struct vc4_hwperfmon *perfmon;
         /** @} */
@@ -428,10 +420,10 @@ struct vc4_depth_stencil_alpha_state {
 };
 
 #define perf_debug(...) do {                            \
-        if (unlikely(vc4_debug & VC4_DEBUG_PERF))       \
+        if (VC4_DBG(PERF))                            \
                 fprintf(stderr, __VA_ARGS__);           \
-        if (unlikely(vc4->debug.debug_message))         \
-                pipe_debug_message(&vc4->debug, PERF_INFO, __VA_ARGS__);    \
+        if (unlikely(vc4->base.debug.debug_message))         \
+                util_debug_message(&vc4->base.debug, PERF_INFO, __VA_ARGS__); \
 } while (0)
 
 static inline struct vc4_context *
@@ -473,10 +465,11 @@ void vc4_simulator_open_from_handle(int fd, int handle, uint32_t size);
 static inline int
 vc4_ioctl(int fd, unsigned long request, void *arg)
 {
-        if (using_vc4_simulator)
-                return vc4_simulator_ioctl(fd, request, arg);
-        else
-                return drmIoctl(fd, request, arg);
+#ifdef USE_VC4_SIMULATOR
+        return vc4_simulator_ioctl(fd, request, arg);
+#else
+        return drmIoctl(fd, request, arg);
+#endif
 }
 
 void vc4_set_shader_uniform_dirty_flags(struct vc4_compiled_shader *shader);

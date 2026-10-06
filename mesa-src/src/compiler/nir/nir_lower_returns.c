@@ -55,32 +55,34 @@ predicate_following(nir_cf_node *node, struct lower_returns_state *state)
 
    assert(state->return_flag);
 
-   nir_if *if_stmt = nir_if_create(b->shader);
-   if_stmt->condition = nir_src_for_ssa(nir_load_var(b, state->return_flag));
-   nir_cf_node_insert(b->cursor, &if_stmt->cf_node);
+   nir_if *if_stmt = nir_push_if(b, nir_load_var(b, state->return_flag));
 
    if (state->loop) {
       /* If we're inside of a loop, then all we need to do is insert a
        * conditional break.
        */
-      nir_jump_instr *brk =
-         nir_jump_instr_create(state->builder.shader, nir_jump_break);
-      nir_instr_insert(nir_before_cf_list(&if_stmt->then_list), &brk->instr);
+      nir_jump(b, nir_jump_break);
+
+      nir_block *block = nir_cursor_current_block(b->cursor);
+      nir_insert_phi_undef(block->successors[0], block);
    } else {
       /* Otherwise, we need to actually move everything into the else case
        * of the if statement.
        */
       nir_cf_list list;
       nir_cf_extract(&list, nir_after_cf_node(&if_stmt->cf_node),
-                            nir_after_cf_list(state->cf_list));
+                     nir_after_cf_list(state->cf_list));
       assert(!exec_list_is_empty(&list.list));
       nir_cf_reinsert(&list, nir_before_cf_list(&if_stmt->else_list));
    }
+
+   nir_pop_if(b, NULL);
 }
 
 static bool
 lower_returns_in_loop(nir_loop *loop, struct lower_returns_state *state)
 {
+   assert(!nir_loop_has_continue_construct(loop));
    nir_loop *parent = state->loop;
    state->loop = loop;
    bool progress = lower_returns_in_cf_list(&loop->body, state);
@@ -128,6 +130,16 @@ lower_returns_in_if(nir_if *if_stmt, struct lower_returns_state *state)
          /* If there are no nested returns we can just add the instructions to
           * the end of the branch that doesn't have the return.
           */
+
+         /* nir_cf_extract will not extract phis at the start of the block. In
+          * this case we know that any phis will have to have had a single
+          * predecessor, and should've been removed by the opt_remove_phis before
+          * beginning this pass.
+          */
+         ASSERTED nir_block *succ_block = nir_after_cf_node(&if_stmt->cf_node).block;
+         assert(nir_block_first_instr(succ_block) == NULL ||
+                nir_block_first_instr(succ_block)->type != nir_instr_type_phi);
+
          nir_cf_list list;
          nir_cf_extract(&list, nir_after_cf_node(&if_stmt->cf_node),
                         nir_after_cf_list(state->cf_list));
@@ -156,7 +168,7 @@ lower_returns_in_block(nir_block *block, struct lower_returns_state *state)
       /* This block is unreachable.  Delete it and everything after it. */
       nir_cf_list list;
       nir_cf_extract(&list, nir_before_cf_node(&block->cf_node),
-                            nir_after_cf_list(state->cf_list));
+                     nir_after_cf_list(state->cf_list));
 
       if (exec_list_is_empty(&list.list)) {
          /* There's nothing here, which also means there's nothing in this
@@ -197,7 +209,7 @@ lower_returns_in_block(nir_block *block, struct lower_returns_state *state)
          nir_local_variable_create(b->impl, glsl_bool_type(), "return");
 
       /* Initialize the variable to 0 */
-      b->cursor = nir_before_cf_list(&b->impl->body);
+      b->cursor = nir_before_impl(b->impl);
       nir_store_var(b, state->return_flag, nir_imm_false(b), 1);
    }
 
@@ -207,6 +219,8 @@ lower_returns_in_block(nir_block *block, struct lower_returns_state *state)
    if (state->loop) {
       /* We're in a loop;  we need to break out of it. */
       nir_jump(b, nir_jump_break);
+
+      nir_insert_phi_undef(block->successors[0], block);
    } else {
       /* Not in a loop;  we'll deal with predicating later*/
       assert(nir_cf_node_next(&block->cf_node) == NULL);
@@ -266,13 +280,14 @@ nir_lower_returns_impl(nir_function_impl *impl)
    state.return_flag = NULL;
    state.has_predicated_return = false;
    state.removed_unreachable_code = false;
-   nir_builder_init(&state.builder, impl);
+   state.builder = nir_builder_create(impl);
 
    bool progress = lower_returns_in_cf_list(&impl->body, &state);
    progress = progress || state.removed_unreachable_code;
 
    if (progress) {
       nir_metadata_preserve(impl, nir_metadata_none);
+      nir_rematerialize_derefs_in_use_blocks_impl(impl);
       nir_repair_ssa_impl(impl);
    } else {
       nir_metadata_preserve(impl, nir_metadata_all);
@@ -284,11 +299,13 @@ nir_lower_returns_impl(nir_function_impl *impl)
 bool
 nir_lower_returns(nir_shader *shader)
 {
-   bool progress = false;
+   /* Before removing jumps and adding undef sources to otherwise single-source phis,
+    * go ahead and simplify those single-source phis.
+    */
+   bool progress = nir_opt_remove_phis(shader);
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress = nir_lower_returns_impl(function->impl) || progress;
+   nir_foreach_function_impl(impl, shader) {
+      progress |= nir_lower_returns_impl(impl) || progress;
    }
 
    return progress;

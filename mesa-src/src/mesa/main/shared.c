@@ -35,15 +35,19 @@
 #include "shared.h"
 #include "program/program.h"
 #include "dlist.h"
+#include "externalobjects.h"
 #include "samplerobj.h"
 #include "shaderapi.h"
 #include "shaderobj.h"
 #include "syncobj.h"
+#include "texobj.h"
 #include "texturebindless.h"
+#include "pipe/p_screen.h"
 
 #include "util/hash_table.h"
 #include "util/set.h"
 #include "util/u_memory.h"
+#include "util/u_process.h"
 
 static void
 free_shared_state(struct gl_context *ctx, struct gl_shared_state *shared);
@@ -58,7 +62,8 @@ free_shared_state(struct gl_context *ctx, struct gl_shared_state *shared);
  * failure.
  */
 struct gl_shared_state *
-_mesa_alloc_shared_state(struct gl_context *ctx)
+_mesa_alloc_shared_state(struct gl_context *ctx,
+                         const struct st_config_options *options)
 {
    struct gl_shared_state *shared;
    GLuint i;
@@ -69,32 +74,46 @@ _mesa_alloc_shared_state(struct gl_context *ctx)
 
    simple_mtx_init(&shared->Mutex, mtx_plain);
 
-   shared->DisplayList = _mesa_NewHashTable();
-   shared->BitmapAtlas = _mesa_NewHashTable();
-   shared->TexObjects = _mesa_NewHashTable();
-   shared->Programs = _mesa_NewHashTable();
+   const char *process_name = util_get_process_name();
+   bool is_virgl_host = strstr(process_name, "qemu-system") == process_name ||
+                        strstr(process_name, "crosvm") ||
+                        strstr(process_name, "virgl_test_server");
+
+   /* Enable GL name reuse for all drivers by default except virglrenderer,
+    * which is hopelessly broken.
+    *
+    * To disable it, set reuse_gl_names=0 in the environment.
+    */
+   if (!is_virgl_host)
+      shared->ReuseGLNames = options->reuse_gl_names != 0;
+
+   _mesa_InitHashTable(&shared->DisplayList, shared->ReuseGLNames);
+   _mesa_InitHashTable(&shared->TexObjects, shared->ReuseGLNames);
+   _mesa_InitHashTable(&shared->Programs, shared->ReuseGLNames);
 
    shared->DefaultVertexProgram =
       ctx->Driver.NewProgram(ctx, MESA_SHADER_VERTEX, 0, true);
    shared->DefaultFragmentProgram =
       ctx->Driver.NewProgram(ctx, MESA_SHADER_FRAGMENT, 0, true);
 
-   shared->ATIShaders = _mesa_NewHashTable();
+   _mesa_InitHashTable(&shared->ATIShaders, shared->ReuseGLNames);
    shared->DefaultFragmentShader = _mesa_new_ati_fragment_shader(ctx, 0);
 
-   shared->ShaderObjects = _mesa_NewHashTable();
+   _mesa_InitHashTable(&shared->ShaderObjects, shared->ReuseGLNames);
 
-   shared->BufferObjects = _mesa_NewHashTable();
+   _mesa_InitHashTable(&shared->BufferObjects, shared->ReuseGLNames);
+   shared->ZombieBufferObjects = _mesa_set_create(NULL, _mesa_hash_pointer,
+                                                  _mesa_key_pointer_equal);
 
    /* GL_ARB_sampler_objects */
-   shared->SamplerObjects = _mesa_NewHashTable();
+   _mesa_InitHashTable(&shared->SamplerObjects, shared->ReuseGLNames);
 
    /* GL_ARB_bindless_texture */
    _mesa_init_shared_handles(shared);
 
    /* ARB_shading_language_include */
    _mesa_init_shader_includes(shared);
-   mtx_init(&shared->ShaderIncludeMutex, mtx_plain);
+   simple_mtx_init(&shared->ShaderIncludeMutex, mtx_plain);
 
    /* Create default texture objects */
    for (i = 0; i < NUM_TEXTURE_TARGETS; i++) {
@@ -114,7 +133,7 @@ _mesa_alloc_shared_state(struct gl_context *ctx)
          GL_TEXTURE_1D
       };
       STATIC_ASSERT(ARRAY_SIZE(targets) == NUM_TEXTURE_TARGETS);
-      shared->DefaultTex[i] = ctx->Driver.NewTextureObject(ctx, 0, targets[i]);
+      shared->DefaultTex[i] = _mesa_new_texture_object(ctx, 0, targets[i]);
       /* Need to explicitly set/overwrite the TargetIndex field here since
        * the call to _mesa_tex_target_to_index() in NewTextureObject() may
        * fail if the texture target is not supported.
@@ -126,27 +145,29 @@ _mesa_alloc_shared_state(struct gl_context *ctx)
    assert(shared->DefaultTex[TEXTURE_1D_INDEX]->RefCount == 1);
 
    /* Mutex and timestamp for texobj state validation */
-   mtx_init(&shared->TexMutex, mtx_recursive);
+   simple_mtx_init(&shared->TexMutex, mtx_plain);
    shared->TextureStateStamp = 0;
 
-   shared->FrameBuffers = _mesa_NewHashTable();
-   shared->RenderBuffers = _mesa_NewHashTable();
+   _mesa_InitHashTable(&shared->FrameBuffers, shared->ReuseGLNames);
+   _mesa_InitHashTable(&shared->RenderBuffers, shared->ReuseGLNames);
 
    shared->SyncObjects = _mesa_set_create(NULL, _mesa_hash_pointer,
                                           _mesa_key_pointer_equal);
 
-   shared->MemoryObjects = _mesa_NewHashTable();
-   shared->SemaphoreObjects = _mesa_NewHashTable();
+   _mesa_InitHashTable(&shared->MemoryObjects, shared->ReuseGLNames);
+   _mesa_InitHashTable(&shared->SemaphoreObjects, shared->ReuseGLNames);
+
+   shared->GLThread.NoLockDuration = ONE_SECOND_IN_NS;
 
    return shared;
 }
 
 
 /**
- * Callback for deleting a display list.  Called by _mesa_HashDeleteAll().
+ * Callback for deleting a display list.  Called by _mesa_DeleteHashTable().
  */
 static void
-delete_displaylist_cb(GLuint id, void *data, void *userData)
+delete_displaylist_cb(void *data, void *userData)
 {
    struct gl_display_list *list = (struct gl_display_list *) data;
    struct gl_context *ctx = (struct gl_context *) userData;
@@ -155,51 +176,39 @@ delete_displaylist_cb(GLuint id, void *data, void *userData)
 
 
 /**
- * Callback for deleting a bitmap atlas.  Called by _mesa_HashDeleteAll().
+ * Callback for deleting a texture object.  Called by _mesa_DeleteHashTable().
  */
 static void
-delete_bitmap_atlas_cb(GLuint id, void *data, void *userData)
-{
-   struct gl_bitmap_atlas *atlas = (struct gl_bitmap_atlas *) data;
-   struct gl_context *ctx = (struct gl_context *) userData;
-   _mesa_delete_bitmap_atlas(ctx, atlas);
-}
-
-
-/**
- * Callback for deleting a texture object.  Called by _mesa_HashDeleteAll().
- */
-static void
-delete_texture_cb(GLuint id, void *data, void *userData)
+delete_texture_cb(void *data, void *userData)
 {
    struct gl_texture_object *texObj = (struct gl_texture_object *) data;
    struct gl_context *ctx = (struct gl_context *) userData;
-   ctx->Driver.DeleteTexture(ctx, texObj);
+   _mesa_delete_texture_object(ctx, texObj);
 }
 
 
 /**
- * Callback for deleting a program object.  Called by _mesa_HashDeleteAll().
+ * Callback for deleting a program object.  Called by _mesa_DeleteHashTable().
  */
 static void
-delete_program_cb(GLuint id, void *data, void *userData)
+delete_program_cb(void *data, void *userData)
 {
    struct gl_program *prog = (struct gl_program *) data;
    struct gl_context *ctx = (struct gl_context *) userData;
    if(prog != &_mesa_DummyProgram) {
       assert(prog->RefCount == 1); /* should only be referenced by hash table */
       prog->RefCount = 0;  /* now going away */
-      ctx->Driver.DeleteProgram(ctx, prog);
+      _mesa_delete_program(ctx, prog);
    }
 }
 
 
 /**
  * Callback for deleting an ATI fragment shader object.
- * Called by _mesa_HashDeleteAll().
+ * Called by _mesa_DeleteHashTable().
  */
 static void
-delete_fragshader_cb(GLuint id, void *data, void *userData)
+delete_fragshader_cb(void *data, void *userData)
 {
    struct ati_fragment_shader *shader = (struct ati_fragment_shader *) data;
    struct gl_context *ctx = (struct gl_context *) userData;
@@ -208,10 +217,10 @@ delete_fragshader_cb(GLuint id, void *data, void *userData)
 
 
 /**
- * Callback for deleting a buffer object.  Called by _mesa_HashDeleteAll().
+ * Callback for deleting a buffer object.  Called by _mesa_DeleteHashTable().
  */
 static void
-delete_bufferobj_cb(GLuint id, void *data, void *userData)
+delete_bufferobj_cb(void *data, void *userData)
 {
    struct gl_buffer_object *bufObj = (struct gl_buffer_object *) data;
    struct gl_context *ctx = (struct gl_context *) userData;
@@ -226,7 +235,7 @@ delete_bufferobj_cb(GLuint id, void *data, void *userData)
  * to avoid memory access error.
  */
 static void
-free_shader_program_data_cb(GLuint id, void *data, void *userData)
+free_shader_program_data_cb(void *data, void *userData)
 {
    struct gl_context *ctx = (struct gl_context *) userData;
    struct gl_shader_program *shProg = (struct gl_shader_program *) data;
@@ -239,10 +248,10 @@ free_shader_program_data_cb(GLuint id, void *data, void *userData)
 
 /**
  * Callback for deleting shader and shader programs objects.
- * Called by _mesa_HashDeleteAll().
+ * Called by _mesa_DeleteHashTable().
  */
 static void
-delete_shader_cb(GLuint id, void *data, void *userData)
+delete_shader_cb(void *data, void *userData)
 {
    struct gl_context *ctx = (struct gl_context *) userData;
    struct gl_shader *sh = (struct gl_shader *) data;
@@ -258,10 +267,10 @@ delete_shader_cb(GLuint id, void *data, void *userData)
 
 
 /**
- * Callback for deleting a framebuffer object.  Called by _mesa_HashDeleteAll()
+ * Callback for deleting a framebuffer object.  Called by _mesa_DeleteHashTable()
  */
 static void
-delete_framebuffer_cb(GLuint id, void *data, void *userData)
+delete_framebuffer_cb(void *data, UNUSED void *userData)
 {
    struct gl_framebuffer *fb = (struct gl_framebuffer *) data;
    /* The fact that the framebuffer is in the hashtable means its refcount
@@ -279,10 +288,10 @@ delete_framebuffer_cb(GLuint id, void *data, void *userData)
 
 
 /**
- * Callback for deleting a renderbuffer object. Called by _mesa_HashDeleteAll()
+ * Callback for deleting a renderbuffer object. Called by _mesa_DeleteHashTable()
  */
 static void
-delete_renderbuffer_cb(GLuint id, void *data, void *userData)
+delete_renderbuffer_cb(void *data, void *userData)
 {
    struct gl_context *ctx = (struct gl_context *) userData;
    struct gl_renderbuffer *rb = (struct gl_renderbuffer *) data;
@@ -293,10 +302,10 @@ delete_renderbuffer_cb(GLuint id, void *data, void *userData)
 
 
 /**
- * Callback for deleting a sampler object. Called by _mesa_HashDeleteAll()
+ * Callback for deleting a sampler object. Called by _mesa_DeleteHashTable()
  */
 static void
-delete_sampler_object_cb(GLuint id, void *data, void *userData)
+delete_sampler_object_cb(void *data, void *userData)
 {
    struct gl_context *ctx = (struct gl_context *) userData;
    struct gl_sampler_object *sampObj = (struct gl_sampler_object *) data;
@@ -304,25 +313,25 @@ delete_sampler_object_cb(GLuint id, void *data, void *userData)
 }
 
 /**
- * Callback for deleting a memory object.  Called by _mesa_HashDeleteAll().
+ * Callback for deleting a memory object.  Called by _mesa_DeleteHashTable().
  */
 static void
-delete_memory_object_cb(GLuint id, void *data, void *userData)
+delete_memory_object_cb(void *data, void *userData)
 {
    struct gl_memory_object *memObj = (struct gl_memory_object *) data;
    struct gl_context *ctx = (struct gl_context *) userData;
-   ctx->Driver.DeleteMemoryObject(ctx, memObj);
+   _mesa_delete_memory_object(ctx, memObj);
 }
 
 /**
- * Callback for deleting a memory object.  Called by _mesa_HashDeleteAll().
+ * Callback for deleting a memory object.  Called by _mesa_DeleteHashTable().
  */
 static void
-delete_semaphore_object_cb(GLuint id, void *data, void *userData)
+delete_semaphore_object_cb(void *data, void *userData)
 {
    struct gl_semaphore_object *semObj = (struct gl_semaphore_object *) data;
    struct gl_context *ctx = (struct gl_context *) userData;
-   ctx->Driver.DeleteSemaphoreObject(ctx, semObj);
+   _mesa_delete_semaphore_object(ctx, semObj);
 }
 
 /**
@@ -344,33 +353,22 @@ free_shared_state(struct gl_context *ctx, struct gl_shared_state *shared)
 
    /* Free the dummy/fallback texture objects */
    for (i = 0; i < NUM_TEXTURE_TARGETS; i++) {
-      if (shared->FallbackTex[i])
-         ctx->Driver.DeleteTexture(ctx, shared->FallbackTex[i]);
+      for (unsigned j = 0; j < ARRAY_SIZE(shared->FallbackTex[0]); j++) {
+         if (shared->FallbackTex[i][j])
+            _mesa_delete_texture_object(ctx, shared->FallbackTex[i][j]);
+      }
    }
 
    /*
     * Free display lists
     */
-   if (shared->DisplayList) {
-      _mesa_HashDeleteAll(shared->DisplayList, delete_displaylist_cb, ctx);
-      _mesa_DeleteHashTable(shared->DisplayList);
-   }
+   _mesa_DeinitHashTable(&shared->DisplayList, delete_displaylist_cb, ctx);
+   free(shared->small_dlist_store.ptr);
+   util_idalloc_fini(&shared->small_dlist_store.free_idx);
 
-   if (shared->BitmapAtlas) {
-      _mesa_HashDeleteAll(shared->BitmapAtlas, delete_bitmap_atlas_cb, ctx);
-      _mesa_DeleteHashTable(shared->BitmapAtlas);
-   }
-
-   if (shared->ShaderObjects) {
-      _mesa_HashWalk(shared->ShaderObjects, free_shader_program_data_cb, ctx);
-      _mesa_HashDeleteAll(shared->ShaderObjects, delete_shader_cb, ctx);
-      _mesa_DeleteHashTable(shared->ShaderObjects);
-   }
-
-   if (shared->Programs) {
-      _mesa_HashDeleteAll(shared->Programs, delete_program_cb, ctx);
-      _mesa_DeleteHashTable(shared->Programs);
-   }
+   _mesa_HashWalk(&shared->ShaderObjects, free_shader_program_data_cb, ctx);
+   _mesa_DeinitHashTable(&shared->ShaderObjects, delete_shader_cb, ctx);
+   _mesa_DeinitHashTable(&shared->Programs, delete_program_cb, ctx);
 
    if (shared->DefaultVertexProgram)
       _mesa_reference_program(ctx, &shared->DefaultVertexProgram, NULL);
@@ -381,25 +379,18 @@ free_shared_state(struct gl_context *ctx, struct gl_shared_state *shared)
    if (shared->DefaultFragmentShader)
       _mesa_delete_ati_fragment_shader(ctx, shared->DefaultFragmentShader);
 
-   if (shared->ATIShaders) {
-      _mesa_HashDeleteAll(shared->ATIShaders, delete_fragshader_cb, ctx);
-      _mesa_DeleteHashTable(shared->ATIShaders);
+   _mesa_DeinitHashTable(&shared->ATIShaders, delete_fragshader_cb, ctx);
+   _mesa_DeinitHashTable(&shared->BufferObjects, delete_bufferobj_cb, ctx);
+
+   if (shared->ZombieBufferObjects) {
+      set_foreach(shared->ZombieBufferObjects, entry) {
+         assert(!"ZombieBufferObjects should be empty");
+      }
+      _mesa_set_destroy(shared->ZombieBufferObjects, NULL);
    }
 
-   if (shared->BufferObjects) {
-      _mesa_HashDeleteAll(shared->BufferObjects, delete_bufferobj_cb, ctx);
-      _mesa_DeleteHashTable(shared->BufferObjects);
-   }
-
-   if (shared->FrameBuffers) {
-      _mesa_HashDeleteAll(shared->FrameBuffers, delete_framebuffer_cb, ctx);
-      _mesa_DeleteHashTable(shared->FrameBuffers);
-   }
-
-   if (shared->RenderBuffers) {
-      _mesa_HashDeleteAll(shared->RenderBuffers, delete_renderbuffer_cb, ctx);
-      _mesa_DeleteHashTable(shared->RenderBuffers);
-   }
+   _mesa_DeinitHashTable(&shared->FrameBuffers, delete_framebuffer_cb, ctx);
+   _mesa_DeinitHashTable(&shared->RenderBuffers, delete_renderbuffer_cb, ctx);
 
    if (shared->SyncObjects) {
       set_foreach(shared->SyncObjects, entry) {
@@ -409,49 +400,37 @@ free_shared_state(struct gl_context *ctx, struct gl_shared_state *shared)
       _mesa_set_destroy(shared->SyncObjects, NULL);
    }
 
-   if (shared->SamplerObjects) {
-      _mesa_HashDeleteAll(shared->SamplerObjects, delete_sampler_object_cb,
-                          ctx);
-      _mesa_DeleteHashTable(shared->SamplerObjects);
-   }
+   _mesa_DeinitHashTable(&shared->SamplerObjects, delete_sampler_object_cb,
+                            ctx);
 
    /*
     * Free texture objects (after FBOs since some textures might have
     * been bound to FBOs).
     */
-   assert(ctx->Driver.DeleteTexture);
    /* the default textures */
    for (i = 0; i < NUM_TEXTURE_TARGETS; i++) {
       if (shared->DefaultTex[i])
-         ctx->Driver.DeleteTexture(ctx, shared->DefaultTex[i]);
+         _mesa_delete_texture_object(ctx, shared->DefaultTex[i]);
    }
 
    /* all other textures */
-   if (shared->TexObjects) {
-      _mesa_HashDeleteAll(shared->TexObjects, delete_texture_cb, ctx);
-      _mesa_DeleteHashTable(shared->TexObjects);
-   }
+   _mesa_DeinitHashTable(&shared->TexObjects, delete_texture_cb, ctx);
 
    _mesa_free_shared_handles(shared);
 
    /* ARB_shading_language_include */
    _mesa_destroy_shader_includes(shared);
-   mtx_destroy(&shared->ShaderIncludeMutex);
+   simple_mtx_destroy(&shared->ShaderIncludeMutex);
 
-   if (shared->MemoryObjects) {
-      _mesa_HashDeleteAll(shared->MemoryObjects, delete_memory_object_cb, ctx);
-      _mesa_DeleteHashTable(shared->MemoryObjects);
-   }
-
-   if (shared->SemaphoreObjects) {
-      _mesa_HashDeleteAll(shared->SemaphoreObjects, delete_semaphore_object_cb, ctx);
-      _mesa_DeleteHashTable(shared->SemaphoreObjects);
-   }
+   _mesa_DeinitHashTable(&shared->MemoryObjects, delete_memory_object_cb,
+                         ctx);
+   _mesa_DeinitHashTable(&shared->SemaphoreObjects,
+                         delete_semaphore_object_cb, ctx);
 
    simple_mtx_destroy(&shared->Mutex);
-   mtx_destroy(&shared->TexMutex);
+   simple_mtx_destroy(&shared->TexMutex);
 
-   free(shared);
+   FREE(shared);
 }
 
 

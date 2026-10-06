@@ -30,7 +30,6 @@
 #include "util/u_memory.h"
 #include "util/u_blitter.h"
 #include "util/u_upload_mgr.h"
-#include "indices/u_primconvert.h"
 #include "pipe/p_screen.h"
 
 #include "vc4_screen.h"
@@ -85,18 +84,6 @@ vc4_texture_barrier(struct pipe_context *pctx, unsigned flags)
 }
 
 static void
-vc4_set_debug_callback(struct pipe_context *pctx,
-                       const struct pipe_debug_callback *cb)
-{
-        struct vc4_context *vc4 = vc4_context(pctx);
-
-        if (cb)
-                vc4->debug = *cb;
-        else
-                memset(&vc4->debug, 0, sizeof(vc4->debug));
-}
-
-static void
 vc4_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
@@ -124,16 +111,12 @@ vc4_context_destroy(struct pipe_context *pctx)
         if (vc4->blitter)
                 util_blitter_destroy(vc4->blitter);
 
-        if (vc4->primconvert)
-                util_primconvert_destroy(vc4->primconvert);
-
         if (vc4->uploader)
                 u_upload_destroy(vc4->uploader);
 
         slab_destroy_child(&vc4->transfer_pool);
 
-        pipe_surface_reference(&vc4->framebuffer.cbufs[0], NULL);
-        pipe_surface_reference(&vc4->framebuffer.zsbuf, NULL);
+        util_unreference_framebuffer_state(&vc4->framebuffer);
 
         if (vc4->yuv_linear_blit_vs)
                 pctx->delete_vs_state(pctx, vc4->yuv_linear_blit_vs);
@@ -162,8 +145,8 @@ vc4_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
         int err;
 
         /* Prevent dumping of the shaders built during context setup. */
-        uint32_t saved_shaderdb_flag = vc4_debug & VC4_DEBUG_SHADERDB;
-        vc4_debug &= ~VC4_DEBUG_SHADERDB;
+        uint32_t saved_shaderdb_flag = vc4_mesa_debug & VC4_DEBUG_SHADERDB;
+        vc4_mesa_debug &= ~VC4_DEBUG_SHADERDB;
 
         vc4 = rzalloc(NULL, struct vc4_context);
         if (!vc4)
@@ -176,7 +159,7 @@ vc4_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
         pctx->priv = priv;
         pctx->destroy = vc4_context_destroy;
         pctx->flush = vc4_pipe_flush;
-        pctx->set_debug_callback = vc4_set_debug_callback;
+        pctx->set_debug_callback = u_default_set_debug_callback;
         pctx->invalidate_resource = vc4_invalidate_resource;
         pctx->texture_barrier = vc4_texture_barrier;
 
@@ -206,12 +189,7 @@ vc4_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
         if (!vc4->blitter)
                 goto fail;
 
-        vc4->primconvert = util_primconvert_create(pctx,
-                                                   (1 << PIPE_PRIM_QUADS) - 1);
-        if (!vc4->primconvert)
-                goto fail;
-
-        vc4_debug |= saved_shaderdb_flag;
+        vc4_mesa_debug |= saved_shaderdb_flag;
 
         vc4->sample_mask = (1 << VC4_MAX_SAMPLES) - 1;
 

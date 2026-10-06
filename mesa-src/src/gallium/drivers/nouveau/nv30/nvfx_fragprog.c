@@ -9,9 +9,7 @@
 
 #include "pipe/p_shader_tokens.h"
 #include "tgsi/tgsi_parse.h"
-#include "tgsi/tgsi_util.h"
 #include "tgsi/tgsi_dump.h"
-#include "tgsi/tgsi_ureg.h"
 
 #include "nouveau_debug.h"
 #include "nv_object.xml.h"
@@ -100,7 +98,7 @@ emit_src(struct nvfx_fpc *fpc, int pos, struct nvfx_src src)
       break;
    case NVFXSR_OUTPUT:
       sr |= NVFX_FP_REG_SRC_HALF;
-      /* fall-through */
+      FALLTHROUGH;
    case NVFXSR_TEMP:
       sr |= (NVFX_FP_REG_TYPE_TEMP << NVFX_FP_REG_TYPE_SHIFT);
       sr |= (src.reg.index << NVFX_FP_REG_SRC_SHIFT);
@@ -173,7 +171,7 @@ emit_dst(struct nvfx_fpc *fpc, struct nvfx_reg dst)
          hw[0] |= NVFX_FP_OP_OUT_REG_HALF;
          dst.index <<= 1;
       }
-      /* fall-through */
+      FALLTHROUGH;
    case NVFXSR_TEMP:
       if (fpc->num_regs < (dst.index + 1))
          fpc->num_regs = dst.index + 1;

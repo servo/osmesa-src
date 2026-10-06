@@ -27,28 +27,22 @@
  *
  **************************************************************************/
 
-
 #ifndef EGLSURFACE_INCLUDED
 #define EGLSURFACE_INCLUDED
 
-#include "c99_compat.h"
-
-#include "egltypedefs.h"
 #include "egldisplay.h"
-
+#include "egltypedefs.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-struct _egl_xy
-{
+struct _egl_xy {
    EGLint x;
    EGLint y;
 };
 
-struct _egl_hdr_metadata
-{
+struct _egl_hdr_metadata {
    struct _egl_xy display_primary_r;
    struct _egl_xy display_primary_g;
    struct _egl_xy display_primary_b;
@@ -62,8 +56,7 @@ struct _egl_hdr_metadata
 /**
  * "Base" class for device driver surfaces.
  */
-struct _egl_surface
-{
+struct _egl_surface {
    /* A surface is a display resource */
    _EGLResource Resource;
 
@@ -142,6 +135,11 @@ struct _egl_surface
    EGLenum VGColorspace;
    EGLenum GLColorspace;
 
+   /* EGL_EXT_surface_compression
+    * Value of EGL_SURFACE_COMPRESSION_EXT attribute selected at creation.
+    */
+   EGLint CompressionRate;
+
    /* attributes set by eglSurfaceAttrib */
    EGLint MipmapLevel;
    EGLenum MultisampleResolve;
@@ -169,35 +167,33 @@ struct _egl_surface
 
    EGLBoolean PostSubBufferSupportedNV;
 
+   EGLBoolean ProtectedContent;
+
+   EGLBoolean PresentOpaque;
+
    struct _egl_hdr_metadata HdrMetadata;
 
    void *NativeSurface;
 };
-
 
 extern EGLBoolean
 _eglInitSurface(_EGLSurface *surf, _EGLDisplay *disp, EGLint type,
                 _EGLConfig *config, const EGLint *attrib_list,
                 void *native_surface);
 
+extern EGLBoolean
+_eglQuerySurface(_EGLDisplay *disp, _EGLSurface *surf, EGLint attribute,
+                 EGLint *value);
 
 extern EGLBoolean
-_eglQuerySurface(_EGLDisplay *disp, _EGLSurface *surf, EGLint attribute, EGLint *value);
-
-
-extern EGLBoolean
-_eglSurfaceAttrib(_EGLDisplay *disp, _EGLSurface *surf, EGLint attribute, EGLint value);
-
+_eglSurfaceAttrib(_EGLDisplay *disp, _EGLSurface *surf, EGLint attribute,
+                  EGLint value);
 
 extern EGLBoolean
 _eglBindTexImage(_EGLDisplay *disp, _EGLSurface *surf, EGLint buffer);
 
 extern EGLBoolean
 _eglReleaseTexImage(_EGLDisplay *disp, _EGLSurface *surf, EGLint buffer);
-
-
-extern EGLBoolean
-_eglSwapInterval(_EGLDisplay *disp, _EGLSurface *surf, EGLint interval);
 
 extern EGLBoolean
 _eglSurfaceHasMutableRenderBuffer(_EGLSurface *surf);
@@ -216,7 +212,6 @@ _eglGetSurface(_EGLSurface *surf)
    return surf;
 }
 
-
 /**
  * Decrement reference count for the surface.
  */
@@ -226,7 +221,6 @@ _eglPutSurface(_EGLSurface *surf)
    return (surf) ? _eglPutResource(&surf->Resource) : EGL_FALSE;
 }
 
-
 /**
  * Link a surface to its display and return the handle of the link.
  * The handle can be passed to client directly.
@@ -235,9 +229,8 @@ static inline EGLSurface
 _eglLinkSurface(_EGLSurface *surf)
 {
    _eglLinkResource(&surf->Resource, _EGL_RESOURCE_SURFACE);
-   return (EGLSurface) surf;
+   return (EGLSurface)surf;
 }
-
 
 /**
  * Unlink a linked surface from its display.
@@ -249,7 +242,6 @@ _eglUnlinkSurface(_EGLSurface *surf)
    _eglUnlinkResource(&surf->Resource, _EGL_RESOURCE_SURFACE);
 }
 
-
 /**
  * Lookup a handle to find the linked surface.
  * Return NULL if the handle has no corresponding linked surface.
@@ -257,12 +249,11 @@ _eglUnlinkSurface(_EGLSurface *surf)
 static inline _EGLSurface *
 _eglLookupSurface(EGLSurface surface, _EGLDisplay *disp)
 {
-   _EGLSurface *surf = (_EGLSurface *) surface;
-   if (!disp || !_eglCheckResource((void *) surf, _EGL_RESOURCE_SURFACE, disp))
+   _EGLSurface *surf = (_EGLSurface *)surface;
+   if (!disp || !_eglCheckResource((void *)surf, _EGL_RESOURCE_SURFACE, disp))
       surf = NULL;
    return surf;
 }
-
 
 /**
  * Return the handle of a linked surface, or EGL_NO_SURFACE.
@@ -270,11 +261,10 @@ _eglLookupSurface(EGLSurface surface, _EGLDisplay *disp)
 static inline EGLSurface
 _eglGetSurfaceHandle(_EGLSurface *surf)
 {
-   _EGLResource *res = (_EGLResource *) surf;
-   return (res && _eglIsResourceLinked(res)) ?
-      (EGLSurface) surf : EGL_NO_SURFACE;
+   _EGLResource *res = (_EGLResource *)surf;
+   return (res && _eglIsResourceLinked(res)) ? (EGLSurface)surf
+                                             : EGL_NO_SURFACE;
 }
-
 
 #ifdef __cplusplus
 }

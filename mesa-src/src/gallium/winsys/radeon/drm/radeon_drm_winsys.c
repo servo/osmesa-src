@@ -1,35 +1,16 @@
 /*
  * Copyright © 2009 Corbin Simpson
  * Copyright © 2011 Marek Olšák <maraeo@gmail.com>
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS
- * AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "radeon_drm_bo.h"
 #include "radeon_drm_cs.h"
-#include "radeon_drm_public.h"
 
 #include "util/os_file.h"
+#include "util/simple_mtx.h"
+#include "util/thread_sched.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_memory.h"
 #include "util/u_hash_table.h"
@@ -44,7 +25,7 @@
 #include <radeon_surface.h>
 
 static struct hash_table *fd_tab = NULL;
-static mtx_t fd_tab_mutex = _MTX_INITIALIZER_NP;
+static simple_mtx_t fd_tab_mutex = SIMPLE_MTX_INITIALIZER;
 
 /* Enable/disable feature access for one command stream.
  * If enable == true, return true on success.
@@ -153,11 +134,14 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
 
    /* Get DRM version. */
    version = drmGetVersion(ws->fd);
+   if (!version)
+      return false;
+
    if (version->version_major != 2 ||
-       version->version_minor < 12) {
+       version->version_minor < 50) {
       fprintf(stderr, "%s: DRM version is %d.%d.%d but this driver is "
-                      "only compatible with 2.12.0 (kernel 3.2) or later.\n",
-              __FUNCTION__,
+                      "only compatible with 2.50.0 (kernel 4.12) or later.\n",
+              __func__,
               version->version_major,
               version->version_minor,
               version->version_patchlevel);
@@ -213,7 +197,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    case CHIP_RS400:
    case CHIP_RC410:
    case CHIP_RS480:
-      ws->info.chip_class = R300;
+      ws->info.gfx_level = R300;
       break;
    case CHIP_R420:     /* R4xx-based cores. */
    case CHIP_R423:
@@ -224,7 +208,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    case CHIP_RS600:
    case CHIP_RS690:
    case CHIP_RS740:
-      ws->info.chip_class = R400;
+      ws->info.gfx_level = R400;
       break;
    case CHIP_RV515:    /* R5xx-based cores. */
    case CHIP_R520:
@@ -232,7 +216,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    case CHIP_R580:
    case CHIP_RV560:
    case CHIP_RV570:
-      ws->info.chip_class = R500;
+      ws->info.gfx_level = R500;
       break;
    case CHIP_R600:
    case CHIP_RV610:
@@ -242,13 +226,13 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    case CHIP_RV635:
    case CHIP_RS780:
    case CHIP_RS880:
-      ws->info.chip_class = R600;
+      ws->info.gfx_level = R600;
       break;
    case CHIP_RV770:
    case CHIP_RV730:
    case CHIP_RV710:
    case CHIP_RV740:
-      ws->info.chip_class = R700;
+      ws->info.gfx_level = R700;
       break;
    case CHIP_CEDAR:
    case CHIP_REDWOOD:
@@ -261,24 +245,24 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    case CHIP_BARTS:
    case CHIP_TURKS:
    case CHIP_CAICOS:
-      ws->info.chip_class = EVERGREEN;
+      ws->info.gfx_level = EVERGREEN;
       break;
    case CHIP_CAYMAN:
    case CHIP_ARUBA:
-      ws->info.chip_class = CAYMAN;
+      ws->info.gfx_level = CAYMAN;
       break;
    case CHIP_TAHITI:
    case CHIP_PITCAIRN:
    case CHIP_VERDE:
    case CHIP_OLAND:
    case CHIP_HAINAN:
-      ws->info.chip_class = GFX6;
+      ws->info.gfx_level = GFX6;
       break;
    case CHIP_BONAIRE:
    case CHIP_KAVERI:
    case CHIP_KABINI:
    case CHIP_HAWAII:
-      ws->info.chip_class = GFX7;
+      ws->info.gfx_level = GFX7;
       break;
    }
 
@@ -305,34 +289,31 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
       ws->info.has_dedicated_vram = true;
    }
 
-   ws->info.num_rings[RING_GFX] = 1;
+   ws->info.ip[AMD_IP_GFX].num_queues = 1;
    /* Check for dma */
-   ws->info.num_rings[RING_DMA] = 0;
+   ws->info.ip[AMD_IP_SDMA].num_queues = 0;
    /* DMA is disabled on R700. There is IB corruption and hangs. */
-   if (ws->info.chip_class >= EVERGREEN && ws->info.drm_minor >= 27) {
-      ws->info.num_rings[RING_DMA] = 1;
+   if (ws->info.gfx_level >= EVERGREEN) {
+      ws->info.ip[AMD_IP_SDMA].num_queues = 1;
    }
 
    /* Check for UVD and VCE */
-   ws->info.has_hw_decode = false;
    ws->info.vce_fw_version = 0x00000000;
-   if (ws->info.drm_minor >= 32) {
-      uint32_t value = RADEON_CS_RING_UVD;
-      if (radeon_get_drm_value(ws->fd, RADEON_INFO_RING_WORKING,
-                               "UVD Ring working", &value)) {
-         ws->info.has_hw_decode = value;
-         ws->info.num_rings[RING_UVD] = 1;
-      }
 
-      value = RADEON_CS_RING_VCE;
-      if (radeon_get_drm_value(ws->fd, RADEON_INFO_RING_WORKING,
-                               NULL, &value) && value) {
+   uint32_t value = RADEON_CS_RING_UVD;
+   if (radeon_get_drm_value(ws->fd, RADEON_INFO_RING_WORKING,
+                            "UVD Ring working", &value)) {
+      ws->info.ip[AMD_IP_UVD].num_queues = 1;
+   }
 
-         if (radeon_get_drm_value(ws->fd, RADEON_INFO_VCE_FW_VERSION,
-                                  "VCE FW version", &value)) {
-            ws->info.vce_fw_version = value;
-            ws->info.num_rings[RING_VCE] = 1;
-         }
+   value = RADEON_CS_RING_VCE;
+   if (radeon_get_drm_value(ws->fd, RADEON_INFO_RING_WORKING,
+                            NULL, &value) && value) {
+
+      if (radeon_get_drm_value(ws->fd, RADEON_INFO_VCE_FW_VERSION,
+                               "VCE FW version", &value)) {
+         ws->info.vce_fw_version = value;
+         ws->info.ip[AMD_IP_VCE].num_queues = 1;
       }
    }
 
@@ -359,31 +340,26 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
               retval);
       return false;
    }
-   ws->info.gart_size = gem_info.gart_size;
-   ws->info.vram_size = gem_info.vram_size;
-   ws->info.vram_vis_size = gem_info.vram_visible;
-   /* Older versions of the kernel driver reported incorrect values, and
-    * didn't support more than 256MB of visible VRAM anyway
-    */
-   if (ws->info.drm_minor < 49)
-      ws->info.vram_vis_size = MIN2(ws->info.vram_vis_size, 256*1024*1024);
+   ws->info.gart_size_kb = DIV_ROUND_UP(gem_info.gart_size, 1024);
+   ws->info.vram_size_kb = DIV_ROUND_UP(gem_info.vram_size, 1024);
+   ws->info.vram_vis_size_kb = DIV_ROUND_UP(gem_info.vram_visible, 1024);
 
    /* Radeon allocates all buffers contiguously, which makes large allocations
     * unlikely to succeed. */
    if (ws->info.has_dedicated_vram)
-      ws->info.max_alloc_size = ws->info.vram_size * 0.7;
+      ws->info.max_heap_size_kb = ws->info.vram_size_kb;
    else
-      ws->info.max_alloc_size = ws->info.gart_size * 0.7;
+      ws->info.max_heap_size_kb = ws->info.gart_size_kb;
 
-   if (ws->info.drm_minor < 40)
-      ws->info.max_alloc_size = MIN2(ws->info.max_alloc_size, 256*1024*1024);
-   /* Both 32-bit and 64-bit address spaces only have 4GB. */
-   ws->info.max_alloc_size = MIN2(ws->info.max_alloc_size, 3ull*1024*1024*1024);
+   /* Both 32-bit and 64-bit address spaces only have 4GB.
+    * This is a limitation of the VM allocator in the winsys.
+    */
+   ws->info.max_heap_size_kb = MIN2(ws->info.max_heap_size_kb, 4 * 1024 * 1024); /* 4 GB */
 
    /* Get max clock frequency info and convert it to MHz */
    radeon_get_drm_value(ws->fd, RADEON_INFO_MAX_SCLK, NULL,
-                        &ws->info.max_shader_clock);
-   ws->info.max_shader_clock /= 1000;
+                        &ws->info.max_gpu_freq_mhz);
+   ws->info.max_gpu_freq_mhz /= 1000;
 
    ws->num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
 
@@ -404,7 +380,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
 
       if (!radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_BACKENDS,
                                 "num backends",
-                                &ws->info.num_render_backends))
+                                &ws->info.max_render_backends))
          return false;
 
       /* get the GPU counter frequency, failure is not fatal */
@@ -415,18 +391,18 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
                            &tiling_config);
 
       ws->info.r600_num_banks =
-            ws->info.chip_class >= EVERGREEN ?
+            ws->info.gfx_level >= EVERGREEN ?
                4 << ((tiling_config & 0xf0) >> 4) :
                     4 << ((tiling_config & 0x30) >> 4);
 
       ws->info.pipe_interleave_bytes =
-            ws->info.chip_class >= EVERGREEN ?
+            ws->info.gfx_level >= EVERGREEN ?
                256 << ((tiling_config & 0xf00) >> 8) :
                       256 << ((tiling_config & 0xc0) >> 6);
 
       if (!ws->info.pipe_interleave_bytes)
          ws->info.pipe_interleave_bytes =
-               ws->info.chip_class >= EVERGREEN ? 512 : 256;
+               ws->info.gfx_level >= EVERGREEN ? 512 : 256;
 
       radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_TILE_PIPES, NULL,
                            &ws->info.num_tile_pipes);
@@ -444,29 +420,32 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
          ws->info.r600_gb_backend_map_valid = true;
 
       /* Default value. */
-      ws->info.enabled_rb_mask = u_bit_consecutive(0, ws->info.num_render_backends);
+      ws->info.enabled_rb_mask = u_bit_consecutive(0, ws->info.max_render_backends);
       /*
        * This fails (silently) on non-GCN or older kernels, overwriting the
        * default enabled_rb_mask with the result of the last query.
        */
-      if (ws->gen >= DRV_SI)
-         radeon_get_drm_value(ws->fd, RADEON_INFO_SI_BACKEND_ENABLED_MASK, NULL,
-                              &ws->info.enabled_rb_mask);
+      if (ws->gen >= DRV_SI) {
+         uint32_t mask;
+
+         radeon_get_drm_value(ws->fd, RADEON_INFO_SI_BACKEND_ENABLED_MASK, NULL, &mask);
+         ws->info.enabled_rb_mask = mask;
+      }
 
       ws->info.r600_has_virtual_memory = false;
-      if (ws->info.drm_minor >= 13) {
-         uint32_t ib_vm_max_size;
 
-         ws->info.r600_has_virtual_memory = true;
-         if (!radeon_get_drm_value(ws->fd, RADEON_INFO_VA_START, NULL,
-                                   &ws->va_start))
-            ws->info.r600_has_virtual_memory = false;
-         if (!radeon_get_drm_value(ws->fd, RADEON_INFO_IB_VM_MAX_SIZE, NULL,
-                                   &ib_vm_max_size))
-            ws->info.r600_has_virtual_memory = false;
-         radeon_get_drm_value(ws->fd, RADEON_INFO_VA_UNMAP_WORKING, NULL,
-                              &ws->va_unmap_working);
-      }
+      uint32_t ib_vm_max_size;
+
+      ws->info.r600_has_virtual_memory = true;
+      if (!radeon_get_drm_value(ws->fd, RADEON_INFO_VA_START, NULL,
+                                &ws->va_start))
+         ws->info.r600_has_virtual_memory = false;
+      if (!radeon_get_drm_value(ws->fd, RADEON_INFO_IB_VM_MAX_SIZE, NULL,
+                                &ib_vm_max_size))
+         ws->info.r600_has_virtual_memory = false;
+      radeon_get_drm_value(ws->fd, RADEON_INFO_VA_UNMAP_WORKING, NULL,
+                           &ws->va_unmap_working);
+
       if (ws->gen == DRV_R600 && !debug_get_bool_option("RADEON_VA", false))
          ws->info.r600_has_virtual_memory = false;
    }
@@ -478,9 +457,9 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
                         &ws->info.r600_max_quad_pipes);
 
    /* All GPUs have at least one compute unit */
-   ws->info.num_good_compute_units = 1;
+   ws->info.num_cu = 1;
    radeon_get_drm_value(ws->fd, RADEON_INFO_ACTIVE_CU_COUNT, NULL,
-                        &ws->info.num_good_compute_units);
+                        &ws->info.num_cu);
 
    radeon_get_drm_value(ws->fd, RADEON_INFO_MAX_SE, NULL,
                         &ws->info.max_se);
@@ -488,25 +467,25 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    switch (ws->info.family) {
    case CHIP_HAINAN:
    case CHIP_KABINI:
-      ws->info.num_tcc_blocks = 2;
+      ws->info.max_tcc_blocks = 2;
       break;
    case CHIP_VERDE:
    case CHIP_OLAND:
    case CHIP_BONAIRE:
    case CHIP_KAVERI:
-      ws->info.num_tcc_blocks = 4;
+      ws->info.max_tcc_blocks = 4;
       break;
    case CHIP_PITCAIRN:
-      ws->info.num_tcc_blocks = 8;
+      ws->info.max_tcc_blocks = 8;
       break;
    case CHIP_TAHITI:
-      ws->info.num_tcc_blocks = 12;
+      ws->info.max_tcc_blocks = 12;
       break;
    case CHIP_HAWAII:
-      ws->info.num_tcc_blocks = 16;
+      ws->info.max_tcc_blocks = 16;
       break;
    default:
-      ws->info.num_tcc_blocks = 0;
+      ws->info.max_tcc_blocks = 0;
       break;
    }
 
@@ -530,12 +509,14 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
       }
    }
 
+   ws->info.num_se = ws->info.max_se;
+
    radeon_get_drm_value(ws->fd, RADEON_INFO_MAX_SH_PER_SE, NULL,
-                        &ws->info.max_sh_per_se);
+                        &ws->info.max_sa_per_se);
    if (ws->gen == DRV_SI) {
       ws->info.max_good_cu_per_sa =
-      ws->info.min_good_cu_per_sa = ws->info.num_good_compute_units /
-                                    (ws->info.max_se * ws->info.max_sh_per_se);
+      ws->info.min_good_cu_per_sa = ws->info.num_cu /
+                                    (ws->info.max_se * ws->info.max_sa_per_se);
    }
 
    radeon_get_drm_value(ws->fd, RADEON_INFO_ACCEL_WORKING2, NULL,
@@ -548,7 +529,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
       return false;
    }
 
-   if (ws->info.chip_class == GFX7) {
+   if (ws->info.gfx_level == GFX7) {
       if (!radeon_get_drm_value(ws->fd, RADEON_INFO_CIK_MACROTILE_MODE_ARRAY, NULL,
                                 ws->info.cik_macrotile_mode_array)) {
          fprintf(stderr, "radeon: Kernel 3.13 is required for Sea Islands support.\n");
@@ -556,7 +537,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
       }
    }
 
-   if (ws->info.chip_class >= GFX6) {
+   if (ws->info.gfx_level >= GFX6) {
       if (!radeon_get_drm_value(ws->fd, RADEON_INFO_SI_TILE_MODE_ARRAY, NULL,
                                 ws->info.si_tile_mode_array)) {
          fprintf(stderr, "radeon: Kernel 3.10 is required for Southern Islands support.\n");
@@ -564,47 +545,105 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
       }
    }
 
+   for (unsigned ip_type = 0; ip_type < AMD_NUM_IP_TYPES; ip_type++)
+      ws->info.ip[ip_type].ib_alignment = 4096;
+
    /* Hawaii with old firmware needs type2 nop packet.
     * accel_working2 with value 3 indicates the new firmware.
     */
-   ws->info.gfx_ib_pad_with_type2 = ws->info.chip_class <= GFX6 ||
+   ws->info.gfx_ib_pad_with_type2 = ws->info.gfx_level <= GFX6 ||
                                     (ws->info.family == CHIP_HAWAII &&
                                      ws->accel_working2 < 3);
+   ws->info.has_cp_dma = true;
    ws->info.tcc_cache_line_size = 64; /* TC L2 line size on GCN */
-   ws->info.ib_alignment = 4096;
-   ws->info.kernel_flushes_hdp_before_ib = ws->info.drm_minor >= 40;
-   /* HTILE is broken with 1D tiling on old kernels and GFX7. */
-   ws->info.htile_cmask_support_1d_tiling = ws->info.chip_class != GFX7 ||
-                                                                   ws->info.drm_minor >= 38;
-   ws->info.si_TA_CS_BC_BASE_ADDR_allowed = ws->info.drm_minor >= 48;
    ws->info.has_bo_metadata = false;
-   ws->info.has_gpu_reset_status_query = ws->info.drm_minor >= 43;
    ws->info.has_eqaa_surface_allocator = false;
-   ws->info.has_format_bc1_through_bc7 = ws->info.drm_minor >= 31;
-   ws->info.kernel_flushes_tc_l2_after_ib = true;
-   /* Old kernels disallowed register writes via COPY_DATA
-    * that are used for indirect compute dispatches. */
-   ws->info.has_indirect_compute_dispatch = ws->info.chip_class == GFX7 ||
-                                            (ws->info.chip_class == GFX6 &&
-                                             ws->info.drm_minor >= 45);
-   /* GFX6 doesn't support unaligned loads. */
-   ws->info.has_unaligned_shader_loads = ws->info.chip_class == GFX7 &&
-                                         ws->info.drm_minor >= 50;
    ws->info.has_sparse_vm_mappings = false;
-   /* 2D tiling on GFX7 is supported since DRM 2.35.0 */
-   ws->info.has_2d_tiling = ws->info.chip_class <= GFX6 || ws->info.drm_minor >= 35;
-   ws->info.has_read_registers_query = ws->info.drm_minor >= 42;
    ws->info.max_alignment = 1024*1024;
    ws->info.has_graphics = true;
    ws->info.cpdma_prefetch_writes_memory = true;
-   ws->info.max_wave64_per_simd = 10;
+   ws->info.max_waves_per_simd = 10;
    ws->info.num_physical_sgprs_per_simd = 512;
    ws->info.num_physical_wave64_vgprs_per_simd = 256;
-   /* Potential hang on Kabini: */
-   ws->info.use_late_alloc = ws->info.family != CHIP_KABINI;
+   ws->info.has_3d_cube_border_color_mipmap = true;
+   ws->info.has_image_opcodes = true;
+   ws->info.spi_cu_en_has_effect = false;
+   ws->info.spi_cu_en = 0xffff;
+   ws->info.never_stop_sq_perf_counters = false;
+   ws->info.num_rb = util_bitcount64(ws->info.enabled_rb_mask);
+   ws->info.max_gflops = 128 * ws->info.num_cu * ws->info.max_gpu_freq_mhz / 1000;
+   ws->info.num_tcc_blocks = ws->info.max_tcc_blocks;
+   ws->info.tcp_cache_size = 16 * 1024;
+   ws->info.num_simd_per_compute_unit = 4;
+   ws->info.min_sgpr_alloc = 8;
+   ws->info.max_sgpr_alloc = 104;
+   ws->info.sgpr_alloc_granularity = 8;
+   ws->info.min_wave64_vgpr_alloc = 4;
+   ws->info.max_vgpr_alloc = 256;
+   ws->info.wave64_vgpr_alloc_granularity = 4;
+   ws->info.lds_size_per_workgroup = ws->info.gfx_level == GFX7 ? 64 * 1024 : 32 * 1024;
+   ws->info.lds_encode_granularity = ws->info.gfx_level == GFX7 ? 128 * 4 : 64 * 4;
+   ws->info.lds_alloc_granularity = ws->info.lds_encode_granularity;
+
+   for (unsigned se = 0; se < ws->info.max_se; se++) {
+      for (unsigned sa = 0; sa < ws->info.max_sa_per_se; sa++)
+         ws->info.cu_mask[se][sa] = BITFIELD_MASK(ws->info.max_good_cu_per_sa);
+   }
+
+   /* The maximum number of scratch waves. The number is only a function of the number of CUs.
+    * It should be large enough to hold at least 1 threadgroup. Use the minimum per-SA CU count.
+    */
+   const unsigned max_waves_per_tg = 1024 / 64; /* LLVM only supports 1024 threads per block */
+   ws->info.max_scratch_waves = MAX2(32 * ws->info.min_good_cu_per_sa * ws->info.max_sa_per_se *
+                                     ws->info.num_se, max_waves_per_tg);
+
+   switch (ws->info.family) {
+   case CHIP_TAHITI:
+   case CHIP_PITCAIRN:
+   case CHIP_OLAND:
+   case CHIP_HAWAII:
+   case CHIP_KABINI:
+      ws->info.l2_cache_size = ws->info.num_tcc_blocks * 64 * 1024;
+      break;
+   case CHIP_VERDE:
+   case CHIP_HAINAN:
+   case CHIP_BONAIRE:
+   case CHIP_KAVERI:
+      ws->info.l2_cache_size = ws->info.num_tcc_blocks * 128 * 1024;
+      break;
+   default:;
+   }
+
+   ws->info.ip[AMD_IP_GFX].num_queues = 1;
+
+   switch (ws->info.gfx_level) {
+   case R300:
+   case R400:
+   case R500:
+      ws->info.ip[AMD_IP_GFX].ver_major = 2;
+      break;
+   case R600:
+   case R700:
+      ws->info.ip[AMD_IP_GFX].ver_major = 3;
+      break;
+   case EVERGREEN:
+      ws->info.ip[AMD_IP_GFX].ver_major = 4;
+      break;
+   case CAYMAN:
+      ws->info.ip[AMD_IP_GFX].ver_major = 5;
+      break;
+   case GFX6:
+      ws->info.ip[AMD_IP_GFX].ver_major = 6;
+      break;
+   case GFX7:
+      ws->info.ip[AMD_IP_GFX].ver_major = 7;
+      break;
+   default:;
+   }
 
    ws->check_vm = strstr(debug_get_option("R600_DEBUG", ""), "check_vm") != NULL ||
                                                                             strstr(debug_get_option("AMD_DEBUG", ""), "check_vm") != NULL;
+   ws->noop_cs = debug_get_bool_option("RADEON_NOOP", false);
 
    return true;
 }
@@ -629,7 +668,7 @@ static void radeon_winsys_destroy(struct radeon_winsys *rws)
 
    _mesa_hash_table_destroy(ws->bo_names, NULL);
    _mesa_hash_table_destroy(ws->bo_handles, NULL);
-   _mesa_hash_table_u64_destroy(ws->bo_vas, NULL);
+   _mesa_hash_table_u64_destroy(ws->bo_vas);
    mtx_destroy(&ws->bo_handles_mutex);
    mtx_destroy(&ws->vm32.mutex);
    mtx_destroy(&ws->vm64.mutex);
@@ -641,8 +680,7 @@ static void radeon_winsys_destroy(struct radeon_winsys *rws)
    FREE(rws);
 }
 
-static void radeon_query_info(struct radeon_winsys *rws,
-                              struct radeon_info *info)
+static void radeon_query_info(struct radeon_winsys *rws, struct radeon_info *info)
 {
    *info = ((struct radeon_drm_winsys *)rws)->info;
 }
@@ -673,9 +711,6 @@ uint32_t radeon_drm_get_gpu_reset_counter(struct radeon_drm_winsys *ws)
 {
    uint64_t retval = 0;
 
-   if (!ws->info.has_gpu_reset_status_query)
-      return 0;
-
    radeon_get_drm_value(ws->fd, RADEON_INFO_GPU_RESET_COUNTER,
                         "gpu-reset-counter", (uint32_t*)&retval);
    return retval;
@@ -701,7 +736,7 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
    case RADEON_NUM_MAPPED_BUFFERS:
       return ws->num_mapped_buffers;
    case RADEON_TIMESTAMP:
-      if (ws->info.drm_minor < 20 || ws->gen < DRV_R600) {
+      if (ws->gen < DRV_R600) {
          assert(0);
          return 0;
       }
@@ -722,6 +757,8 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
    case RADEON_VRAM_VIS_USAGE:
    case RADEON_GFX_BO_LIST_COUNTER:
    case RADEON_GFX_IB_SIZE_COUNTER:
+   case RADEON_SLAB_WASTED_VRAM:
+   case RADEON_SLAB_WASTED_GTT:
       return 0; /* unimplemented */
    case RADEON_VRAM_USAGE:
       radeon_get_drm_value(ws->fd, RADEON_INFO_VRAM_USAGE,
@@ -777,7 +814,7 @@ static bool radeon_winsys_unref(struct radeon_winsys *ws)
     * This must happen while the mutex is locked, so that
     * radeon_drm_winsys_create in another thread doesn't get the winsys
     * from the table when the counter drops to 0. */
-   mtx_lock(&fd_tab_mutex);
+   simple_mtx_lock(&fd_tab_mutex);
 
    destroy = pipe_reference(&rws->reference, NULL);
    if (destroy && fd_tab) {
@@ -788,24 +825,19 @@ static bool radeon_winsys_unref(struct radeon_winsys *ws)
       }
    }
 
-   mtx_unlock(&fd_tab_mutex);
+   simple_mtx_unlock(&fd_tab_mutex);
    return destroy;
 }
 
 static void radeon_pin_threads_to_L3_cache(struct radeon_winsys *ws,
-                                           unsigned cache)
+                                           unsigned cpu)
 {
    struct radeon_drm_winsys *rws = (struct radeon_drm_winsys*)ws;
 
    if (util_queue_is_initialized(&rws->cs_queue)) {
-      util_pin_thread_to_L3(rws->cs_queue.threads[0], cache,
-            util_cpu_caps.cores_per_L3);
+      util_thread_sched_apply_policy(rws->cs_queue.threads[0],
+                                     UTIL_THREAD_DRIVER_SUBMIT, cpu, NULL);
    }
-}
-
-static bool radeon_ws_is_secure(struct radeon_winsys* ws)
-{
-    return false;
 }
 
 static bool radeon_cs_is_secure(struct radeon_cmdbuf* cs)
@@ -813,8 +845,17 @@ static bool radeon_cs_is_secure(struct radeon_cmdbuf* cs)
     return false;
 }
 
-static void radeon_cs_set_secure(struct radeon_cmdbuf* cs, bool enable)
+static bool radeon_cs_set_pstate(struct radeon_cmdbuf* cs, enum radeon_ctx_pstate state)
 {
+    return false;
+}
+
+static int
+radeon_drm_winsys_get_fd(struct radeon_winsys *ws)
+{
+   struct radeon_drm_winsys *rws = (struct radeon_drm_winsys*)ws;
+
+   return rws->fd;
 }
 
 PUBLIC struct radeon_winsys *
@@ -823,7 +864,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
 {
    struct radeon_drm_winsys *ws;
 
-   mtx_lock(&fd_tab_mutex);
+   simple_mtx_lock(&fd_tab_mutex);
    if (!fd_tab) {
       fd_tab = util_hash_table_create_fd_keys();
    }
@@ -831,13 +872,13 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
    ws = util_hash_table_get(fd_tab, intptr_to_pointer(fd));
    if (ws) {
       pipe_reference(NULL, &ws->reference);
-      mtx_unlock(&fd_tab_mutex);
+      simple_mtx_unlock(&fd_tab_mutex);
       return &ws->base;
    }
 
    ws = CALLOC_STRUCT(radeon_drm_winsys);
    if (!ws) {
-      mtx_unlock(&fd_tab_mutex);
+      simple_mtx_unlock(&fd_tab_mutex);
       return NULL;
    }
 
@@ -846,9 +887,11 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
    if (!do_winsys_init(ws))
       goto fail1;
 
-   pb_cache_init(&ws->bo_cache, RADEON_MAX_CACHED_HEAPS,
+   pb_cache_init(&ws->bo_cache, RADEON_NUM_HEAPS,
                  500000, ws->check_vm ? 1.0f : 2.0f, 0,
-                 MIN2(ws->info.vram_size, ws->info.gart_size),
+                 (uint64_t)MIN2(ws->info.vram_size_kb, ws->info.gart_size_kb) * 1024,
+                 offsetof(struct radeon_bo, u.real.cache_entry),
+                 NULL,
                  radeon_bo_destroy,
                  radeon_bo_can_reclaim);
 
@@ -859,7 +902,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
        */
       if (!pb_slabs_init(&ws->bo_slabs,
                          RADEON_SLAB_MIN_SIZE_LOG2, RADEON_SLAB_MAX_SIZE_LOG2,
-                         RADEON_MAX_SLAB_HEAPS,
+                         RADEON_NUM_HEAPS, false,
                          ws,
                          radeon_bo_can_reclaim_slab,
                          radeon_bo_slab_alloc,
@@ -883,14 +926,14 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
    /* Set functions. */
    ws->base.unref = radeon_winsys_unref;
    ws->base.destroy = radeon_winsys_destroy;
+   ws->base.get_fd = radeon_drm_winsys_get_fd;
    ws->base.query_info = radeon_query_info;
    ws->base.pin_threads_to_L3_cache = radeon_pin_threads_to_L3_cache;
    ws->base.cs_request_feature = radeon_cs_request_feature;
    ws->base.query_value = radeon_query_value;
    ws->base.read_registers = radeon_read_registers;
-    ws->base.ws_is_secure = radeon_ws_is_secure;
-    ws->base.cs_is_secure = radeon_cs_is_secure;
-    ws->base.cs_set_secure = radeon_cs_set_secure;
+   ws->base.cs_is_secure = radeon_cs_is_secure;
+   ws->base.cs_set_pstate = radeon_cs_set_pstate;
 
    radeon_drm_bo_init_functions(ws);
    radeon_drm_cs_init_functions(ws);
@@ -913,31 +956,22 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
    if (ws->va_start > 8 * 1024 * 1024) {
       /* Not enough 32-bit address space. */
       radeon_winsys_destroy(&ws->base);
-      mtx_unlock(&fd_tab_mutex);
+      simple_mtx_unlock(&fd_tab_mutex);
       return NULL;
    }
 
    ws->vm32.start = ws->va_start;
    ws->vm32.end = 1ull << 32;
 
-   /* The maximum is 8GB of virtual address space limited by the kernel.
-    * It's obviously not enough for bigger cards, like Hawaiis with 4GB
-    * and 8GB of physical memory and 4GB of GART.
-    *
-    * Older kernels set the limit to 4GB, which is even worse, so they only
-    * have 32-bit address space.
-    */
-   if (ws->info.drm_minor >= 41) {
-      ws->vm64.start = 1ull << 32;
-      ws->vm64.end = 1ull << 33;
-   }
+   ws->vm64.start = 1ull << 32;
+   ws->vm64.end = 1ull << 33;
 
    /* TTM aligns the BO size to the CPU page size */
    ws->info.gart_page_size = sysconf(_SC_PAGESIZE);
    ws->info.pte_fragment_size = 64 * 1024; /* GPUVM page size */
 
    if (ws->num_cpus > 1 && debug_get_option_thread())
-      util_queue_init(&ws->cs_queue, "rcs", 8, 1, 0);
+      util_queue_init(&ws->cs_queue, "rcs", 8, 1, 0, NULL);
 
    /* Create the screen at the end. The winsys must be initialized
     * completely.
@@ -947,7 +981,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
    ws->base.screen = screen_create(&ws->base, config);
    if (!ws->base.screen) {
       radeon_winsys_destroy(&ws->base);
-      mtx_unlock(&fd_tab_mutex);
+      simple_mtx_unlock(&fd_tab_mutex);
       return NULL;
    }
 
@@ -956,7 +990,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
    /* We must unlock the mutex once the winsys is fully initialized, so that
     * other threads attempting to create the winsys from the same fd will
     * get a fully initialized winsys and not just half-way initialized. */
-   mtx_unlock(&fd_tab_mutex);
+   simple_mtx_unlock(&fd_tab_mutex);
 
    return &ws->base;
 
@@ -966,7 +1000,7 @@ fail_slab:
 fail_cache:
    pb_cache_deinit(&ws->bo_cache);
 fail1:
-   mtx_unlock(&fd_tab_mutex);
+   simple_mtx_unlock(&fd_tab_mutex);
    if (ws->surf_man)
       radeon_surface_manager_free(ws->surf_man);
    if (ws->fd >= 0)
